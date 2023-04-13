@@ -172,10 +172,10 @@ impl ExprIntervalGraphNode {
         let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
-            let interval = Interval {
-                lower: IntervalBound::Closed(value.clone()),
-                upper: IntervalBound::Closed(value.clone()),
-            };
+            let interval = Interval::new(
+                IntervalBound::Closed(value.clone()),
+                IntervalBound::Closed(value.clone()),
+            );
             ExprIntervalGraphNode::new_with_interval(expr, interval)
         } else {
             ExprIntervalGraphNode::new(expr)
@@ -242,25 +242,13 @@ pub fn propagate_arithmetic(
 /// Currently, we only support strict inequalities since open/closed intervals
 /// are not implemented yet.
 fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Interval> {
-    let unbounded = ScalarValue::try_from(datatype)?;
+    let unbounded = IntervalBound::make_unbounded(datatype)?;
     let zero = ScalarValue::new_zero(datatype)?;
     Ok(match *op {
-        Operator::GtEq => Interval {
-            lower: IntervalBound::Closed(zero),
-            upper: IntervalBound::Open(unbounded),
-        },
-        Operator::Gt => Interval {
-            lower: IntervalBound::Open(zero),
-            upper: IntervalBound::Open(unbounded),
-        },
-        Operator::LtEq => Interval {
-            lower: IntervalBound::Open(unbounded),
-            upper: IntervalBound::Closed(zero),
-        },
-        Operator::Lt => Interval {
-            lower: IntervalBound::Open(unbounded),
-            upper: IntervalBound::Open(zero),
-        },
+        Operator::GtEq => Interval::new(IntervalBound::Closed(zero), unbounded),
+        Operator::Gt => Interval::new(IntervalBound::Open(zero), unbounded),
+        Operator::LtEq => Interval::new(unbounded, IntervalBound::Closed(zero)),
+        Operator::Lt => Interval::new(unbounded, IntervalBound::Open(zero)),
         _ => unreachable!(),
     })
 }
@@ -439,19 +427,19 @@ impl ExprIntervalGraph {
     ///  // Provide intervals for leaf variables (here, there is only one).
     ///  let intervals = vec![(
     ///     left_index,
-    ///     Interval {
-    ///         lower: IntervalBound::Open(ScalarValue::Int32(Some(10))),
-    ///         upper: IntervalBound::Open(ScalarValue::Int32(Some(20))),
-    ///         },
+    ///     Interval::new(
+    ///         IntervalBound::Open(ScalarValue::Int32(Some(10))),
+    ///         IntervalBound::Open(ScalarValue::Int32(Some(20))),
+    ///     ),
     ///     )];
     ///  // Evaluate bounds for the composite expression:
     ///  graph.assign_intervals(&intervals);
     ///  assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
-    ///     &Interval {
-    ///         lower: IntervalBound::Open(ScalarValue::Int32(Some(20))),
-    ///         upper: IntervalBound::Open(ScalarValue::Int32(Some(30)))
-    ///     }
+    ///     &Interval::new(
+    ///         IntervalBound::Open(ScalarValue::Int32(Some(20))),
+    ///         IntervalBound::Open(ScalarValue::Int32(Some(30))),
+    ///     )
     ///  )
     ///
     /// ```
@@ -573,33 +561,33 @@ mod tests {
         let col_stats = vec![
             (
                 exprs_with_interval.0.clone(),
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int32(left_interval.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int32(left_interval.1)),
-                },
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int32(left_interval.0)),
+                    IntervalBound::Open(ScalarValue::Int32(left_interval.1)),
+                ),
             ),
             (
                 exprs_with_interval.1.clone(),
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int32(right_interval.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int32(right_interval.1)),
-                },
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int32(right_interval.0)),
+                    IntervalBound::Open(ScalarValue::Int32(right_interval.1)),
+                ),
             ),
         ];
         let expected = vec![
             (
                 exprs_with_interval.0.clone(),
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int32(left_waited.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int32(left_waited.1)),
-                },
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int32(left_waited.0)),
+                    IntervalBound::Open(ScalarValue::Int32(left_waited.1)),
+                ),
             ),
             (
                 exprs_with_interval.1.clone(),
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int32(right_waited.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int32(right_waited.1)),
-                },
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int32(right_waited.0)),
+                    IntervalBound::Open(ScalarValue::Int32(right_waited.1)),
+                ),
             ),
         ];
         let mut graph = ExprIntervalGraph::try_new(expr)?;

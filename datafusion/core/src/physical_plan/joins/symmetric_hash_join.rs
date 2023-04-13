@@ -790,18 +790,12 @@ fn update_filter_expr_interval(
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:
-    let infinite = ScalarValue::try_from(value.get_datatype())?;
+    let unbounded = IntervalBound::make_unbounded(value.get_datatype())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval {
-            lower: IntervalBound::Open(infinite),
-            upper: IntervalBound::Closed(value),
-        }
+        Interval::new(unbounded, IntervalBound::Closed(value))
     } else {
-        Interval {
-            lower: IntervalBound::Closed(value),
-            upper: IntervalBound::Open(infinite),
-        }
+        Interval::new(IntervalBound::Closed(value), unbounded)
     };
     // Set the calculated interval for the sorted filter expression:
     sorted_expr.set_interval(interval);
@@ -838,9 +832,9 @@ fn determine_prune_length(
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
-        interval.upper.get_bound_scalar().clone()
+        interval.upper.get_value().clone()
     } else {
-        interval.lower.get_bound_scalar().clone()
+        interval.lower.get_value().clone()
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned

@@ -29,11 +29,9 @@ use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
 
-/// This type represents an interval, which is used to calculate reliable
-/// bounds for expressions. Currently, we only support addition and
-/// subtraction, but more capabilities will be added in the future.
-/// Upper/lower bounds having NULL values indicate an unbounded side. For
-/// example; [10, 20], [10, ∞], [-∞, 100] and [-∞, ∞] are all valid intervals.
+/// This type represents a single endpoint of an [`Interval`]. An endpoint can
+/// be open or closed, denoting whether the interval includes or excludes the
+/// endpoint itself.
 #[derive(Debug, Clone, Eq)]
 pub enum IntervalBound {
     Open(ScalarValue),
@@ -41,16 +39,42 @@ pub enum IntervalBound {
 }
 
 impl IntervalBound {
-    pub fn get_bound_scalar(&self) -> &ScalarValue {
+    /// This convenience function creates an unbounded interval endpoint.
+    pub fn make_unbounded<T: Borrow<DataType>>(data_type: T) -> Result<Self> {
+        ScalarValue::try_from(data_type.borrow()).map(IntervalBound::Open)
+    }
+
+    /// This convenience function returns the data type associated with this
+    /// `IntervalBound`.
+    pub fn get_datatype(&self) -> DataType {
         match self {
-            IntervalBound::Open(scalar) | IntervalBound::Closed(scalar) => scalar,
+            IntervalBound::Open(value) | IntervalBound::Closed(value) => {
+                value.get_datatype()
+            }
         }
     }
 
-    pub fn is_null(&self) -> bool {
-        self.get_bound_scalar().is_null()
+    /// This convenience function returns the scalar value associated with this
+    /// `IntervalBound`.
+    pub fn get_value(&self) -> &ScalarValue {
+        match self {
+            IntervalBound::Open(value) | IntervalBound::Closed(value) => value,
+        }
     }
 
+    /// This convenience function checks whether the `IntervalBound` represents
+    /// an unbounded interval endpoint.
+    pub fn is_null(&self) -> bool {
+        self.get_value().is_null()
+    }
+
+    /// This convenience function checks whether the `IntervalBound` represents
+    /// a closed (i.e. inclusive) endpoint.
+    pub fn is_closed(&self) -> bool {
+        matches!(self, IntervalBound::Closed(_))
+    }
+
+    /// This function casts the `IntervalBound` to the given data type.
     pub(crate) fn cast_to(
         &self,
         data_type: &DataType,
@@ -66,94 +90,93 @@ impl IntervalBound {
         })
     }
 
-    /// Add the given IntervalBound to this IntervalBound.
-    /// If either bound is null, the result is an open bound with the same data type.
-    /// Otherwise, the bounds are added, and the result is closed if both original bounds are closed,
-    /// or open otherwise.
+    /// This function adds the given `IntervalBound` to this `IntervalBound`.
+    /// The result is unbounded if either is; otherwise, their values are
+    /// added. The result is closed if both original bounds are closed, or open
+    /// otherwise.
     pub fn add<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
         let rhs = other.borrow();
-        let res = if self.is_null() || rhs.is_null() {
-            IntervalBound::Open(ScalarValue::try_from(
-                self.get_bound_scalar().get_datatype(),
-            )?)
+        if self.is_null() || rhs.is_null() {
+            IntervalBound::make_unbounded(self.get_datatype())
         } else {
-            let res = self.get_bound_scalar().add(rhs.get_bound_scalar())?;
-            if is_bound_closed(self, rhs) {
-                IntervalBound::Closed(res)
+            let result = self.get_value().add(rhs.get_value());
+            if self.is_closed() && rhs.is_closed() {
+                result.map(IntervalBound::Closed)
             } else {
-                IntervalBound::Open(res)
+                result.map(IntervalBound::Open)
             }
-        };
-        Ok(res)
+        }
     }
 
-    /// Subtract the given IntervalBound from this IntervalBound.
-    /// If either bound is null, the result is an open bound with the same data type.
-    /// Otherwise, the bounds are subtracted, and the result is closed if both original bounds are closed,
+    /// This function subtracts the given `IntervalBound` from `self`.
+    /// The result is unbounded if either is; otherwise, their values are
+    /// subtracted. The result is closed if both original bounds are closed,
     /// or open otherwise.
     pub fn sub<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
         let rhs = other.borrow();
-        let res = if self.is_null() || rhs.is_null() {
-            IntervalBound::Open(ScalarValue::try_from(
-                self.get_bound_scalar().get_datatype(),
-            )?)
+        if self.is_null() || rhs.is_null() {
+            IntervalBound::make_unbounded(self.get_datatype())
         } else {
-            let res = self.get_bound_scalar().sub(rhs.get_bound_scalar())?;
-            if is_bound_closed(self, rhs) {
-                IntervalBound::Closed(res)
+            let result = self.get_value().sub(rhs.get_value());
+            if self.is_closed() && rhs.is_closed() {
+                result.map(IntervalBound::Closed)
             } else {
-                IntervalBound::Open(res)
+                result.map(IntervalBound::Open)
             }
-        };
-        Ok(res)
+        }
     }
 
-    pub fn intersect_bounds(
-        self_: &IntervalBound,
-        other: &IntervalBound,
-        min_max: fn(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
+    /// This function chooses one of the given `IntervalBound`s according to
+    /// the given function `decide`. The result is unbounded if both are. If
+    /// only one of the arguments is unbounded, the other one is chosen by
+    /// default. If neither is unbounded, the function `decide` is used.
+    pub fn choose(
+        first: &IntervalBound,
+        second: &IntervalBound,
+        decide: fn(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
     ) -> Result<IntervalBound> {
-        let val = if self_.is_null() {
-            other.clone()
-        } else if other.is_null() {
-            self_.clone()
-        } else {
-            let inner = min_max(self_.get_bound_scalar(), other.get_bound_scalar())?;
-            if self_ != other {
-                if inner == *self_.get_bound_scalar() {
-                    self_.clone()
-                } else {
-                    other.clone()
-                }
-            } else if is_bound_closed(self_, other) {
-                IntervalBound::Closed(other.get_bound_scalar().clone())
+        Ok(if first.is_null() {
+            second.clone()
+        } else if second.is_null() {
+            first.clone()
+        } else if first != second {
+            let chosen = decide(first.get_value(), second.get_value())?;
+            if chosen.eq(first.get_value()) {
+                first.clone()
             } else {
-                IntervalBound::Open(other.get_bound_scalar().clone())
+                second.clone()
             }
-        };
-        Ok(val)
+        } else if first.is_closed() && second.is_closed() {
+            IntervalBound::Closed(second.get_value().clone())
+        } else {
+            IntervalBound::Open(second.get_value().clone())
+        })
     }
 }
 
 impl Display for IntervalBound {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "IntervalBound [{}]", self.get_bound_scalar())
+        write!(f, "IntervalBound [{}]", self.get_value())
     }
 }
 
 impl PartialOrd for IntervalBound {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.get_bound_scalar()
-            .partial_cmp(other.get_bound_scalar())
+        self.get_value().partial_cmp(other.get_value())
     }
 }
 
 impl PartialEq for IntervalBound {
     fn eq(&self, other: &Self) -> bool {
-        self.get_bound_scalar() == other.get_bound_scalar()
+        self.get_value() == other.get_value()
     }
 }
 
+/// This type represents an interval, which is used to calculate reliable
+/// bounds for expressions. Currently, we only support addition and
+/// subtraction, but more capabilities will be added in the future.
+/// Upper/lower bounds having NULL values indicate an unbounded side. For
+/// example; [10, 20], [10, ∞), (-∞, 100] and (-∞, ∞) are all valid intervals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
     pub lower: IntervalBound,
@@ -176,10 +199,12 @@ impl Display for Interval {
 }
 
 impl Interval {
-    fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
+    /// Creates a new interval object using the given bounds.
+    pub fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
         Interval { lower, upper }
     }
 
+    /// Casts this interval to `data_type` using `cast_options`.
     pub(crate) fn cast_to(
         &self,
         data_type: &DataType,
@@ -190,10 +215,11 @@ impl Interval {
         Ok(Interval::new(lower, upper))
     }
 
-    // If the scalar type of bounds are not the same, return error.
+    /// This function returns the data type of this interval. If both endpoints
+    /// do not have the same data type, returns an error.
     pub(crate) fn get_datatype(&self) -> Result<DataType> {
-        let lower_type = self.lower.get_bound_scalar().get_datatype();
-        let upper_type = self.upper.get_bound_scalar().get_datatype();
+        let lower_type = self.lower.get_value().get_datatype();
+        let upper_type = self.upper.get_value().get_datatype();
         if lower_type == upper_type {
             Ok(lower_type)
         } else {
@@ -210,64 +236,62 @@ impl Interval {
     pub(crate) fn gt(&self, other: &Interval) -> Interval {
         let flags = if !self.upper.is_null()
             && !other.lower.is_null()
-            && (self.upper <= other.lower)
+            && self.upper <= other.lower
         {
-            // If self.upper is less than or equal to other.lower, self can't be greater than other.
+            // Values in this interval are certainly less than or equal to those
+            // in the given interval.
             (false, false)
         } else if !self.lower.is_null()
             && !other.upper.is_null()
-            && (self.lower >= other.upper)
+            && self.lower >= other.upper
+            && (self.lower > other.upper
+                || !self.lower.is_closed()
+                || !other.upper.is_closed())
         {
-            // If self.lower is greater than or equal to other.upper, self is certainly greater than other.
-            if self.lower > other.upper {
-                (true, true)
-            } else if is_bound_closed(&self.lower, &other.upper) {
-                (false, true)
-            } else {
-                (true, true)
-            }
+            // Values in this interval are certainly greater than those in the
+            // given interval.
+            (true, true)
         } else {
-            // Otherwise, self is possibly greater than other.
+            // All outcomes are possible.
             (false, true)
         };
 
-        Interval {
-            lower: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
-            upper: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
-        }
+        Interval::new(
+            IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
+            IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
+        )
     }
 
     /// Decide if this interval is certainly greater than or equal to, possibly greater than
     /// or equal to, or can't be greater than or equal to `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub(crate) fn gt_eq(&self, other: &Interval) -> Interval {
-        let flags = if !self.upper.is_null()
-            && !other.lower.is_null()
-            && (self.upper <= other.lower)
-        {
-            // If self.upper is less than or equal to other.lower, self can't be greater than or equal to other.
-            if self.upper < other.lower {
-                (false, false)
-            } else if is_bound_closed(&self.upper, &other.lower) {
-                (false, true)
-            } else {
-                (false, false)
-            }
-        } else if !self.lower.is_null()
+        let flags = if !self.lower.is_null()
             && !other.upper.is_null()
-            && (self.lower >= other.upper)
+            && self.lower >= other.upper
         {
-            // If self.lower is greater than or equal to other.upper, self is certainly greater than or equal to other.
+            // Values in this interval are certainly greater than or equal to those
+            // in the given interval.
             (true, true)
+        } else if !self.upper.is_null()
+            && !other.lower.is_null()
+            && self.upper <= other.lower
+            && (self.upper < other.lower
+                || !self.upper.is_closed()
+                || !other.lower.is_closed())
+        {
+            // Values in this interval are certainly less than those in the
+            // given interval.
+            (false, false)
         } else {
-            // Otherwise, self is possibly greater than or equal to other.
+            // All outcomes are possible.
             (false, true)
         };
 
-        Interval {
-            lower: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
-            upper: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
-        }
+        Interval::new(
+            IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
+            IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
+        )
     }
 
     /// Decide if this interval is certainly less than, possibly less than,
@@ -279,7 +303,7 @@ impl Interval {
 
     /// Decide if this interval is certainly less than or equal to, possibly
     /// less than or equal to, or can't be less than or equal to `other` by returning
-    ///  [true, true], [false, true] or [false, false] respectively.
+    /// [true, true], [false, true] or [false, false] respectively.
     pub(crate) fn lt_eq(&self, other: &Interval) -> Interval {
         other.gt_eq(self)
     }
@@ -294,36 +318,26 @@ impl Interval {
             && (self.lower == other.lower)
         {
             (true, true)
-        } else if self.gt(other)
-            == (Interval {
-                lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-                upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
-            })
-            || self.gt(other)
-                == (Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
-                })
-        {
+        } else if self.gt(other) == CERTAINLY_TRUE || self.gt(other) == CERTAINLY_FALSE {
             (false, false)
         } else {
             (false, true)
         };
 
-        Interval {
-            lower: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
-            upper: IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
-        }
+        Interval::new(
+            IntervalBound::Closed(ScalarValue::Boolean(Some(flags.0))),
+            IntervalBound::Closed(ScalarValue::Boolean(Some(flags.1))),
+        )
     }
 
     /// Compute the logical conjunction of this (boolean) interval with the
     /// given boolean interval. Boolean intervals always have closed bounds.
     pub(crate) fn and(&self, other: &Interval) -> Result<Interval> {
         match (
-            self.lower.get_bound_scalar(),
-            self.upper.get_bound_scalar(),
-            other.lower.get_bound_scalar(),
-            other.upper.get_bound_scalar(),
+            self.lower.get_value(),
+            self.upper.get_value(),
+            other.lower.get_value(),
+            other.upper.get_value(),
         ) {
             (
                 ScalarValue::Boolean(Some(self_lower)),
@@ -359,20 +373,14 @@ impl Interval {
             return Ok(None);
         }
 
-        let lower = IntervalBound::intersect_bounds(&self.lower, &other.lower, max)?;
+        let lower = IntervalBound::choose(&self.lower, &other.lower, max)?;
+        let upper = IntervalBound::choose(&self.upper, &other.upper, min)?;
 
-        let upper = IntervalBound::intersect_bounds(&self.upper, &other.upper, min)?;
-
-        Ok(if !lower.is_null() && !upper.is_null() && lower == upper {
-            match (&lower, &upper) {
-                (IntervalBound::Closed(_), IntervalBound::Closed(_)) => {
-                    Some(Interval { lower, upper })
-                }
-                (_, _) => None,
-            }
-        } else {
-            Some(Interval { lower, upper })
-        })
+        let non_empty = lower.is_null()
+            || upper.is_null()
+            || lower != upper
+            || (lower.is_closed() && upper.is_closed());
+        Ok(non_empty.then_some(Interval::new(lower, upper)))
     }
 
     /// Add the given interval (`other`) to this interval. Say we have
@@ -381,11 +389,10 @@ impl Interval {
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-
-        let lower = self.lower.add(&rhs.lower)?;
-        let upper = self.upper.add(&rhs.upper)?;
-
-        Ok(Interval { lower, upper })
+        Ok(Interval::new(
+            self.lower.add(&rhs.lower)?,
+            self.upper.add(&rhs.upper)?,
+        ))
     }
 
     /// Subtract the given interval (`other`) from this interval. Say we have
@@ -394,11 +401,22 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = self.lower.sub(&rhs.upper)?;
-        let upper = self.upper.sub(&rhs.lower)?;
-        Ok(Interval { lower, upper })
+        Ok(Interval::new(
+            self.lower.sub(&rhs.upper)?,
+            self.upper.sub(&rhs.lower)?,
+        ))
     }
 }
+
+const CERTAINLY_TRUE: Interval = Interval {
+    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
+    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(true))),
+};
+
+const CERTAINLY_FALSE: Interval = Interval {
+    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
+    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(false))),
+};
 
 /// Indicates whether interval arithmetic is supported for the given operator.
 pub fn is_operator_supported(op: &Operator) -> bool {
@@ -408,15 +426,10 @@ pub fn is_operator_supported(op: &Operator) -> bool {
             | &Operator::Minus
             | &Operator::And
             | &Operator::Gt
+            | &Operator::GtEq
             | &Operator::Lt
+            | &Operator::LtEq
     )
-}
-
-pub fn is_bound_closed(bound1: &IntervalBound, bound2: &IntervalBound) -> bool {
-    match (bound1, bound2) {
-        (IntervalBound::Closed(_), IntervalBound::Closed(_)) => true,
-        (_, _) => false,
-    }
 }
 
 /// Indicates whether interval arithmetic is supported for the given data type.
@@ -444,10 +457,10 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::And => lhs.and(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
-        _ => Ok(Interval {
-            lower: IntervalBound::Open(ScalarValue::Null),
-            upper: IntervalBound::Open(ScalarValue::Null),
-        }),
+        _ => Ok(Interval::new(
+            IntervalBound::Open(ScalarValue::Null),
+            IntervalBound::Open(ScalarValue::Null),
+        )),
     }
 }
 
@@ -489,19 +502,19 @@ mod tests {
 
         for case in possible_cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.1))
-                }
-                .intersect(&Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.2)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.3))
-                })?
+                Interval::new(
+                    Open(ScalarValue::Int64(case.0)),
+                    Open(ScalarValue::Int64(case.1)),
+                )
+                .intersect(&Interval::new(
+                    Open(ScalarValue::Int64(case.2)),
+                    Open(ScalarValue::Int64(case.3))
+                ))?
                 .unwrap(),
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.4)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.5))
-                }
+                Interval::new(
+                    Open(ScalarValue::Int64(case.4)),
+                    Open(ScalarValue::Int64(case.5)),
+                )
             )
         }
 
@@ -514,14 +527,14 @@ mod tests {
 
         for case in empty_cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.1))
-                }
-                .intersect(&Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.2)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.3))
-                })?,
+                Interval::new(
+                    Open(ScalarValue::Int64(case.0)),
+                    Open(ScalarValue::Int64(case.1)),
+                )
+                .intersect(&Interval::new(
+                    Open(ScalarValue::Int64(case.2)),
+                    Open(ScalarValue::Int64(case.3)),
+                ))?,
                 None
             )
         }
@@ -548,18 +561,18 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.1))
-                }
-                .gt(&Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.2)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.3))
-                }),
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(case.4))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(case.5)))
-                }
+                Interval::new(
+                    Open(ScalarValue::Int64(case.0)),
+                    Open(ScalarValue::Int64(case.1)),
+                )
+                .gt(&Interval::new(
+                    Open(ScalarValue::Int64(case.2)),
+                    Open(ScalarValue::Int64(case.3)),
+                )),
+                Interval::new(
+                    Closed(ScalarValue::Boolean(Some(case.4))),
+                    Closed(ScalarValue::Boolean(Some(case.5))),
+                )
             )
         }
     }
@@ -581,18 +594,18 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.1))
-                }
-                .lt(&Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.2)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.3))
-                }),
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(case.4))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(case.5)))
-                },
+                Interval::new(
+                    Open(ScalarValue::Int64(case.0)),
+                    Open(ScalarValue::Int64(case.1)),
+                )
+                .lt(&Interval::new(
+                    Open(ScalarValue::Int64(case.2)),
+                    Open(ScalarValue::Int64(case.3)),
+                )),
+                Interval::new(
+                    Closed(ScalarValue::Boolean(Some(case.4))),
+                    Closed(ScalarValue::Boolean(Some(case.5))),
+                ),
             )
         }
     }
@@ -610,18 +623,18 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(case.0))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(case.1)))
-                }
-                .and(&Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(case.2))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(case.3)))
-                })?,
-                Interval {
-                    lower: IntervalBound::Closed(ScalarValue::Boolean(Some(case.4))),
-                    upper: IntervalBound::Closed(ScalarValue::Boolean(Some(case.5)))
-                }
+                Interval::new(
+                    Closed(ScalarValue::Boolean(Some(case.0))),
+                    Closed(ScalarValue::Boolean(Some(case.1))),
+                )
+                .and(&Interval::new(
+                    Closed(ScalarValue::Boolean(Some(case.2))),
+                    Closed(ScalarValue::Boolean(Some(case.3))),
+                ))?,
+                Interval::new(
+                    Closed(ScalarValue::Boolean(Some(case.4))),
+                    Closed(ScalarValue::Boolean(Some(case.5))),
+                )
             )
         }
         Ok(())
@@ -650,18 +663,18 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.1))
-                }
-                .add(&Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.2)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.3))
-                })?,
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.4)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.5))
-                }
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int64(case.0)),
+                    IntervalBound::Open(ScalarValue::Int64(case.1)),
+                )
+                .add(&Interval::new(
+                    IntervalBound::Open(ScalarValue::Int64(case.2)),
+                    IntervalBound::Open(ScalarValue::Int64(case.3)),
+                ))?,
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int64(case.4)),
+                    IntervalBound::Open(ScalarValue::Int64(case.5)),
+                )
             )
         }
         Ok(())
@@ -690,18 +703,18 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.0)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.1))
-                }
-                .sub(&Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.2)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.3))
-                })?,
-                Interval {
-                    lower: IntervalBound::Open(ScalarValue::Int64(case.4)),
-                    upper: IntervalBound::Open(ScalarValue::Int64(case.5))
-                }
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int64(case.0)),
+                    IntervalBound::Open(ScalarValue::Int64(case.1)),
+                )
+                .sub(&Interval::new(
+                    IntervalBound::Open(ScalarValue::Int64(case.2)),
+                    IntervalBound::Open(ScalarValue::Int64(case.3)),
+                ))?,
+                Interval::new(
+                    IntervalBound::Open(ScalarValue::Int64(case.4)),
+                    IntervalBound::Open(ScalarValue::Int64(case.5)),
+                )
             )
         }
         Ok(())
