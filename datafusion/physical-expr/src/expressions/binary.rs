@@ -61,7 +61,7 @@ use datafusion_common::scalar::{
     op_ym_dt, op_ym_mdn, parse_timezones, seconds_add, seconds_sub, MILLISECOND_MODE,
     NANOSECOND_MODE,
 };
-use datafusion_expr::type_coercion::{is_timestamp, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
 use kernels::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -672,7 +672,8 @@ impl PhysicalExpr for BinaryExpr {
 
         match (&left_value, &left_data_type, &right_value, &right_data_type) {
             // Types are equal => valid
-            (_, l, _, r) if l == r => {}
+            // Decimal types can be different but still valid as we coerce them to the same type later
+            (_, l, _, r) if l == r || (is_decimal(l) && is_decimal(r)) => {}
             // Allow comparing a dictionary value with its corresponding scalar value
             (
                 ColumnarValue::Array(_),
@@ -685,7 +686,8 @@ impl PhysicalExpr for BinaryExpr {
                 scalar_t,
                 ColumnarValue::Array(_),
                 DataType::Dictionary(_, dict_t),
-            ) if dict_t.as_ref() == scalar_t => {}
+            ) if dict_t.as_ref() == scalar_t
+                || (is_decimal(dict_t.as_ref()) && is_decimal(scalar_t)) => {}
             _ => {
                 return Err(DataFusionError::Internal(format!(
                     "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -1288,7 +1290,7 @@ pub fn binary(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
     }
-    if !lhs_type.eq(rhs_type) {
+    if !lhs_type.eq(rhs_type) && (!is_decimal(lhs_type) && !is_decimal(rhs_type)) {
         return Err(DataFusionError::Internal(format!(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
