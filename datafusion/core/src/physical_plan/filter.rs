@@ -107,7 +107,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])

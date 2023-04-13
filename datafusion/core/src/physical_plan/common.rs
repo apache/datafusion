@@ -296,21 +296,25 @@ pub fn get_meet_of_orderings(
 fn get_meet_of_orderings_helper(
     orderings: Vec<Vec<PhysicalSortExpr>>,
 ) -> Option<Vec<PhysicalSortExpr>> {
-    let mut idx = 0;
-    let first = &orderings[0];
-    loop {
-        for ordering in orderings.iter() {
-            if idx >= ordering.len() {
-                return Some(ordering.to_vec());
-            } else if ordering[idx] != first[idx] {
-                return if idx > 0 {
-                    Some(ordering[..idx].to_vec())
-                } else {
-                    None
-                };
+    match orderings.as_slice() {
+        [first, ..] => {
+            let mut idx = 0;
+            loop {
+                for ordering in orderings.iter() {
+                    if idx >= ordering.len() {
+                        return Some(ordering.to_vec());
+                    } else if ordering[idx] != first[idx] {
+                        return if idx > 0 {
+                            Some(ordering[..idx].to_vec())
+                        } else {
+                            None
+                        };
+                    }
+                }
+                idx += 1;
             }
         }
-        idx += 1;
+        [] => None,
     }
 }
 
@@ -382,7 +386,7 @@ mod tests {
         }];
 
         let result = get_meet_of_orderings_helper(vec![input1, input2, input3]);
-        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result, Some(expected));
         Ok(())
     }
 
@@ -430,7 +434,7 @@ mod tests {
         ];
 
         let result = get_meet_of_orderings_helper(vec![input1.clone(), input2, input3]);
-        assert_eq!(result.unwrap(), input1);
+        assert_eq!(result, Some(input1));
         Ok(())
     }
 

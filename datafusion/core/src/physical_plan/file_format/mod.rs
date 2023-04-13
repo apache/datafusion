@@ -712,7 +712,7 @@ pub(crate) fn get_output_ordering(
             None
         } else {
             Some(output_ordering.to_vec())
-        }).unwrap_or_else(|| None)
+        }).unwrap_or(None)
 }
 
 #[cfg(test)]

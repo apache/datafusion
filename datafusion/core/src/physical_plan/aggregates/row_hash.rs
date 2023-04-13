@@ -33,7 +33,8 @@ use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AccumulatorItem,
-    AggregateMode, AggregateState, GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
+    AggregateMode, AggregationOrdering, GroupByOrderMode, PhysicalGroupBy,
+    RowAccumulatorItem,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
@@ -107,7 +108,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
-    state: Option<AggregateState>,
+    state: Option<AggregationOrdering>,
     is_end: bool,
 }
 
@@ -142,7 +143,7 @@ impl GroupedHashAggregateStream {
         context: Arc<TaskContext>,
         partition: usize,
         // Stores algorithm mode and output ordering
-        state: Option<AggregateState>,
+        state: Option<AggregationOrdering>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -284,7 +285,9 @@ impl Stream for GroupedHashAggregateStream {
                         Some(Err(e)) => return Poll::Ready(Some(Err(e))),
                         // inner is done, producing output
                         None => {
-                            self.set_can_emits()?;
+                            for element in self.aggr_state.group_states.iter_mut() {
+                                element.emit_status = GroupStatus::CanEmit;
+                            }
                             self.exec_state = ExecutionState::ProducingOutput;
                         }
                     }
@@ -303,7 +306,7 @@ impl Stream for GroupedHashAggregateStream {
                             self.row_group_skip_position += batch.num_rows();
                             if self.state.is_some() {
                                 self.exec_state = ExecutionState::ReadingInput;
-                                self.prune()?;
+                                self.prune();
                             }
                             return Poll::Ready(Some(Ok(batch)));
                         }
@@ -327,24 +330,33 @@ impl RecordBatchStream for GroupedHashAggregateStream {
     }
 }
 
+/// This utility object encapsulates the row object, the hash and the group
+/// indices for a group. This information is used when executing streaming
+/// GROUP BY calculations.
+struct GroupOrderInfo {
+    owned_row: OwnedRow,
+    hash: u64,
+    indices: Vec<u32>,
+}
+
 impl GroupedHashAggregateStream {
-    // Get the indices for each group
+    // Get indices for each group.
     fn get_per_group_indices(
         &mut self,
         group_values: &[ArrayRef],
-    ) -> Result<Vec<(OwnedRow, u64, Vec<u32>)>> {
+    ) -> Result<Vec<GroupOrderInfo>> {
         let group_rows = self.row_converter.convert_columns(group_values)?;
         let n_rows = group_rows.num_rows();
         // 1.1 Calculate the group keys for the group values
         let mut batch_hashes = vec![0; n_rows];
         create_hashes(group_values, &self.random_state, &mut batch_hashes)?;
-        let mut res: Vec<(OwnedRow, u64, Vec<u32>)> = vec![];
-        if let Some(AggregateState {
-            mode: GroupByOrderMode::Ordered(ordered_indices),
+        if let Some(AggregationOrdering {
+            mode: GroupByOrderMode::Ordered,
+            order_indices,
             ordering,
         }) = &self.state
         {
-            let sort_column = ordered_indices
+            let sort_column = order_indices
                 .iter()
                 .enumerate()
                 .map(|(idx, cur_idx)| SortColumn {
@@ -352,37 +364,39 @@ impl GroupedHashAggregateStream {
                     options: Some(ordering[idx].options),
                 })
                 .collect::<Vec<_>>();
-            let n_rows = group_rows.num_rows();
-            let ranges = evaluate_partition_ranges(n_rows, &sort_column)?;
-            for range in ranges {
-                let row = group_rows.row(range.start).owned();
-                let indices = (range.start as u32..range.end as u32).collect::<Vec<_>>();
-                res.push((row, batch_hashes[range.start], indices))
-            }
-        } else {
-            let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(n_rows);
-            for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
-                let row = group_rows.row(row_idx as usize).owned();
-                let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
-                    // In case of hash collusion. Get the partition where OwnedRow is same.
-                    row.eq(&res[*group_idx].0)
-                });
-                match entry {
-                    // Existing partition. Update indices for the corresponding partition.
-                    Some((_hash, group_idx)) => res[*group_idx].2.push(row_idx),
-                    None => {
-                        row_map.insert(
-                            hash,
-                            (hash, res.len()),
-                            |(hash, _group_index)| *hash,
-                        );
-                        // This is a new partition its only index is row_idx for now.
-                        res.push((row, hash, vec![row_idx]));
-                    }
+            let ranges = evaluate_partition_ranges(group_rows.num_rows(), &sort_column)?;
+            return Ok(ranges
+                .iter()
+                .map(|range| GroupOrderInfo {
+                    owned_row: group_rows.row(range.start).owned(),
+                    hash: batch_hashes[range.start],
+                    indices: (range.start as u32..range.end as u32).collect::<Vec<_>>(),
+                })
+                .collect());
+        }
+        let mut result: Vec<GroupOrderInfo> = vec![];
+        let mut row_map: RawTable<(u64, usize)> = RawTable::with_capacity(n_rows);
+        for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
+            let row = group_rows.row(row_idx as usize);
+            let entry = row_map.get_mut(hash, |(_, group_idx)| {
+                // In case of hash collusion. Get the partition where OwnedRow is same.
+                result[*group_idx].owned_row.row() == row
+            });
+            match entry {
+                // Existing partition. Update indices for the corresponding partition.
+                Some((_, group_idx)) => result[*group_idx].indices.push(row_idx),
+                None => {
+                    row_map.insert(hash, (hash, result.len()), |(hash, _)| *hash);
+                    // This is a new partition its only index is row_idx for now.
+                    result.push(GroupOrderInfo {
+                        owned_row: row.owned(),
+                        hash,
+                        indices: vec![row_idx],
+                    });
                 }
             }
         }
-        Ok(res)
+        Ok(result)
     }
 
     // Update the aggr_state according to groub_by values (result of group_by_expressions)
@@ -404,7 +418,12 @@ impl GroupedHashAggregateStream {
             map, group_states, ..
         } = &mut self.aggr_state;
 
-        for (owned_row, hash, indices) in per_group_indices {
+        for GroupOrderInfo {
+            owned_row,
+            hash,
+            indices,
+        } in per_group_indices
+        {
             let entry = map.get_mut(hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
@@ -436,7 +455,7 @@ impl GroupedHashAggregateStream {
                         Some(state) => {
                             let row = get_row_at_idx(group_values, indices[0] as usize)?;
                             state
-                                .ordered_indices()
+                                .order_indices
                                 .iter()
                                 .map(|idx| row[*idx].clone())
                                 .collect::<Vec<_>>()
@@ -616,10 +635,10 @@ impl GroupedHashAggregateStream {
                 get_optional_filters(&row_filter_values, &batch_indices);
             let normal_filter_values =
                 get_optional_filters(&normal_filter_values, &batch_indices);
-            if let Some(AggregateState {
-                mode: GroupByOrderMode::Ordered(_),
-                ..
-            }) = &self.state
+            if self
+                .state
+                .as_ref()
+                .map_or(false, |s| s.mode == GroupByOrderMode::Ordered)
             {
                 self.update_accumulators(
                     &groups_with_rows,
@@ -656,7 +675,7 @@ impl GroupedHashAggregateStream {
                 .aggr_state
                 .group_states
                 .last()
-                .map(|elem| elem.ordered_columns.clone());
+                .map(|item| item.ordered_columns.clone());
 
             if let Some(last_ordered_columns) = last_ordered_columns {
                 for cur_group in &mut self.aggr_state.group_states {
@@ -737,7 +756,7 @@ impl std::fmt::Debug for AggregationState {
 }
 
 impl GroupedHashAggregateStream {
-    fn prune(&mut self) -> Result<()> {
+    fn prune(&mut self) {
         let n_partition = self.aggr_state.group_states.len();
         self.aggr_state
             .group_states
@@ -745,21 +764,12 @@ impl GroupedHashAggregateStream {
         let n_partition_new = self.aggr_state.group_states.len();
         let n_pruned = n_partition - n_partition_new;
         self.aggr_state.map.clear();
-        for (idx, elem) in self.aggr_state.group_states.iter().enumerate() {
+        for (idx, item) in self.aggr_state.group_states.iter().enumerate() {
             self.aggr_state
                 .map
-                .insert(elem.hash, (elem.hash, idx), |(hash, _)| *hash);
+                .insert(item.hash, (item.hash, idx), |(hash, _)| *hash);
         }
         self.row_group_skip_position -= n_pruned;
-        Ok(())
-    }
-
-    fn set_can_emits(&mut self) -> Result<()> {
-        self.aggr_state
-            .group_states
-            .iter_mut()
-            .for_each(|elem| elem.emit_status = GroupStatus::CanEmit);
-        Ok(())
     }
 
     /// Create a RecordBatch with all group keys and accumulator' states or values.
@@ -768,9 +778,7 @@ impl GroupedHashAggregateStream {
         if skip_items > self.aggr_state.group_states.len() || self.is_end {
             return Ok(None);
         }
-        if skip_items == self.aggr_state.group_states.len() {
-            self.is_end = true;
-        }
+        self.is_end |= skip_items == self.aggr_state.group_states.len();
         if self.aggr_state.group_states.is_empty() {
             let schema = self.schema.clone();
             return Ok(Some(RecordBatch::new_empty(schema)));
@@ -782,9 +790,9 @@ impl GroupedHashAggregateStream {
         );
         let group_state_chunk = &self.aggr_state.group_states[skip_items..end_idx];
         // Consider only the groups that can be emitted. (The ones we are sure that will not receive new entry.)
-        let group_state_chunk = &group_state_chunk
+        let group_state_chunk = group_state_chunk
             .iter()
-            .filter(|elem| elem.emit_status == GroupStatus::CanEmit)
+            .filter(|item| item.emit_status == GroupStatus::CanEmit)
             .collect::<Vec<_>>();
 
         if group_state_chunk.is_empty() {
@@ -895,13 +903,11 @@ impl GroupedHashAggregateStream {
         }
 
         // Set status of the emitted groups to GroupStatus::Emitted mode.
-        self.aggr_state.group_states[skip_items..end_idx]
-            .iter_mut()
-            .for_each(|elem| {
-                if elem.emit_status == GroupStatus::CanEmit {
-                    elem.emit_status = GroupStatus::Emitted;
-                }
-            });
+        for gs in self.aggr_state.group_states[skip_items..end_idx].iter_mut() {
+            if gs.emit_status == GroupStatus::CanEmit {
+                gs.emit_status = GroupStatus::Emitted;
+            }
+        }
 
         Ok(Some(RecordBatch::try_new(self.schema.clone(), output)?))
     }

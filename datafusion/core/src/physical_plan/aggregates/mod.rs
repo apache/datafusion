@@ -18,42 +18,41 @@
 //! Aggregates functionalities
 
 use crate::execution::context::TaskContext;
-use crate::physical_plan::aggregates::no_grouping::AggregateStream;
+use crate::physical_plan::aggregates::{
+    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
+};
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
 };
 use arrow::array::ArrayRef;
+use arrow::compute::DEFAULT_CAST_OPTIONS;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::expressions::{Avg, CastExpr, Column, Sum};
 use datafusion_physical_expr::{
-    expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
+    aggregate::row_accumulator::RowAccumulator,
+    equivalence::project_equivalence_properties,
+    expressions,
+    expressions::{Avg, CastExpr, Column, Sum},
+    normalize_out_expr_with_alias_schema,
+    utils::{convert_to_expr, get_indices_of_matching_exprs},
+    AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
 use std::any::Any;
 use std::collections::HashMap;
-
-use arrow::compute::DEFAULT_CAST_OPTIONS;
-use datafusion_common::utils::longest_consecutive_prefix;
-use itertools::Itertools;
 use std::sync::Arc;
 
 mod no_grouping;
 mod row_hash;
 
-use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStream;
-use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
-use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
-use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -78,23 +77,10 @@ pub enum AggregateMode {
 /// Group By expression modes
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
-    /// It means that some of the expressions in the GROUP BY clause is ordered.
-    /// `Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
-    // For instance, in input is ordered by a, b and GROUP BY c, b, a is entered Vec<usize> would be vec![2, 1]
-    PartiallyOrdered(Vec<usize>),
-    /// It means that all of the expressions in the GROUP BY clause is ordered.
-    /// Vec<usize>` stores indices such that when iterated in this order GROUP BY expressions would match input ordering.
-    Ordered(Vec<usize>),
-}
-
-impl GroupByOrderMode {
-    /// Util function to get iteration order information stored inside the `GroupByOrderMode`.
-    pub fn ordered_indices(&self) -> &[usize] {
-        match &self {
-            GroupByOrderMode::Ordered(ordered_indices) => ordered_indices,
-            GroupByOrderMode::PartiallyOrdered(ordered_indices) => ordered_indices,
-        }
-    }
+    /// Some of the expressions in the GROUP BY clause have an ordering.
+    PartiallyOrdered,
+    /// All the expressions in the GROUP BY clause have orderings.
+    Ordered,
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -210,18 +196,12 @@ impl From<StreamType> for SendableRecordBatchStream {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AggregateState {
+pub(crate) struct AggregationOrdering {
     mode: GroupByOrderMode,
+    /// Stores indices such that when we iterate with these indices, GROUP BY
+    /// expressions match input ordering.
+    order_indices: Vec<usize>,
     ordering: Vec<PhysicalSortExpr>,
-}
-
-impl AggregateState {
-    pub fn ordered_indices(&self) -> &[usize] {
-        match &self.mode {
-            GroupByOrderMode::Ordered(ordered_indices) => ordered_indices,
-            GroupByOrderMode::PartiallyOrdered(ordered_indices) => ordered_indices,
-        }
-    }
 }
 
 /// Hash aggregate execution plan
@@ -251,55 +231,58 @@ pub struct AggregateExec {
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
-// If None of the expressions in the GROUP BY is ordered, function returns `None`
-// If some of the expressions in the GROUP BY is ordered, function returns `Some(GroupByOrderMode::PartiallyOrdered)`
-// If all of the expressions in the GROUP BY is ordered, function returns `Some(GroupByOrderMode::Ordered)`
+/// - If no GROUP BY expression has an ordering, returns `None`.
+/// - If some GROUP BY expressions have an ordering, returns `Some(GroupByOrderMode::PartiallyOrdered)`.
+/// - If all GROUP BY expressions have orderings, returns `Some(GroupByOrderMode::Ordered)`.
 fn get_working_mode(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
-) -> Option<GroupByOrderMode> {
+) -> Option<(GroupByOrderMode, Vec<usize>)> {
     if group_by.groups.len() > 1 {
-        // If we have more than 1 group (grouping set is used). We do not support
-        // streaming execution.
+        // We do not currently support streaming execution if we have more
+        // than one group (e.g. we have grouping sets).
         return None;
     };
 
     let output_ordering = input.output_ordering().unwrap_or(vec![]);
-    // Since direction of the ordering is not important for group by columns. We convert
-    // PhysicalSortExpr to PhysicalExpr in the existing ordering.
+    // Since direction of the ordering is not important for GROUP BY columns,
+    // we convert PhysicalSortExpr to PhysicalExpr in the existing ordering.
     let ordering_exprs = convert_to_expr(&output_ordering);
     let groupby_exprs = group_by
         .expr
         .iter()
-        .map(|(elem, _)| elem.clone())
+        .map(|(item, _)| item.clone())
         .collect::<Vec<_>>();
-    // Find where each expression of the group by clause occurs in the existing ordering (If occurs)
-    let indices = get_indices_of_matching_exprs(&groupby_exprs, &ordering_exprs, || {
-        input.equivalence_properties()
-    });
-    let ordered_indices = indices.iter().copied().sorted().collect::<Vec<_>>();
-    // Find out how many expressions of the existing ordering, defines ordering for expressions in the group by clause.
-    // If input is ordered by a, b, c, d and GROUP BY b, a, d is entered, below result would be 2. Meaning 2 elements (a, b)
-    // among group by expressions defines ordering in the input.
+    // Find where each expression of the GROUP BY clause occurs in the existing
+    // ordering (if it occurs):
+    let mut ordered_indices =
+        get_indices_of_matching_exprs(&groupby_exprs, &ordering_exprs, || {
+            input.equivalence_properties()
+        });
+    ordered_indices.sort();
+    // Find out how many expressions of the existing ordering define ordering
+    // for expressions in the GROUP BY clause. For example, if the input is
+    // ordered by a, b, c, d and we group by b, a, d; the result below would be.
+    // 2, meaning 2 elements (a, b) among the GROUP BY columns define ordering.
     let first_n = longest_consecutive_prefix(ordered_indices);
+    if first_n == 0 {
+        // No GROUP by columns are ordered, we can not do streaming execution.
+        return None;
+    }
     let ordered_exprs = ordering_exprs[0..first_n].to_vec();
-    // Find the indices of the group by expressions such that when iterated with this order would match existing ordering.
-    // For the example above, this would produce 1, 0. Meaning, among the GROUP BY expressions b, a, d: 1st and 0th entries (a, b)
-    // matches input ordering.
+    // Find indices for the GROUP BY expressions such that when we iterate with
+    // these indices, we would match existing ordering. For the example above,
+    // this would produce 1, 0; meaning 1st and 0th entries (a, b) among the
+    // GROUP BY expressions b, a, d match input ordering.
     let ordered_group_by_indices =
         get_indices_of_matching_exprs(&ordered_exprs, &groupby_exprs, || {
             input.equivalence_properties()
         });
-    if first_n > 0 {
-        if first_n == group_by.expr.len() {
-            Some(GroupByOrderMode::Ordered(ordered_group_by_indices))
-        } else {
-            Some(GroupByOrderMode::PartiallyOrdered(ordered_group_by_indices))
-        }
+    Some(if first_n == group_by.expr.len() {
+        (GroupByOrderMode::Ordered, ordered_group_by_indices)
     } else {
-        // If None of the group by columns is ordered. There is no way to run streaming execution.
-        None
-    }
+        (GroupByOrderMode::PartiallyOrdered, ordered_group_by_indices)
+    })
 }
 
 impl AggregateExec {
@@ -431,14 +414,12 @@ impl AggregateExec {
         }
     }
 
-    fn calc_aggregate_state(&self) -> Option<AggregateState> {
-        let mode = get_working_mode(&self.input, &self.group_by);
-        if let Some(mode) = mode {
+    fn calc_aggregate_state(&self) -> Option<AggregationOrdering> {
+        get_working_mode(&self.input, &self.group_by).map(|(mode, order_indices)| {
             let existing_ordering = self.input.output_ordering().unwrap_or(vec![]);
             let out_group_expr = self.output_group_expr();
-            // Output ordering information for the executor.
-            let out_ordering = mode
-                .ordered_indices()
+            // Calculate output ordering information for the operator:
+            let out_ordering = order_indices
                 .iter()
                 .zip(existing_ordering)
                 .map(|(idx, input_col)| PhysicalSortExpr {
@@ -446,13 +427,12 @@ impl AggregateExec {
                     options: input_col.options,
                 })
                 .collect::<Vec<_>>();
-            Some(AggregateState {
+            AggregationOrdering {
                 mode,
+                order_indices,
                 ordering: out_ordering,
-            })
-        } else {
-            None
-        }
+            }
+        })
     }
 }
 
@@ -495,15 +475,14 @@ impl ExecutionPlan for AggregateExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        let state = self.calc_aggregate_state();
         if children[0] {
-            if state.is_none() {
+            if self.calc_aggregate_state().is_none() {
                 // Cannot run without breaking pipeline.
                 Err(DataFusionError::Plan(
-                    "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
+                    "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.".to_string(),
                 ))
             } else {
                 Ok(true)
@@ -514,8 +493,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
-        let state = self.calc_aggregate_state();
-        state.map(|state| state.ordering)
+        self.calc_aggregate_state().map(|state| state.ordering)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -1037,22 +1015,22 @@ mod tests {
         // Some(GroupByOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
         // GroupByOrderMode.
         let test_cases = vec![
-            (vec!["a"], Some(Ordered(vec![0]))),
+            (vec!["a"], Some((Ordered, vec![0]))),
             (vec!["b"], None),
             (vec!["c"], None),
-            (vec!["b", "a"], Some(Ordered(vec![1, 0]))),
+            (vec!["b", "a"], Some((Ordered, vec![1, 0]))),
             (vec!["c", "b"], None),
-            (vec!["c", "a"], Some(PartiallyOrdered(vec![1]))),
-            (vec!["c", "b", "a"], Some(Ordered(vec![2, 1, 0]))),
-            (vec!["d", "a"], Some(PartiallyOrdered(vec![1]))),
+            (vec!["c", "a"], Some((PartiallyOrdered, vec![1]))),
+            (vec!["c", "b", "a"], Some((Ordered, vec![2, 1, 0]))),
+            (vec!["d", "a"], Some((PartiallyOrdered, vec![1]))),
             (vec!["d", "b"], None),
             (vec!["d", "c"], None),
-            (vec!["d", "b", "a"], Some(PartiallyOrdered(vec![2, 1]))),
+            (vec!["d", "b", "a"], Some((PartiallyOrdered, vec![2, 1]))),
             (vec!["d", "c", "b"], None),
-            (vec!["d", "c", "a"], Some(PartiallyOrdered(vec![2]))),
+            (vec!["d", "c", "a"], Some((PartiallyOrdered, vec![2]))),
             (
                 vec!["d", "c", "b", "a"],
-                Some(PartiallyOrdered(vec![3, 2, 1])),
+                Some((PartiallyOrdered, vec![3, 2, 1])),
             ),
         ];
         for (case_idx, test_case) in test_cases.iter().enumerate() {
