@@ -602,7 +602,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         let input_stream = select(left_stream, right_stream).boxed();
 
         let reservation = Arc::new(Mutex::new(
-            MemoryConsumer::new(format!("SymmetricHashJoinExec[{partition}]"))
+            MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
                 .register(context.memory_pool()),
         ));
         if let Some(g) = graph.as_ref() {
