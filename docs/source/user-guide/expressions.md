@@ -88,6 +88,7 @@ expressions such as `col("a") + col("b")` to be used.
 | cbrt(x)               | cube root                                         |
 | ceil(x)               | nearest integer greater than or equal to argument |
 | cos(x)                | cosine                                            |
+| cosh(x)                | hyperbolic cosine                                            |
 | exp(x)                | exponential                                       |
 | floor(x)              | nearest integer less than or equal to argument    |
 | ln(x)                 | natural logarithm                                 |
@@ -98,8 +99,10 @@ expressions such as `col("a") + col("b")` to be used.
 | round(x)              | round to nearest integer                          |
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |
+| sinh(x)                | hyperbolic sine                                              |
 | sqrt(x)               | square root                                       |
 | tan(x)                | tangent                                           |
+| tanh(x)                | hyperbolic tangent                                           |
 | trunc(x)              | truncate toward zero                              |
 
 ### Math functions usage notes:
