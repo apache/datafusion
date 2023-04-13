@@ -48,12 +48,11 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
-use datafusion_common::{reverse_sort_options, DataFusionError};
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
-    make_sort_exprs_from_requirements, ordering_satisfy,
-    ordering_satisfy_requirement_concrete,
+    ordering_satisfy, ordering_satisfy_requirement_concrete,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::{concat, izip};
 use std::iter::zip;
 use std::sync::Arc;
@@ -468,7 +467,8 @@ fn ensure_sorting(
                 ) {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
-                    let sort_expr = make_sort_exprs_from_requirements(&required_ordering);
+                    let sort_expr =
+                        PhysicalSortRequirement::to_sort_exprs(required_ordering);
                     add_sort_above(child, sort_expr)?;
                     if is_sort(child) {
                         *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
@@ -479,7 +479,7 @@ fn ensure_sorting(
             }
             (Some(required), None) => {
                 // Ordering requirement is not met, we should add a `SortExec` to the plan.
-                let sort_expr = make_sort_exprs_from_requirements(&required);
+                let sort_expr = PhysicalSortRequirement::to_sort_exprs(required);
                 add_sort_above(child, sort_expr)?;
                 *sort_onwards = Some(ExecTree::new(child.clone(), idx, vec![]));
             }
@@ -587,7 +587,7 @@ fn analyze_window_sort_removal(
         .map(|elem| elem.len())
         .unwrap_or(0);
 
-    let mut first_should_reverse = None;
+    let mut needs_reverse = None;
     for sort_any in sort_tree.get_leaves() {
         let sort_output_ordering = sort_any.output_ordering();
         // Variable `sort_any` will either be a `SortExec` or a
@@ -598,32 +598,27 @@ fn analyze_window_sort_removal(
         let sort_output_ordering = sort_output_ordering.ok_or_else(|| {
             DataFusionError::Plan("A SortExec should have output ordering".to_string())
         })?;
-        // It is enough to check whether first n_req element of the sort output satisfies window_exec requirement.
-        // Because length of window_exec requirement is n_req.
+        // It is enough to check whether the first "n_req" elements of the sort
+        // output satisfy window_exec's requirement as it is only "n_req" long.
         let required_ordering = &sort_output_ordering[0..n_req];
         if let Some(physical_ordering) = physical_ordering {
-            let (can_skip_sorting, should_reverse) = can_skip_sort(
+            if let Some(should_reverse) = can_skip_sort(
                 window_expr[0].partition_by(),
                 required_ordering,
                 &sort_input.schema(),
                 physical_ordering,
-            )?;
-            if !can_skip_sorting {
-                return Ok(None);
-            } else if let Some(first_should_reverse) = first_should_reverse {
-                if first_should_reverse != should_reverse {
-                    return Ok(None);
+            )? {
+                if should_reverse == *needs_reverse.get_or_insert(should_reverse) {
+                    continue;
                 }
-            } else {
-                first_should_reverse = Some(should_reverse);
             }
-        } else {
-            // If there is no physical ordering, there is no way to remove a
-            // sort, so immediately return.
-            return Ok(None);
         }
+        // If there is no physical ordering, or we can not skip the sort, or
+        // window reversal requirements are not uniform; then there is no
+        // opportunity for a sort removal -- we immediately return.
+        return Ok(None);
     }
-    let new_window_expr = if first_should_reverse.unwrap() {
+    let new_window_expr = if needs_reverse.unwrap() {
         window_expr
             .iter()
             .map(|e| e.get_reverse_expr())
@@ -784,39 +779,40 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
 #[derive(Debug)]
 /// This structure stores extra column information required to remove unnecessary sorts.
 pub struct ColumnInfo {
-    is_aligned: bool,
     reverse: bool,
     is_partition: bool,
 }
 
-/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s and returns a tuple.
-/// The first element indicates whether these `PhysicalSortExpr`s can be removed from the physical plan.
-/// The second element is a flag indicating whether we should reverse the sort direction in order to
-/// remove physical sort expressions from the plan.
+/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s
+/// to decide whether a `SortExec` before a `WindowAggExec` can be removed.
+/// A `None` return value indicates that we can remove the sort in question.
+/// A `Some(bool)` value indicates otherwise, and signals whether we need to
+/// reverse the ordering in order to remove the sort in question.
 pub fn can_skip_sort(
     partition_keys: &[Arc<dyn PhysicalExpr>],
     required: &[PhysicalSortExpr],
     input_schema: &SchemaRef,
     physical_ordering: &[PhysicalSortExpr],
-) -> Result<(bool, bool)> {
+) -> Result<Option<bool>> {
     if required.len() > physical_ordering.len() {
-        return Ok((false, false));
+        return Ok(None);
     }
     let mut col_infos = vec![];
     for (sort_expr, physical_expr) in zip(required, physical_ordering) {
         let column = sort_expr.expr.clone();
         let is_partition = partition_keys.iter().any(|e| e.eq(&column));
-        let (is_aligned, reverse) =
-            check_alignment(input_schema, physical_expr, sort_expr);
-        col_infos.push(ColumnInfo {
-            is_aligned,
-            reverse,
-            is_partition,
-        });
+        if let Some(reverse) = check_alignment(input_schema, physical_expr, sort_expr)? {
+            col_infos.push(ColumnInfo {
+                reverse,
+                is_partition,
+            });
+        } else {
+            return Ok(None);
+        }
     }
     let partition_by_sections = col_infos
         .iter()
-        .filter(|elem| elem.is_partition)
+        .filter(|c| c.is_partition)
         .collect::<Vec<_>>();
     let can_skip_partition_bys = if partition_by_sections.is_empty() {
         true
@@ -824,7 +820,7 @@ pub fn can_skip_sort(
         let first_reverse = partition_by_sections[0].reverse;
         let can_skip_partition_bys = partition_by_sections
             .iter()
-            .all(|c| c.is_aligned && c.reverse == first_reverse);
+            .all(|c| c.reverse == first_reverse);
         can_skip_partition_bys
     };
     let order_by_sections = col_infos
@@ -835,38 +831,36 @@ pub fn can_skip_sort(
         (true, false)
     } else {
         let first_reverse = order_by_sections[0].reverse;
-        let can_skip_order_bys = order_by_sections
-            .iter()
-            .all(|c| c.is_aligned && c.reverse == first_reverse);
+        let can_skip_order_bys =
+            order_by_sections.iter().all(|c| c.reverse == first_reverse);
         (can_skip_order_bys, first_reverse)
     };
     let can_skip = can_skip_order_bys && can_skip_partition_bys;
-    Ok((can_skip, should_reverse_order_bys))
+    Ok(can_skip.then_some(should_reverse_order_bys))
 }
 
-/// Compares `physical_ordering` and `required` ordering, returns a tuple
-/// indicating (1) whether this column requires sorting, and (2) whether we
-/// should reverse the window expression in order to avoid sorting.
+/// Compares `physical_ordering` and `required` ordering, decides whether
+/// alignments match. A `None` return value indicates that current column is
+/// not aligned. A `Some(bool)` value indicates otherwise, and signals whether
+/// we should reverse the window expression in order to avoid sorting.
 fn check_alignment(
     input_schema: &SchemaRef,
     physical_ordering: &PhysicalSortExpr,
     required: &PhysicalSortExpr,
-) -> (bool, bool) {
-    if required.expr.eq(&physical_ordering.expr) {
-        let nullable = required.expr.nullable(input_schema).unwrap();
+) -> Result<Option<bool>> {
+    Ok(if required.expr.eq(&physical_ordering.expr) {
         let physical_opts = physical_ordering.options;
         let required_opts = required.options;
-        let is_reversed = if nullable {
-            physical_opts == reverse_sort_options(required_opts)
+        if required.expr.nullable(input_schema)? {
+            let reverse = physical_opts == !required_opts;
+            (reverse || physical_opts == required_opts).then_some(reverse)
         } else {
             // If the column is not nullable, NULLS FIRST/LAST is not important.
-            physical_opts.descending != required_opts.descending
-        };
-        let can_skip = !nullable || is_reversed || (physical_opts == required_opts);
-        (can_skip, is_reversed)
+            Some(physical_opts.descending != required_opts.descending)
+        }
     } else {
-        (false, false)
-    }
+        None
+    })
 }
 
 #[cfg(test)]
@@ -901,7 +895,8 @@ mod tests {
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
-        let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
+        let non_nullable_column =
+            Field::new("non_nullable_col", DataType::Boolean, false);
         let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
 
         Ok(schema)
@@ -925,17 +920,17 @@ mod tests {
     async fn test_is_column_aligned_nullable() -> Result<()> {
         let schema = create_test_schema()?;
         let params = vec![
-            ((true, true), (false, false), (true, true)),
-            ((true, true), (false, true), (false, false)),
-            ((true, true), (true, false), (false, false)),
-            ((true, false), (false, true), (true, true)),
-            ((true, false), (false, false), (false, false)),
-            ((true, false), (true, true), (false, false)),
+            ((true, true), (false, false), Some(true)),
+            ((true, true), (false, true), None),
+            ((true, true), (true, false), None),
+            ((true, false), (false, true), Some(true)),
+            ((true, false), (false, false), None),
+            ((true, false), (true, true), None),
         ];
         for (
             (physical_desc, physical_nulls_first),
             (req_desc, req_nulls_first),
-            (is_aligned_expected, reverse_expected),
+            expected,
         ) in params
         {
             let physical_ordering = PhysicalSortExpr {
@@ -952,10 +947,8 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let (is_aligned, reverse) =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
-            assert_eq!(is_aligned, is_aligned_expected);
-            assert_eq!(reverse, reverse_expected);
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
+            assert_eq!(res, expected);
         }
 
         Ok(())
@@ -966,17 +959,17 @@ mod tests {
         let schema = create_test_schema()?;
 
         let params = vec![
-            ((true, true), (false, false), (true, true)),
-            ((true, true), (false, true), (true, true)),
-            ((true, true), (true, false), (true, false)),
-            ((true, false), (false, true), (true, true)),
-            ((true, false), (false, false), (true, true)),
-            ((true, false), (true, true), (true, false)),
+            ((true, true), (false, false), Some(true)),
+            ((true, true), (false, true), Some(true)),
+            ((true, true), (true, false), Some(false)),
+            ((true, false), (false, true), Some(true)),
+            ((true, false), (false, false), Some(true)),
+            ((true, false), (true, true), Some(false)),
         ];
         for (
             (physical_desc, physical_nulls_first),
             (req_desc, req_nulls_first),
-            (is_aligned_expected, reverse_expected),
+            expected,
         ) in params
         {
             let physical_ordering = PhysicalSortExpr {
@@ -993,10 +986,8 @@ mod tests {
                     nulls_first: req_nulls_first,
                 },
             };
-            let (is_aligned, reverse) =
-                check_alignment(&schema, &physical_ordering, &required_ordering);
-            assert_eq!(is_aligned, is_aligned_expected);
-            assert_eq!(reverse, reverse_expected);
+            let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
+            assert_eq!(res, expected);
         }
 
         Ok(())
@@ -1220,12 +1211,10 @@ mod tests {
             sort_expr("non_nullable_col", &schema),
         ];
         let repartition_exec = repartition_exec(spm);
-        let sort2 = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs.clone(),
-            repartition_exec,
-            true,
-            None,
-        )) as _;
+        let sort2 = Arc::new(
+            SortExec::new(sort_exprs.clone(), repartition_exec)
+                .with_preserve_partitioning(true),
+        ) as _;
         let spm2 = sort_preserving_merge_exec(sort_exprs, sort2);
 
         let physical_plan = aggregate_exec(spm2);
@@ -1263,12 +1252,9 @@ mod tests {
 
         let sort_exprs = vec![sort_expr("non_nullable_col", &schema)];
         // let sort = sort_exec(sort_exprs.clone(), union);
-        let sort = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs.clone(),
-            union,
-            true,
-            None,
-        )) as _;
+        let sort = Arc::new(
+            SortExec::new(sort_exprs.clone(), union).with_preserve_partitioning(true),
+        ) as _;
         let spm = sort_preserving_merge_exec(sort_exprs, sort);
 
         let filter = filter_exec(
@@ -2274,12 +2260,8 @@ mod tests {
         let window = bounded_window_exec("nullable_col", sort_exprs.clone(), memory_exec);
         let repartition = repartition_exec(window);
 
-        let orig_plan = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs,
-            repartition,
-            false,
-            None,
-        )) as Arc<dyn ExecutionPlan>;
+        let orig_plan =
+            Arc::new(SortExec::new(sort_exprs, repartition)) as Arc<dyn ExecutionPlan>;
 
         let mut plan = orig_plan.clone();
         let rules = vec![
@@ -2315,12 +2297,10 @@ mod tests {
         let repartition = repartition_exec(coalesce_partitions);
         let sort_exprs = vec![sort_expr("nullable_col", &schema)];
         // Add local sort
-        let sort = Arc::new(SortExec::new_with_partitioning(
-            sort_exprs.clone(),
-            repartition,
-            true,
-            None,
-        )) as _;
+        let sort = Arc::new(
+            SortExec::new(sort_exprs.clone(), repartition)
+                .with_preserve_partitioning(true),
+        ) as _;
         let spm = sort_preserving_merge_exec(sort_exprs.clone(), sort);
         let sort = sort_exec(sort_exprs, spm);
 
@@ -2372,7 +2352,7 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
-        Arc::new(SortExec::try_new(sort_exprs, input, None).unwrap())
+        Arc::new(SortExec::new(sort_exprs, input))
     }
 
     fn sort_preserving_merge_exec(
@@ -2489,6 +2469,7 @@ mod tests {
             AggregateExec::try_new(
                 AggregateMode::Final,
                 PhysicalGroupBy::default(),
+                vec![],
                 vec![],
                 input,
                 schema,

@@ -40,7 +40,6 @@ use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::type_coercion::TypeCoercion;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use chrono::{DateTime, Utc};
 use datafusion_common::config::ConfigOptions;
@@ -209,7 +208,6 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
@@ -594,7 +592,7 @@ mod tests {
                 let metadata =
                     [("key".into(), format!("value {i}"))].into_iter().collect();
 
-                let new_arrow_field = f.field().clone().with_metadata(metadata);
+                let new_arrow_field = f.field().as_ref().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
                     DFField::from_qualified(qualifier.clone(), new_arrow_field)
                 } else {

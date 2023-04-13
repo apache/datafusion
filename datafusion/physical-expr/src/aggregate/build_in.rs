@@ -29,7 +29,7 @@
 use crate::{expressions, AggregateExpr, PhysicalExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::aggregate_function::return_type;
+use datafusion_expr::aggregate_function::{return_type, sum_type_of_avg};
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
 
@@ -48,15 +48,13 @@ pub fn create_aggregate_expr(
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
-    let return_type = return_type(fun, &input_phy_types)?;
+    let rt_type = return_type(fun, &input_phy_types)?;
     let input_phy_exprs = input_phy_exprs.to_vec();
 
     Ok(match (fun, distinct) {
-        (AggregateFunction::Count, false) => Arc::new(expressions::Count::new(
-            input_phy_exprs[0].clone(),
-            name,
-            return_type,
-        )),
+        (AggregateFunction::Count, false) => Arc::new(
+            expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, rt_type),
+        ),
         (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
             input_phy_types[0].clone(),
             input_phy_exprs[0].clone(),
@@ -65,17 +63,21 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
-        (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
-            input_phy_exprs[0].clone(),
-            name,
-            return_type,
-        )),
+        (AggregateFunction::Sum, false) => {
+            let cast_to_sum_type = rt_type != input_phy_types[0];
+            Arc::new(expressions::Sum::new_with_pre_cast(
+                input_phy_exprs[0].clone(),
+                name,
+                rt_type,
+                cast_to_sum_type,
+            ))
+        }
         (AggregateFunction::Sum, true) => Arc::new(expressions::DistinctSum::new(
             vec![input_phy_exprs[0].clone()],
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::ApproxDistinct, _) => {
             Arc::new(expressions::ApproxDistinct::new(
@@ -99,18 +101,24 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::Max, _) => Arc::new(expressions::Max::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
-        (AggregateFunction::Avg, false) => Arc::new(expressions::Avg::new(
-            input_phy_exprs[0].clone(),
-            name,
-            return_type,
-        )),
+        (AggregateFunction::Avg, false) => {
+            let sum_type = sum_type_of_avg(&input_phy_types)?;
+            let cast_to_sum_type = sum_type != input_phy_types[0];
+            Arc::new(expressions::Avg::new_with_pre_cast(
+                input_phy_exprs[0].clone(),
+                name,
+                sum_type,
+                rt_type,
+                cast_to_sum_type,
+            ))
+        }
         (AggregateFunction::Avg, true) => {
             return Err(DataFusionError::NotImplemented(
                 "AVG(DISTINCT) aggregations are not available".to_string(),
@@ -119,7 +127,7 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::Variance, true) => {
             return Err(DataFusionError::NotImplemented(
@@ -127,7 +135,7 @@ pub fn create_aggregate_expr(
             ));
         }
         (AggregateFunction::VariancePop, false) => Arc::new(
-            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, return_type),
+            expressions::VariancePop::new(input_phy_exprs[0].clone(), name, rt_type),
         ),
         (AggregateFunction::VariancePop, true) => {
             return Err(DataFusionError::NotImplemented(
@@ -138,7 +146,7 @@ pub fn create_aggregate_expr(
             input_phy_exprs[0].clone(),
             input_phy_exprs[1].clone(),
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::Covariance, true) => {
             return Err(DataFusionError::NotImplemented(
@@ -150,7 +158,7 @@ pub fn create_aggregate_expr(
                 input_phy_exprs[0].clone(),
                 input_phy_exprs[1].clone(),
                 name,
-                return_type,
+                rt_type,
             ))
         }
         (AggregateFunction::CovariancePop, true) => {
@@ -161,7 +169,7 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::Stddev, true) => {
             return Err(DataFusionError::NotImplemented(
@@ -171,7 +179,7 @@ pub fn create_aggregate_expr(
         (AggregateFunction::StddevPop, false) => Arc::new(expressions::StddevPop::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::StddevPop, true) => {
             return Err(DataFusionError::NotImplemented(
@@ -183,7 +191,7 @@ pub fn create_aggregate_expr(
                 input_phy_exprs[0].clone(),
                 input_phy_exprs[1].clone(),
                 name,
-                return_type,
+                rt_type,
             ))
         }
         (AggregateFunction::Correlation, true) => {
@@ -197,14 +205,14 @@ pub fn create_aggregate_expr(
                     // Pass in the desired percentile expr
                     input_phy_exprs,
                     name,
-                    return_type,
+                    rt_type,
                 )?)
             } else {
                 Arc::new(expressions::ApproxPercentileCont::new_with_max_size(
                     // Pass in the desired percentile expr
                     input_phy_exprs,
                     name,
-                    return_type,
+                    rt_type,
                 )?)
             }
         }
@@ -219,7 +227,7 @@ pub fn create_aggregate_expr(
                 // Pass in the desired percentile expr
                 input_phy_exprs,
                 name,
-                return_type,
+                rt_type,
             )?)
         }
         (AggregateFunction::ApproxPercentileContWithWeight, true) => {
@@ -232,7 +240,7 @@ pub fn create_aggregate_expr(
             Arc::new(expressions::ApproxMedian::try_new(
                 input_phy_exprs[0].clone(),
                 name,
-                return_type,
+                rt_type,
             )?)
         }
         (AggregateFunction::ApproxMedian, true) => {
@@ -243,7 +251,7 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Median, false) => Arc::new(expressions::Median::new(
             input_phy_exprs[0].clone(),
             name,
-            return_type,
+            rt_type,
         )),
         (AggregateFunction::Median, true) => {
             return Err(DataFusionError::NotImplemented(
@@ -316,13 +324,9 @@ mod tests {
                         assert!(result_agg_phy_exprs.as_any().is::<ArrayAgg>());
                         assert_eq!("c1", result_agg_phy_exprs.name());
                         assert_eq!(
-                            Field::new(
+                            Field::new_list(
                                 "c1",
-                                DataType::List(Box::new(Field::new(
-                                    "item",
-                                    data_type.clone(),
-                                    true,
-                                ))),
+                                Field::new("item", data_type.clone(), true,),
                                 false,
                             ),
                             result_agg_phy_exprs.field().unwrap()
@@ -359,13 +363,9 @@ mod tests {
                         assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
                         assert_eq!("c1", result_distinct.name());
                         assert_eq!(
-                            Field::new(
+                            Field::new_list(
                                 "c1",
-                                DataType::List(Box::new(Field::new(
-                                    "item",
-                                    data_type.clone(),
-                                    true,
-                                ))),
+                                Field::new("item", data_type.clone(), true,),
                                 false,
                             ),
                             result_agg_phy_exprs.field().unwrap()

@@ -22,10 +22,13 @@ use crate::expr::{
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::type_coercion::other::get_coerce_type_for_case_expression;
-use crate::{aggregate_function, function, window_function};
+use crate::{
+    aggregate_function, function, window_function, LogicalPlan, Projection, Subquery,
+};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use std::sync::Arc;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
@@ -290,20 +293,60 @@ impl ExprSchemable for Expr {
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
     fn cast_to<S: ExprSchema>(self, cast_to_type: &DataType, schema: &S) -> Result<Expr> {
+        let this_type = self.get_type(schema)?;
+        if this_type == *cast_to_type {
+            return Ok(self);
+        }
+
         // TODO(kszucs): most of the operations do not validate the type correctness
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
-        let this_type = self.get_type(schema)?;
-        if this_type == *cast_to_type {
-            Ok(self)
-        } else if can_cast_types(&this_type, cast_to_type) {
-            Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone())))
+
+        if can_cast_types(&this_type, cast_to_type) {
+            match self {
+                Expr::ScalarSubquery(subquery) => {
+                    Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
+                }
+                _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
+            }
         } else {
             Err(DataFusionError::Plan(format!(
                 "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
             )))
         }
     }
+}
+
+/// cast subquery in InSubquery/ScalarSubquery to a given type.
+pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
+    if subquery.subquery.schema().field(0).data_type() == cast_to_type {
+        return Ok(subquery);
+    }
+
+    let plan = subquery.subquery.as_ref();
+    let new_plan = match plan {
+        LogicalPlan::Projection(projection) => {
+            let cast_expr = projection.expr[0]
+                .clone()
+                .cast_to(cast_to_type, projection.input.schema())?;
+            LogicalPlan::Projection(Projection::try_new(
+                vec![cast_expr],
+                projection.input.clone(),
+            )?)
+        }
+        _ => {
+            let cast_expr = Expr::Column(plan.schema().field(0).qualified_column())
+                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            LogicalPlan::Projection(Projection::try_new(
+                vec![cast_expr],
+                subquery.subquery,
+            )?)
+        }
+    };
+    Ok(Subquery {
+        subquery: Arc::new(new_plan),
+        outer_ref_columns: subquery.outer_ref_columns,
+    })
 }
 
 #[cfg(test)]

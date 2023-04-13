@@ -30,21 +30,20 @@ use crate::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::compute::{
-    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
-};
+use arrow::compute::{concat, concat_batches};
+use arrow::datatypes::SchemaBuilder;
 use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -271,13 +270,14 @@ fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(input_schema.fields().len() + window_expr.len());
-    fields.extend_from_slice(input_schema.fields());
+    let capacity = input_schema.fields().len() + window_expr.len();
+    let mut builder = SchemaBuilder::with_capacity(capacity);
+    builder.extend(input_schema.fields().iter().cloned());
     // append results to the schema
     for expr in window_expr {
-        fields.push(expr.field()?);
+        builder.push(expr.field()?);
     }
-    Ok(Schema::new(fields))
+    Ok(builder.finish())
 }
 
 /// Compute the window aggregate columns
@@ -336,7 +336,7 @@ impl WindowAggStream {
             .map(|elem| elem.evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
-            self.evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
+            evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
 
         let mut partition_results = vec![];
         // Calculate window cols
@@ -361,25 +361,6 @@ impl WindowAggStream {
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
         Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
-    }
-
-    /// Evaluates the partition points given the sort columns. If the sort columns are
-    /// empty, then the result will be a single element vector spanning the entire batch.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>()
-        })
     }
 }
 

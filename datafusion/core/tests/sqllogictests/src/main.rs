@@ -17,6 +17,8 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+#[cfg(target_family = "windows")]
+use std::thread;
 
 use log::info;
 use sqllogictest::strict_column_validator;
@@ -33,16 +35,31 @@ mod utils;
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
-#[tokio::main]
 #[cfg(target_family = "windows")]
-pub async fn main() -> Result<(), Box<dyn Error>> {
-    println!("Skipping test on windows");
-    Ok(())
+pub fn main() {
+    // Tests from `tpch.slt` fail with stackoverflow with the default stack size.
+    thread::Builder::new()
+        .stack_size(2 * 1024 * 1024) // 2 MB
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async { run_tests().await })
+                .unwrap()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<(), Box<dyn Error>> {
+    run_tests().await
+}
+
+async fn run_tests() -> Result<(), Box<dyn Error>> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
@@ -154,6 +171,10 @@ async fn context_for_test_file(relative_path: &Path) -> SessionContext {
         "aggregate.slt" | "select.slt" => {
             info!("Registering aggregate tables");
             setup::register_aggregate_tables(&ctx).await;
+        }
+        "scalar.slt" => {
+            info!("Registering scalar tables");
+            setup::register_scalar_tables(&ctx).await;
         }
         _ => {
             info!("Using default SessionContext");

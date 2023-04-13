@@ -25,6 +25,7 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -67,9 +68,9 @@ impl AggregateExpr for DistinctSum {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         // State field is a List which stores items to rebuild hash set.
-        Ok(vec![Field::new(
+        Ok(vec![Field::new_list(
             format_state_name(&self.name, "sum distinct"),
-            DataType::List(Box::new(Field::new("item", self.data_type.clone(), true))),
+            Field::new("item", self.data_type.clone(), true),
             false,
         )])
     }
@@ -84,6 +85,24 @@ impl AggregateExpr for DistinctSum {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DistinctSumAccumulator::try_new(&self.data_type)?))
+    }
+}
+
+impl PartialEq<dyn Any> for DistinctSum {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.exprs.len() == x.exprs.len()
+                    && self
+                        .exprs
+                        .iter()
+                        .zip(x.exprs.iter())
+                        .all(|(this, other)| this.eq(other))
+            })
+            .unwrap_or(false)
     }
 }
 

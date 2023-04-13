@@ -226,6 +226,14 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     }
 }
 
+/// Returns an approximate value of π
+pub fn pi() -> Expr {
+    Expr::ScalarFunction {
+        fun: built_in_function::BuiltinScalarFunction::Pi,
+        args: vec![],
+    }
+}
+
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction {
@@ -446,12 +454,19 @@ macro_rules! nary_scalar_expr {
 
 // math functions
 scalar_expr!(Sqrt, sqrt, num, "square root of a number");
+scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Tan, tan, num, "tangent");
+scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
+scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
+scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
 scalar_expr!(Asin, asin, num, "inverse sine");
 scalar_expr!(Acos, acos, num, "inverse cosine");
 scalar_expr!(Atan, atan, num, "inverse tangent");
+scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
+scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
+scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
 scalar_expr!(
     Floor,
     floor,
@@ -758,12 +773,19 @@ mod test {
     #[test]
     fn scalar_function_definitions() {
         test_unary_scalar_expr!(Sqrt, sqrt);
+        test_unary_scalar_expr!(Cbrt, cbrt);
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Tan, tan);
+        test_unary_scalar_expr!(Sinh, sinh);
+        test_unary_scalar_expr!(Cosh, cosh);
+        test_unary_scalar_expr!(Tanh, tanh);
         test_unary_scalar_expr!(Asin, asin);
         test_unary_scalar_expr!(Acos, acos);
         test_unary_scalar_expr!(Atan, atan);
+        test_unary_scalar_expr!(Asinh, asinh);
+        test_unary_scalar_expr!(Acosh, acosh);
+        test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_nary_scalar_expr!(Round, round, input);

@@ -30,8 +30,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
 };
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
-use crate::physical_plan::sorts::SortedStream;
+use crate::physical_plan::sorts::merge::streaming_merge;
 use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
@@ -169,37 +168,40 @@ impl ExternalSorter {
         let batch_size = self.session_config.batch_size();
 
         if self.spilled_before() {
-            let tracking_metrics = self
+            let intermediate_metrics = self
                 .metrics_set
                 .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
-            let mut streams: Vec<SortedStream> = vec![];
+            let mut merge_metrics = self
+                .metrics_set
+                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
+
+            let mut streams = vec![];
             if !self.in_mem_batches.is_empty() {
                 let in_mem_stream = in_mem_partial_sort(
                     &mut self.in_mem_batches,
                     self.schema.clone(),
                     &self.expr,
                     batch_size,
-                    tracking_metrics,
+                    intermediate_metrics,
                     self.fetch,
                 )?;
-                let prev_used = self.reservation.free();
-                streams.push(SortedStream::new(in_mem_stream, prev_used));
+                // TODO: More accurate, dynamic memory accounting (#5885)
+                merge_metrics.init_mem_used(self.reservation.free());
+                streams.push(in_mem_stream);
             }
 
             for spill in self.spills.drain(..) {
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
-                streams.push(SortedStream::new(stream, 0));
+                streams.push(stream);
             }
-            let tracking_metrics = self
-                .metrics_set
-                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
-            Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+
+            streaming_merge(
                 streams,
                 self.schema.clone(),
                 &self.expr,
-                tracking_metrics,
+                merge_metrics,
                 self.session_config.batch_size(),
-            )?))
+            )
         } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self
                 .metrics_set
@@ -517,8 +519,9 @@ impl Stream for SortedSizedRecordBatchStream {
                         let arrays = self
                             .batches
                             .iter()
-                            .map(|b| b.column(i).data())
+                            .map(|b| b.column(i).to_data())
                             .collect::<Vec<_>>();
+                        let arrays = arrays.iter().collect();
                         let mut mutable = MutableArrayData::new(arrays, false, num_rows);
                         for x in slices.iter() {
                             mutable.extend(
@@ -619,7 +622,10 @@ fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// External Sort execution plan
+/// Sort execution plan.
+///
+/// This operator supports sorting datasets that are larger than the
+/// memory allotted by the memory manager, by spilling to disk.
 #[derive(Debug)]
 pub struct SortExec {
     /// Input schema
@@ -628,7 +634,8 @@ pub struct SortExec {
     expr: Vec<PhysicalSortExpr>,
     /// Containing all metrics set created during sort
     metrics_set: CompositeMetricsSet,
-    /// Preserve partitions of input plan
+    /// Preserve partitions of input plan. If false, the input partitions
+    /// will be sorted and merged into a single output partition.
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
@@ -636,12 +643,42 @@ pub struct SortExec {
 
 impl SortExec {
     /// Create a new sort execution plan
+    #[deprecated(since = "22.0.0", note = "use `new` and `with_fetch`")]
     pub fn try_new(
         expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        Ok(Self::new_with_partitioning(expr, input, false, fetch))
+        Ok(Self::new(expr, input).with_fetch(fetch))
+    }
+
+    /// Create a new sort execution plan that produces a single,
+    /// sorted output partition.
+    pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            expr,
+            input,
+            metrics_set: CompositeMetricsSet::new(),
+            preserve_partitioning: false,
+            fetch: None,
+        }
+    }
+
+    /// Create a new sort execution plan with the option to preserve
+    /// the partitioning of the input plan
+    #[deprecated(
+        since = "22.0.0",
+        note = "use `new`, `with_fetch` and `with_preserve_partioning` instead"
+    )]
+    pub fn new_with_partitioning(
+        expr: Vec<PhysicalSortExpr>,
+        input: Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
+        fetch: Option<usize>,
+    ) -> Self {
+        Self::new(expr, input)
+            .with_fetch(fetch)
+            .with_preserve_partitioning(preserve_partitioning)
     }
 
     /// Whether this `SortExec` preserves partitioning of the children
@@ -649,21 +686,22 @@ impl SortExec {
         self.preserve_partitioning
     }
 
-    /// Create a new sort execution plan with the option to preserve
-    /// the partitioning of the input plan
-    pub fn new_with_partitioning(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        preserve_partitioning: bool,
-        fetch: Option<usize>,
-    ) -> Self {
-        Self {
-            expr,
-            input,
-            metrics_set: CompositeMetricsSet::new(),
-            preserve_partitioning,
-            fetch,
-        }
+    /// Specify the partitioning behavior of this sort exec
+    ///
+    /// If `preserve_partitioning` is true, sorts each partition
+    /// individually, producing one sorted strema for each input partition.
+    ///
+    /// If `preserve_partitioning` is false, sorts and merges all
+    /// input partitions producing a single, sorted partition.
+    pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
+        self.preserve_partitioning = preserve_partitioning;
+        self
+    }
+
+    /// Whether this `SortExec` preserves partitioning of the children
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
     }
 
     /// Input schema
@@ -702,7 +740,7 @@ impl ExecutionPlan for SortExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
@@ -743,12 +781,11 @@ impl ExecutionPlan for SortExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SortExec::new_with_partitioning(
-            self.expr.clone(),
-            children[0].clone(),
-            self.preserve_partitioning,
-            self.fetch,
-        )))
+        let new_sort = SortExec::new(self.expr.clone(), children[0].clone())
+            .with_fetch(self.fetch)
+            .with_preserve_partitioning(self.preserve_partitioning);
+
+        Ok(Arc::new(new_sort))
     }
 
     fn execute(
@@ -933,7 +970,7 @@ mod tests {
         let csv = test::scan_partitioned_csv(partitions)?;
         let schema = csv.schema();
 
-        let sort_exec = Arc::new(SortExec::try_new(
+        let sort_exec = Arc::new(SortExec::new(
             vec![
                 // c1 string column
                 PhysicalSortExpr {
@@ -952,8 +989,7 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
-            None,
-        )?);
+        ));
 
         let result = collect(sort_exec, task_ctx).await?;
 
@@ -993,7 +1029,7 @@ mod tests {
         let csv = test::scan_partitioned_csv(partitions)?;
         let schema = csv.schema();
 
-        let sort_exec = Arc::new(SortExec::try_new(
+        let sort_exec = Arc::new(SortExec::new(
             vec![
                 // c1 string column
                 PhysicalSortExpr {
@@ -1012,8 +1048,7 @@ mod tests {
                 },
             ],
             Arc::new(CoalescePartitionsExec::new(csv)),
-            None,
-        )?);
+        ));
 
         let task_ctx = session_ctx.task_ctx();
         let result = collect(sort_exec.clone(), task_ctx).await?;
@@ -1077,27 +1112,29 @@ mod tests {
             let csv = test::scan_partitioned_csv(partitions)?;
             let schema = csv.schema();
 
-            let sort_exec = Arc::new(SortExec::try_new(
-                vec![
-                    // c1 string column
-                    PhysicalSortExpr {
-                        expr: col("c1", &schema)?,
-                        options: SortOptions::default(),
-                    },
-                    // c2 uin32 column
-                    PhysicalSortExpr {
-                        expr: col("c2", &schema)?,
-                        options: SortOptions::default(),
-                    },
-                    // c7 uin8 column
-                    PhysicalSortExpr {
-                        expr: col("c7", &schema)?,
-                        options: SortOptions::default(),
-                    },
-                ],
-                Arc::new(CoalescePartitionsExec::new(csv)),
-                fetch,
-            )?);
+            let sort_exec = Arc::new(
+                SortExec::new(
+                    vec![
+                        // c1 string column
+                        PhysicalSortExpr {
+                            expr: col("c1", &schema)?,
+                            options: SortOptions::default(),
+                        },
+                        // c2 uin32 column
+                        PhysicalSortExpr {
+                            expr: col("c2", &schema)?,
+                            options: SortOptions::default(),
+                        },
+                        // c7 uin8 column
+                        PhysicalSortExpr {
+                            expr: col("c7", &schema)?,
+                            options: SortOptions::default(),
+                        },
+                    ],
+                    Arc::new(CoalescePartitionsExec::new(csv)),
+                )
+                .with_fetch(fetch),
+            );
 
             let task_ctx = session_ctx.task_ctx();
             let result = collect(sort_exec.clone(), task_ctx).await?;
@@ -1135,14 +1172,13 @@ mod tests {
         let input =
             Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None).unwrap());
 
-        let sort_exec = Arc::new(SortExec::try_new(
+        let sort_exec = Arc::new(SortExec::new(
             vec![PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
                 options: SortOptions::default(),
             }],
             input,
-            None,
-        )?);
+        ));
 
         let result: Vec<RecordBatch> = collect(sort_exec, task_ctx).await?;
 
@@ -1197,7 +1233,7 @@ mod tests {
             ],
         )?;
 
-        let sort_exec = Arc::new(SortExec::try_new(
+        let sort_exec = Arc::new(SortExec::new(
             vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
@@ -1215,8 +1251,7 @@ mod tests {
                 },
             ],
             Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
-            None,
-        )?);
+        ));
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
@@ -1277,14 +1312,13 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let sort_exec = Arc::new(SortExec::try_new(
+        let sort_exec = Arc::new(SortExec::new(
             vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
                 options: SortOptions::default(),
             }],
             blocking_exec,
-            None,
-        )?);
+        ));
 
         let fut = collect(sort_exec, task_ctx);
         let mut fut = fut.boxed();

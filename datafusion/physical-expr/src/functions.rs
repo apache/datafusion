@@ -339,8 +339,12 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
+        BuiltinScalarFunction::Acosh => Arc::new(math_expressions::acosh),
+        BuiltinScalarFunction::Asinh => Arc::new(math_expressions::asinh),
+        BuiltinScalarFunction::Atanh => Arc::new(math_expressions::atanh),
         BuiltinScalarFunction::Ceil => Arc::new(math_expressions::ceil),
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
+        BuiltinScalarFunction::Cosh => Arc::new(math_expressions::cosh),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
@@ -352,9 +356,13 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::Signum => Arc::new(math_expressions::signum),
         BuiltinScalarFunction::Sin => Arc::new(math_expressions::sin),
+        BuiltinScalarFunction::Sinh => Arc::new(math_expressions::sinh),
         BuiltinScalarFunction::Sqrt => Arc::new(math_expressions::sqrt),
+        BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
+        BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
         BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
+        BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
         }
@@ -2756,6 +2764,7 @@ mod tests {
 
         let funs = [
             BuiltinScalarFunction::Now,
+            BuiltinScalarFunction::Pi,
             BuiltinScalarFunction::Random,
             BuiltinScalarFunction::Uuid,
         ];
@@ -2791,7 +2800,7 @@ mod tests {
         assert_eq!(
             expr.data_type(&schema)?,
             // type equals to a common coercion
-            DataType::FixedSizeList(Box::new(Field::new("item", expected_type, true)), 2)
+            DataType::FixedSizeList(Arc::new(Field::new("item", expected_type, true)), 2)
         );
 
         // evaluate works
@@ -2853,7 +2862,7 @@ mod tests {
         // type is correct
         assert_eq!(
             expr.data_type(&schema)?,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
 
         // evaluate works
@@ -2892,7 +2901,7 @@ mod tests {
         // type is correct
         assert_eq!(
             expr.data_type(&schema)?,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
 
         // evaluate works
