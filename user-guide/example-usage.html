@@ -537,14 +537,15 @@ worth noting that using the settings in the <code class="docutils literal notran
 </pre></div>
 </div>
 <p>Then, in <code class="docutils literal notranslate"><span class="pre">main.rs.</span></code> update the memory allocator with the below after your imports:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">prelude</span>::<span class="o">*</span><span class="p">;</span>
+<div class="highlight-rust,ignore notranslate"><div class="highlight"><pre><span></span>use datafusion::prelude::*;
 
-<span class="cp">#[global_allocator]</span>
-<span class="k">static</span><span class="w"> </span><span class="n">ALLOC</span>: <span class="nc">snmalloc_rs</span>::<span class="n">SnMalloc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">snmalloc_rs</span>::<span class="n">SnMalloc</span><span class="p">;</span>
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-<span class="k">async</span><span class="w"> </span><span class="k">fn</span> <span class="nf">main</span><span class="p">()</span><span class="w"> </span>-&gt; <span class="nc">datafusion</span>::<span class="n">error</span>::<span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">Ok</span><span class="p">(())</span>
-<span class="p">}</span>
+#[tokio::main]
+async fn main() -&gt; datafusion::error::Result&lt;()&gt; {
+  Ok(())
+}
 </pre></div>
 </div>
 <p>Finally, in order to build with the <code class="docutils literal notranslate"><span class="pre">simd</span></code> optimization <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">nightly</span></code> is required.</p>
@@ -553,7 +554,7 @@ worth noting that using the settings in the <code class="docutils literal notran
 </div>
 <p>Based on the instruction set architecture you are building on you will want to configure the <code class="docutils literal notranslate"><span class="pre">target-cpu</span></code> as well, ideally
 with <code class="docutils literal notranslate"><span class="pre">native</span></code> or at least <code class="docutils literal notranslate"><span class="pre">avx2</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span> <span class="n">cargo</span> <span class="o">+</span><span class="n">nightly</span> <span class="n">run</span> <span class="o">--</span><span class="n">release</span>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">RUSTFLAGS</span><span class="o">=</span><span class="s1">&#39;-C target-cpu=native&#39;</span><span class="w"> </span>cargo<span class="w"> </span>+nightly<span class="w"> </span>run<span class="w"> </span>--release
 </pre></div>
 </div>
 </section>
