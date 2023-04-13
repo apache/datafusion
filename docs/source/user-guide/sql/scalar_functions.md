@@ -38,6 +38,7 @@
 - [ln](#ln)
 - [log10](#log10)
 - [log2](#log2)
+- [pi](#pi)
 - [power](#power)
 - [random](#random)
 - [round](#round)
@@ -271,6 +272,14 @@ log2(numeric_expression)
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `pi`
+
+Returns an approximate value of π.
+
+```
+pi()
+```
 
 ### `power`
 
