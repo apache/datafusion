@@ -32,111 +32,199 @@ CREATE TABLE t1(
 ;
 
 # abs scalar function
-query RR rowsort
-select abs(64), abs(0), abs(-64)
----
+query RRR rowsort
+select abs(64), abs(0), abs(-64);
+----
 64 0 64
 
+# abs scalar nulls
+query R rowsort
+select abs(null);
+----
+NULL
+
 # acos scalar function
-query RR rowsort
-select acos(0), acos(0.5), acos(1)
----
-1.5707963 1.0471976 0
+query RRR rowsort
+select acos(0), acos(0.5), acos(1);
+----
+1.570796326795 1.047197551197 0
+
+# acos scalar nulls
+query R rowsort
+select acos(null);
+----
+NULL
+
+# acosh scalar function
+# cosh(x) = (exp(x) + exp(-x)) / 2
+query RRR rowsort
+select acosh((exp(1) + exp(-1)) / 2), acosh((exp(2) + exp(-2)) / 2), acosh((exp(3) + exp(-3)) / 2);
+----
+1 2 3
+
+# acosh scalar nulls
+query R rowsort
+select acosh(null);
+----
+NULL
 
 # asin scalar function
-query RR rowsort
-select asin(0), asin(0.5), asin(1)
----
-0 1.0471976 1.5707963
+query RRR rowsort
+select asin(0), asin(0.5), asin(1);
+----
+0 0.523598775598 1.570796326795
+
+# asin scalar nulls
+query R rowsort
+select asin(null);
+----
+NULL
+
+# asinh scalar function
+# sinh(x) = (exp(x) - exp(-x)) / 2
+query RRR rowsort
+select asinh((exp(1) - exp(-1)) / 2), asinh((exp(2) - exp(-2)) / 2), asinh((exp(3) - exp(-3)) / 2);
+----
+1 2 3
+
+# asinh scalar nulls
+query R rowsort
+select asinh(null);
+----
+NULL
 
 # atan scalar function
-query RR rowsort
-select atan(0), atan(1.7320508), atan(1)
----
-0 1.0471976 0.7853982
+query RRR rowsort
+select atan(0), atan(cbrt(3)), atan(1);
+----
+0 0.964539792856 0.785398163397
+
+# atan scalar nulls
+query R rowsort
+select atan(null);
+----
+NULL
+
+# atanh scalar function
+# tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+query RRR rowsort
+select atanh((exp(2) - 1) / (exp(2) + 1)), atanh((exp(4) - 1) / (exp(4) + 1)), atanh((exp(6) - 1) / (exp(6) + 1));
+----
+1 2 3
+
+# atanh scalar nulls
+query R rowsort
+select atanh(null);
+----
+NULL
 
 # atan2 scalar function
-query RR rowsort
-select atan2(0, 1), atan2(1, 2), atan2(2, 2)
----
-1 1.0471976 1.5707963
+query RRR rowsort
+select atan2(0, 1), atan2(1, 2), atan2(2, 2);
+----
+0 0.4636476 0.7853982
 
 # atan2 scalar nulls
-query RR rowsort
-select atan2(null, 64) a, atan2(null) b
+query R rowsort
+select atan2(null, 64);
 ----
-NULL NULL
+NULL
 
 # atan2 scalar nulls 1
-query RR rowsort
-select atan2(2, null), atan2(null) b
+query R rowsort
+select atan2(2, null);
 ----
-NULL NULL
+NULL
 
 # atan2 scalar nulls 2
-query RR rowsort
-select atan2(null, null), atan2(null) b
+query R rowsort
+select atan2(null, null);
 ----
-NULL NULL
+NULL
+
+# cbrt scalar function
+query RRR rowsort
+select cbrt(0), cbrt(8), cbrt(27);
+----
+0 2 3
+
+# cbrt scalar nulls
+query R rowsort
+select cbrt(null);
+----
+NULL
 
 # ceil scalar function
-query RR rowsort
-select ceil(1.6), ceil(1.5), ceil(1.4)
----
-1 1 1
+query RRR rowsort
+select ceil(1.6), ceil(1.5), ceil(1.4);
+----
+2 2 2
 
 # ceil scalar nulls
-query RR rowsort
-select ceil(null)
+query R rowsort
+select ceil(null);
 ----
 NULL
 
 # cos scalar function
-query RR rowsort
-select cos(0), cos(1.0471976), cos(1,5707963)
----
+query RRR rowsort
+select cos(0), cos(pi() / 3), cos(pi() / 2);
+----
 1 0.5 0
 
-# cos scalar function
-query RR rowsort
-select cos(null)
----
+# cos scalar nulls
+query R rowsort
+select cos(null);
+----
+NULL
+
+# cosh scalar function
+# cosh(x) = (exp(x) + exp(-x)) / 2
+query RRR rowsort
+select cosh(1), cosh(2), cosh(3);
+----
+1.543080634815 3.762195691084 10.067661995778
+
+# cosh scalar nulls
+query R rowsort
+select cosh(null);
+----
 NULL
 
 # exp scalar function
-query RR rowsort
-select exp(0), exp(1), exp(2)
----
-1 2.7182818 7.3890560
+query RRR rowsort
+select exp(0), exp(1), exp(2);
+----
+1 2.718281828459 7.389056098931
 
-# exp scalar function
-query RR rowsort
-select exp(null)
----
+# exp scalar nulls
+query R rowsort
+select exp(null);
+----
 NULL
 
 # floor scalar function
-query RR rowsort
-select floor(1.4), floor(1.5), floor(1.6)
----
-2 2 2
+query RRR rowsort
+select floor(1.4), floor(1.5), floor(1.6);
+----
+1 1 1
 
-# floor scalar function
-query RR rowsort
-select floor(null)
----
+# floor scalar nulls
+query R rowsort
+select floor(null);
+----
 NULL
 
 # ln scalar function
-query RR rowsort
-select ln(1), ln(exp(1)), ln(3)
----
-0 1 1.0986123
+query RRR rowsort
+select ln(1), ln(exp(1)), ln(3);
+----
+0 1 1.098612288668
 
-# ln scalar function
-query RR rowsort
-select ln(null)
----
+# ln scalar nulls
+query R rowsort
+select ln(null);
+----
 NULL
 
 # log scalar function
@@ -156,52 +244,66 @@ Infinity 2 2
 
 # log scalar nulls
 query RR rowsort
-select log(null, 64) a, log(null) b
+select log(null, 64) a, log(null) b;
 ----
 NULL NULL
 
 # log scalar nulls 1
 query RR rowsort
-select log(2, null) a, log(null) b
+select log(2, null) a, log(null) b;
 ----
 NULL NULL
 
 # log scalar nulls 2
 query RR rowsort
-select log(null, null) a, log(null) b
+select log(null, null) a, log(null) b;
 ----
 NULL NULL
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
-select log(0) a, log(1, 64) b
+select log(0) a, log(1, 64) b;
 ----
 -Infinity Infinity
 
 # log10 scalar function
-query RR rowsort
-select log10(1), log10(10), log10(100)
----
+query RRR rowsort
+select log10(1), log10(10), log10(100);
+----
 0 1 2
 
-# log10 scalar function
-query RR rowsort
-select log10(null)
----
+# log10 scalar nulls
+query R rowsort
+select log10(null);
+----
 NULL
 
+# log10 scalar ops with zero edgecases
+# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+query R rowsort
+select log10(0);
+----
+-Infinity
+
 # log2 scalar function
-query RR rowsort
-select log2(1), log2(2), log2(4)
----
+query RRR rowsort
+select log2(1), log2(2), log2(4);
+----
 0 1 2
 
-# log2 scalar function
-query RR rowsort
-select log2(null)
----
+# log2 scalar nulls
+query R rowsort
+select log2(null);
+----
 NULL
+
+# log2 scalar ops with zero edgecases
+# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+query R rowsort
+select log2(0);
+----
+-Infinity
 
 # pi scalar function
 query RRR rowsort
@@ -210,99 +312,125 @@ select pi(), pi() / 2, pi() / 3;
 3.14159265359 1.570796326795 1.047197551197
 
 # power scalar function
-query RR rowsort
-select power(2, 0), power(2, 1), power(2, 2)
----
-0 1 4
+query III rowsort
+select power(2, 0), power(2, 1), power(2, 2);
+----
+1 2 4
 
 # power scalar nulls
-query RR rowsort
-select power(null, 64) a, power(null) b
+query R rowsort
+select power(null, 64);
 ----
-NULL NULL
+NULL
 
 # power scalar nulls 1
-query RR rowsort
-select power(2, null), power(null) b
+query I rowsort
+select power(2, null);
 ----
-NULL NULL
+NULL
 
 # power scalar nulls 2
-query RR rowsort
-select power(null, null), power(null) b
+query R rowsort
+select power(null, null);
 ----
-NULL NULL
+NULL
 
 # round scalar function
-query RR rowsort
-select round(1.4), round(1.5), round(1.6)
----
+query RRR rowsort
+select round(1.4), round(1.5), round(1.6);
+----
 1 2 2
 
-# round scalar function
-query RR rowsort
-select round(null)
----
+# round scalar nulls
+query R rowsort
+select round(null);
+----
 NULL
 
 # signum scalar function
-query RR rowsort
-select signum(-2), signum(0), signum(2)
----
--1 0 1
+query RRR rowsort
+select signum(-2), signum(0), signum(2);
+----
+-1 1 1
 
-# signum scalar function
-query RR rowsort
-select signum(null)
----
+# signum scalar nulls
+query R rowsort
+select signum(null);
+----
 NULL
 
 # sin scalar function
-query RR rowsort
-select sin(0), sin(1.0471976), sin(1,5707963)
----
-0 0.8660254 1
+query RRR rowsort
+select sin(0), sin(pi() / 3), sin(pi() / 2);
+----
+0 0.866025403784 1
 
-# sin scalar function
-query RR rowsort
-select sin(null)
----
+# sin scalar nulls
+query R rowsort
+select sin(null);
+----
+NULL
+
+# sinh scalar function
+# sinh(x) = (exp(x) - exp(-x)) / 2
+query RRR rowsort
+select sinh(1), sinh(2), sinh(3);
+----
+1.175201193644 3.626860407847 10.01787492741
+
+# sinh scalar nulls
+query R rowsort
+select sinh(null);
+----
 NULL
 
 # sqrt scalar function
-query RR rowsort
-select sqrt(0), sqrt(4), sqrt(9)
----
+query RRR rowsort
+select sqrt(0), sqrt(4), sqrt(9);
+----
 0 2 3
 
-# sqrt scalar function
-query RR rowsort
-select sqrt(null)
----
-NULL
-
-# cbrt scalar function
-query RR rowsort
-select cbrt(0), cbrt(8), cbrt(27)
----
-0 2 3
-
-# cbrt scalar function
-query RR rowsort
-select cbrt(null)
----
+# sqrt scalar nulls
+query R rowsort
+select sqrt(null);
+----
 NULL
 
 # tan scalar function
-query RR rowsort
-select tan(0), tan(0.5235987), tan(0.7853982)
----
-0 0.5773502 1
+query RRR rowsort
+select tan(0), tan(pi() / 6), tan(pi() / 4);
+----
+0 0.57735026919 1
 
-# tan scalar function
-query RR rowsort
-select tan(null)
----
+# tan scalar nulls
+query R rowsort
+select tan(null);
+----
+NULL
+
+# tanh scalar function
+# tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+query RRR rowsort
+select tanh(1), tanh(2), tanh(3);
+----
+0.761594155956 0.964027580076 0.995054753687
+
+# tanh scalar nulls
+query R rowsort
+select tanh(null);
+----
+NULL
+
+# trunc scalar function
+query RRR rowsort
+select trunc(1.5), trunc(2.71), trunc(3.1415);
+----
+1 2 3
+
+# trunc scalar nulls
+query R rowsort
+select trunc(null);
+----
 NULL
 
 # bitwise and with column and scalar
