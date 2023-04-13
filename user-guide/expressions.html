@@ -294,6 +294,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#bitwise-expressions">
+   Bitwise expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#comparison-expressions">
    Comparison Expressions
   </a>
@@ -461,6 +466,33 @@ available for creating logical expressions. These are documented below.</p>
 </tbody>
 </table>
 </section>
+<section id="bitwise-expressions">
+<h2>Bitwise expressions<a class="headerlink" href="#bitwise-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>bitwise_and</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_and(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_and(expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>bitwise_or</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_or(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_or(expr2)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>bitwise_xor</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_xor(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_xor(expr2)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>bitwise_shift_right</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_shift_right(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_shift_right(expr2)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>bitwise_shift_left</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bitwise_shift_left(expr1,</span> <span class="pre">expr2)</span></code> or <code class="docutils literal notranslate"><span class="pre">expr1.bitwise_shift_left(expr2)</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
 <section id="comparison-expressions">
 <h2>Comparison Expressions<a class="headerlink" href="#comparison-expressions" title="Permalink to this heading">¶</a></h2>
 <table class="table">
@@ -535,38 +567,44 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <tr class="row-even"><td><p>cos(x)</p></td>
 <td><p>cosine</p></td>
 </tr>
-<tr class="row-odd"><td><p>exp(x)</p></td>
+<tr class="row-odd"><td><p>cosh(x)</p></td>
+<td><p>hyperbolic cosine</p></td>
+</tr>
+<tr class="row-even"><td><p>exp(x)</p></td>
 <td><p>exponential</p></td>
 </tr>
-<tr class="row-even"><td><p>floor(x)</p></td>
+<tr class="row-odd"><td><p>floor(x)</p></td>
 <td><p>nearest integer less than or equal to argument</p></td>
 </tr>
-<tr class="row-odd"><td><p>ln(x)</p></td>
+<tr class="row-even"><td><p>ln(x)</p></td>
 <td><p>natural logarithm</p></td>
 </tr>
-<tr class="row-even"><td><p>log(base, x)</p></td>
+<tr class="row-odd"><td><p>log(base, x)</p></td>
 <td><p>logarithm of x for a particular base</p></td>
 </tr>
-<tr class="row-odd"><td><p>log10(x)</p></td>
+<tr class="row-even"><td><p>log10(x)</p></td>
 <td><p>base 10 logarithm</p></td>
 </tr>
-<tr class="row-even"><td><p>log2(x)</p></td>
+<tr class="row-odd"><td><p>log2(x)</p></td>
 <td><p>base 2 logarithm</p></td>
 </tr>
-<tr class="row-odd"><td><p>pi(base, exponent)</p></td>
+<tr class="row-even"><td><p>pi()</p></td>
 <td><p>approximate value of π</p></td>
 </tr>
-<tr class="row-even"><td><p>power(base, exponent)</p></td>
+<tr class="row-odd"><td><p>power(base, exponent)</p></td>
 <td><p>base raised to the power of exponent</p></td>
 </tr>
-<tr class="row-odd"><td><p>round(x)</p></td>
+<tr class="row-even"><td><p>round(x)</p></td>
 <td><p>round to nearest integer</p></td>
 </tr>
-<tr class="row-even"><td><p>signum(x)</p></td>
+<tr class="row-odd"><td><p>signum(x)</p></td>
 <td><p>sign of the argument (-1, 0, +1)</p></td>
 </tr>
-<tr class="row-odd"><td><p>sin(x)</p></td>
+<tr class="row-even"><td><p>sin(x)</p></td>
 <td><p>sine</p></td>
+</tr>
+<tr class="row-odd"><td><p>sinh(x)</p></td>
+<td><p>hyperbolic sine</p></td>
 </tr>
 <tr class="row-even"><td><p>sqrt(x)</p></td>
 <td><p>square root</p></td>
@@ -574,7 +612,10 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <tr class="row-odd"><td><p>tan(x)</p></td>
 <td><p>tangent</p></td>
 </tr>
-<tr class="row-even"><td><p>trunc(x)</p></td>
+<tr class="row-even"><td><p>tanh(x)</p></td>
+<td><p>hyperbolic tangent</p></td>
+</tr>
+<tr class="row-odd"><td><p>trunc(x)</p></td>
 <td><p>truncate toward zero</p></td>
 </tr>
 </tbody>
@@ -649,95 +690,95 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>ascii</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>ascii(character)</p></td>
+<td><p>Returns a numeric representation of the character (<code class="docutils literal notranslate"><span class="pre">character</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">ascii('a')</span> <span class="pre">-&gt;</span> <span class="pre">97</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>bit_length</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>bit_length(text)</p></td>
+<td><p>Returns the length of the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>) in bits. Example: <code class="docutils literal notranslate"><span class="pre">bit_length('spider')</span> <span class="pre">-&gt;</span> <span class="pre">48</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>btrim</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>btrim(text, characters)</p></td>
+<td><p>Removes all specified characters (<code class="docutils literal notranslate"><span class="pre">characters</span></code>) from both the beginning and the end of the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">btrim('aabchelloccb',</span> <span class="pre">'abc')</span> <span class="pre">-&gt;</span> <span class="pre">hello</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>char_length</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>char_length(text)</p></td>
+<td><p>Returns number of characters in the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). The same as <code class="docutils literal notranslate"><span class="pre">character_length</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code>. Example: <code class="docutils literal notranslate"><span class="pre">character_length('lion')</span> <span class="pre">-&gt;</span> <span class="pre">4</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>character_length</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>character_length(text)</p></td>
+<td><p>Returns number of characters in the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). The same as <code class="docutils literal notranslate"><span class="pre">char_length</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code>. Example: <code class="docutils literal notranslate"><span class="pre">char_length('lion')</span> <span class="pre">-&gt;</span> <span class="pre">4</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>concat</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>concat(value1, [value2 [, …]])</p></td>
+<td><p>Concatenates the text representations (<code class="docutils literal notranslate"><span class="pre">value1,</span> <span class="pre">[value2</span> <span class="pre">[,</span> <span class="pre">...]]</span></code>) of all the arguments. NULL arguments are ignored. Example: <code class="docutils literal notranslate"><span class="pre">concat('aaa',</span> <span class="pre">'bbc',</span> <span class="pre">NULL,</span> <span class="pre">321)</span> <span class="pre">-&gt;</span> <span class="pre">aaabbc321</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>concat_ws</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>concat_ws(separator, value1, [value2 [, …]])</p></td>
+<td><p>Concatenates the text representations (<code class="docutils literal notranslate"><span class="pre">value1,</span> <span class="pre">[value2</span> <span class="pre">[,</span> <span class="pre">...]]</span></code>) of all the arguments with the separator (<code class="docutils literal notranslate"><span class="pre">separator</span></code>). NULL arguments are ignored. <code class="docutils literal notranslate"><span class="pre">concat_ws('/',</span> <span class="pre">'path',</span> <span class="pre">'to',</span> <span class="pre">NULL,</span> <span class="pre">'my',</span> <span class="pre">'folder',</span> <span class="pre">123)</span> <span class="pre">-&gt;</span> <span class="pre">path/to/my/folder/123</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>chr</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>chr(integer)</p></td>
+<td><p>Returns a character by its numeric representation (<code class="docutils literal notranslate"><span class="pre">integer</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">chr(90)</span> <span class="pre">-&gt;</span> <span class="pre">8</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>initcap</p></td>
-<td><p></p></td>
+<td><p>Converts the first letter of each word to upper case and the rest to lower case. Example: <code class="docutils literal notranslate"><span class="pre">initcap('hi</span> <span class="pre">TOM')</span> <span class="pre">-&gt;</span> <span class="pre">Hi</span> <span class="pre">Tom</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>left</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>left(text, number)</p></td>
+<td><p>Returns a certain number (<code class="docutils literal notranslate"><span class="pre">number</span></code>) of first characters (<code class="docutils literal notranslate"><span class="pre">text</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">left('like',</span> <span class="pre">2)</span> <span class="pre">-&gt;</span> <span class="pre">li</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>length</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>length(text)</p></td>
+<td><p>Returns number of characters in the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). The same as <code class="docutils literal notranslate"><span class="pre">character_length</span></code> and <code class="docutils literal notranslate"><span class="pre">char_length</span></code>. Example: <code class="docutils literal notranslate"><span class="pre">length('lion')</span> <span class="pre">-&gt;</span> <span class="pre">4</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>lower</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>lower(text)</p></td>
+<td><p>Converts all characters in the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>) into lower case. Example: <code class="docutils literal notranslate"><span class="pre">lower('HELLO')</span> <span class="pre">-&gt;</span> <span class="pre">hello</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>lpad</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>lpad(text, length, [, fill])</p></td>
+<td><p>Extends the string to length (<code class="docutils literal notranslate"><span class="pre">length</span></code>) by prepending the characters (<code class="docutils literal notranslate"><span class="pre">fill</span></code>) (a space by default). Example: <code class="docutils literal notranslate"><span class="pre">lpad('bb',</span> <span class="pre">5,</span> <span class="pre">'a')</span> <span class="pre">→</span> <span class="pre">aaabb</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>ltrim</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>ltrim(text, text)</p></td>
+<td><p>Removes all specified characters (<code class="docutils literal notranslate"><span class="pre">characters</span></code>) from the beginning of the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">ltrim('aabchelloccb',</span> <span class="pre">'abc')</span> <span class="pre">-&gt;</span> <span class="pre">helloccb</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>md5</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>md5(text)</p></td>
+<td><p>Computes the MD5 hash of the argument (<code class="docutils literal notranslate"><span class="pre">text</span></code>).</p></td>
 </tr>
-<tr class="row-odd"><td><p>octet_length</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>octet_length(text)</p></td>
+<td><p>Returns number of bytes in the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>).</p></td>
 </tr>
-<tr class="row-even"><td><p>repeat</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>repeat(text, number)</p></td>
+<td><p>Repeats the string the specified number of times. Example: <code class="docutils literal notranslate"><span class="pre">repeat('1',</span> <span class="pre">4)</span> <span class="pre">-&gt;</span> <span class="pre">1111</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>replace</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>replace(string, from, to)</p></td>
+<td><p>Replaces a specified string (<code class="docutils literal notranslate"><span class="pre">from</span></code>) with another specified string (<code class="docutils literal notranslate"><span class="pre">to</span></code>) in the string (<code class="docutils literal notranslate"><span class="pre">string</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">replace('Hello',</span> <span class="pre">'replace',</span> <span class="pre">'el')</span> <span class="pre">-&gt;</span> <span class="pre">Hola</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>reverse</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>reverse(text)</p></td>
+<td><p>Reverses the order of the characters in the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">reverse('hello')</span> <span class="pre">-&gt;</span> <span class="pre">olleh</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p>right</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>right(text, number)</p></td>
+<td><p>Returns a certain number (<code class="docutils literal notranslate"><span class="pre">number</span></code>) of last characters (<code class="docutils literal notranslate"><span class="pre">text</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">right('like',</span> <span class="pre">2)</span> <span class="pre">-&gt;</span> <span class="pre">ke</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>rpad</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>rpad(text, length, [, fill])</p></td>
+<td><p>Extends the string to length (<code class="docutils literal notranslate"><span class="pre">length</span></code>) by prepending the characters (<code class="docutils literal notranslate"><span class="pre">fill</span></code>) (a space by default). Example: <code class="docutils literal notranslate"><span class="pre">rpad('bb',</span> <span class="pre">5,</span> <span class="pre">'a')</span> <span class="pre">→</span> <span class="pre">bbaaa</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>rtrim</p></td>
-<td><p></p></td>
+<td><p>Removes all specified characters (<code class="docutils literal notranslate"><span class="pre">characters</span></code>) from the end of the string (<code class="docutils literal notranslate"><span class="pre">text</span></code>). Example: <code class="docutils literal notranslate"><span class="pre">rtrim('aabchelloccb',</span> <span class="pre">'abc')</span> <span class="pre">-&gt;</span> <span class="pre">aabchello</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>digest</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>digest(input, algorithm)</p></td>
+<td><p>Computes the binary hash of <code class="docutils literal notranslate"><span class="pre">input</span></code>, using the <code class="docutils literal notranslate"><span class="pre">algorithm</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>split_part</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>split_part(string, delimiter, index)</p></td>
+<td><p>Splits the string (<code class="docutils literal notranslate"><span class="pre">string</span></code>) based on a delimiter (<code class="docutils literal notranslate"><span class="pre">delimiter</span></code>) and picks out the desired field based on the index (<code class="docutils literal notranslate"><span class="pre">index</span></code>).</p></td>
 </tr>
-<tr class="row-even"><td><p>starts_with</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>starts_with(string, prefix)</p></td>
+<td><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if the string (<code class="docutils literal notranslate"><span class="pre">string</span></code>) starts with the specified prefix (<code class="docutils literal notranslate"><span class="pre">prefix</span></code>). If not, it returns <code class="docutils literal notranslate"><span class="pre">false</span></code>. Example: <code class="docutils literal notranslate"><span class="pre">starts_with('Hi</span> <span class="pre">Tom',</span> <span class="pre">'Hi')</span> <span class="pre">-&gt;</span> <span class="pre">true</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>strpos</p></td>
-<td><p></p></td>
+<td><p>Finds the position from where the <code class="docutils literal notranslate"><span class="pre">substring</span></code> matches the <code class="docutils literal notranslate"><span class="pre">string</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>substr</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>substr(string, position, [, length])</p></td>
+<td><p>Returns substring from the position (<code class="docutils literal notranslate"><span class="pre">position</span></code>) with length (<code class="docutils literal notranslate"><span class="pre">length</span></code>) characters in the string (<code class="docutils literal notranslate"><span class="pre">string</span></code>).</p></td>
 </tr>
-<tr class="row-odd"><td><p>translate</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>translate(string, from, to)</p></td>
+<td><p>Replaces the characters in <code class="docutils literal notranslate"><span class="pre">from</span></code> with the counterpart in <code class="docutils literal notranslate"><span class="pre">to</span></code>. Example: <code class="docutils literal notranslate"><span class="pre">translate('abcde',</span> <span class="pre">'acd',</span> <span class="pre">'15')</span> <span class="pre">-&gt;</span> <span class="pre">1b5e</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>trim</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>trim(string)</p></td>
+<td><p>Removes all characters, space by default from the string (<code class="docutils literal notranslate"><span class="pre">string</span></code>)</p></td>
 </tr>
 <tr class="row-odd"><td><p>upper</p></td>
-<td><p></p></td>
+<td><p>Converts all characters in the string into upper case. Example: <code class="docutils literal notranslate"><span class="pre">upper('hello')</span> <span class="pre">-&gt;</span> <span class="pre">HELLO</span></code></p></td>
 </tr>
 </tbody>
 </table>
@@ -752,10 +793,10 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </thead>
 <tbody>
 <tr class="row-even"><td><p>regexp_match</p></td>
-<td><p></p></td>
+<td><p>Matches a regular expression against a string and returns matched substrings.</p></td>
 </tr>
 <tr class="row-odd"><td><p>regexp_replace</p></td>
-<td><p></p></td>
+<td><p>Replaces strings that match a regular expression</p></td>
 </tr>
 </tbody>
 </table>
@@ -770,28 +811,28 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </thead>
 <tbody>
 <tr class="row-even"><td><p>date_part</p></td>
-<td><p></p></td>
+<td><p>Extracts a subfield from the date.</p></td>
 </tr>
 <tr class="row-odd"><td><p>date_trunc</p></td>
-<td><p></p></td>
+<td><p>Truncates the date to a specified level of precision.</p></td>
 </tr>
 <tr class="row-even"><td><p>from_unixtime</p></td>
-<td><p></p></td>
+<td><p>Returns the unix time in format.</p></td>
 </tr>
 <tr class="row-odd"><td><p>to_timestamp</p></td>
-<td><p></p></td>
+<td><p>Converts a string to a <code class="docutils literal notranslate"><span class="pre">Timestamp(_,</span> <span class="pre">_)</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>to_timestamp_millis</p></td>
-<td><p></p></td>
+<td><p>Converts a string to a <code class="docutils literal notranslate"><span class="pre">Timestamp(Milliseconds,</span> <span class="pre">None)</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>to_timestamp_micros</p></td>
-<td><p></p></td>
+<td><p>Converts a string to a <code class="docutils literal notranslate"><span class="pre">Timestamp(Microseconds,</span> <span class="pre">None)</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>to_timestamp_seconds</p></td>
-<td><p></p></td>
+<td><p>Converts a string to a <code class="docutils literal notranslate"><span class="pre">Timestamp(Seconds,</span> <span class="pre">None)</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>now()</p></td>
-<td><p>current time</p></td>
+<td><p>Returns current time.</p></td>
 </tr>
 </tbody>
 </table>
@@ -805,32 +846,29 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>array</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>array([value1, …])</p></td>
+<td><p>Returns an array of fixed size with each argument (<code class="docutils literal notranslate"><span class="pre">[value1,</span> <span class="pre">...]</span></code>) on it.</p></td>
 </tr>
-<tr class="row-odd"><td><p>in_list</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>in_list(expr, list, negated)</p></td>
+<td><p>Returns <code class="docutils literal notranslate"><span class="pre">true</span></code> if (<code class="docutils literal notranslate"><span class="pre">expr</span></code>) belongs or not belongs (<code class="docutils literal notranslate"><span class="pre">negated</span></code>) to a list (<code class="docutils literal notranslate"><span class="pre">list</span></code>), otherwise returns false.</p></td>
 </tr>
-<tr class="row-even"><td><p>random</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>random()</p></td>
+<td><p>Returns a random value from 0 (inclusive) to 1 (exclusive).</p></td>
 </tr>
-<tr class="row-odd"><td><p>sha224</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>sha224(text)</p></td>
+<td><p>Computes the SHA224 hash of the argument (<code class="docutils literal notranslate"><span class="pre">text</span></code>).</p></td>
 </tr>
-<tr class="row-even"><td><p>sha256</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>sha256(text)</p></td>
+<td><p>Computes the SHA256 hash of the argument (<code class="docutils literal notranslate"><span class="pre">text</span></code>).</p></td>
 </tr>
-<tr class="row-odd"><td><p>sha384</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>sha384(text)</p></td>
+<td><p>Computes the SHA384 hash of the argument (<code class="docutils literal notranslate"><span class="pre">text</span></code>).</p></td>
 </tr>
-<tr class="row-even"><td><p>sha512</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>sha512(text)</p></td>
+<td><p>Computes the SHA512 hash of the argument (<code class="docutils literal notranslate"><span class="pre">text</span></code>).</p></td>
 </tr>
-<tr class="row-odd"><td><p>struct</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p>to_hex</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>to_hex(integer)</p></td>
+<td><p>Converts the integer (<code class="docutils literal notranslate"><span class="pre">integer</span></code>) to the corresponding hexadecimal string.</p></td>
 </tr>
 </tbody>
 </table>
@@ -844,47 +882,47 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>avg</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>avg(expr)</p></td>
+<td><p>Сalculates the average value for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>approx_distinct</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>approx_distinct(expr)</p></td>
+<td><p>Calculates an approximate count of the number of distinct values for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>approx_median</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>approx_median(expr)</p></td>
+<td><p>Calculates an approximation of the median for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>approx_percentile_cont</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>approx_percentile_cont(expr, percentile)</p></td>
+<td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>approx_percentile_cont_with_weight</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>approx_percentile_cont_with_weight(expr, weight_expr, percentile)</p></td>
+<td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code> and <code class="docutils literal notranslate"><span class="pre">weight_expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>count</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>count(expr)</p></td>
+<td><p>Returns the number of rows for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td><p>count_distinct</p></td>
-<td><p></p></td>
+<td><p>Creates an expression to represent the count(distinct) aggregate function</p></td>
 </tr>
-<tr class="row-odd"><td><p>cube</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>cube(exprs)</p></td>
+<td><p>Creates a grouping set for all combination of <code class="docutils literal notranslate"><span class="pre">exprs</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>grouping_set</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>grouping_set(exprs)</p></td>
+<td><p>Create a grouping set.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>max(expr)</p></td>
+<td><p>Finds the maximum value of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>median</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>median(expr)</p></td>
+<td><p>Сalculates the median of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>min</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>min(expr)</p></td>
+<td><p>Finds the minimum value of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>rollup</p></td>
-<td><p></p></td>
+<tr class="row-even"><td><p>rollup(exprs)</p></td>
+<td><p>Creates a grouping set for rollup sets.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sum</p></td>
-<td><p></p></td>
+<tr class="row-odd"><td><p>sum(expr)</p></td>
+<td><p>Сalculates the sum of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -899,19 +937,19 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </thead>
 <tbody>
 <tr class="row-even"><td><p>exists</p></td>
-<td><p></p></td>
+<td><p>Creates an <code class="docutils literal notranslate"><span class="pre">EXISTS</span></code> subquery expression</p></td>
 </tr>
 <tr class="row-odd"><td><p>in_subquery</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">df1.filter(in_subquery(col(&quot;foo&quot;),</span> <span class="pre">df2))?</span></code> is the equivalent of the SQL <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">foo</span> <span class="pre">IN</span> <span class="pre">&lt;df2&gt;</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>not_exists</p></td>
-<td><p></p></td>
+<td><p>Creates a <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">EXISTS</span></code> subquery expression</p></td>
 </tr>
 <tr class="row-odd"><td><p>not_in_subquery</p></td>
-<td><p></p></td>
+<td><p>Creates a <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> subquery expression</p></td>
 </tr>
 <tr class="row-even"><td><p>scalar_subquery</p></td>
-<td><p></p></td>
+<td><p>Creates a scalar subquery expression</p></td>
 </tr>
 </tbody>
 </table>
@@ -926,10 +964,10 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </thead>
 <tbody>
 <tr class="row-even"><td><p>create_udf</p></td>
-<td><p></p></td>
+<td><p>Creates a new UDF with a specific signature and specific return type.</p></td>
 </tr>
 <tr class="row-odd"><td><p>create_udaf</p></td>
-<td><p></p></td>
+<td><p>Creates a new UDAF with a specific signature, state type and return type.</p></td>
 </tr>
 </tbody>
 </table>
