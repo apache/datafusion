@@ -1622,11 +1622,11 @@ mod tests {
             .infer_schema(&state, &store, &[meta.clone()])
             .await?;
 
-        let group_empty = vec![vec![file_range(&meta, 0, 5)]];
-        let group_contain = vec![vec![file_range(&meta, 5, i64::MAX)]];
+        let group_empty = vec![vec![file_range(&meta, 0, 2)]];
+        let group_contain = vec![vec![file_range(&meta, 2, i64::MAX)]];
         let group_all = vec![vec![
-            file_range(&meta, 0, 5),
-            file_range(&meta, 5, i64::MAX),
+            file_range(&meta, 0, 2),
+            file_range(&meta, 2, i64::MAX),
         ]];
 
         assert_parquet_read(&state, group_empty, None, file_schema.clone()).await?;
