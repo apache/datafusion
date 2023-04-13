@@ -112,7 +112,9 @@ pub fn coerce_types(
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
-        | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
+        | Operator::LtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
             if (is_date(lhs_type)
@@ -125,7 +127,7 @@ pub fn coerce_types(
                     || !is_timestamp(rhs_type)
                     || *op != Operator::Minus) =>
         {
-            temporal_add_sub_coercion(lhs_type, rhs_type, op)?
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
@@ -140,9 +142,6 @@ pub fn coerce_types(
         | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type),
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
-        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
-            eq_coercion(lhs_type, rhs_type)
-        }
     };
 
     // re-write the error message of failed coercions to include the operator's information
@@ -211,35 +210,37 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 // This function performs temporal coercion between the two input data types and the provided operator.
-// It returns an error if the operands are date or timestamp data types with an unsupported operation,
-// or None if the coercion is not possible. If the coercion is possible, it returns a new data type as Some(DataType).
+// It returns None (it will convert a Err outside) if the operands are an unsupported/wrong operation.
+// If the coercion is possible, it returns a new data type as Some(DataType).
 pub fn temporal_add_sub_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
     op: &Operator,
-) -> Result<Option<DataType>> {
+) -> Option<DataType> {
     match (lhs_type, rhs_type, op) {
         // if an interval is being added/subtracted from a date/timestamp, return the date/timestamp data type
         (lhs, rhs, _) if is_interval(lhs) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Ok(Some(rhs.clone()))
+            Some(rhs.clone())
         }
         (lhs, rhs, _) if is_interval(rhs) && (is_date(lhs) || is_timestamp(lhs)) => {
-            Ok(Some(lhs.clone()))
+            Some(lhs.clone())
         }
         // if two timestamps are being subtracted, check their time units and return the corresponding interval data type
         (lhs, rhs, Operator::Minus) if is_timestamp(lhs) && is_timestamp(rhs) => {
             handle_timestamp_minus(lhs, rhs)
         }
         // if two intervals are being added/subtracted, check their interval units and return the corresponding interval data type
-        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => handle_interval_addition(lhs, rhs),
-        // if two date/timestamp are being added/subtracted, return an error indicating that the operation is not supported
-        (lhs, rhs, _) if (is_date(lhs) || is_timestamp(lhs)) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Err(DataFusionError::Plan(format!(
-                "{lhs_type:?} {rhs_type:?} is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types"
-            )))
+        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
+            handle_interval_addition(lhs, rhs)
+        }
+        (lhs, rhs, Operator::Minus)
+            if (is_date(lhs) || is_timestamp(lhs))
+                && (is_date(rhs) || is_timestamp(rhs)) =>
+        {
+            temporal_coercion(lhs, rhs)
         }
         // return None if no coercion is possible
-        _ => Ok(None),
+        _ => None,
     }
 }
 
@@ -247,19 +248,19 @@ pub fn temporal_add_sub_coercion(
 // representing the sum of them. If the two interval data types have different units, it returns an interval data type
 // with "IntervalUnit::MonthDayNano". If the two interval data types are already "IntervalUnit::YearMonth" or "IntervalUnit::DayTime",
 // it returns an interval data type with the same unit as the operands.
-fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Result<Option<DataType>> {
+fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     match (lhs, rhs) {
         // operation with the same types
         (
             DataType::Interval(IntervalUnit::YearMonth),
             DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::YearMonth))),
+        ) => Some(DataType::Interval(IntervalUnit::YearMonth)),
         (
             DataType::Interval(IntervalUnit::DayTime),
             DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
         // operation with MonthDayNano's or different types
-        (_, _) => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+        (_, _) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
     }
 }
 
@@ -267,7 +268,7 @@ fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Result<Option<Dat
 // representing the difference between them, either "IntervalUnit::DayTime" if the time unit is second or millisecond,
 // or "IntervalUnit::MonthDayNano" if the time unit is microsecond or nanosecond. If the two timestamp data types have
 // different time units, it returns an error indicating that "The timestamps have different types".
-fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataType>> {
+fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     match (lhs, rhs) {
         (
             DataType::Timestamp(TimeUnit::Second, _),
@@ -276,7 +277,7 @@ fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataT
         | (
             DataType::Timestamp(TimeUnit::Millisecond, _),
             DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
         (
             DataType::Timestamp(TimeUnit::Microsecond, _),
             DataType::Timestamp(TimeUnit::Microsecond, _),
@@ -284,10 +285,8 @@ fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataT
         | (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
             DataType::Timestamp(TimeUnit::Nanosecond, _),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
-        (_, _) => Err(DataFusionError::Plan(
-            "The timestamps have different types".to_string(),
-        )),
+        ) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
+        (_, _) => None,
     }
 }
 
@@ -752,51 +751,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     }
 }
 
-/// Coercion rule for numerical types: The type that both lhs and rhs
-/// can be casted to for numerical calculation, while maintaining
-/// maximum precision
-fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-
-    // error on any non-numeric type
-    if !is_numeric(lhs_type) || !is_numeric(rhs_type) {
-        return None;
-    };
-
-    if lhs_type == rhs_type {
-        // same type => all good
-        return Some(lhs_type.clone());
-    }
-
-    // these are ordered from most informative to least informative so
-    // that the coercion removes the least amount of information
-    match (lhs_type, rhs_type) {
-        (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
-        _ => None,
-    }
-}
-
-/// coercion rules for equality operations. This is a superset of all numerical coercion rules.
-fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
-    }
-    numerical_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
-        .or_else(|| null_coercion(lhs_type, rhs_type))
-}
-
 /// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
 /// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -1003,12 +957,12 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert_contains!(&err, "The timestamps have different types");
+        assert_contains!(&err, "Timestamp(Nanosecond, None) - Timestamp(Millisecond, None) can't be evaluated because there isn't a common type to coerce the types to");
 
         let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
             .unwrap_err()
             .to_string();
-        assert_contains!(&err, "Date32 Date64 is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+        assert_contains!(&err, "Date32 + Date64 can't be evaluated because there isn't a common type to coerce the types to");
 
         Ok(())
     }

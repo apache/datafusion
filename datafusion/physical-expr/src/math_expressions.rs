@@ -146,9 +146,15 @@ math_unary_function!("cbrt", cbrt);
 math_unary_function!("sin", sin);
 math_unary_function!("cos", cos);
 math_unary_function!("tan", tan);
+math_unary_function!("sinh", sinh);
+math_unary_function!("cosh", cosh);
+math_unary_function!("tanh", tanh);
 math_unary_function!("asin", asin);
 math_unary_function!("acos", acos);
 math_unary_function!("atan", atan);
+math_unary_function!("asinh", asinh);
+math_unary_function!("acosh", acosh);
+math_unary_function!("atanh", atanh);
 math_unary_function!("floor", floor);
 math_unary_function!("ceil", ceil);
 math_unary_function!("trunc", trunc);
@@ -158,6 +164,17 @@ math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
+
+/// Pi SQL function
+pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if !matches!(&args[0], ColumnarValue::Array(_)) {
+        return Err(DataFusionError::Internal(
+            "Expect pi function to take no param".to_string(),
+        ));
+    }
+    let array = Float64Array::from_value(std::f64::consts::PI, 1);
+    Ok(ColumnarValue::Array(Arc::new(array)))
+}
 
 /// Random SQL function
 pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {

@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Expressions
+# Expression API
 
 DataFrame methods such as `select` and `filter` accept one or more logical expressions and there are many functions
 available for creating logical expressions. These are documented below.
@@ -69,9 +69,13 @@ expressions such as `col("a") + col("b")` to be used.
 | --------------------- | ------------------------------------------------- |
 | abs(x)                | absolute value                                    |
 | acos(x)               | inverse cosine                                    |
+| acosh(x)              | inverse hyperbolic cosine                         |
 | asin(x)               | inverse sine                                      |
+| asinh(x)              | inverse hyperbolic sine                           |
 | atan(x)               | inverse tangent                                   |
+| atanh(x)              | inverse hyperbolic tangent                        |
 | atan2(y, x)           | inverse tangent of y / x                          |
+| cbrt(x)               | cube root                                         |
 | ceil(x)               | nearest integer greater than or equal to argument |
 | cos(x)                | cosine                                            |
 | exp(x)                | exponential                                       |
@@ -80,12 +84,12 @@ expressions such as `col("a") + col("b")` to be used.
 | log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |
 | log2(x)               | base 2 logarithm                                  |
+| pi(base, exponent)    | approximate value of π                            |
 | power(base, exponent) | base raised to the power of exponent              |
 | round(x)              | round to nearest integer                          |
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |
 | sqrt(x)               | square root                                       |
-| cbrt(x)               | cube root                                         |
 | tan(x)                | tangent                                           |
 | trunc(x)              | truncate toward zero                              |
 

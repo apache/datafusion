@@ -213,9 +213,9 @@ mod tests {
     }
 
     fn list_schema(col: &str) -> Schema {
-        Schema::new(vec![Field::new(
+        Schema::new(vec![Field::new_list(
             col,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
+            Field::new("item", DataType::Utf8, true),
             true,
         )])
     }
@@ -329,15 +329,11 @@ mod tests {
         let struct_col = "s";
         let fields = vec![
             Field::new("foo", DataType::Int64, true),
-            Field::new(
-                "bar",
-                DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
-                true,
-            ),
+            Field::new_list("bar", Field::new("item", DataType::Utf8, true), true),
         ];
         let schema = Schema::new(vec![Field::new(
             struct_col,
-            DataType::Struct(fields.clone()),
+            DataType::Struct(fields.clone().into()),
             true,
         )]);
         let struct_col = build_struct(fields, list_of_tuples.clone());
@@ -409,11 +405,7 @@ mod tests {
     fn get_indexed_field_list_out_of_bounds() {
         let fields = vec![
             Field::new("id", DataType::Int64, true),
-            Field::new(
-                "a",
-                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
-                true,
-            ),
+            Field::new_list("a", Field::new("item", DataType::Float64, true), true),
         ];
 
         let schema = Schema::new(fields);

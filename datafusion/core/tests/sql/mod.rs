@@ -161,22 +161,6 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
-fn create_case_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
-    let data = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("b"),
-            Some("c"),
-            None,
-        ]))],
-    )?;
-    ctx.register_batch("t1", data)?;
-    Ok(ctx)
-}
-
 fn create_join_context(
     column_left: &str,
     column_right: &str,
@@ -1283,7 +1267,7 @@ where
     make_timestamp_tz_table::<A>(None)
 }
 
-fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
+fn make_timestamp_tz_table<A>(tz: Option<Arc<str>>) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {
@@ -1319,8 +1303,8 @@ where
 }
 
 fn make_timestamp_tz_sub_table<A>(
-    tz1: Option<String>,
-    tz2: Option<String>,
+    tz1: Option<Arc<str>>,
+    tz2: Option<Arc<str>>,
 ) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,

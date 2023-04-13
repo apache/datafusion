@@ -35,9 +35,7 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
@@ -230,8 +228,12 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![
-            Some(make_sort_requirements_from_exprs(&self.left_sort_exprs)),
-            Some(make_sort_requirements_from_exprs(&self.right_sort_exprs)),
+            Some(PhysicalSortRequirement::from_sort_exprs(
+                &self.left_sort_exprs,
+            )),
+            Some(PhysicalSortRequirement::from_sort_exprs(
+                &self.right_sort_exprs,
+            )),
         ]
     }
 

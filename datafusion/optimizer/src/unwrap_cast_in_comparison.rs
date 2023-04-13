@@ -789,7 +789,7 @@ mod tests {
     }
 
     fn lit_timestamp_nano_utc(ts: i64) -> Expr {
-        let utc = Some("+0:00".to_string());
+        let utc = Some("+0:00".into());
         lit(ScalarValue::TimestampNanosecond(Some(ts), utc))
     }
 
@@ -803,7 +803,7 @@ mod tests {
 
     // this is the type that now() returns
     fn timestamp_nano_utc_type() -> DataType {
-        let utc = Some("+0:00".to_string());
+        let utc = Some("+0:00".into());
         DataType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
@@ -957,7 +957,7 @@ mod tests {
             TimeUnit::Microsecond,
             TimeUnit::Nanosecond,
         ] {
-            let utc = Some("+0:00".to_string());
+            let utc = Some("+0:00".into());
             // No timezone, utc timezone
             let (lit_tz_none, lit_tz_utc) = match time_unit {
                 TimeUnit::Second => (
@@ -1054,7 +1054,7 @@ mod tests {
         // int64 to list
         expect_cast(
             ScalarValue::Int64(Some(12345)),
-            DataType::List(Box::new(Field::new("f", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("f", DataType::Int32, true))),
             ExpectedCast::NoValue,
         );
     }

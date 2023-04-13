@@ -26,6 +26,8 @@ use crate::aggregate::row_accumulator::{
 };
 use crate::aggregate::sum;
 use crate::aggregate::sum::sum_batch;
+use crate::aggregate::utils::calculate_result_decimal_for_avg;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
@@ -34,6 +36,7 @@ use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
+use arrow_array::Array;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -44,7 +47,9 @@ use datafusion_row::accessor::RowAccessor;
 pub struct Avg {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
-    data_type: DataType,
+    pub sum_data_type: DataType,
+    rt_data_type: DataType,
+    pub pre_cast_to_sum_type: bool,
 }
 
 impl Avg {
@@ -52,17 +57,34 @@ impl Avg {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        data_type: DataType,
+        sum_data_type: DataType,
     ) -> Self {
+        Self::new_with_pre_cast(expr, name, sum_data_type.clone(), sum_data_type, false)
+    }
+
+    pub fn new_with_pre_cast(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        sum_data_type: DataType,
+        rt_data_type: DataType,
+        cast_to_sum_type: bool,
+    ) -> Self {
+        // the internal sum data type of avg just support FLOAT64 and Decimal data type.
+        assert!(matches!(
+            sum_data_type,
+            DataType::Float64 | DataType::Decimal128(_, _)
+        ));
         // the result of avg just support FLOAT64 and Decimal data type.
         assert!(matches!(
-            data_type,
+            rt_data_type,
             DataType::Float64 | DataType::Decimal128(_, _)
         ));
         Self {
             name: name.into(),
             expr,
-            data_type,
+            sum_data_type,
+            rt_data_type,
+            pre_cast_to_sum_type: cast_to_sum_type,
         }
     }
 }
@@ -74,13 +96,14 @@ impl AggregateExpr for Avg {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(&self.name, self.rt_data_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(AvgAccumulator::try_new(
             // avg is f64 or decimal
-            &self.data_type,
+            &self.sum_data_type,
+            &self.rt_data_type,
         )?))
     }
 
@@ -93,7 +116,7 @@ impl AggregateExpr for Avg {
             ),
             Field::new(
                 format_state_name(&self.name, "sum"),
-                self.data_type.clone(),
+                self.sum_data_type.clone(),
                 true,
             ),
         ])
@@ -108,7 +131,7 @@ impl AggregateExpr for Avg {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        is_row_accumulator_support_dtype(&self.data_type)
+        is_row_accumulator_support_dtype(&self.sum_data_type)
     }
 
     fn supports_bounded_execution(&self) -> bool {
@@ -121,7 +144,7 @@ impl AggregateExpr for Avg {
     ) -> Result<Box<dyn RowAccumulator>> {
         Ok(Box::new(AvgRowAccumulator::new(
             start_index,
-            self.data_type.clone(),
+            self.sum_data_type.clone(),
         )))
     }
 
@@ -130,7 +153,24 @@ impl AggregateExpr for Avg {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(AvgAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(AvgAccumulator::try_new(
+            &self.sum_data_type,
+            &self.rt_data_type,
+        )?))
+    }
+}
+
+impl PartialEq<dyn Any> for Avg {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.sum_data_type == x.sum_data_type
+                    && self.rt_data_type == x.rt_data_type
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -139,14 +179,18 @@ impl AggregateExpr for Avg {
 pub struct AvgAccumulator {
     // sum is used for null
     sum: ScalarValue,
+    sum_data_type: DataType,
+    return_data_type: DataType,
     count: u64,
 }
 
 impl AvgAccumulator {
     /// Creates a new `AvgAccumulator`
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new(datatype: &DataType, return_data_type: &DataType) -> Result<Self> {
         Ok(Self {
             sum: ScalarValue::try_from(datatype)?,
+            sum_data_type: datatype.clone(),
+            return_data_type: return_data_type.clone(),
             count: 0,
         })
     }
@@ -160,16 +204,16 @@ impl Accumulator for AvgAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
 
-        self.count += (values.len() - values.data().null_count()) as u64;
+        self.count += (values.len() - values.null_count()) as u64;
         self.sum = self
             .sum
-            .add(&sum::sum_batch(values, &self.sum.get_datatype())?)?;
+            .add(&sum::sum_batch(values, &self.sum_data_type)?)?;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.count -= (values.len() - values.data().null_count()) as u64;
+        self.count -= (values.len() - values.null_count()) as u64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
@@ -183,7 +227,7 @@ impl Accumulator for AvgAccumulator {
         // sums are summed
         self.sum = self
             .sum
-            .add(&sum::sum_batch(&states[1], &self.sum.get_datatype())?)?;
+            .add(&sum::sum_batch(&states[1], &self.sum_data_type)?)?;
         Ok(())
     }
 
@@ -195,12 +239,15 @@ impl Accumulator for AvgAccumulator {
             ScalarValue::Decimal128(value, precision, scale) => {
                 Ok(match value {
                     None => ScalarValue::Decimal128(None, precision, scale),
-                    // TODO add the checker for overflow the precision
-                    Some(v) => ScalarValue::Decimal128(
-                        Some(v / self.count as i128),
-                        precision,
-                        scale,
-                    ),
+                    Some(value) => {
+                        // now the sum_type and return type is not the same, need to convert the sum type to return type
+                        calculate_result_decimal_for_avg(
+                            value,
+                            self.count as i128,
+                            scale,
+                            &self.return_data_type,
+                        )?
+                    }
                 })
             }
             _ => Err(DataFusionError::Internal(
@@ -237,7 +284,7 @@ impl RowAccumulator for AvgRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         // count
-        let delta = (values.len() - values.data().null_count()) as u64;
+        let delta = (values.len() - values.null_count()) as u64;
         accessor.add_u64(self.state_index(), delta);
 
         // sum

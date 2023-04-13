@@ -19,7 +19,10 @@
 
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
+use arrow::compute;
 use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
+use arrow_array::types::UInt32Type;
+use arrow_array::PrimitiveArray;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
@@ -258,6 +261,24 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
         }
     }
     Ok(idents)
+}
+
+/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+pub fn get_arrayref_at_indices(
+    arrays: &[ArrayRef],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<ArrayRef>> {
+    arrays
+        .iter()
+        .map(|array| {
+            compute::take(
+                array.as_ref(),
+                indices,
+                None, // None: no index check
+            )
+            .map_err(DataFusionError::ArrowError)
+        })
+        .collect()
 }
 
 pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
@@ -577,6 +598,39 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_arrayref_at_indices() -> Result<()> {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+        ];
+
+        let row_indices_vec: Vec<Vec<u32>> = vec![
+            // Get rows 0 and 1
+            vec![0, 1],
+            // Get rows 0 and 1
+            vec![0, 2],
+            // Get rows 1 and 3
+            vec![1, 3],
+            // Get rows 2 and 4
+            vec![2, 4],
+        ];
+        for row_indices in row_indices_vec {
+            let indices = PrimitiveArray::from_iter_values(row_indices.iter().cloned());
+            let chunk = get_arrayref_at_indices(&arrays, &indices)?;
+            for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
+                for (idx, orig_idx) in row_indices.iter().enumerate() {
+                    let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;
+                    let res2 = ScalarValue::try_from_array(arr_chunk, idx)?;
+                    assert_eq!(res1, res2);
+                }
+            }
+        }
         Ok(())
     }
 }

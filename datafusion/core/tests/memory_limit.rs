@@ -188,9 +188,8 @@ async fn test_limit_symmetric_hash_join() {
 /// 50 byte memory limit
 const MEMORY_FRACTION: f64 = 0.95;
 
-/// runs the specified query against 1000 rows with a 50
-/// byte memory limit and no disk manager enabled
-/// with default SessionConfig.
+/// runs the specified query against 1000 rows with specified
+/// memory limit and no disk manager enabled with default SessionConfig.
 async fn run_limit_test(
     query: &str,
     expected_error_contains: Vec<&str>,
@@ -219,7 +218,6 @@ async fn run_limit_test_with_config(
     let rt_config = RuntimeConfig::new()
         // do not allow spilling
         .with_disk_manager(DiskManagerConfig::Disabled)
-        // Only allow 50 bytes
         .with_memory_limit(memory_limit, MEMORY_FRACTION);
 
     let runtime = RuntimeEnv::new(rt_config).unwrap();
