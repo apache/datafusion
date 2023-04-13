@@ -1009,7 +1009,7 @@ mod tests {
         ]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "This feature is not implemented: DATE_BIN stride does not support month intervals"
+            "This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals"
         );
 
         // origin: invalid type
