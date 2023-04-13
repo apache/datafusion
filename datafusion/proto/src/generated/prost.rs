@@ -2141,6 +2141,7 @@ pub enum ScalarFunction {
     Sinh = 77,
     Cosh = 78,
     Tanh = 79,
+    Pi = 80,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2229,6 +2230,7 @@ impl ScalarFunction {
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Tanh => "Tanh",
+            ScalarFunction::Pi => "Pi",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2314,6 +2316,7 @@ impl ScalarFunction {
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Tanh" => Some(Self::Tanh),
+            "Pi" => Some(Self::Pi),
             _ => None,
         }
     }
@@ -2658,6 +2661,7 @@ pub enum AggregateMode {
     Partial = 0,
     Final = 1,
     FinalPartitioned = 2,
+    Single = 3,
 }
 impl AggregateMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2669,6 +2673,7 @@ impl AggregateMode {
             AggregateMode::Partial => "PARTIAL",
             AggregateMode::Final => "FINAL",
             AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
+            AggregateMode::Single => "SINGLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2677,6 +2682,7 @@ impl AggregateMode {
             "PARTIAL" => Some(Self::Partial),
             "FINAL" => Some(Self::Final),
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
+            "SINGLE" => Some(Self::Single),
             _ => None,
         }
     }

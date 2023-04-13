@@ -79,5 +79,6 @@ pub fn is_row_accumulator_support_dtype(data_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal128(_, _)
     )
 }

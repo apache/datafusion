@@ -530,6 +530,7 @@ enum ScalarFunction {
   Sinh = 77;
   Cosh = 78;
   Tanh = 79;
+  Pi = 80;
 }
 
 message ScalarFunctionNode {
@@ -1249,6 +1250,7 @@ enum AggregateMode {
   PARTIAL = 0;
   FINAL = 1;
   FINAL_PARTITIONED = 2;
+  SINGLE = 3;
 }
 
 message WindowAggExecNode {

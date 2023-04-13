@@ -20,21 +20,27 @@ use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::stream::{
-    PartitionedStream, PrimitiveCursorStream, RowCursorStream,
+    FieldCursorStream, PartitionedStream, RowCursorStream,
 };
 use crate::physical_plan::{
     PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
 };
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::downcast_primitive;
+use arrow_array::*;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 macro_rules! primitive_merge_helper {
+    ($t:ty, $($v:ident),+) => {
+        merge_helper!(PrimitiveArray<$t>, $($v),+)
+    };
+}
+
+macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident) => {{
-        let streams = PrimitiveCursorStream::<$t>::new($sort, $streams);
+        let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,
@@ -58,6 +64,10 @@ pub(crate) fn streaming_merge(
         let data_type = sort.expr.data_type(schema.as_ref())?;
         downcast_primitive! {
             data_type => (primitive_merge_helper, sort, streams, schema, tracking_metrics, batch_size),
+            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, tracking_metrics, batch_size)
+            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, tracking_metrics, batch_size)
+            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, tracking_metrics, batch_size)
+            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, tracking_metrics, batch_size)
             _ => {}
         }
     }

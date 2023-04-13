@@ -161,22 +161,6 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
-fn create_case_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
-    let data = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("b"),
-            Some("c"),
-            None,
-        ]))],
-    )?;
-    ctx.register_batch("t1", data)?;
-    Ok(ctx)
-}
-
 fn create_join_context(
     column_left: &str,
     column_right: &str,
