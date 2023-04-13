@@ -333,48 +333,26 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     })
 }
 
-trait DateBinInterval {
-    fn date_bin_interval(&self, stride: i64, source: i64, origin: i64) -> i64;
-}
-
-struct DateBinNanosInterval;
-impl DateBinNanosInterval {
-    fn new() -> Self {
-        Self {}
-    }
-}
-impl DateBinInterval for DateBinNanosInterval {
-    fn date_bin_interval(&self, stride: i64, source: i64, origin: i64) -> i64 {
-        date_bin_nanos_interval(stride, source, origin)
-    }
-}
-
-struct DateBinMonthsInterval;
-impl DateBinMonthsInterval {
-    fn new() -> Self {
-        Self {}
-    }
-}
-impl DateBinInterval for DateBinMonthsInterval {
-    fn date_bin_interval(&self, stride: i64, source: i64, origin: i64) -> i64 {
-        date_bin_months_interval(stride, source, origin)
-    }
-}
-
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
 fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> i64 {
     let time_diff = source - origin;
-    // distance to bin
-    let time_delta = time_diff - (time_diff % stride_nanos);
 
-    let time_delta = if time_diff < 0 && stride_nanos > 1 {
-        // The origin is later than the source timestamp, round down to the previous bin
-        time_delta - stride_nanos
-    } else {
-        time_delta
-    };
+    // distance from origin to bin
+    let time_delta = compute_distance(time_diff, stride_nanos);
 
     origin + time_delta
+}
+
+// distance from origin to bin
+fn compute_distance(time_diff: i64, stride: i64) -> i64 {
+    let time_delta = time_diff - (time_diff % stride);
+
+    if time_diff < 0 && stride > 1 {
+        // The origin is later than the source timestamp, round down to the previous bin
+        time_delta - stride
+    } else {
+        time_delta
+    }
 }
 
 // return time in nanoseconds that the source timestamp falls into based on the stride and origin
@@ -389,20 +367,30 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
         - origin_date.month() as i32;
 
     // distance from origin to bin
-    let month_delta = month_diff - (month_diff % stride_months as i32);
+    let month_delta = compute_distance(month_diff as i64, stride_months);
 
-    let month_delta = if month_diff < 0 && stride_months > 1 {
-        // The origin is later than the source timestamp, round down to the previous bin
-        month_delta - stride_months as i32
-    } else {
-        month_delta
-    };
-
-    let bin_time = if month_delta < 0 {
-        origin_date - Months::new(month_delta.unsigned_abs())
+    let mut bin_time = if month_delta < 0 {
+        origin_date - Months::new(month_delta.unsigned_abs() as u32)
     } else {
         origin_date + Months::new(month_delta as u32)
     };
+
+    // If origin is not midnight of first date of the month, the bin_time may be larger than the source
+    // In this case, we need to move back to previous bin
+    if (origin_date.day() != 1
+        || origin_date.hour() != 0
+        || origin_date.minute() != 0
+        || origin_date.second() != 0
+        || origin_date.nanosecond() != 0)
+        && bin_time > source_date
+    {
+        let month_delta = month_delta - stride_months;
+        bin_time = if month_delta < 0 {
+            origin_date - Months::new(month_delta.unsigned_abs() as u32)
+        } else {
+            origin_date + Months::new(month_delta as u32)
+        };
+    }
 
     bin_time.timestamp_nanos()
 }
@@ -437,10 +425,21 @@ enum Interval {
     Months(i64),
 }
 
+impl Interval {
+    fn bin(&self, source: i64, origin: i64) -> i64 {
+        match self {
+            Interval::Nanoseconds(nanos) => {
+                date_bin_nanos_interval(*nanos, source, origin)
+            }
+            Interval::Months(months) => date_bin_months_interval(*months, source, origin),
+        }
+    }
+}
+
 // Supported intervals:
 //  1. IntervalDayTime: this means that the stride is in days, hours, minutes, seconds and milliseconds
 //     We will assume month interval won't be converted into this type
-//     TODO (my next PR): for array data, the stride was converted into ScalarValue::IntervalDayTime somwhere
+//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somwhere
 //             for month interval. I need to find that and make it ScalarValue::IntervalMonthDayNano instead
 // 2. IntervalMonthDayNano
 fn date_bin_impl(
@@ -515,18 +514,7 @@ fn date_bin_impl(
         )),
     };
 
-    let f = move |x: Option<i64>| {
-        x.map(|x| match stride {
-            Interval::Nanoseconds(stride) => {
-                let y = DateBinNanosInterval::new();
-                y.date_bin_interval(stride, x, origin)
-            }
-            Interval::Months(stride) => {
-                let y = DateBinMonthsInterval::new();
-                y.date_bin_interval(stride, x, origin)
-            }
-        })
-    };
+    let f = |x: Option<i64>| x.map(|x| stride.bin(x, origin));
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
