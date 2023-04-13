@@ -25,7 +25,7 @@ use crate::physical_plan::{
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
-    udaf, PhysicalExpr,
+    udaf, ExecutionPlan, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
@@ -36,6 +36,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::window::{
     BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
 };
+use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -43,6 +44,8 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+use datafusion_common::utils::longest_consecutive_prefix;
+use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -188,22 +191,54 @@ fn create_built_in_window_expr(
     })
 }
 
-pub(crate) fn calc_requirements(
-    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_sort_exprs: &[PhysicalSortExpr],
+pub(crate) fn calc_requirements<
+    T: Borrow<Arc<dyn PhysicalExpr>>,
+    S: Borrow<PhysicalSortExpr>,
+>(
+    partition_by_exprs: impl IntoIterator<Item = T>,
+    orderby_sort_exprs: impl IntoIterator<Item = S>,
 ) -> Option<Vec<PhysicalSortRequirement>> {
-    let mut sort_reqs = vec![];
-    for partition_by in partition_by_exprs {
-        sort_reqs.push(PhysicalSortRequirement::new(partition_by.clone(), None))
-    }
-    for sort_expr in orderby_sort_exprs {
-        let contains = sort_reqs.iter().any(|e| sort_expr.expr.eq(e.expr()));
-        if !contains {
-            sort_reqs.push(PhysicalSortRequirement::from(sort_expr.clone()));
+    let mut sort_reqs = partition_by_exprs
+        .into_iter()
+        .map(|partition_by| {
+            PhysicalSortRequirement::new(partition_by.borrow().clone(), None)
+        })
+        .collect::<Vec<_>>();
+    for element in orderby_sort_exprs.into_iter() {
+        let PhysicalSortExpr { expr, options } = element.borrow();
+        if !sort_reqs.iter().any(|e| e.expr().eq(expr)) {
+            sort_reqs.push(PhysicalSortRequirement::new(expr.clone(), Some(*options)));
         }
     }
     // Convert empty result to None. Otherwise wrap result inside Some()
     (!sort_reqs.is_empty()).then_some(sort_reqs)
+}
+
+/// This function calculates the indices such that when partition by expressions reordered with this indices
+/// resulting expressions define a preset for existing ordering.
+// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used
+// This vector will be [1, 0]. It means that when we iterate b,a columns with the order [1, 0]
+// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
+pub(crate) fn get_ordered_partition_by_indices(
+    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
+    input: &Arc<dyn ExecutionPlan>,
+) -> Vec<usize> {
+    let input_ordering = input.output_ordering().unwrap_or(&[]);
+    let input_ordering_exprs = convert_to_expr(input_ordering);
+    let equal_properties = || input.equivalence_properties();
+    let input_places = get_indices_of_matching_exprs(
+        &input_ordering_exprs,
+        partition_by_exprs,
+        equal_properties,
+    );
+    let mut partition_places = get_indices_of_matching_exprs(
+        partition_by_exprs,
+        &input_ordering_exprs,
+        equal_properties,
+    );
+    partition_places.sort();
+    let first_n = longest_consecutive_prefix(partition_places);
+    input_places[0..first_n].to_vec()
 }
 
 #[cfg(test)]
@@ -215,7 +250,7 @@ mod tests {
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::{self, assert_is_pending};
+    use crate::test::{self, assert_is_pending, csv_exec_sorted};
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, SchemaRef};
@@ -235,8 +270,60 @@ mod tests {
         let b = Field::new("b", DataType::Int32, true);
         let c = Field::new("c", DataType::Int32, true);
         let d = Field::new("d", DataType::Int32, true);
-        let schema = Arc::new(Schema::new(vec![a, b, c, d]));
+        let e = Field::new("e", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
         Ok(schema)
+    }
+
+    /// make PhysicalSortExpr with default options
+    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
+        sort_expr_options(name, schema, SortOptions::default())
+    }
+
+    /// PhysicalSortExpr with specified options
+    fn sort_expr_options(
+        name: &str,
+        schema: &Schema,
+        options: SortOptions,
+    ) -> PhysicalSortExpr {
+        PhysicalSortExpr {
+            expr: col(name, schema).unwrap(),
+            options,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_partition_by_ordering() -> Result<()> {
+        let test_schema = create_test_schema2()?;
+        // Columns a,c are nullable whereas b,d are not nullable.
+        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
+        // Column e is not ordered.
+        let sort_exprs = vec![
+            sort_expr("a", &test_schema),
+            sort_expr("b", &test_schema),
+            sort_expr("c", &test_schema),
+            sort_expr("d", &test_schema),
+        ];
+        // Input is ordered by a,b,c,d
+        let input = csv_exec_sorted(&test_schema, sort_exprs, true);
+        let test_data = vec![
+            (vec!["a", "b"], vec![0, 1]),
+            (vec!["b", "a"], vec![1, 0]),
+            (vec!["b", "a", "c"], vec![1, 0, 2]),
+            (vec!["d", "b", "a"], vec![2, 1]),
+            (vec!["d", "e", "a"], vec![2]),
+        ];
+        for (pb_names, expected) in test_data {
+            let pb_exprs = pb_names
+                .iter()
+                .map(|name| col(name, &test_schema))
+                .collect::<Result<Vec<_>>>()?;
+            assert_eq!(
+                get_ordered_partition_by_indices(&pb_exprs, &input),
+                expected
+            );
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -298,7 +385,7 @@ mod tests {
                     expected = Some(vec![res]);
                 }
             }
-            assert_eq!(calc_requirements(&partitionbys, &orderbys), expected);
+            assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
         Ok(())
     }
