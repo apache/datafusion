@@ -59,8 +59,7 @@ pub(crate) fn prune_row_groups(
             let col = metadata.column(0);
             let offset = col
                 .dictionary_page_offset()
-                .unwrap_or(0)
-                .max(col.data_page_offset());
+                .unwrap_or_else(|| col.data_page_offset());
             if offset < range.start || offset >= range.end {
                 continue;
             }
