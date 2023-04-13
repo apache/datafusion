@@ -64,7 +64,7 @@ impl IntervalBound {
 
     /// This convenience function checks whether the `IntervalBound` represents
     /// an unbounded interval endpoint.
-    pub fn is_null(&self) -> bool {
+    pub fn is_unbounded(&self) -> bool {
         self.get_value().is_null()
     }
 
@@ -96,7 +96,7 @@ impl IntervalBound {
     /// otherwise.
     pub fn add<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
         let rhs = other.borrow();
-        if self.is_null() || rhs.is_null() {
+        if self.is_unbounded() || rhs.is_unbounded() {
             IntervalBound::make_unbounded(self.get_datatype())
         } else {
             let result = self.get_value().add(rhs.get_value());
@@ -114,7 +114,7 @@ impl IntervalBound {
     /// or open otherwise.
     pub fn sub<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
         let rhs = other.borrow();
-        if self.is_null() || rhs.is_null() {
+        if self.is_unbounded() || rhs.is_unbounded() {
             IntervalBound::make_unbounded(self.get_datatype())
         } else {
             let result = self.get_value().sub(rhs.get_value());
@@ -135,9 +135,9 @@ impl IntervalBound {
         second: &IntervalBound,
         decide: fn(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
     ) -> Result<IntervalBound> {
-        Ok(if first.is_null() {
+        Ok(if first.is_unbounded() {
             second.clone()
-        } else if second.is_null() {
+        } else if second.is_unbounded() {
             first.clone()
         } else if first != second {
             let chosen = decide(first.get_value(), second.get_value())?;
@@ -234,15 +234,15 @@ impl Interval {
     /// or can't be greater than `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub(crate) fn gt(&self, other: &Interval) -> Interval {
-        let flags = if !self.upper.is_null()
-            && !other.lower.is_null()
+        let flags = if !self.upper.is_unbounded()
+            && !other.lower.is_unbounded()
             && self.upper <= other.lower
         {
             // Values in this interval are certainly less than or equal to those
             // in the given interval.
             (false, false)
-        } else if !self.lower.is_null()
-            && !other.upper.is_null()
+        } else if !self.lower.is_unbounded()
+            && !other.upper.is_unbounded()
             && self.lower >= other.upper
             && (self.lower > other.upper
                 || !self.lower.is_closed()
@@ -266,15 +266,15 @@ impl Interval {
     /// or equal to, or can't be greater than or equal to `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
     pub(crate) fn gt_eq(&self, other: &Interval) -> Interval {
-        let flags = if !self.lower.is_null()
-            && !other.upper.is_null()
+        let flags = if !self.lower.is_unbounded()
+            && !other.upper.is_unbounded()
             && self.lower >= other.upper
         {
             // Values in this interval are certainly greater than or equal to those
             // in the given interval.
             (true, true)
-        } else if !self.upper.is_null()
-            && !other.lower.is_null()
+        } else if !self.upper.is_unbounded()
+            && !other.lower.is_unbounded()
             && self.upper <= other.lower
             && (self.upper < other.lower
                 || !self.upper.is_closed()
@@ -312,7 +312,7 @@ impl Interval {
     /// or can't be equal to `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.    
     pub(crate) fn equal(&self, other: &Interval) -> Interval {
-        let flags = if !self.lower.is_null()
+        let flags = if !self.lower.is_unbounded()
             && (self.lower == self.upper)
             && (other.lower == other.upper)
             && (self.lower == other.lower)
@@ -364,9 +364,11 @@ impl Interval {
     pub(crate) fn intersect(&self, other: &Interval) -> Result<Option<Interval>> {
         // If it is evident that the result is an empty interval,
         // do not make any calculation and directly return None.
-        if (!self.lower.is_null() && !other.upper.is_null() && self.lower > other.upper)
-            || (!self.upper.is_null()
-                && !other.lower.is_null()
+        if (!self.lower.is_unbounded()
+            && !other.upper.is_unbounded()
+            && self.lower > other.upper)
+            || (!self.upper.is_unbounded()
+                && !other.lower.is_unbounded()
                 && self.upper < other.lower)
         {
             // This None value signals an empty interval.
@@ -376,8 +378,8 @@ impl Interval {
         let lower = IntervalBound::choose(&self.lower, &other.lower, max)?;
         let upper = IntervalBound::choose(&self.upper, &other.upper, min)?;
 
-        let non_empty = lower.is_null()
-            || upper.is_null()
+        let non_empty = lower.is_unbounded()
+            || upper.is_unbounded()
             || lower != upper
             || (lower.is_closed() && upper.is_closed());
         Ok(non_empty.then_some(Interval::new(lower, upper)))
