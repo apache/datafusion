@@ -53,7 +53,11 @@ pub(crate) fn prune_row_groups(
     let mut filtered = Vec::with_capacity(groups.len());
     for (idx, metadata) in groups.iter().enumerate() {
         if let Some(range) = &range {
-            let offset = metadata.column(0).file_offset();
+            let col = metadata.column(0);
+            let offset = col
+                .dictionary_page_offset()
+                .unwrap_or(0)
+                .max(col.data_page_offset());
             if offset < range.start || offset >= range.end {
                 continue;
             }
