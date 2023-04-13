@@ -75,7 +75,8 @@ pub struct BoundedWindowAggExec {
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Partition by indices that define ordering
+    /// Partition by indices that defines preset for existing ordering
+    // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
 }
 
@@ -441,7 +442,7 @@ impl SortedPartitionByBoundedWindowStream {
 
         // In BoundedWindowAggExec all partition by columns should be ordered.
         if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
-            return Err(DataFusionError::Execution(
+            return Err(DataFusionError::Internal(
                 "All partition by columns should have an ordering".to_string(),
             ));
         }

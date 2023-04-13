@@ -2037,6 +2037,9 @@ SELECT
 15673 -1899175111
 
 # test_window_agg_partition_by_set
+# These tests checks for whether BoundedWindowAggExec treats partition by expressions as set.
+# Physical plan shouldn't have SortExec in between BoundedWindowAggExec
+
 statement ok
 set datafusion.execution.target_partitions = 1;
 
@@ -2081,6 +2084,8 @@ SELECT c9,
 145294611 6802765992 6802765992
 
 # test_window_agg_partition_by_set2
+# These tests checks for whether WindowAggExec treats partition by expressions as set.
+# Physical plan shouldn't have SortExec in between WindowAggExec
 
 query TT
 EXPLAIN SELECT

@@ -205,6 +205,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_sorted() {
+        assert!(is_sorted::<usize>([]));
+        assert!(is_sorted([0]));
         assert!(is_sorted([0, 3, 4]));
         assert!(is_sorted([0, 1, 2]));
         assert!(is_sorted([0, 1, 4]));
@@ -219,5 +221,7 @@ mod tests {
         assert_eq!(set_difference([0, 3, 4], [1, 2, 4]), vec![0, 3]);
         // return value should have same ordering with the in1
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
+        assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
+        assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
     }
 }
