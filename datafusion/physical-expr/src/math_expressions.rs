@@ -165,6 +165,17 @@ math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
 
+/// Pi SQL function
+pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if !matches!(&args[0], ColumnarValue::Array(_)) {
+        return Err(DataFusionError::Internal(
+            "Expect pi function to take no param".to_string(),
+        ));
+    }
+    let array = Float64Array::from_value(std::f64::consts::PI, 1);
+    Ok(ColumnarValue::Array(Arc::new(array)))
+}
+
 /// Random SQL function
 pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let len: usize = match &args[0] {

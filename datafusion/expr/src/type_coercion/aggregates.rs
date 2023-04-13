@@ -266,8 +266,7 @@ fn check_arg_count(
         TypeSignature::VariadicAny => {
             if input_types.is_empty() {
                 return Err(DataFusionError::Plan(format!(
-                    "The function {:?} expects at least one argument",
-                    agg_fun
+                    "The function {agg_fun:?} expects at least one argument"
                 )));
             }
         }
@@ -373,6 +372,21 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 4);
             let new_scale = DECIMAL128_MAX_SCALE.min(*scale + 4);
             Ok(DataType::Decimal128(new_precision, new_scale))
+        }
+        arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
+        other => Err(DataFusionError::Plan(format!(
+            "AVG does not support {other:?}"
+        ))),
+    }
+}
+
+/// internal sum type of an average
+pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
+    match arg_type {
+        DataType::Decimal128(precision, scale) => {
+            // in the spark, the sum type of avg is DECIMAL(min(38,precision+10), s)
+            let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
+            Ok(DataType::Decimal128(new_precision, *scale))
         }
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(

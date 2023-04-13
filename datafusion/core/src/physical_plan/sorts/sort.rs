@@ -519,8 +519,9 @@ impl Stream for SortedSizedRecordBatchStream {
                         let arrays = self
                             .batches
                             .iter()
-                            .map(|b| b.column(i).data())
+                            .map(|b| b.column(i).to_data())
                             .collect::<Vec<_>>();
+                        let arrays = arrays.iter().collect();
                         let mut mutable = MutableArrayData::new(arrays, false, num_rows);
                         for x in slices.iter() {
                             mutable.extend(
