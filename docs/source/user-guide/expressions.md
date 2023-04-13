@@ -88,22 +88,22 @@ expressions such as `col("a") + col("b")` to be used.
 | cbrt(x)               | cube root                                         |
 | ceil(x)               | nearest integer greater than or equal to argument |
 | cos(x)                | cosine                                            |
-| cosh(x)                | hyperbolic cosine                                            |
+| cosh(x)               | hyperbolic cosine                                 |
 | exp(x)                | exponential                                       |
 | floor(x)              | nearest integer less than or equal to argument    |
 | ln(x)                 | natural logarithm                                 |
 | log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |
 | log2(x)               | base 2 logarithm                                  |
-| pi(base, exponent)    | approximate value of π                            |
+| pi()                  | approximate value of π                            |
 | power(base, exponent) | base raised to the power of exponent              |
 | round(x)              | round to nearest integer                          |
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |
-| sinh(x)                | hyperbolic sine                                              |
+| sinh(x)               | hyperbolic sine                                   |
 | sqrt(x)               | square root                                       |
 | tan(x)                | tangent                                           |
-| tanh(x)                | hyperbolic tangent                                           |
+| tanh(x)               | hyperbolic tangent                                |
 | trunc(x)              | truncate toward zero                              |
 
 ### Math functions usage notes:
@@ -153,7 +153,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | left(text, number)                             | Returns a certain number (`number`) of first characters (`text`). Example: `left('like', 2) -> li`                                                                                                                                       |
 | length(text)                                   | Returns number of characters in the string (`text`). The same as `character_length` and `char_length`. Example: `length('lion') -> 4`                                                                                                    |
 | lower(text)                                    | Converts all characters in the string (`text`) into lower case. Example: `lower('HELLO') -> hello`                                                                                                                                       |
-| lpad(text, length, [, fill])                   | Extends the string to length (`lenght`) by prepending the characters (`fill`) (a space by default). Example: `lpad('bb', 5, 'a') → aaabb`                                                                                                |
+| lpad(text, length, [, fill])                   | Extends the string to length (`length`) by prepending the characters (`fill`) (a space by default). Example: `lpad('bb', 5, 'a') → aaabb`                                                                                                |
 | ltrim(text, text)                              | Removes all specified characters (`characters`) from the beginning of the string (`text`). Example: `ltrim('aabchelloccb', 'abc') -> helloccb`                                                                                           |
 | md5(text)                                      | Computes the MD5 hash of the argument (`text`).                                                                                                                                                                                          |
 | octet_length(text)                             | Returns number of bytes in the string (`text`).                                                                                                                                                                                          |
@@ -161,7 +161,7 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | replace(string, from, to)                      | Replaces a specified string (`from`) with another specified string (`to`) in the string (`string`). Example: `replace('Hello', 'replace', 'el') -> Hola`                                                                                 |
 | reverse(text)                                  | Reverses the order of the characters in the string (`text`). Example: `reverse('hello') -> olleh`                                                                                                                                        |
 | right(text, number)                            | Returns a certain number (`number`) of last characters (`text`). Example: `right('like', 2) -> ke`                                                                                                                                       |
-| rpad(text, length, [, fill])                   | Extends the string to length (`lenght`) by prepending the characters (`fill`) (a space by default). Example: `rpad('bb', 5, 'a') → bbaaa`                                                                                                |
+| rpad(text, length, [, fill])                   | Extends the string to length (`length`) by prepending the characters (`fill`) (a space by default). Example: `rpad('bb', 5, 'a') → bbaaa`                                                                                                |
 | rtrim                                          | Removes all specified characters (`characters`) from the end of the string (`text`). Example: `rtrim('aabchelloccb', 'abc') -> aabchello`                                                                                                |
 | digest(input, algorithm)                       | Computes the binary hash of `input`, using the `algorithm`.                                                                                                                                                                              |
 | split_part(string, delimiter, index)           | Splits the string (`string`) based on a delimiter (`delimiter`) and picks out the desired field based on the index (`index`).                                                                                                            |
@@ -203,7 +203,6 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | sha256(text)                 | Computes the SHA256 hash of the argument (`text`).                                                         |
 | sha384(text)                 | Computes the SHA384 hash of the argument (`text`).                                                         |
 | sha512(text)                 | Computes the SHA512 hash of the argument (`text`).                                                         |
-| struct                       |                                                                                                            |
 | to_hex(integer)              | Converts the integer (`integer`) to the corresponding hexadecimal string.                                  |
 
 ## Aggregate Functions
