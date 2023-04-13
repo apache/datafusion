@@ -175,12 +175,13 @@ codegen-units = 1
 
 Then, in `main.rs.` update the memory allocator with the below after your imports:
 
-```rust
+```rust,ignore
 use datafusion::prelude::*;
 
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
+#[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
   Ok(())
 }
@@ -195,6 +196,6 @@ rustup toolchain install nightly
 Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
-```
+```shell
 RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
 ```
