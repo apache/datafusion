@@ -1024,7 +1024,7 @@ impl DataFrame {
             .plan
             .schema()
             .fields()
-            .into_iter()
+            .iter()
             .map(|f| {
                 if f == field_to_rename {
                     col(f.qualified_column()).alias(new_name)
