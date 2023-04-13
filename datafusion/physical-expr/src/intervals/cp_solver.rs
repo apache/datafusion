@@ -556,8 +556,8 @@ mod tests {
         exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
         left_interval: Interval,
         right_interval: Interval,
-        left_waited: Interval,
-        right_waited: Interval,
+        left_expected: Interval,
+        right_expected: Interval,
         result: PropagationResult,
     ) -> Result<()> {
         let col_stats = vec![
@@ -565,8 +565,8 @@ mod tests {
             (exprs_with_interval.1.clone(), right_interval),
         ];
         let expected = vec![
-            (exprs_with_interval.0.clone(), left_waited),
-            (exprs_with_interval.1.clone(), right_waited),
+            (exprs_with_interval.0.clone(), left_expected),
+            (exprs_with_interval.1.clone(), right_expected),
         ];
         let mut graph = ExprIntervalGraph::try_new(expr)?;
         let expr_indexes = graph
@@ -587,18 +587,8 @@ mod tests {
         assert_eq!(exp_result, result);
         col_stat_nodes.iter().zip(expected_nodes.iter()).for_each(
             |((_, calculated_interval_node), (_, expected))| {
-                let (
-                    Interval {
-                        lower: calc_lower,
-                        upper: calc_upper,
-                    },
-                    Interval {
-                        lower: expected_lower,
-                        upper: expected_upper,
-                    },
-                ) = (calculated_interval_node, expected);
-                assert!(calc_lower <= expected_lower);
-                assert!(calc_upper >= expected_upper);
+                assert!(calculated_interval_node.lower <= expected.lower);
+                assert!(calculated_interval_node.upper >= expected.upper);
             },
         );
         Ok(())
@@ -731,19 +721,20 @@ mod tests {
             #[rstest]
             #[test]
             fn $test_func(
-                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 123, 4123)] seed: u64,
+                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
+                seed: u64,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
+                // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
 
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
                     (
-                        Operator::Minus,
-                        Operator::Minus,
-                        Operator::Minus,
+                        Operator::Plus,
+                        Operator::Plus,
+                        Operator::Plus,
                         Operator::Plus,
                     ),
                     ScalarValue::$SCALAR(Some(1 as $type)),
@@ -784,19 +775,20 @@ mod tests {
             #[rstest]
             #[test]
             fn $test_func(
-                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 123, 4123)] seed: u64,
+                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
+                seed: u64,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
+                // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
 
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
                     (
                         Operator::Minus,
-                        Operator::Minus,
-                        Operator::Minus,
+                        Operator::Plus,
+                        Operator::Plus,
                         Operator::Plus,
                     ),
                     ScalarValue::$SCALAR(Some(1 as $type)),
@@ -837,22 +829,23 @@ mod tests {
             #[rstest]
             #[test]
             fn $test_func(
-                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 123, 4123)] seed: u64,
+                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
+                seed: u64,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
+                // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
 
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
                     (
                         Operator::Minus,
-                        Operator::Minus,
+                        Operator::Plus,
                         Operator::Minus,
                         Operator::Plus,
                     ),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(1 as $type)),
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
@@ -890,7 +883,8 @@ mod tests {
             #[rstest]
             #[test]
             fn $test_func(
-                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 123, 4123)] seed: u64,
+                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
+                seed: u64,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
@@ -943,7 +937,8 @@ mod tests {
             #[rstest]
             #[test]
             fn $test_func(
-                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 123, 4123)] seed: u64,
+                #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
+                seed: u64,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));

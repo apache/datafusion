@@ -199,35 +199,24 @@ impl Interval {
     /// Note that this represents all possible values the sum can take if
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+        fn handle_scalar_add<const UPPER: bool>(
+            lhs: &ScalarValue,
+            rhs: &ScalarValue,
+        ) -> Result<ScalarValue> {
+            if lhs.is_null() || rhs.is_null() {
+                ScalarValue::try_from(lhs.get_datatype())
+            } else if matches!(lhs.get_datatype(), DataType::Float64 | DataType::Float32)
+            {
+                alter_round_mode_for_float_operation::<UPPER, _>(lhs, rhs, |lhs, rhs| {
+                    lhs.add(rhs)
+                })
+            } else {
+                lhs.add(rhs)
+            }
+        }
         let rhs = other.borrow();
-        let lower = if self.lower.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(self.lower.get_datatype())
-        } else {
-            match self.get_datatype() {
-                DataType::Float64 | DataType::Float32 => {
-                    alter_round_mode_for_float_operation::<false>(
-                        &self.lower,
-                        &rhs.lower,
-                        Box::new(|lhs, rhs| lhs.add(rhs)),
-                    )
-                }
-                _ => self.lower.add(&rhs.lower),
-            }
-        }?;
-        let upper = if self.upper.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(self.upper.get_datatype())
-        } else {
-            match self.get_datatype() {
-                DataType::Float64 | DataType::Float32 => {
-                    alter_round_mode_for_float_operation::<true>(
-                        &self.upper,
-                        &rhs.upper,
-                        Box::new(|lhs, rhs| lhs.add(rhs)),
-                    )
-                }
-                _ => self.upper.add(&rhs.upper),
-            }
-        }?;
+        let lower = handle_scalar_add::<false>(&self.lower, &rhs.lower)?;
+        let upper = handle_scalar_add::<true>(&self.upper, &rhs.upper)?;
         Ok(Interval { lower, upper })
     }
 
@@ -236,35 +225,25 @@ impl Interval {
     /// Note that this represents all possible values the difference can take
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+        fn handle_scalar_sub<const UPPER: bool>(
+            lhs: &ScalarValue,
+            rhs: &ScalarValue,
+        ) -> Result<ScalarValue> {
+            if lhs.is_null() || rhs.is_null() {
+                ScalarValue::try_from(lhs.get_datatype())
+            } else if matches!(lhs.get_datatype(), DataType::Float64 | DataType::Float32)
+            {
+                alter_round_mode_for_float_operation::<UPPER, _>(lhs, rhs, |lhs, rhs| {
+                    lhs.sub(rhs)
+                })
+            } else {
+                lhs.sub(rhs)
+            }
+        }
         let rhs = other.borrow();
-        let lower = if self.lower.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(self.lower.get_datatype())
-        } else {
-            match self.get_datatype() {
-                DataType::Float64 | DataType::Float32 => {
-                    alter_round_mode_for_float_operation::<false>(
-                        &self.lower,
-                        &rhs.upper,
-                        Box::new(|lhs, rhs| lhs.sub(rhs)),
-                    )
-                }
-                _ => self.lower.sub(&rhs.upper),
-            }
-        }?;
-        let upper = if self.upper.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(self.upper.get_datatype())
-        } else {
-            match self.get_datatype() {
-                DataType::Float64 | DataType::Float32 => {
-                    alter_round_mode_for_float_operation::<true>(
-                        &self.upper,
-                        &rhs.lower,
-                        Box::new(|lhs, rhs| lhs.sub(rhs)),
-                    )
-                }
-                _ => self.upper.sub(&rhs.lower),
-            }
-        }?;
+
+        let lower = handle_scalar_sub::<false>(&self.lower, &rhs.upper)?;
+        let upper = handle_scalar_sub::<true>(&self.upper, &rhs.lower)?;
         Ok(Interval { lower, upper })
     }
 }
@@ -625,41 +604,24 @@ mod tests {
     ))]
     #[test]
     fn test_add_intervals_lower_affected_f32() {
-        let lower = f32::from_bits(1073741887);
-        let upper = f32::from_bits(1098907651);
+        // Lower is affected
+        let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
+        let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
         capture_mode_change_f32((lower, upper), (true, false));
-    }
 
-    #[cfg(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        not(target_os = "windows")
-    ))]
-    #[test]
-    fn test_add_intervals_upper_affected_f32() {
-        let lower = f32::from_bits(1072693248);
-        let upper = f32::from_bits(715827883);
+        // Upper is affected
+        let lower = f32::from_bits(1072693248); //111111111100000000000000000000
+        let upper = f32::from_bits(715827883); //101010101010101010101010101011
         capture_mode_change_f32((lower, upper), (false, true));
-    }
 
-    #[cfg(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        not(target_os = "windows")
-    ))]
-    #[test]
-    fn test_add_intervals_lower_affected_f64() {
-        let lower = 1.0;
-        let upper = 0.3;
+        // Lower is affected
+        let lower = 1.0; // 0x3FF0000000000000
+        let upper = 0.3; // 0x3FD3333333333333
         capture_mode_change_f64((lower, upper), (true, false));
-    }
 
-    #[cfg(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        not(target_os = "windows")
-    ))]
-    #[test]
-    fn test_add_intervals_upper_affected_f64() {
-        let lower = 1.4999999999999998;
-        let upper = 0.000_000_000_000_000_022_044_604_925_031_31;
+        // Upper is affected
+        let lower = 1.4999999999999998; // 0x3FF7FFFFFFFFFFFF
+        let upper = 0.000_000_000_000_000_022_044_604_925_031_31; // 0x3C796A6B413BB21F
         capture_mode_change_f64((lower, upper), (false, true));
     }
 
@@ -672,14 +634,7 @@ mod tests {
         let lower = 1.5;
         let upper = 1.5;
         capture_mode_change_f64((lower, upper), (true, true));
-    }
 
-    #[cfg(any(
-        not(any(target_arch = "x86_64", target_arch = "aarch64")),
-        target_os = "windows"
-    ))]
-    #[test]
-    fn test_next_impl_add_intervals_f32() {
         let lower = 1.5;
         let upper = 1.5;
         capture_mode_change_f32((lower, upper), (true, true));

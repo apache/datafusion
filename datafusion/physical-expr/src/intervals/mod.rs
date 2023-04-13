@@ -28,8 +28,6 @@ use datafusion_common::ScalarValue;
 pub use interval_aritmetic::*;
 use std::ops::{Add, BitAnd, Sub};
 
-type ScalarValueOperation = dyn FnOnce(&ScalarValue, &ScalarValue) -> Result<ScalarValue>;
-
 // Define constants for ARM
 #[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
 const FE_UPWARD: i32 = 0x00400000;
@@ -225,11 +223,47 @@ pub fn next_down<F: FloatBits + Copy>(float: F) -> F {
     F::from_bits(next_bits)
 }
 
-pub fn alter_round_mode_for_float_operation<const UPPER: bool>(
+#[cfg(any(
+    not(any(target_arch = "x86_64", target_arch = "aarch64")),
+    target_os = "windows"
+))]
+pub fn alter_round_mode_for_other_arch<const UPPER: bool, F>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-    cls: Box<ScalarValueOperation>,
-) -> Result<ScalarValue> {
+    cls: F,
+) -> Result<ScalarValue>
+where
+    F: FnOnce(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
+{
+    let mut res = cls(lhs, rhs)?;
+    match &mut res {
+        ScalarValue::Float64(Some(val)) => {
+            if UPPER {
+                *val = next_up(*val)
+            } else {
+                *val = next_down(*val)
+            }
+        }
+        ScalarValue::Float32(Some(val)) => {
+            if UPPER {
+                *val = next_up(*val)
+            } else {
+                *val = next_down(*val)
+            }
+        }
+        _ => {}
+    };
+    Ok(res)
+}
+
+pub fn alter_round_mode_for_float_operation<const UPPER: bool, F>(
+    lhs: &ScalarValue,
+    rhs: &ScalarValue,
+    cls: F,
+) -> Result<ScalarValue>
+where
+    F: FnOnce(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
+{
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
         not(target_os = "windows")
@@ -245,19 +279,7 @@ pub fn alter_round_mode_for_float_operation<const UPPER: bool>(
         not(any(target_arch = "x86_64", target_arch = "aarch64")),
         target_os = "windows"
     ))]
-    match cls(lhs, rhs) {
-        Ok(ScalarValue::Float64(Some(val))) => Ok(ScalarValue::Float64(Some(if UPPER {
-            next_up(val)
-        } else {
-            next_down(val)
-        }))),
-        Ok(ScalarValue::Float32(Some(val))) => Ok(ScalarValue::Float32(Some(if UPPER {
-            next_up(val)
-        } else {
-            next_down(val)
-        }))),
-        val => val,
-    }
+    alter_round_mode_for_other_arch::<UPPER, _>(lhs, rhs, cls)
 }
 
 #[cfg(test)]

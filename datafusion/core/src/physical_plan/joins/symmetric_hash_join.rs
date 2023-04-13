@@ -1657,6 +1657,7 @@ mod tests {
         Ok(result)
     }
 
+    // It creates join filters for different type of fields for testing.
     macro_rules! join_expr_tests {
         ($func_name:ident, $type:ty, $SCALAR:ident) => {
             fn $func_name(
@@ -1798,10 +1799,16 @@ mod tests {
         let cardinality = Arc::new(Int32Array::from_iter(
             initial_range.clone().map(|x| x % 4).collect::<Vec<i32>>(),
         ));
-        let cardinality_key = Arc::new(Int32Array::from_iter(
+        let cardinality_key_left = Arc::new(Int32Array::from_iter(
             initial_range
                 .clone()
                 .map(|x| x % key_cardinality.0)
+                .collect::<Vec<i32>>(),
+        ));
+        let cardinality_key_right = Arc::new(Int32Array::from_iter(
+            initial_range
+                .clone()
+                .map(|x| x % key_cardinality.1)
                 .collect::<Vec<i32>>(),
         ));
         let ordered_asc_null_first = Arc::new(Int32Array::from_iter({
@@ -1839,7 +1846,7 @@ mod tests {
         let left = RecordBatch::try_from_iter(vec![
             ("la1", ordered.clone()),
             ("lb1", cardinality.clone()),
-            ("lc1", cardinality_key.clone()),
+            ("lc1", cardinality_key_left),
             ("lt1", time.clone()),
             ("la2", ordered.clone()),
             ("la1_des", ordered_des.clone()),
@@ -1851,7 +1858,7 @@ mod tests {
         let right = RecordBatch::try_from_iter(vec![
             ("ra1", ordered.clone()),
             ("rb1", cardinality),
-            ("rc1", cardinality_key),
+            ("rc1", cardinality_key_right),
             ("rt1", time),
             ("ra2", ordered),
             ("ra1_des", ordered_des),
@@ -2799,8 +2806,6 @@ mod tests {
         join_type: JoinType,
         #[values(
         (4, 5),
-        (11, 21),
-        (31, 71),
         (99, 12),
         )]
         cardinality: (i32, i32),
@@ -2845,11 +2850,11 @@ mod tests {
         );
         let column_indices = vec![
             ColumnIndex {
-                index: 9,
+                index: 9, // l_float
                 side: JoinSide::Left,
             },
             ColumnIndex {
-                index: 9,
+                index: 9, // r_float
                 side: JoinSide::Right,
             },
         ];
