@@ -47,17 +47,20 @@ use hashbrown::{raw::RawTable, HashSet};
 use parking_lot::Mutex;
 
 use datafusion_common::{utils::bisect, ScalarValue};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
+use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
+use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     joins::{
-        hash_join::{build_join_indices, update_hash, JoinHashMap},
+        hash_join::{build_join_indices, update_hash},
         hash_join_utils::{build_filter_input_order, SortedFilterExpr},
         utils::{
             build_batch_from_indices, build_join_schema, check_join_is_valid,
@@ -69,6 +72,8 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+
+const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
 /// A symmetric hash join with range conditions is when both streams are hashed on the
 /// join key and the resulting hash tables are used to join the streams.
@@ -209,6 +214,8 @@ struct SymmetricHashJoinMetrics {
     left: SymmetricHashJoinSideMetrics,
     /// Number of right batches/rows consumed by this operator
     right: SymmetricHashJoinSideMetrics,
+    /// Memory used by sides in bytes
+    pub(crate) stream_memory_usage: metrics::Gauge,
     /// Number of batches produced by this operator
     output_batches: metrics::Count,
     /// Number of rows produced by this operator
@@ -233,6 +240,9 @@ impl SymmetricHashJoinMetrics {
             input_rows,
         };
 
+        let stream_memory_usage =
+            MetricBuilder::new(metrics).gauge("stream_memory_usage", partition);
+
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
 
@@ -242,6 +252,7 @@ impl SymmetricHashJoinMetrics {
             left,
             right,
             output_batches,
+            stream_memory_usage,
             output_rows,
         }
     }
@@ -581,7 +592,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
         let right_stream = self
             .right
-            .execute(partition, context)?
+            .execute(partition, context.clone())?
             .map(|val| (JoinSide::Right, val));
         // This function will attempt to pull items from both streams.
         // Each stream will be polled in a round-robin fashion, and whenever a stream is
@@ -589,6 +600,14 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         // After one of the two input streams completes, the remaining one will be polled exclusively.
         // The returned stream completes when both input streams have completed.
         let input_stream = select(left_stream, right_stream).boxed();
+
+        let reservation = Arc::new(Mutex::new(
+            MemoryConsumer::new(format!("SymmetricHashJoinStream[{partition}]"))
+                .register(context.memory_pool()),
+        ));
+        if let Some(g) = graph.as_ref() {
+            reservation.lock().try_grow(g.size())?;
+        }
 
         Ok(Box::pin(SymmetricHashJoinStream {
             input_stream,
@@ -605,6 +624,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             right_sorted_filter_expr,
             null_equals_null: self.null_equals_null,
             final_result: false,
+            reservation,
         }))
     }
 }
@@ -637,6 +657,8 @@ struct SymmetricHashJoinStream {
     null_equals_null: bool,
     /// Metrics
     metrics: SymmetricHashJoinMetrics,
+    /// Memory reservation
+    reservation: SharedMemoryReservation,
     /// Flag indicating whether there is nothing to process anymore
     final_result: bool,
 }
@@ -689,6 +711,7 @@ fn prune_hash_values(
             }
         }
     }
+    hashmap.shrink_if_necessary(HASHMAP_SHRINK_SCALE_FACTOR);
     Ok(())
 }
 
@@ -1041,12 +1064,26 @@ struct OneSideHashJoiner {
 }
 
 impl OneSideHashJoiner {
+    pub fn size(&self) -> usize {
+        let mut size = 0;
+        size += std::mem::size_of_val(self);
+        size += std::mem::size_of_val(&self.build_side);
+        size += self.input_buffer.get_array_memory_size();
+        size += std::mem::size_of_val(&self.on);
+        size += self.hashmap.size();
+        size += self.row_hash_values.capacity() * std::mem::size_of::<u64>();
+        size += self.hashes_buffer.capacity() * std::mem::size_of::<u64>();
+        size += self.visited_rows.capacity() * std::mem::size_of::<usize>();
+        size += std::mem::size_of_val(&self.offset);
+        size += std::mem::size_of_val(&self.deleted_offset);
+        size
+    }
     pub fn new(build_side: JoinSide, on: Vec<Column>, schema: SchemaRef) -> Self {
         Self {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
             on,
-            hashmap: JoinHashMap(RawTable::with_capacity(10_000)),
+            hashmap: JoinHashMap(RawTable::with_capacity(0)),
             row_hash_values: VecDeque::new(),
             hashes_buffer: vec![],
             visited_rows: HashSet::new(),
@@ -1074,6 +1111,7 @@ impl OneSideHashJoiner {
         self.input_buffer = concat_batches(&batch.schema(), [&self.input_buffer, batch])?;
         // Resize the hashes buffer to the number of rows in the incoming batch:
         self.hashes_buffer.resize(batch.num_rows(), 0);
+        // Get allocation_info before adding the item
         // Update the hashmap with the join key values and hashes of the incoming batch:
         update_hash(
             &self.on,
@@ -1339,6 +1377,24 @@ fn combine_two_batches(
 }
 
 impl SymmetricHashJoinStream {
+    fn size(&self) -> usize {
+        let mut size = 0;
+        size += std::mem::size_of_val(&self.input_stream);
+        size += std::mem::size_of_val(&self.schema);
+        size += std::mem::size_of_val(&self.filter);
+        size += std::mem::size_of_val(&self.join_type);
+        size += self.left.size();
+        size += self.right.size();
+        size += std::mem::size_of_val(&self.column_indices);
+        size += self.graph.as_ref().map(|g| g.size()).unwrap_or(0);
+        size += std::mem::size_of_val(&self.left_sorted_filter_expr);
+        size += std::mem::size_of_val(&self.right_sorted_filter_expr);
+        size += std::mem::size_of_val(&self.random_state);
+        size += std::mem::size_of_val(&self.null_equals_null);
+        size += std::mem::size_of_val(&self.metrics);
+        size += std::mem::size_of_val(&self.final_result);
+        size
+    }
     /// Polls the next result of the join operation.
     ///
     /// If the result of the join is ready, it returns the next record batch.
@@ -1442,6 +1498,9 @@ impl SymmetricHashJoinStream {
                     // Combine results:
                     let result =
                         combine_two_batches(&self.schema, equal_result, anti_result)?;
+                    let capacity = self.size();
+                    self.metrics.stream_memory_usage.set(capacity);
+                    self.reservation.lock().try_resize(capacity)?;
                     // Update the metrics if we have a batch; otherwise, continue the loop.
                     if let Some(batch) = &result {
                         self.metrics.output_batches.add(1);
@@ -1482,7 +1541,6 @@ impl SymmetricHashJoinStream {
                         // Update the metrics:
                         self.metrics.output_batches.add(1);
                         self.metrics.output_rows.add(batch.num_rows());
-
                         return Poll::Ready(Ok(result).transpose());
                     }
                 }
