@@ -37,8 +37,9 @@ use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
 use crate::physical_optimizer::utils::{
-    add_sort_above, is_coalesce_partitions, is_limit, is_repartition, is_sort,
-    is_sort_preserving_merge, is_union, is_window,
+    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
+    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
+    merge_and_order_indices, set_difference,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -48,13 +49,14 @@ use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
+use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::{
-    ordering_satisfy, ordering_satisfy_requirement_concrete,
+    convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy,
+    ordering_satisfy_requirement_concrete,
 };
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::{concat, izip};
-use std::iter::zip;
 use std::sync::Arc;
 
 /// This rule inspects `SortExec`'s in the given physical plan and removes the
@@ -582,40 +584,24 @@ fn analyze_window_sort_removal(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
         ));
     };
-    let n_req = window_exec.required_input_ordering()[0]
-        .as_ref()
-        .map(|elem| elem.len())
-        .unwrap_or(0);
 
     let mut needs_reverse = None;
     for sort_any in sort_tree.get_leaves() {
-        let sort_output_ordering = sort_any.output_ordering();
         // Variable `sort_any` will either be a `SortExec` or a
         // `SortPreservingMergeExec`, and both have a single child.
         // Therefore, we can use the 0th index without loss of generality.
         let sort_input = sort_any.children()[0].clone();
-        let physical_ordering = sort_input.output_ordering();
-        let sort_output_ordering = sort_output_ordering.ok_or_else(|| {
-            DataFusionError::Plan("A SortExec should have output ordering".to_string())
-        })?;
-        // It is enough to check whether the first "n_req" elements of the sort
-        // output satisfy window_exec's requirement as it is only "n_req" long.
-        let required_ordering = &sort_output_ordering[0..n_req];
-        if let Some(physical_ordering) = physical_ordering {
-            if let Some(should_reverse) = can_skip_sort(
-                window_expr[0].partition_by(),
-                required_ordering,
-                &sort_input.schema(),
-                physical_ordering,
-            )? {
-                if should_reverse == *needs_reverse.get_or_insert(should_reverse) {
-                    continue;
-                }
+        if let Some(should_reverse) = can_skip_sort(
+            window_expr[0].partition_by(),
+            window_expr[0].order_by(),
+            &sort_input,
+        )? {
+            if should_reverse == *needs_reverse.get_or_insert(should_reverse) {
+                continue;
             }
         }
-        // If there is no physical ordering, or we can not skip the sort, or
-        // window reversal requirements are not uniform; then there is no
-        // opportunity for a sort removal -- we immediately return.
+        // We can not skip the sort, or window reversal requirements are not
+        // uniform; then sort removal is not possible -- we immediately return.
         return Ok(None);
     }
     let new_window_expr = if needs_reverse.unwrap() {
@@ -776,67 +762,108 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-#[derive(Debug)]
-/// This structure stores extra column information required to remove unnecessary sorts.
-pub struct ColumnInfo {
-    reverse: bool,
-    is_partition: bool,
-}
-
 /// Compares physical ordering and required ordering of all `PhysicalSortExpr`s
 /// to decide whether a `SortExec` before a `WindowAggExec` can be removed.
 /// A `None` return value indicates that we can remove the sort in question.
 /// A `Some(bool)` value indicates otherwise, and signals whether we need to
 /// reverse the ordering in order to remove the sort in question.
-pub fn can_skip_sort(
-    partition_keys: &[Arc<dyn PhysicalExpr>],
-    required: &[PhysicalSortExpr],
-    input_schema: &SchemaRef,
-    physical_ordering: &[PhysicalSortExpr],
+fn can_skip_sort(
+    partitionby_exprs: &[Arc<dyn PhysicalExpr>],
+    orderby_keys: &[PhysicalSortExpr],
+    input: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<bool>> {
-    if required.len() > physical_ordering.len() {
+    let physical_ordering = if let Some(physical_ordering) = input.output_ordering() {
+        physical_ordering
+    } else {
+        // If there is no physical ordering, there is no way to remove a
+        // sort, so immediately return.
+        return Ok(None);
+    };
+    let orderby_exprs = convert_to_expr(orderby_keys);
+    let physical_ordering_exprs = convert_to_expr(physical_ordering);
+    let equal_properties = || input.equivalence_properties();
+    // indices of the order by expressions among input ordering expressions
+    let ob_indices = get_indices_of_matching_exprs(
+        &orderby_exprs,
+        &physical_ordering_exprs,
+        equal_properties,
+    );
+    let contains_all_orderbys = ob_indices.len() == orderby_exprs.len();
+    if !contains_all_orderbys {
+        // If all order by expressions are not in the input ordering. There is no way to remove a sort
+        // immediately return
         return Ok(None);
     }
-    let mut col_infos = vec![];
-    for (sort_expr, physical_expr) in zip(required, physical_ordering) {
-        let column = sort_expr.expr.clone();
-        let is_partition = partition_keys.iter().any(|e| e.eq(&column));
-        if let Some(reverse) = check_alignment(input_schema, physical_expr, sort_expr)? {
-            col_infos.push(ColumnInfo {
-                reverse,
-                is_partition,
-            });
-        } else {
-            return Ok(None);
-        }
+    // indices of the partition by expressions among input ordering expressions
+    let mut pb_indices = get_indices_of_matching_exprs(
+        partitionby_exprs,
+        &physical_ordering_exprs,
+        equal_properties,
+    );
+    let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
+    // Indices of order by columns that doesn't seen in partition by
+    // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
+    let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
+    if !is_sorted(&unique_ob_indices) {
+        // ORDER BY indices should be ascending ordered
+        return Ok(None);
     }
-    let partition_by_sections = col_infos
-        .iter()
-        .filter(|c| c.is_partition)
-        .collect::<Vec<_>>();
-    let can_skip_partition_bys = if partition_by_sections.is_empty() {
-        true
+    let first_n = longest_consecutive_prefix(ordered_merged_indices);
+    let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
+    // Cannot skip sort if last order by index is not within consecutive prefix.
+    // For instance, if input is ordered by a,b,c,d
+    // for expression `PARTITION BY a, ORDER BY b, d`, `first_n` would be 2 (meaning a, b defines a prefix for input ordering)
+    // Whereas `furthest_ob_index` would be 3 (column d occurs at the 3rd index of the existing ordering.)
+    // Hence existing ordering is not sufficient to run current Executor.
+    // However, for expression `PARTITION BY a, ORDER BY b, c, d`, `first_n` would be 4 (meaning a, b, c, d defines a prefix for input ordering)
+    // Similarly, `furthest_ob_index` would be 3 (column d occurs at the 3rd index of the existing ordering.)
+    // Hence existing ordering would be sufficient to run current Executor.
+    if first_n <= furthest_ob_index {
+        return Ok(None);
+    }
+    let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
+    let expected_orderby_columns =
+        get_at_indices(orderby_keys, find_indices(&ob_indices, unique_ob_indices)?)?;
+    let should_reverse = if let Some(should_reverse) = check_alignments(
+        &input.schema(),
+        &input_orderby_columns,
+        &expected_orderby_columns,
+    )? {
+        should_reverse
     } else {
-        let first_reverse = partition_by_sections[0].reverse;
-        let can_skip_partition_bys = partition_by_sections
-            .iter()
-            .all(|c| c.reverse == first_reverse);
-        can_skip_partition_bys
+        // If ordering directions are not aligned. We cannot calculate result without changing existing ordering.
+        return Ok(None);
     };
-    let order_by_sections = col_infos
-        .iter()
-        .filter(|elem| !elem.is_partition)
-        .collect::<Vec<_>>();
-    let (can_skip_order_bys, should_reverse_order_bys) = if order_by_sections.is_empty() {
-        (true, false)
+
+    // Determine how many elements in the partition by columns defines a consecutive range from zero.
+    pb_indices.sort();
+    let first_n = longest_consecutive_prefix(pb_indices);
+    if first_n < partitionby_exprs.len() {
+        return Ok(None);
+    }
+    Ok(Some(should_reverse))
+}
+
+fn check_alignments(
+    schema: &SchemaRef,
+    physical_ordering: &[PhysicalSortExpr],
+    required: &[PhysicalSortExpr],
+) -> Result<Option<bool>> {
+    let res = izip!(physical_ordering, required)
+        .map(|(lhs, rhs)| check_alignment(schema, lhs, rhs))
+        .collect::<Result<Option<Vec<_>>>>()?;
+    Ok(if let Some(res) = res {
+        if !res.is_empty() {
+            let first = res[0];
+            let all_same = res.into_iter().all(|elem| elem == first);
+            all_same.then_some(first)
+        } else {
+            Some(false)
+        }
     } else {
-        let first_reverse = order_by_sections[0].reverse;
-        let can_skip_order_bys =
-            order_by_sections.iter().all(|c| c.reverse == first_reverse);
-        (can_skip_order_bys, first_reverse)
-    };
-    let can_skip = can_skip_order_bys && can_skip_partition_bys;
-    Ok(can_skip.then_some(should_reverse_order_bys))
+        // Cannot skip some of the requirements in the input.
+        None
+    })
 }
 
 /// Compares `physical_ordering` and `required` ordering, decides whether
@@ -883,6 +910,7 @@ mod tests {
     use crate::physical_plan::windows::create_window_expr;
     use crate::physical_plan::{displayable, Partitioning};
     use crate::prelude::SessionContext;
+    use crate::test::csv_exec_sorted;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
@@ -906,6 +934,17 @@ mod tests {
         let col_a = Field::new("col_a", DataType::Int32, true);
         let col_b = Field::new("col_b", DataType::Int32, true);
         let schema = Arc::new(Schema::new(vec![col_a, col_b]));
+        Ok(schema)
+    }
+
+    // Generate a schema which consists of 5 columns (a, b, c, d, e)
+    fn create_test_schema3() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, false);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, false);
+        let e = Field::new("e", DataType::Int32, false);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
         Ok(schema)
     }
 
@@ -988,6 +1027,109 @@ mod tests {
             };
             let res = check_alignment(&schema, &physical_ordering, &required_ordering)?;
             assert_eq!(res, expected);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_can_skip_ordering_exhaustive() -> Result<()> {
+        let test_schema = create_test_schema3()?;
+        // Columns a,c are nullable whereas b,d are not nullable.
+        // Source is sorted by a ASC NULLS FIRST, b ASC NULLS FIRST, c ASC NULLS FIRST, d ASC NULLS FIRST
+        // Column e is not ordered.
+        let sort_exprs = vec![
+            sort_expr("a", &test_schema),
+            sort_expr("b", &test_schema),
+            sort_expr("c", &test_schema),
+            sort_expr("d", &test_schema),
+        ];
+        let exec_unbounded = csv_exec_sorted(&test_schema, sort_exprs, true);
+
+        // test cases consists of vector of tuples. Where each tuple represents a single test case.
+        // First field in the tuple is Vec<str> where each element in the vector represents PARTITION BY columns
+        // For instance `vec!["a", "b"]` corresponds to PARTITION BY a, b
+        // Second field in the tuple is Vec<str> where each element in the vector represents ORDER BY columns
+        // For instance, vec!["c"], corresponds to ORDER BY c ASC NULLS FIRST, (ordering is default ordering. We do not check
+        // for reversibility in this test).
+        // Third field in the tuple is Option<bool>, which corresponds to expected result for `can_skip_sort` function.
+        // None represents that existing ordering is not sufficient to run executor.
+        // (We need to add SortExec to be able to run it).
+        // Some(bool) represents, we can run algorithm with existing ordering. If bool is `true`. We should reverse, window expressions
+        // if bool is `false`. Existing window expression can be used as is.
+        let test_cases = vec![
+            (vec!["a"], vec!["a"], Some(false)),
+            (vec!["a"], vec!["b"], Some(false)),
+            (vec!["a"], vec!["c"], None),
+            (vec!["a"], vec!["a", "b"], Some(false)),
+            (vec!["a"], vec!["b", "c"], Some(false)),
+            (vec!["a"], vec!["a", "c"], None),
+            (vec!["a"], vec!["a", "b", "c"], Some(false)),
+            (vec!["b"], vec!["a"], None),
+            (vec!["b"], vec!["b"], None),
+            (vec!["b"], vec!["c"], None),
+            (vec!["b"], vec!["a", "b"], None),
+            (vec!["b"], vec!["b", "c"], None),
+            (vec!["b"], vec!["a", "c"], None),
+            (vec!["b"], vec!["a", "b", "c"], None),
+            (vec!["c"], vec!["a"], None),
+            (vec!["c"], vec!["b"], None),
+            (vec!["c"], vec!["c"], None),
+            (vec!["c"], vec!["a", "b"], None),
+            (vec!["c"], vec!["b", "c"], None),
+            (vec!["c"], vec!["a", "c"], None),
+            (vec!["c"], vec!["a", "b", "c"], None),
+            (vec!["b", "a"], vec!["a"], Some(false)),
+            (vec!["b", "a"], vec!["b"], Some(false)),
+            (vec!["b", "a"], vec!["c"], Some(false)),
+            (vec!["b", "a"], vec!["a", "b"], Some(false)),
+            (vec!["b", "a"], vec!["b", "c"], Some(false)),
+            (vec!["b", "a"], vec!["a", "c"], Some(false)),
+            (vec!["b", "a"], vec!["a", "b", "c"], Some(false)),
+            (vec!["c", "b"], vec!["a"], None),
+            (vec!["c", "b"], vec!["b"], None),
+            (vec!["c", "b"], vec!["c"], None),
+            (vec!["c", "b"], vec!["a", "b"], None),
+            (vec!["c", "b"], vec!["b", "c"], None),
+            (vec!["c", "b"], vec!["a", "c"], None),
+            (vec!["c", "b"], vec!["a", "b", "c"], None),
+            (vec!["c", "a"], vec!["a"], None),
+            (vec!["c", "a"], vec!["b"], None),
+            (vec!["c", "a"], vec!["c"], None),
+            (vec!["c", "a"], vec!["a", "b"], None),
+            (vec!["c", "a"], vec!["b", "c"], None),
+            (vec!["c", "a"], vec!["a", "c"], None),
+            (vec!["c", "a"], vec!["a", "b", "c"], None),
+            (vec!["c", "b", "a"], vec!["a"], Some(false)),
+            (vec!["c", "b", "a"], vec!["b"], Some(false)),
+            (vec!["c", "b", "a"], vec!["c"], Some(false)),
+            (vec!["c", "b", "a"], vec!["a", "b"], Some(false)),
+            (vec!["c", "b", "a"], vec!["b", "c"], Some(false)),
+            (vec!["c", "b", "a"], vec!["a", "c"], Some(false)),
+            (vec!["c", "b", "a"], vec!["a", "b", "c"], Some(false)),
+        ];
+        for (case_idx, test_case) in test_cases.iter().enumerate() {
+            let (partition_by_columns, order_by_params, expected) = &test_case;
+            let mut partition_by_exprs = vec![];
+            for col_name in partition_by_columns {
+                partition_by_exprs.push(col(col_name, &test_schema)?);
+            }
+
+            let mut order_by_exprs = vec![];
+            for col_name in order_by_params {
+                let expr = col(col_name, &test_schema)?;
+                // Give default ordering, this is same with input ordering direction
+                // In this test we do check for reversibility.
+                let options = SortOptions::default();
+                order_by_exprs.push(PhysicalSortExpr { expr, options });
+            }
+            let res =
+                can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
+            assert_eq!(
+                res, *expected,
+                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
+                case_idx, test_case
+            );
         }
 
         Ok(())
