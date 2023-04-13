@@ -346,6 +346,29 @@ macro_rules! typed_min_max_string {
     }};
 }
 
+macro_rules! interval_choose_min_max {
+    (min) => {
+        std::cmp::Ordering::Greater
+    };
+    (max) => {
+        std::cmp::Ordering::Less
+    };
+}
+
+macro_rules! interval_min_max {
+    ($OP:tt, $LHS:expr, $RHS:expr) => {{
+        match $LHS.partial_cmp(&$RHS) {
+            Some(interval_choose_min_max!($OP)) => $RHS.clone(),
+            Some(_) => $LHS.clone(),
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Comparison error while computing interval min/max".to_string(),
+                ))
+            }
+        }
+    }};
+}
+
 // min/max of two scalar values of the same type
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
@@ -455,6 +478,45 @@ macro_rules! min_max {
                 ScalarValue::Time64Nanosecond(rhs),
             ) => {
                 typed_min_max!(lhs, rhs, Time64Nanosecond, $OP)
+            }
+            (
+                ScalarValue::IntervalYearMonth(lhs),
+                ScalarValue::IntervalYearMonth(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalYearMonth, $OP)
+            }
+            (
+                ScalarValue::IntervalMonthDayNano(lhs),
+                ScalarValue::IntervalMonthDayNano(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalMonthDayNano, $OP)
+            }
+            (
+                ScalarValue::IntervalDayTime(lhs),
+                ScalarValue::IntervalDayTime(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalDayTime, $OP)
+            }
+            (
+                ScalarValue::IntervalYearMonth(_),
+                ScalarValue::IntervalMonthDayNano(_),
+            ) | (
+                ScalarValue::IntervalYearMonth(_),
+                ScalarValue::IntervalDayTime(_),
+            ) | (
+                ScalarValue::IntervalMonthDayNano(_),
+                ScalarValue::IntervalDayTime(_),
+            ) | (
+                ScalarValue::IntervalMonthDayNano(_),
+                ScalarValue::IntervalYearMonth(_),
+            ) | (
+                ScalarValue::IntervalDayTime(_),
+                ScalarValue::IntervalYearMonth(_),
+            ) | (
+                ScalarValue::IntervalDayTime(_),
+                ScalarValue::IntervalMonthDayNano(_),
+            ) => {
+                interval_min_max!($OP, $VALUE, $DELTA)
             }
             e => {
                 return Err(DataFusionError::Internal(format!(

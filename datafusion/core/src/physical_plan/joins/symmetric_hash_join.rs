@@ -1554,17 +1554,19 @@ impl SymmetricHashJoinStream {
 mod tests {
     use std::fs::File;
 
-    use arrow::array::ArrayRef;
-    use arrow::array::{Int32Array, TimestampNanosecondArray};
+    use arrow::array::{ArrayRef, IntervalDayTimeArray};
+    use arrow::array::{Int32Array, TimestampMillisecondArray};
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
     use arrow::util::pretty::pretty_format_batches;
     use rstest::*;
     use tempfile::TempDir;
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
-    use datafusion_physical_expr::intervals::test_utils::gen_conjunctive_numeric_expr;
+    use datafusion_physical_expr::intervals::test_utils::{
+        gen_conjunctive_numeric_expr, gen_conjunctive_temporal_expr,
+    };
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::physical_plan::joins::{
@@ -1789,6 +1791,44 @@ mod tests {
             _ => unreachable!(),
         }
     }
+    fn join_expr_tests_fixture_temporal(
+        expr_id: usize,
+        left_col: Arc<dyn PhysicalExpr>,
+        right_col: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        match expr_id {
+            // constructs ((left_col - INTERVAL '100ms')  > (right_col - INTERVAL '200ms')) AND ((left_col - INTERVAL '450ms') < (right_col - INTERVAL '300ms'))
+            0 => gen_conjunctive_temporal_expr(
+                left_col,
+                right_col,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Minus,
+                ScalarValue::new_interval_dt(0, 100), // 100 ms
+                ScalarValue::new_interval_dt(0, 200), // 200 ms
+                ScalarValue::new_interval_dt(0, 450), // 450 ms
+                ScalarValue::new_interval_dt(0, 300), // 300 ms
+                schema,
+            ),
+            // constructs ((left_col - TIMESTAMP '2023-01-01:12.00.03')  > (right_col - TIMESTAMP '2023-01-01:12.00.01')) AND ((left_col - TIMESTAMP '2023-01-01:12.00.00') < (right_col - TIMESTAMP '2023-01-01:12.00.02'))
+            1 => gen_conjunctive_temporal_expr(
+                left_col,
+                right_col,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Minus,
+                ScalarValue::TimestampMillisecond(Some(1672574403000), None), // 2023-01-01:12.00.03
+                ScalarValue::TimestampMillisecond(Some(1672574401000), None), // 2023-01-01:12.00.01
+                ScalarValue::TimestampMillisecond(Some(1672574400000), None), // 2023-01-01:12.00.00
+                ScalarValue::TimestampMillisecond(Some(1672574402000), None), // 2023-01-01:12.00.02
+                schema,
+            ),
+            _ => unreachable!(),
+        }
+    }
     fn build_sides_record_batches(
         table_size: i32,
         key_cardinality: (i32, i32),
@@ -1833,9 +1873,15 @@ mod tests {
                 .collect::<Vec<Option<i32>>>()
         }));
 
-        let time = Arc::new(TimestampNanosecondArray::from(
+        let time = Arc::new(TimestampMillisecondArray::from(
             initial_range
-                .map(|x| 1664264591000000000 + (5000000000 * (x as i64)))
+                .clone()
+                .map(|x| x as i64 + 1672531200000) // x + 2023-01-01:00.00.00
+                .collect::<Vec<i64>>(),
+        ));
+        let interval_time: ArrayRef = Arc::new(IntervalDayTimeArray::from(
+            initial_range
+                .map(|x| x as i64 * 100) // x * 100ms
                 .collect::<Vec<i64>>(),
         ));
 
@@ -1849,6 +1895,7 @@ mod tests {
             ("l_asc_null_first", ordered_asc_null_first.clone()),
             ("l_asc_null_last", ordered_asc_null_last.clone()),
             ("l_desc_null_first", ordered_desc_null_first.clone()),
+            ("li1", interval_time.clone()),
         ])?;
         let right = RecordBatch::try_from_iter(vec![
             ("ra1", ordered.clone()),
@@ -1860,6 +1907,7 @@ mod tests {
             ("r_asc_null_first", ordered_asc_null_first),
             ("r_asc_null_last", ordered_asc_null_last),
             ("r_desc_null_first", ordered_desc_null_first),
+            ("ri1", interval_time),
         ])?;
         Ok((left, right))
     }
@@ -2779,6 +2827,168 @@ mod tests {
             false,
         )?;
         assert_eq!(left_side_joiner.visited_rows.is_empty(), should_be_empty);
+        Ok(())
+    }
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testing_with_temporal_columns(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+        #[values(
+               (4, 5),
+               (99, 12),
+               )]
+        cardinality: (i32, i32),
+        #[values(0, 1)] case_expr: usize,
+    ) -> Result<()> {
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: col("lt1", left_schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: col("rt1", right_schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            Some(left_sorted),
+            Some(right_sorted),
+            13,
+        )?;
+        let intermediate_schema = Schema::new(vec![
+            Field::new(
+                "left",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new(
+                "right",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+        ]);
+        let filter_expr = join_expr_tests_fixture_temporal(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+            &intermediate_schema,
+        )?;
+        let column_indices = vec![
+            ColumnIndex {
+                index: 3,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 3,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
+        Ok(())
+    }
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_with_interval_columns(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+        #[values(
+        (4, 5),
+        (99, 12),
+        )]
+        cardinality: (i32, i32),
+    ) -> Result<()> {
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: col("li1", left_schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: col("ri1", right_schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            Some(left_sorted),
+            Some(right_sorted),
+            13,
+        )?;
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Interval(IntervalUnit::DayTime), false),
+            Field::new("right", DataType::Interval(IntervalUnit::DayTime), false),
+        ]);
+        let filter_expr = join_expr_tests_fixture_temporal(
+            0,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+            &intermediate_schema,
+        )?;
+        let column_indices = vec![
+            ColumnIndex {
+                index: 9,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 9,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
+
         Ok(())
     }
 }
