@@ -503,6 +503,9 @@ macro_rules! min_max_v2 {
             ScalarValue::Decimal128(rhs, ..) => {
                 typed_min_max_v2!($INDEX, $ACC, rhs, i128, $OP)
             }
+            ScalarValue::Null => {
+                // do nothing
+            }
             e => {
                 return Err(DataFusionError::Internal(format!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -647,8 +650,16 @@ impl RowAccumulator for MaxRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &max_batch(values)?;
-        max_row(self.index, accessor, delta)?;
-        Ok(())
+        max_row(self.index, accessor, delta)
+    }
+
+    fn update_scalar(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let values = &values[0];
+        max_row(self.index, accessor, values)
     }
 
     fn merge_batch(
@@ -892,6 +903,15 @@ impl RowAccumulator for MinRowAccumulator {
         let delta = &min_batch(values)?;
         min_row(self.index, accessor, delta)?;
         Ok(())
+    }
+
+    fn update_scalar(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let values = &values[0];
+        min_row(self.index, accessor, values)
     }
 
     fn merge_batch(

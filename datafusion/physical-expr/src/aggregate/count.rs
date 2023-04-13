@@ -242,6 +242,24 @@ impl RowAccumulator for CountRowAccumulator {
         Ok(())
     }
 
+    fn update_scalar(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        if values.len() == 1 {
+            match &values[0] {
+                ScalarValue::Null => {
+                    // do not update the accumulator
+                }
+                _ => accessor.add_u64(self.state_index, 1),
+            }
+        } else if !values.iter().any(|s| matches!(s, ScalarValue::Null)) {
+            accessor.add_u64(self.state_index, 1)
+        }
+        Ok(())
+    }
+
     fn merge_batch(
         &mut self,
         states: &[ArrayRef],
