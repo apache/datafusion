@@ -23,13 +23,13 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
-use std::borrow::Borrow;
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -154,19 +154,14 @@ pub fn normalize_expr_with_equivalence_properties(
     expr.clone()
         .transform(&|expr| {
             let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                        for class in eq_properties {
-                            if class.contains(column) {
-                                normalized = Some(Arc::new(class.head().clone()));
-                                break;
-                            }
+                expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                    for class in eq_properties {
+                        if class.contains(column) {
+                            return Some(Arc::new(class.head().clone()) as _);
                         }
-                        normalized
                     }
-                    None => None,
-                };
+                    None
+                });
             Ok(if let Some(normalized_form) = normalized_form {
                 Transformed::Yes(normalized_form)
             } else {
@@ -302,53 +297,6 @@ pub fn ordering_satisfy_requirement_concrete<F: FnOnce() -> EquivalencePropertie
     }
 }
 
-/// This function returns all `Arc<dyn PhysicalExpr>`s inside the given
-/// `PhysicalSortExpr` sequence.
-pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
-    sequence: impl IntoIterator<Item = T>,
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    sequence
-        .into_iter()
-        .map(|elem| elem.borrow().expr.clone())
-        .collect()
-}
-
-/// This function finds the indices of `targets` within `items`, taking into
-/// account equivalences according to `equal_properties`.
-pub fn get_indices_of_matching_exprs<
-    T: Borrow<Arc<dyn PhysicalExpr>>,
-    F: FnOnce() -> EquivalenceProperties,
->(
-    targets: impl IntoIterator<Item = T>,
-    items: &[Arc<dyn PhysicalExpr>],
-    equal_properties: F,
-) -> Vec<usize> {
-    if let eq_classes @ [_, ..] = equal_properties().classes() {
-        let normalized_targets = targets.into_iter().map(|e| {
-            normalize_expr_with_equivalence_properties(e.borrow().clone(), eq_classes)
-        });
-        let normalized_items = items
-            .iter()
-            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
-            .collect::<Vec<_>>();
-        get_indices_of_exprs_strict(normalized_targets, &normalized_items)
-    } else {
-        get_indices_of_exprs_strict(targets, items)
-    }
-}
-
-/// This function finds the indices of `targets` within `items` using strict
-/// equality.
-fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
-    targets: impl IntoIterator<Item = T>,
-    items: &[Arc<dyn PhysicalExpr>],
-) -> Vec<usize> {
-    targets
-        .into_iter()
-        .filter_map(|target| items.iter().position(|e| e.eq(target.borrow())))
-        .collect()
-}
-
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
 pub fn requirements_compatible<F: FnOnce() -> EquivalenceProperties>(
@@ -424,13 +372,58 @@ pub fn map_columns_before_projection(
     parent_required
         .iter()
         .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
+            r.as_any()
+                .downcast_ref::<Column>()
+                .and_then(|c| column_mapping.get(c.name()))
         })
         .map(|e| Arc::new(e.clone()) as _)
+        .collect()
+}
+
+/// This function returns all `Arc<dyn PhysicalExpr>`s inside the given
+/// `PhysicalSortExpr` sequence.
+pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
+    sequence: impl IntoIterator<Item = T>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    sequence
+        .into_iter()
+        .map(|elem| elem.borrow().expr.clone())
+        .collect()
+}
+
+/// This function finds the indices of `targets` within `items`, taking into
+/// account equivalences according to `equal_properties`.
+pub fn get_indices_of_matching_exprs<
+    T: Borrow<Arc<dyn PhysicalExpr>>,
+    F: FnOnce() -> EquivalenceProperties,
+>(
+    targets: impl IntoIterator<Item = T>,
+    items: &[Arc<dyn PhysicalExpr>],
+    equal_properties: F,
+) -> Vec<usize> {
+    if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let normalized_targets = targets.into_iter().map(|e| {
+            normalize_expr_with_equivalence_properties(e.borrow().clone(), eq_classes)
+        });
+        let normalized_items = items
+            .iter()
+            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
+            .collect::<Vec<_>>();
+        get_indices_of_exprs_strict(normalized_targets, &normalized_items)
+    } else {
+        get_indices_of_exprs_strict(targets, items)
+    }
+}
+
+/// This function finds the indices of `targets` within `items` using strict
+/// equality.
+fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    targets: impl IntoIterator<Item = T>,
+    items: &[Arc<dyn PhysicalExpr>],
+) -> Vec<usize> {
+    targets
+        .into_iter()
+        .filter_map(|target| items.iter().position(|e| e.eq(target.borrow())))
         .collect()
 }
 
@@ -613,7 +606,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use std::fmt::{Display, Formatter};
 
-    use arrow_schema::{DataType, Field, Fields, Schema};
+    use arrow_schema::{DataType, Field, Schema};
     use petgraph::visit::Bfs;
     use std::sync::Arc;
 
@@ -735,10 +728,7 @@ mod tests {
 
     #[test]
     fn test_get_indices_of_matching_exprs() {
-        let empty_schema = &Arc::new(Schema {
-            fields: Fields::empty(),
-            metadata: Default::default(),
-        });
+        let empty_schema = &Arc::new(Schema::empty());
         let equal_properties = || EquivalenceProperties::new(empty_schema.clone());
         let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
             Arc::new(Column::new("a", 0)),

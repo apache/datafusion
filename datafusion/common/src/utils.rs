@@ -292,6 +292,22 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+/// This function "takes" the elements at `indices` from the slice `items`.
+pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
+    items: &[T],
+    indices: impl IntoIterator<Item = I>,
+) -> Result<Vec<T>> {
+    indices
+        .into_iter()
+        .map(|idx| items.get(*idx.borrow()).cloned())
+        .collect::<Option<Vec<T>>>()
+        .ok_or_else(|| {
+            DataFusionError::Execution(
+                "Expects indices to be in the range of searched vector".to_string(),
+            )
+        })
+}
+
 /// This function finds the longest prefix of the form 0, 1, 2, ... within the
 /// collection `sequence`. Examples:
 /// - For 0, 1, 2, 4, 5; we would produce 3, meaning 0, 1, 2 is the longest satisfying
@@ -314,6 +330,7 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 mod tests {
     use arrow::array::Float64Array;
     use arrow_array::Array;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;
@@ -619,14 +636,6 @@ mod tests {
     }
 
     #[test]
-    fn test_longest_consecutive_prefix() {
-        assert_eq!(longest_consecutive_prefix([0, 3, 4]), 1);
-        assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
-        assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
-        assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
-    }
-
-    #[test]
     fn test_get_arrayref_at_indices() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
@@ -657,5 +666,23 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_get_at_indices() -> Result<()> {
+        let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(get_at_indices(&in_vec, [0, 2])?, vec![1, 3]);
+        assert_eq!(get_at_indices(&in_vec, [4, 2])?, vec![5, 3]);
+        // 7 is outside the range
+        assert!(get_at_indices(&in_vec, [7]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_longest_consecutive_prefix() {
+        assert_eq!(longest_consecutive_prefix([0, 3, 4]), 1);
+        assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
+        assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
+        assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
     }
 }

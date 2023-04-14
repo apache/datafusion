@@ -172,6 +172,10 @@ async fn context_for_test_file(relative_path: &Path) -> SessionContext {
             info!("Registering aggregate tables");
             setup::register_aggregate_tables(&ctx).await;
         }
+        "scalar.slt" => {
+            info!("Registering scalar tables");
+            setup::register_scalar_tables(&ctx).await;
+        }
         _ => {
             info!("Using default SessionContext");
         }
