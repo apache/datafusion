@@ -193,6 +193,7 @@ impl<'a> RowAccessor<'a> {
     fn_get_idx!(i64, 8);
     fn_get_idx!(f32, 4);
     fn_get_idx!(f64, 8);
+    fn_get_idx!(i128, 16);
 
     fn_get_idx_opt!(bool);
     fn_get_idx_opt!(u8);
@@ -205,6 +206,7 @@ impl<'a> RowAccessor<'a> {
     fn_get_idx_opt!(i64);
     fn_get_idx_opt!(f32);
     fn_get_idx_opt!(f64);
+    fn_get_idx_opt!(i128);
 
     fn_get_idx_scalar!(bool, Boolean);
     fn_get_idx_scalar!(u8, UInt8);
@@ -217,6 +219,14 @@ impl<'a> RowAccessor<'a> {
     fn_get_idx_scalar!(i64, Int64);
     fn_get_idx_scalar!(f32, Float32);
     fn_get_idx_scalar!(f64, Float64);
+
+    fn get_decimal128_scalar(&self, idx: usize, p: u8, s: i8) -> ScalarValue {
+        if self.is_valid_at(idx) {
+            ScalarValue::Decimal128(Some(self.get_i128(idx)), p, s)
+        } else {
+            ScalarValue::Decimal128(None, p, s)
+        }
+    }
 
     pub fn get_as_scalar(&self, dt: &DataType, index: usize) -> ScalarValue {
         match dt {
@@ -231,6 +241,7 @@ impl<'a> RowAccessor<'a> {
             DataType::UInt64 => self.get_u64_scalar(index),
             DataType::Float32 => self.get_f32_scalar(index),
             DataType::Float64 => self.get_f64_scalar(index),
+            DataType::Decimal128(p, s) => self.get_decimal128_scalar(index, *p, *s),
             _ => unreachable!(),
         }
     }
@@ -264,6 +275,7 @@ impl<'a> RowAccessor<'a> {
     fn_set_idx!(i64, 8);
     fn_set_idx!(f32, 4);
     fn_set_idx!(f64, 8);
+    fn_set_idx!(i128, 16);
 
     fn set_i8(&mut self, idx: usize, value: i8) {
         self.assert_index_valid(idx);
@@ -285,6 +297,7 @@ impl<'a> RowAccessor<'a> {
     fn_add_idx!(i64);
     fn_add_idx!(f32);
     fn_add_idx!(f64);
+    fn_add_idx!(i128);
 
     fn_max_min_idx!(u8, max);
     fn_max_min_idx!(u16, max);
@@ -296,6 +309,7 @@ impl<'a> RowAccessor<'a> {
     fn_max_min_idx!(i64, max);
     fn_max_min_idx!(f32, max);
     fn_max_min_idx!(f64, max);
+    fn_max_min_idx!(i128, max);
 
     fn_max_min_idx!(u8, min);
     fn_max_min_idx!(u16, min);
@@ -307,4 +321,5 @@ impl<'a> RowAccessor<'a> {
     fn_max_min_idx!(i64, min);
     fn_max_min_idx!(f32, min);
     fn_max_min_idx!(f64, min);
+    fn_max_min_idx!(i128, min);
 }

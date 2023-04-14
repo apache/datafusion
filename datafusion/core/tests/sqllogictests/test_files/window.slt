@@ -358,22 +358,21 @@ physical_plan
 SortPreservingMergeExec: [b@0 ASC NULLS LAST]
   SortExec: expr=[b@0 ASC NULLS LAST]
     ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a, MAX(d.seq)@2 as MAX(d.seq)]
-      AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[MAX(d.a), MAX(d.seq)]
-        AggregateExec: mode=Partial, gby=[b@2 as b], aggr=[MAX(d.a), MAX(d.seq)]
-          ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
-            BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }]
-              SortExec: expr=[b@1 ASC NULLS LAST,a@0 ASC NULLS LAST]
-                CoalesceBatchesExec: target_batch_size=8192
-                  RepartitionExec: partitioning=Hash([Column { name: "b", index: 1 }], 4), input_partitions=4
-                    UnionExec
-                      ProjectionExec: expr=[1 as a, aa as b]
-                        EmptyExec: produce_one_row=true
-                      ProjectionExec: expr=[3 as a, aa as b]
-                        EmptyExec: produce_one_row=true
-                      ProjectionExec: expr=[5 as a, bb as b]
-                        EmptyExec: produce_one_row=true
-                      ProjectionExec: expr=[7 as a, bb as b]
-                        EmptyExec: produce_one_row=true
+      AggregateExec: mode=Single, gby=[b@2 as b], aggr=[MAX(d.a), MAX(d.seq)]
+        ProjectionExec: expr=[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as seq, a@0 as a, b@1 as b]
+          BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }]
+            SortExec: expr=[b@1 ASC NULLS LAST,a@0 ASC NULLS LAST]
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([Column { name: "b", index: 1 }], 4), input_partitions=4
+                  UnionExec
+                    ProjectionExec: expr=[1 as a, aa as b]
+                      EmptyExec: produce_one_row=true
+                    ProjectionExec: expr=[3 as a, aa as b]
+                      EmptyExec: produce_one_row=true
+                    ProjectionExec: expr=[5 as a, bb as b]
+                      EmptyExec: produce_one_row=true
+                    ProjectionExec: expr=[7 as a, bb as b]
+                      EmptyExec: produce_one_row=true
 
 
 # check actual result
@@ -2036,8 +2035,115 @@ SELECT
 -1114 -1927628110
 15673 -1899175111
 
+# test_window_agg_partition_by_set
+# These tests checks for whether BoundedWindowAggExec and WindowAggExec treats partition by expressions as set.
+# Physical plan shouldn't have any SortExec in between Window Executors.
+
 statement ok
-set datafusion.execution.target_partitions = 2;
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT
+    c9,
+    SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+    SUM(c9) OVER(PARTITION BY c2, c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2,
+    SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum3,
+    SUM(c9) OVER(PARTITION BY c2, c1 ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum4
+    FROM aggregate_test_100
+    ORDER BY c9
+    LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+  Sort: aggregate_test_100.c9 ASC NULLS LAST, fetch=5
+    Projection: aggregate_test_100.c9, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum2, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS sum3, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS sum4
+      WindowAggr: windowExpr=[[SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+        WindowAggr: windowExpr=[[SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+          WindowAggr: windowExpr=[[SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+            WindowAggr: windowExpr=[[SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+              TableScan: aggregate_test_100 projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+  SortExec: fetch=5, expr=[c9@0 ASC NULLS LAST]
+    ProjectionExec: expr=[c9@8 as c9, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@14 as sum1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@16 as sum2, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@13 as sum3, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c2, aggregate_test_100.c1] ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@15 as sum4]
+      BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]
+        WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)) }]
+          BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]
+            WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)) }]
+              SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c9@8 ASC NULLS LAST,c8@7 ASC NULLS LAST]
+                CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]
+
+
+query IIIII
+SELECT c9,
+   SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+   SUM(c9) OVER(PARTITION BY c2, c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2,
+   SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum3,
+   SUM(c9) OVER(PARTITION BY c2, c1 ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum4
+   FROM aggregate_test_100
+   ORDER BY c9
+   LIMIT 5
+----
+28774375 9144476174 9144476174 12665844451 12665844451
+63044568 5125627947 5125627947 5125627947 5125627947
+141047417 3650978969 3650978969 3650978969 3650978969
+141680161 8526017165 8526017165 11924524414 11924524414
+145294611 6802765992 6802765992 6802765992 6802765992
+
+
+# test_window_agg_child_equivalence
+
+query TT
+EXPLAIN SELECT c9,
+  SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+  SUM(c9) OVER(PARTITION BY c2, c1_alias ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2,
+  SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum3,
+  SUM(c9) OVER(PARTITION BY c2, c1_alias ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum4
+  FROM (SELECT c1, c2, c8, c9, c1 as c1_alias
+        FROM aggregate_test_100
+        ORDER BY c9) t1
+  LIMIT 5
+----
+logical_plan
+Projection: t1.c9, SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum1, SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING AS sum2, SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS sum3, SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS sum4
+  Limit: skip=0, fetch=5
+    WindowAggr: windowExpr=[[SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+      WindowAggr: windowExpr=[[SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+        WindowAggr: windowExpr=[[SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING]]
+          WindowAggr: windowExpr=[[SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+            SubqueryAlias: t1
+              Sort: aggregate_test_100.c9 ASC NULLS LAST
+                Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c8, aggregate_test_100.c9, aggregate_test_100.c1 AS c1_alias
+                  TableScan: aggregate_test_100 projection=[c1, c2, c8, c9]
+physical_plan
+ProjectionExec: expr=[c9@3 as c9, SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@6 as sum1, SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@8 as sum2, SUM(t1.c9) PARTITION BY [t1.c1, t1.c2] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@5 as sum3, SUM(t1.c9) PARTITION BY [t1.c2, t1.c1_alias] ORDER BY [t1.c9 ASC NULLS LAST, t1.c8 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING@7 as sum4]
+  GlobalLimitExec: skip=0, fetch=5
+    BoundedWindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: "SUM(t1.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]
+      WindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: "SUM(t1.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)) }]
+        BoundedWindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: "SUM(t1.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(5)) }]
+          WindowAggExec: wdw=[SUM(t1.c9): Ok(Field { name: "SUM(t1.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(NULL)) }]
+            SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST,c9@3 ASC NULLS LAST,c8@2 ASC NULLS LAST]
+              ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c8@2 as c8, c9@3 as c9, c1@0 as c1_alias]
+                CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2, c8, c9]
+
+
+query IIIII
+SELECT c9,
+  SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1,
+  SUM(c9) OVER(PARTITION BY c2, c1_alias ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum2,
+  SUM(c9) OVER(PARTITION BY c1, c2 ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum3,
+  SUM(c9) OVER(PARTITION BY c2, c1_alias ORDER BY c9, c8 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum4
+  FROM (SELECT c1, c2, c8, c9, c1 as c1_alias
+        FROM aggregate_test_100
+        ORDER BY c9) t1
+  LIMIT 5
+----
+774637006 12189635055 12189635055 12189635055 12189635055
+1454057357 12189635055 12189635055 12189635055 12189635055
+2669374863 11414998049 11414998049 11414998049 11414998049
+3276123488 9960940692 9960940692 9960940692 9960940692
+4015442341 7291565829 7291565829 7291565829 7291565829
+
 
 # test_window_agg_with_bounded_group
 query TT

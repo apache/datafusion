@@ -89,6 +89,11 @@ use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
+use sqlparser::dialect::{
+    AnsiDialect, BigQueryDialect, ClickHouseDialect, Dialect, GenericDialect,
+    HiveDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, RedshiftSqlDialect,
+    SQLiteDialect, SnowflakeDialect,
+};
 use url::Url;
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
@@ -98,11 +103,15 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use crate::physical_optimizer::sort_enforcement::EnforceSorting;
-use datafusion_optimizer::OptimizerConfig;
+use datafusion_optimizer::{
+    analyzer::{Analyzer, AnalyzerRule},
+    OptimizerConfig,
+};
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
+use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 
@@ -1178,6 +1187,8 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct SessionState {
     /// UUID for the session
     session_id: String,
+    /// Responsible for analyzing and rewrite a logical plan before optimization
+    analyzer: Analyzer,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -1304,6 +1315,9 @@ impl SessionState {
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
+            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution
+            // and EnforceSorting rules
+            Arc::new(CombinePartialFinalAggregate::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
@@ -1316,6 +1330,7 @@ impl SessionState {
 
         SessionState {
             session_id,
+            analyzer: Analyzer::new(),
             optimizer: Optimizer::new(),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
@@ -1428,6 +1443,15 @@ impl SessionState {
         self
     }
 
+    /// Replace the analyzer rules
+    pub fn with_analyzer_rules(
+        mut self,
+        rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    ) -> Self {
+        self.analyzer = Analyzer::with_rules(rules);
+        self
+    }
+
     /// Replace the optimizer rules
     pub fn with_optimizer_rules(
         mut self,
@@ -1443,6 +1467,15 @@ impl SessionState {
         physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
         self.physical_optimizers = physical_optimizers;
+        self
+    }
+
+    /// Adds a new [`AnalyzerRule`]
+    pub fn add_analyzer_rule(
+        mut self,
+        analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    ) -> Self {
+        self.analyzer.rules.push(analyzer_rule);
         self
     }
 
@@ -1480,8 +1513,10 @@ impl SessionState {
     pub fn sql_to_statement(
         &self,
         sql: &str,
+        dialect: &str,
     ) -> Result<datafusion_sql::parser::Statement> {
-        let mut statements = DFParser::parse_sql(sql)?;
+        let dialect = create_dialect_from_str(dialect)?;
+        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
             return Err(DataFusionError::NotImplemented(
                 "The context currently only supports a single SQL statement".to_string(),
@@ -1609,7 +1644,8 @@ impl SessionState {
     ///
     /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
     pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        let statement = self.sql_to_statement(sql)?;
+        let dialect = self.config.options().sql_parser.dialect.as_str();
+        let statement = self.sql_to_statement(sql, dialect)?;
         let plan = self.statement_to_plan(statement).await?;
         Ok(plan)
     }
@@ -1619,9 +1655,12 @@ impl SessionState {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
+            let analyzed_plan = self
+                .analyzer
+                .execute_and_check(e.plan.as_ref(), self.options())?;
             // optimize the child plan, capturing the output of each optimizer
             let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
-                e.plan.as_ref(),
+                &analyzed_plan,
                 self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
@@ -1647,7 +1686,8 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            self.optimizer.optimize(plan, self, |_, _| {})
+            let analyzed_plan = self.analyzer.execute_and_check(plan, self.options())?;
+            self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
         }
     }
 
@@ -1815,6 +1855,29 @@ impl From<&SessionState> for TaskContext {
             state.aggregate_functions.clone(),
             state.runtime_env.clone(),
         )
+    }
+}
+
+// TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/848 is released
+fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
+    match dialect_name.to_lowercase().as_str() {
+        "generic" => Ok(Box::new(GenericDialect)),
+        "mysql" => Ok(Box::new(MySqlDialect {})),
+        "postgresql" | "postgres" => Ok(Box::new(PostgreSqlDialect {})),
+        "hive" => Ok(Box::new(HiveDialect {})),
+        "sqlite" => Ok(Box::new(SQLiteDialect {})),
+        "snowflake" => Ok(Box::new(SnowflakeDialect)),
+        "redshift" => Ok(Box::new(RedshiftSqlDialect {})),
+        "mssql" => Ok(Box::new(MsSqlDialect {})),
+        "clickhouse" => Ok(Box::new(ClickHouseDialect {})),
+        "bigquery" => Ok(Box::new(BigQueryDialect)),
+        "ansi" => Ok(Box::new(AnsiDialect {})),
+        _ => {
+            Err(DataFusionError::Internal(format!(
+                "Unsupported SQL dialect: {}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi.",
+                dialect_name
+            )))
+        }
     }
 }
 
@@ -1988,7 +2051,12 @@ mod tests {
             DataType::Float64,
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(|_| {
+                Ok(Box::new(AvgAccumulator::try_new(
+                    &DataType::Float64,
+                    &DataType::Float64,
+                )?))
+            }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
 

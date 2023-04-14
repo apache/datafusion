@@ -42,6 +42,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
@@ -144,6 +145,20 @@ impl AggregateExpr for Max {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
+    }
+}
+
+impl PartialEq<dyn Any> for Max {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -331,6 +346,29 @@ macro_rules! typed_min_max_string {
     }};
 }
 
+macro_rules! interval_choose_min_max {
+    (min) => {
+        std::cmp::Ordering::Greater
+    };
+    (max) => {
+        std::cmp::Ordering::Less
+    };
+}
+
+macro_rules! interval_min_max {
+    ($OP:tt, $LHS:expr, $RHS:expr) => {{
+        match $LHS.partial_cmp(&$RHS) {
+            Some(interval_choose_min_max!($OP)) => $RHS.clone(),
+            Some(_) => $LHS.clone(),
+            None => {
+                return Err(DataFusionError::Internal(
+                    "Comparison error while computing interval min/max".to_string(),
+                ))
+            }
+        }
+    }};
+}
+
 // min/max of two scalar values of the same type
 macro_rules! min_max {
     ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
@@ -441,6 +479,45 @@ macro_rules! min_max {
             ) => {
                 typed_min_max!(lhs, rhs, Time64Nanosecond, $OP)
             }
+            (
+                ScalarValue::IntervalYearMonth(lhs),
+                ScalarValue::IntervalYearMonth(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalYearMonth, $OP)
+            }
+            (
+                ScalarValue::IntervalMonthDayNano(lhs),
+                ScalarValue::IntervalMonthDayNano(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalMonthDayNano, $OP)
+            }
+            (
+                ScalarValue::IntervalDayTime(lhs),
+                ScalarValue::IntervalDayTime(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, IntervalDayTime, $OP)
+            }
+            (
+                ScalarValue::IntervalYearMonth(_),
+                ScalarValue::IntervalMonthDayNano(_),
+            ) | (
+                ScalarValue::IntervalYearMonth(_),
+                ScalarValue::IntervalDayTime(_),
+            ) | (
+                ScalarValue::IntervalMonthDayNano(_),
+                ScalarValue::IntervalDayTime(_),
+            ) | (
+                ScalarValue::IntervalMonthDayNano(_),
+                ScalarValue::IntervalYearMonth(_),
+            ) | (
+                ScalarValue::IntervalDayTime(_),
+                ScalarValue::IntervalYearMonth(_),
+            ) | (
+                ScalarValue::IntervalDayTime(_),
+                ScalarValue::IntervalMonthDayNano(_),
+            ) => {
+                interval_min_max!($OP, $VALUE, $DELTA)
+            }
             e => {
                 return Err(DataFusionError::Internal(format!(
                     "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
@@ -484,6 +561,9 @@ macro_rules! min_max_v2 {
             }
             ScalarValue::Int8(rhs) => {
                 typed_min_max_v2!($INDEX, $ACC, rhs, i8, $OP)
+            }
+            ScalarValue::Decimal128(rhs, ..) => {
+                typed_min_max_v2!($INDEX, $ACC, rhs, i128, $OP)
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
@@ -734,6 +814,20 @@ impl AggregateExpr for Min {
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
+    }
+}
+
+impl PartialEq<dyn Any> for Min {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 

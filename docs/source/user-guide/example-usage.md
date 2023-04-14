@@ -26,7 +26,7 @@ In this example some simple processing is performed on the [`example.csv`](../..
 Add the following to your `Cargo.toml` file:
 
 ```toml
-datafusion = "11.0"
+datafusion = "22"
 tokio = "1.0"
 ```
 
@@ -81,7 +81,7 @@ async fn main() -> datafusion::error::Result<()> {
 +---+--------+
 ```
 
-# Identifiers and Capitalization
+## Identifiers and Capitalization
 
 Please be aware that all identifiers are effectively made lower-case in SQL, so if your csv file has capital letters (ex: `Name`) you must put your column name in double quotes or the examples won't work.
 
@@ -140,4 +140,62 @@ async fn main() -> datafusion::error::Result<()> {
 | 2 | 1      |
 | 1 | 2      |
 +---+--------+
+```
+
+## Extensibility
+
+DataFusion is designed to be extensible at all points. To that end, you can provide your own custom:
+
+- [x] User Defined Functions (UDFs)
+- [x] User Defined Aggregate Functions (UDAFs)
+- [x] User Defined Table Source (`TableProvider`) for tables
+- [x] User Defined `Optimizer` passes (plan rewrites)
+- [x] User Defined `LogicalPlan` nodes
+- [x] User Defined `ExecutionPlan` nodes
+
+## Rust Version Compatibility
+
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+
+## Optimized Configuration
+
+For an optimized build several steps are required. First, use the below in your `Cargo.toml`. It is
+worth noting that using the settings in the `[profile.release]` section will significantly increase the build time.
+
+```toml
+[dependencies]
+datafusion = { version = "22.0" , features = ["simd"]}
+tokio = { version = "^1.0", features = ["rt-multi-thread"] }
+snmalloc-rs = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+```
+
+Then, in `main.rs.` update the memory allocator with the below after your imports:
+
+```rust,ignore
+use datafusion::prelude::*;
+
+#[global_allocator]
+static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
+
+#[tokio::main]
+async fn main() -> datafusion::error::Result<()> {
+  Ok(())
+}
+```
+
+Finally, in order to build with the `simd` optimization `cargo nightly` is required.
+
+```shell
+rustup toolchain install nightly
+```
+
+Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
+with `native` or at least `avx2`.
+
+```shell
+RUSTFLAGS='-C target-cpu=native' cargo +nightly run --release
 ```

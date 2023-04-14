@@ -17,8 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, normalize_ident, rebase_expr,
-    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{
@@ -60,6 +60,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         if !select.sort_by.is_empty() {
             return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
+        }
+        if select.into.is_some() {
+            return Err(DataFusionError::NotImplemented("INTO".to_string()));
         }
 
         // process `from` clause
@@ -330,7 +333,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Alias(Box::new(col), normalize_ident(alias));
+                let expr = Alias(Box::new(col), self.normalizer.normalize(alias));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {

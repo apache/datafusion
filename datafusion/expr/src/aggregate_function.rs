@@ -20,6 +20,7 @@
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
+use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 /// Enum of all built-in aggregate functions
@@ -145,7 +146,7 @@ pub fn return_type(
         AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
-        AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
+        AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
             "item",
             coerced_data_types[0].clone(),
             true,
@@ -159,6 +160,19 @@ pub fn return_type(
         }
         AggregateFunction::Grouping => Ok(DataType::Int32),
     }
+}
+
+/// Returns the internal sum datatype of the avg aggregate function.
+pub fn sum_type_of_avg(input_expr_types: &[DataType]) -> Result<DataType> {
+    // Note that this function *must* return the same type that the respective physical expression returns
+    // or the execution panics.
+    let fun = AggregateFunction::Avg;
+    let coerced_data_types = crate::type_coercion::aggregates::coerce_types(
+        &fun,
+        input_expr_types,
+        &signature(&fun),
+    )?;
+    avg_sum_type(&coerced_data_types[0])
 }
 
 /// the signatures supported by the function `fun`.

@@ -37,10 +37,9 @@ community.
    :maxdepth: 1
    :caption: Links
 
-   Issue tracker <https://github.com/apache/arrow-datafusion/issues>
+   Github and Issue Tracker <https://github.com/apache/arrow-datafusion>
    crates.io <https://crates.io/crates/datafusion>
-   API Docs <https://docs.rs/datafusion/21.1.0/datafusion/>
-   Github <https://github.com/apache/arrow-datafusion>
+   API Docs <https://docs.rs/datafusion/latest/datafusion/>
    Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
 
 .. _toc.guide:
@@ -50,22 +49,17 @@ community.
 
    user-guide/introduction
    user-guide/example-usage
-   user-guide/users
-   user-guide/comparison
-   user-guide/integration
-   user-guide/library
    user-guide/cli
    user-guide/dataframe
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
    user-guide/faq
-   Rust Crate Documentation <https://docs.rs/crate/datafusion/>
 
 .. _toc.contributor-guide:
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Contributor Guide
 
    contributor-guide/index
