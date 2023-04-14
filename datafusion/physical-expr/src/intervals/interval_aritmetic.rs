@@ -206,9 +206,9 @@ impl Interval {
         ) -> Result<ScalarValue> {
             if lhs.is_null() || rhs.is_null() {
                 ScalarValue::try_from(coerce_types(
-                    lhs.get_datatype(),
-                    &Operator::Minus,
-                    rhs.get_datatype(),
+                    &lhs.get_datatype(),
+                    &Operator::Plus,
+                    &rhs.get_datatype(),
                 )?)
             } else if matches!(lhs.get_datatype(), DataType::Float64 | DataType::Float32)
             {
@@ -236,9 +236,9 @@ impl Interval {
         ) -> Result<ScalarValue> {
             if lhs.is_null() || rhs.is_null() {
                 ScalarValue::try_from(coerce_types(
-                    lhs.get_datatype(),
+                    &lhs.get_datatype(),
                     &Operator::Minus,
-                    rhs.get_datatype(),
+                    &rhs.get_datatype(),
                 )?)
             } else if matches!(lhs.get_datatype(), DataType::Float64 | DataType::Float32)
             {

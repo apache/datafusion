@@ -1554,8 +1554,7 @@ impl SymmetricHashJoinStream {
 mod tests {
     use std::fs::File;
 
-
-    use arrow::array::{ArrayRef, IntervalDayTimeArray, Float64Array};
+    use arrow::array::{ArrayRef, Float64Array, IntervalDayTimeArray};
     use arrow::array::{Int32Array, TimestampMillisecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
