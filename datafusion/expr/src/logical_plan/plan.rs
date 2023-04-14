@@ -609,8 +609,13 @@ impl LogicalPlan {
                         return Err(DataFusionError::Plan(
                             "Empty placeholder id".to_string(),
                         ));
+                    } else if id == "$0" {
+                        return Err(DataFusionError::Plan(
+                            "Invalid placeholder id: $0".to_string(),
+                        ));
                     }
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                    dbg!(&id);
                     let idx = id[1..].parse::<usize>().map_err(|e| {
                         DataFusionError::Internal(format!(
                             "Failed to parse placeholder id: {e}"
@@ -2337,13 +2342,30 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_invalid_placeholder_empty() {
+    fn test_replace_invalid_placeholder() {
+        // test empty placeholder
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
             .filter(col("id").eq(Expr::Placeholder {
                 id: "".into(),
+                data_type: Some(DataType::Int32),
+            }))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        plan.replace_params_with_values(&[42i32.into()])
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+
+        // test $0 placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(Expr::Placeholder {
+                id: "$0".into(),
                 data_type: Some(DataType::Int32),
             }))
             .unwrap()
