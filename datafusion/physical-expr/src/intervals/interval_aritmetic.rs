@@ -24,6 +24,7 @@ use std::fmt::{Display, Formatter};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
@@ -77,7 +78,11 @@ impl IntervalBound {
     pub fn add<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
-            IntervalBound::make_unbounded(self.get_datatype())
+            IntervalBound::make_unbounded(coerce_types(
+                &self.get_datatype(),
+                &Operator::Plus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.value
                 .add(&rhs.value)
@@ -92,7 +97,11 @@ impl IntervalBound {
     pub fn sub<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
-            IntervalBound::make_unbounded(self.get_datatype())
+            IntervalBound::make_unbounded(coerce_types(
+                &self.get_datatype(),
+                &Operator::Minus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.value
                 .sub(&rhs.value)
