@@ -678,6 +678,7 @@ mod tests {
         }
         Ok(())
     }
+
     #[test]
     fn test_get_at_indices() -> Result<()> {
         let in_vec = vec![1, 2, 3, 4, 5, 6, 7];

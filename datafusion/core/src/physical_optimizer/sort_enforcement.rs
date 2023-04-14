@@ -599,24 +599,16 @@ fn analyze_window_sort_removal(
         // `SortPreservingMergeExec`, and both have a single child.
         // Therefore, we can use the 0th index without loss of generality.
         let sort_input = sort_any.children()[0].clone();
-        // TODO: Once we can ensure that required ordering information propagates with
-        //       the necessary lineage information, compare `physical_ordering` and the
-        //       ordering required by the window executor instead of `sort_output_ordering`.
-        //       This will enable us to handle cases such as (a,b) -> Sort -> (a,b,c) -> Required(a,b).
-        //       Currently, we can not remove such sorts.
         if let Some(new_res) =
             can_skip_sort(partitionby_exprs, orderby_sort_keys, &sort_input)?
         {
-            if let Some(res) = &res {
-                if res != &new_res {
-                    return Ok(None);
-                }
-            } else {
-                res = Some(new_res);
-            };
-        } else {
-            return Ok(None);
-        };
+            if new_res == *res.get_or_insert(new_res.clone()) {
+                continue;
+            }
+        }
+        // We can not skip the sort, or window reversal requirements are not
+        // uniform; then sort removal is not possible -- we immediately return.
+        return Ok(None);
     }
     let (should_reverse, partition_search_mode) = if let Some(res) = res {
         if !source_unbounded && !matches!(res.1, PartitionSearchMode::Sorted) {
@@ -849,8 +841,15 @@ fn can_skip_sort(
     }
     let first_n = longest_consecutive_prefix(ordered_merged_indices);
     let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
-    let consecutive_till_ob_end = first_n > furthest_ob_index;
-    if !consecutive_till_ob_end {
+    // Cannot skip sort if last order by index is not within consecutive prefix.
+    // For instance, if input is ordered by a,b,c,d
+    // for expression `PARTITION BY a, ORDER BY b, d`, `first_n` would be 2 (meaning a, b defines a prefix for input ordering)
+    // Whereas `furthest_ob_index` would be 3 (column d occurs at the 3rd index of the existing ordering.)
+    // Hence existing ordering is not sufficient to run current Executor.
+    // However, for expression `PARTITION BY a, ORDER BY b, c, d`, `first_n` would be 4 (meaning a, b, c, d defines a prefix for input ordering)
+    // Similarly, `furthest_ob_index` would be 3 (column d occurs at the 3rd index of the existing ordering.)
+    // Hence existing ordering would be sufficient to run current Executor.
+    if first_n <= furthest_ob_index {
         return Ok(None);
     }
     let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
