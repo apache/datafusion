@@ -672,7 +672,8 @@ from (values
   (timestamp '2022-01-02 00:00:00'), 
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00'),
+  (timestamp '2023-10-28 01:33:00')  
 ) as sq
 ----
 2022-01-01T00:00:00
@@ -681,6 +682,7 @@ from (values
 2022-01-01T00:00:00
 2022-01-01T00:00:00
 2022-01-01T00:00:00
+2023-01-01T00:00:00
 
 # year interval with start date is end of the month plus some minutes
 query P
@@ -707,7 +709,7 @@ SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z', '1970-01-01T00:00:00Z');
 ----
 2022-01-01T00:00:00
 
-# three months interval on constant
+# five months interval on constant
 query P
 SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
 ----
@@ -719,13 +721,13 @@ SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
 ----
 2022-01-01T00:00:00
 
-# origin is May 51 to produce time for source Feb 28
+# origin on the first date but not at midnight
 query P
 SELECT DATE_BIN('1 month', '2022-04-01T00:00:00Z', '2021-05-01T00:04:00Z');
 ----
 2022-03-01T00:04:00
 
-# origin is May 51 to produce time for source Feb 28
+# origin is May 51 (last date of the month) to produce bin on Feb 28
 query P
 SELECT DATE_BIN('3 month', '2022-04-01T00:00:00Z', '2021-05-31T00:04:00Z');
 ----

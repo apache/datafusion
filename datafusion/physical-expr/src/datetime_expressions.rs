@@ -377,13 +377,7 @@ fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64
 
     // If origin is not midnight of first date of the month, the bin_time may be larger than the source
     // In this case, we need to move back to previous bin
-    if (origin_date.day() != 1
-        || origin_date.hour() != 0
-        || origin_date.minute() != 0
-        || origin_date.second() != 0
-        || origin_date.nanosecond() != 0)
-        && bin_time > source_date
-    {
+    if bin_time > source_date {
         let month_delta = month_delta - stride_months;
         bin_time = if month_delta < 0 {
             origin_date - Months::new(month_delta.unsigned_abs() as u32)
