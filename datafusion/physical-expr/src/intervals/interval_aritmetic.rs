@@ -169,8 +169,45 @@ impl Display for Interval {
 
 impl Interval {
     /// Creates a new interval object using the given bounds.
+    /// For boolean intervals, having an "(false, ..." (open false lower bound) is
+    /// equivalent to having a "[true, ..."  (true closed lower bound). Similarly,
+    /// having an "..., true)" (open true upper bound) is equivalent to having
+    /// a "..., false] (false closed upper bound). Also for boolean intervals, having
+    /// a None (infinite) IntervalBound should mean "[false, ..." for lower bounds,
+    /// and  "..., true]" for upper bounds. To circulate a standard structure is easier
+    /// to handle. Therefore; input parameters to construct an Interval can have
+    /// different types, but they all result in [false, false], [false, true] or [true, true].
     pub fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
-        Interval { lower, upper }
+        // Boolean intervals need a special handling.
+        if let ScalarValue::Boolean(_) = lower.value {
+            let standardized_lower = match lower.value {
+                ScalarValue::Boolean(None) if lower.open => {
+                    ScalarValue::Boolean(Some(false))
+                }
+                ScalarValue::Boolean(Some(false)) if lower.open => {
+                    ScalarValue::Boolean(Some(true))
+                }
+                // The rest may include some invalid interval cases. The validation of
+                // interval construction parameters will be implemented later.
+                // For now, let's return them unchanged.
+                _ => lower.value,
+            };
+            let standardized_upper = match upper.value {
+                ScalarValue::Boolean(None) if upper.open => {
+                    ScalarValue::Boolean(Some(true))
+                }
+                ScalarValue::Boolean(Some(true)) if upper.open => {
+                    ScalarValue::Boolean(Some(false))
+                }
+                _ => upper.value,
+            };
+            Interval {
+                lower: IntervalBound::new(standardized_lower, false),
+                upper: IntervalBound::new(standardized_upper, false),
+            }
+        } else {
+            Interval { lower, upper }
+        }
     }
 
     /// Casts this interval to `data_type` using `cast_options`.
@@ -303,18 +340,30 @@ impl Interval {
 
     /// Compute the logical conjunction of this (boolean) interval with the given boolean interval.
     pub(crate) fn and(&self, other: &Interval) -> Result<Interval> {
-        let (self_lower_value, self_upper_value) =
-            standardize_boolean_bound(&self.lower, &self.upper)?;
-        let (other_lower_value, other_upper_value) =
-            standardize_boolean_bound(&other.lower, &other.upper)?;
+        match (
+            &self.lower.value,
+            &self.upper.value,
+            &other.lower.value,
+            &other.upper.value,
+        ) {
+            (
+                ScalarValue::Boolean(Some(self_lower)),
+                ScalarValue::Boolean(Some(self_upper)),
+                ScalarValue::Boolean(Some(other_lower)),
+                ScalarValue::Boolean(Some(other_upper)),
+            ) => {
+                let lower = *self_lower && *other_lower;
+                let upper = *self_upper && *other_upper;
 
-        let lower = self_lower_value && other_lower_value;
-        let upper = self_upper_value && other_upper_value;
-
-        Ok(Interval {
-            lower: IntervalBound::new(ScalarValue::Boolean(Some(lower)), false),
-            upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
-        })
+                Ok(Interval {
+                    lower: IntervalBound::new(ScalarValue::Boolean(Some(lower)), false),
+                    upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
+                })
+            }
+            _ => Err(DataFusionError::Internal(
+                "Incompatible types for logical conjunction".to_string(),
+            )),
+        }
     }
 
     /// Compute the intersection of the interval with the given interval.
@@ -434,72 +483,6 @@ fn cast_scalar_value(
 ) -> Result<ScalarValue> {
     let cast_array = cast_with_options(&value.to_array(), data_type, cast_options)?;
     ScalarValue::try_from_array(&cast_array, 0)
-}
-
-/// For boolean intervals, having an "(false, ..." (open false lower bound) is
-/// equivalent to having a "[true, ..."  (true closed lower bound). Similarly,
-/// having an "..., true)" (open true upper bound) is equivalent to having
-/// a "..., false] (false closed upper bound). Open true lower bounds and open false
-/// upper bounds are impossible. Also for boolean intervals, having a None (infinite)
-/// IntervalBound should mean "[false, ..." for lower bounds and  "..., true]" for
-/// upper bounds. This function standardizes all acceptable matches to [lhs, rhs],
-/// where lhs cannot be true while rhs is false.
-#[inline]
-fn standardize_boolean_bound(
-    lhs: &IntervalBound,
-    rhs: &IntervalBound,
-) -> Result<(bool, bool)> {
-    let err = Err(DataFusionError::Internal(
-        "Open true lower bounds and open false upper bounds are impossible for an interval."
-            .to_string(),
-    ));
-    let err_none = Err(DataFusionError::Internal(
-        "Intervals cannot have a None (infinite) value bounded by a closed bound."
-            .to_string(),
-    ));
-    match (lhs.open, lhs.value.clone(), rhs.value.clone(), rhs.open) {
-        (
-            false,
-            ScalarValue::Boolean(Some(false)),
-            ScalarValue::Boolean(Some(false)),
-            false,
-        )
-        | (
-            false,
-            ScalarValue::Boolean(Some(false)),
-            ScalarValue::Boolean(Some(true)),
-            true,
-        ) => Ok((false, false)),
-        (
-            false,
-            ScalarValue::Boolean(Some(false)),
-            ScalarValue::Boolean(Some(true)),
-            false,
-        ) => Ok((false, true)),
-        (
-            false,
-            ScalarValue::Boolean(Some(true)),
-            ScalarValue::Boolean(Some(true)),
-            false,
-        )
-        | (
-            true,
-            ScalarValue::Boolean(Some(false)),
-            ScalarValue::Boolean(Some(true)),
-            false,
-        ) => Ok((true, true)),
-        (true, ScalarValue::Boolean(None), value, open) => Ok(standardize_boolean_bound(
-            &IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
-            &IntervalBound::new(value, open),
-        )?),
-        (open, value, ScalarValue::Boolean(None), true) => Ok(standardize_boolean_bound(
-            &IntervalBound::new(value, open),
-            &IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
-        )?),
-        (false, ScalarValue::Boolean(None), _, _)
-        | (_, _, ScalarValue::Boolean(None), false) => err_none,
-        (_, _, _, _) => err,
-    }
 }
 
 #[cfg(test)]
@@ -1358,97 +1341,71 @@ mod tests {
         Ok(())
     }
 
+    // This test function tests if valid constructions can produce the standard Interval types
+    // ( [false, false], [false, true], [true, true] ).
     #[test]
-    fn non_standard_boolean_intervals() -> Result<()> {
+    fn non_standard_interval_constructs() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Boolean(None), true),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                (IntervalBound::new(Boolean(None), true)),
+                (IntervalBound::new(Boolean(Some(true)), false)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(false)), false),
+                    upper: IntervalBound::new(Boolean(Some(true)), false),
+                }),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(None), true),
-                    IntervalBound::new(Boolean(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                (IntervalBound::new(Boolean(None), true)),
+                (IntervalBound::new(Boolean(Some(true)), true)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(false)), false),
+                    upper: IntervalBound::new(Boolean(Some(false)), false),
+                }),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(None), true),
-                    IntervalBound::new(Boolean(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                (IntervalBound::new(Boolean(None), true)),
+                (IntervalBound::new(Boolean(Some(true)), true)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(false)), false),
+                    upper: IntervalBound::new(Boolean(Some(false)), false),
+                }),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Boolean(None), true),
-                    IntervalBound::new(Boolean(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), true),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                (IntervalBound::new(Boolean(Some(false)), false)),
+                (IntervalBound::new(Boolean(None), true)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(false)), false),
+                    upper: IntervalBound::new(Boolean(Some(true)), false),
+                }),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(None), true),
-                    IntervalBound::new(Boolean(Some(true)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                (IntervalBound::new(Boolean(Some(true)), false)),
+                (IntervalBound::new(Boolean(None), true)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(true)), false),
+                    upper: IntervalBound::new(Boolean(Some(true)), false),
+                }),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), true),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                (IntervalBound::new(Boolean(None), true)),
+                (IntervalBound::new(Boolean(None), true)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(false)), false),
+                    upper: IntervalBound::new(Boolean(Some(true)), false),
+                }),
+            ),
+            (
+                (IntervalBound::new(Boolean(Some(false)), true)),
+                (IntervalBound::new(Boolean(None), true)),
+                (Interval {
+                    lower: IntervalBound::new(Boolean(Some(true)), false),
+                    upper: IntervalBound::new(Boolean(Some(true)), false),
+                }),
             ),
         ];
 
         for case in cases {
-            assert_eq!(case.0.and(&case.1)?, case.2)
+            assert_eq!(Interval::new(case.0, case.1), case.2)
         }
         Ok(())
     }

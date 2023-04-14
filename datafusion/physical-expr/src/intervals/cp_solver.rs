@@ -261,7 +261,7 @@ fn comparison_operator_target(
     right_datatype: &DataType,
 ) -> Result<Interval> {
     let datatype = coerce_types(left_datatype, &Operator::Minus, right_datatype)?;
-    let unbounded = IntervalBound::make_unbounded(datatype.clone())?;
+    let unbounded = IntervalBound::make_unbounded(&datatype)?;
     let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
         Operator::GtEq => Interval::new(IntervalBound::new(zero, false), unbounded),
