@@ -218,7 +218,14 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
                 self.loser_tree_adjusted = false;
                 self.in_progress.push_row(stream_idx);
                 if self.in_progress.len() < self.batch_size {
-                    continue;
+                    match self.fetch {
+                        Some(limit) => {
+                            if self.in_progress.len() < limit {
+                                continue;
+                            }
+                        }
+                        _ => continue,
+                    }
                 }
             }
 
