@@ -520,14 +520,16 @@ impl GroupedHashAggregateStream {
                 RowAccessor::new_from_layout(self.row_aggr_layout.clone());
             state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
             for idx in &group_state.indices {
-                for (accumulator, values, filter_array) in izip!(
+                for (accumulator, values_array, filter_array) in izip!(
                     self.row_accumulators.iter_mut(),
                     row_values.iter(),
                     filter_bool_array.iter()
                 ) {
-                    let scalar_value =
-                        vec![col_to_scalar(&values[0], filter_array, *idx as usize)?];
-                    accumulator.update_scalar(&scalar_value, &mut state_accessor)?;
+                    let scalar_values = values_array
+                        .iter()
+                        .map(|array| col_to_scalar(array, filter_array, *idx as usize))
+                        .collect::<Result<Vec<_>>>()?;
+                    accumulator.update_scalar(&scalar_values, &mut state_accessor)?;
                 }
             }
             // clear the group indices in this group
