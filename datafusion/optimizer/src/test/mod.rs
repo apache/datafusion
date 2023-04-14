@@ -121,7 +121,19 @@ pub fn assert_analyzed_plan_eq(
 
     Ok(())
 }
+pub fn assert_analyzed_plan_eq_display_indent(
+    rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    plan: &LogicalPlan,
+    expected: &str,
+) -> Result<()> {
+    let options = ConfigOptions::default();
+    let analyzed_plan =
+        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options)?;
+    let formatted_plan = format!("{}", analyzed_plan.display_indent_schema());
+    assert_eq!(formatted_plan, expected);
 
+    Ok(())
+}
 pub fn assert_optimized_plan_eq(
     rule: Arc<dyn OptimizerRule + Send + Sync>,
     plan: &LogicalPlan,
