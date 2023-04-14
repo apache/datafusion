@@ -162,7 +162,8 @@ impl ExecutionPlan for NdJsonExec {
     }
 }
 
-struct JsonOpener {
+/// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
+pub struct JsonOpener {
     batch_size: usize,
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,

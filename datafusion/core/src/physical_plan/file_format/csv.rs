@@ -188,8 +188,9 @@ impl ExecutionPlan for CsvExec {
     }
 }
 
+/// A Config for [`CsvOpener`]
 #[derive(Debug, Clone)]
-struct CsvConfig {
+pub struct CsvConfig {
     batch_size: usize,
     file_schema: SchemaRef,
     file_projection: Option<Vec<usize>>,
@@ -228,7 +229,8 @@ impl CsvConfig {
     }
 }
 
-struct CsvOpener {
+/// A [`FileOpener`] that opens a CSV file and yields a [`FileOpenFuture`]
+pub struct CsvOpener {
     config: Arc<CsvConfig>,
     file_compression_type: FileCompressionType,
 }
