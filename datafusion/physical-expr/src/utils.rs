@@ -603,10 +603,11 @@ mod tests {
     use crate::expressions::{binary, cast, col, lit, Column, Literal};
     use crate::PhysicalSortExpr;
     use arrow::compute::SortOptions;
-    use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
-    use petgraph::visit::Bfs;
     use std::fmt::{Display, Formatter};
+
+    use arrow_schema::{DataType, Field, Schema};
+    use petgraph::visit::Bfs;
     use std::sync::Arc;
 
     #[derive(Clone)]
