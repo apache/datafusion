@@ -377,13 +377,16 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::from_slice::FromSlice;
     use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::TaskContext;
     use futures::StreamExt;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn test_insert_into() -> Result<()> {
-        let ctx = SessionContext::new();
+        // Create session context
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
         let testdata = test_util::arrow_test_data();
         let schema = test_util::aggr_test_schema();
         ctx.register_csv(
@@ -433,7 +436,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_into_as_select_multi_partitioned() -> Result<()> {
-        let ctx = SessionContext::new();
+        // Create session context
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
         let testdata = test_util::arrow_test_data();
         let schema = test_util::aggr_test_schema();
         ctx.register_csv(
@@ -481,7 +486,9 @@ mod tests {
     // TODO: The generated plan is suboptimal since SortExec is in global state.
     #[tokio::test]
     async fn test_insert_into_as_select_single_partition() -> Result<()> {
-        let ctx = SessionContext::new();
+        // Create session context
+        let config = SessionConfig::new().with_target_partitions(8);
+        let ctx = SessionContext::with_config(config);
         let testdata = test_util::arrow_test_data();
         let schema = test_util::aggr_test_schema();
         ctx.register_csv(
@@ -579,7 +586,7 @@ mod tests {
             schema.clone(),
             vec![single_partition],
             None,
-            false
+            false,
         )?);
         let plan = initial_table
             .insert_into(&session_ctx.state(), input)
@@ -621,7 +628,7 @@ mod tests {
                 single_partition,
             ],
             None,
-            false
+            false,
         )?);
         let plan = initial_table
             .insert_into(&session_ctx.state(), input)
