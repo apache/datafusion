@@ -201,6 +201,7 @@ impl ExternalSorter {
                 &self.expr,
                 merge_metrics,
                 self.session_config.batch_size(),
+                self.fetch,
             )
         } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self

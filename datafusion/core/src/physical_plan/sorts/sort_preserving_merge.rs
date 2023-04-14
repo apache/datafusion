@@ -72,15 +72,22 @@ pub struct SortPreservingMergeExec {
     expr: Vec<PhysicalSortExpr>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Fetch highest/lowest n results
+    fetch: Option<usize>,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
-    pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(
+        expr: Vec<PhysicalSortExpr>,
+        input: Arc<dyn ExecutionPlan>,
+        fetch: Option<usize>,
+    ) -> Self {
         Self {
             input,
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
+            fetch,
         }
     }
 
@@ -92,6 +99,11 @@ impl SortPreservingMergeExec {
     /// Sort expressions
     pub fn expr(&self) -> &[PhysicalSortExpr] {
         &self.expr
+    }
+
+    /// If `Some(fetch)`, limits output to only the first "fetch" items
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -141,6 +153,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Ok(Arc::new(SortPreservingMergeExec::new(
             self.expr.clone(),
             children[0].clone(),
+            self.fetch,
         )))
     }
 
@@ -213,6 +226,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     &self.expr,
                     tracking_metrics,
                     context.session_config().batch_size(),
+                    self.fetch,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -230,7 +244,16 @@ impl ExecutionPlan for SortPreservingMergeExec {
         match t {
             DisplayFormatType::Default => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))
+                match self.fetch {
+                    Some(fetch) => {
+                        write!(
+                            f,
+                            "SortPreservingMergeExec: fetch={fetch}, [{}]",
+                            expr.join(",")
+                        )
+                    }
+                    None => write!(f, "SortPreservingMergeExec: [{}]", expr.join(",")),
+                }
             }
         }
     }
@@ -500,7 +523,7 @@ mod tests {
             },
         ];
         let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), None));
 
         let collected = collect(merge, context).await.unwrap();
         assert_batches_eq!(exp, collected.as_slice());
@@ -511,7 +534,7 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         context: Arc<TaskContext>,
     ) -> RecordBatch {
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, input, None));
         let mut result = collect(merge, context).await.unwrap();
         assert_eq!(result.len(), 1);
         result.remove(0)
@@ -694,7 +717,7 @@ mod tests {
         let session_ctx_bs_23 =
             SessionContext::with_config(SessionConfig::new().with_batch_size(23));
 
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, input, None));
         let task_ctx = session_ctx_bs_23.task_ctx();
         let merged = collect(merge, task_ctx).await.unwrap();
 
@@ -769,7 +792,7 @@ mod tests {
             },
         ];
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), None));
 
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
@@ -839,6 +862,7 @@ mod tests {
             sort.as_slice(),
             tracking_metrics,
             task_ctx.session_config().batch_size(),
+            None,
         )
         .unwrap();
 
@@ -879,7 +903,7 @@ mod tests {
             options: Default::default(),
         }];
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), None));
 
         let collected = collect(merge.clone(), task_ctx).await.unwrap();
         let expected = vec![
@@ -933,6 +957,7 @@ mod tests {
                 options: SortOptions::default(),
             }],
             blocking_exec,
+            None,
         ));
 
         let fut = collect(sort_preserving_merge_exec, task_ctx);
@@ -986,7 +1011,7 @@ mod tests {
         }];
 
         let exec = MemoryExec::try_new(&partitions, schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), None));
 
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);

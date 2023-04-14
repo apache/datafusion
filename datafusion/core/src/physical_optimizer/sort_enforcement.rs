@@ -415,7 +415,11 @@ fn parallelize_sorts(
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
         let sort_exprs = get_sort_exprs(&plan)?;
         add_sort_above(&mut prev_layer, sort_exprs.to_vec())?;
-        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
+        let spm = SortPreservingMergeExec::new(
+            sort_exprs.to_vec(),
+            prev_layer,
+            get_fetch(&plan),
+        );
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
             plan: Arc::new(spm),
             coalesce_onwards: vec![None],
@@ -544,6 +548,7 @@ fn analyze_immediate_sort_removal(
                         Arc::new(SortPreservingMergeExec::new(
                             sort_exec.expr().to_vec(),
                             sort_input,
+                            sort_exec.fetch(),
                         ));
                     let new_tree = ExecTree::new(
                         new_plan.clone(),
@@ -735,9 +740,11 @@ fn remove_corresponding_sort_from_sub_plan(
         // If there is existing ordering, to preserve ordering use SortPreservingMergeExec
         // instead of CoalescePartitionsExec.
         if let Some(ordering) = updated_plan.output_ordering() {
+            let fetch = get_fetch(&updated_plan.clone());
             updated_plan = Arc::new(SortPreservingMergeExec::new(
                 ordering.to_vec(),
                 updated_plan,
+                fetch,
             ));
         } else {
             updated_plan = Arc::new(CoalescePartitionsExec::new(updated_plan.clone()));
@@ -759,6 +766,19 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
             "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
                 .to_string(),
         ))
+    }
+}
+
+/// read "fetch" from an [ExecutionPlan] trait object when possible.
+fn get_fetch(sort_any: &Arc<dyn ExecutionPlan>) -> Option<usize> {
+    if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
+        sort_exec.fetch()
+    } else if let Some(sort_preserving_merge_exec) =
+        sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
+    {
+        sort_preserving_merge_exec.fetch()
+    } else {
+        None
     }
 }
 
@@ -2012,7 +2032,7 @@ mod tests {
         let sort2 = sort_exec(sort_exprs1.clone(), source2);
 
         let union = union_exec(vec![sort1, sort2]);
-        let spm = Arc::new(SortPreservingMergeExec::new(sort_exprs1, union)) as _;
+        let spm = Arc::new(SortPreservingMergeExec::new(sort_exprs1, union, None)) as _;
         let physical_plan = bounded_window_exec("nullable_col", sort_exprs2, spm);
 
         // The `WindowAggExec` can get its required sorting from the leaf nodes directly.
@@ -2502,7 +2522,7 @@ mod tests {
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = sort_exprs.into_iter().collect();
-        Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
+        Arc::new(SortPreservingMergeExec::new(sort_exprs, input, None))
     }
 
     fn filter_exec(

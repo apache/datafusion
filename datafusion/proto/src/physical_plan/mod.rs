@@ -669,7 +669,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Arc::new(SortPreservingMergeExec::new(exprs, input)))
+                let fetch = if sort.fetch < 0 {
+                    None
+                } else {
+                    Some(sort.fetch as usize)
+                };
+                Ok(Arc::new(SortPreservingMergeExec::new(exprs, input, fetch)))
             }
             PhysicalPlanType::Extension(extension) => {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
@@ -1114,6 +1119,10 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
+                        fetch: match exec.fetch() {
+                            Some(n) => n as i64,
+                            _ => -1,
+                        },
                     }),
                 )),
             })

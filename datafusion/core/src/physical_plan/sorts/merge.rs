@@ -39,13 +39,14 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident) => {{
         let streams = FieldCursorStream::<$t>::new($sort, $streams);
         return Ok(Box::pin(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,
             $tracking_metrics,
             $batch_size,
+            $fetch,
         )));
     }};
 }
@@ -57,17 +58,18 @@ pub(crate) fn streaming_merge(
     expressions: &[PhysicalSortExpr],
     tracking_metrics: MemTrackingMetrics,
     batch_size: usize,
+    fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
     // Special case single column comparisons with optimized cursor implementations
     if expressions.len() == 1 {
         let sort = expressions[0].clone();
         let data_type = sort.expr.data_type(schema.as_ref())?;
         downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, tracking_metrics, batch_size),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, tracking_metrics, batch_size)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, tracking_metrics, batch_size)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, tracking_metrics, batch_size)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, tracking_metrics, batch_size)
+            data_type => (primitive_merge_helper, sort, streams, schema, tracking_metrics, batch_size, fetch),
+            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, tracking_metrics, batch_size, fetch)
+            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, tracking_metrics, batch_size, fetch)
+            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, tracking_metrics, batch_size, fetch)
+            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, tracking_metrics, batch_size, fetch)
             _ => {}
         }
     }
@@ -78,6 +80,7 @@ pub(crate) fn streaming_merge(
         schema,
         tracking_metrics,
         batch_size,
+        fetch,
     )))
 }
 
@@ -120,6 +123,9 @@ struct SortPreservingMergeStream<C> {
     /// target batch size
     batch_size: usize,
 
+    /// fetch highest/lowest n results
+    fetch: Option<usize>,
+
     /// Vector that holds cursors for each non-exhausted input partition
     cursors: Vec<Option<C>>,
 }
@@ -130,6 +136,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         schema: SchemaRef,
         tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
+        fetch: Option<usize>,
     ) -> Self {
         let stream_count = streams.partitions();
 
@@ -142,6 +149,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             loser_tree: vec![],
             loser_tree_adjusted: false,
             batch_size,
+            fetch,
         }
     }
 
