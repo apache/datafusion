@@ -653,13 +653,21 @@ impl RowAccumulator for MaxRowAccumulator {
         max_row(self.index, accessor, delta)
     }
 
-    fn update_scalar(
+    fn update_scalar_values(
         &mut self,
         values: &[ScalarValue],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let values = &values[0];
-        max_row(self.index, accessor, values)
+        let value = &values[0];
+        max_row(self.index, accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        max_row(self.index, accessor, value)
     }
 
     fn merge_batch(
@@ -905,13 +913,21 @@ impl RowAccumulator for MinRowAccumulator {
         Ok(())
     }
 
-    fn update_scalar(
+    fn update_scalar_values(
         &mut self,
         values: &[ScalarValue],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let values = &values[0];
-        min_row(self.index, accessor, values)
+        let value = &values[0];
+        min_row(self.index, accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        min_row(self.index, accessor, value)
     }
 
     fn merge_batch(

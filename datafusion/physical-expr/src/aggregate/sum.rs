@@ -381,12 +381,20 @@ impl RowAccumulator for SumRowAccumulator {
         add_to_row(self.index, accessor, &delta)
     }
 
-    fn update_scalar(
+    fn update_scalar_values(
         &mut self,
         values: &[ScalarValue],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let value = &values[0];
+        add_to_row(self.index, accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
         add_to_row(self.index, accessor, value)
     }
 

@@ -52,9 +52,16 @@ pub trait RowAccumulator: Send + Sync + Debug {
     ) -> Result<()>;
 
     /// updates the accumulator's state from a vector of Scalar value.
-    fn update_scalar(
+    fn update_scalar_values(
         &mut self,
         values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()>;
+
+    /// updates the accumulator's state from a Scalar value.
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
         accessor: &mut RowAccessor,
     ) -> Result<()>;
 

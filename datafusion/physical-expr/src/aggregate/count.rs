@@ -242,20 +242,27 @@ impl RowAccumulator for CountRowAccumulator {
         Ok(())
     }
 
-    fn update_scalar(
+    fn update_scalar_values(
         &mut self,
         values: &[ScalarValue],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        if values.len() == 1 {
-            match &values[0] {
-                ScalarValue::Null => {
-                    // do not update the accumulator
-                }
-                _ => accessor.add_u64(self.state_index, 1),
-            }
-        } else if !values.iter().any(|s| matches!(s, ScalarValue::Null)) {
+        if !values.iter().any(|s| matches!(s, ScalarValue::Null)) {
             accessor.add_u64(self.state_index, 1)
+        }
+        Ok(())
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        match value {
+            ScalarValue::Null => {
+                // do not update the accumulator
+            }
+            _ => accessor.add_u64(self.state_index, 1),
         }
         Ok(())
     }

@@ -302,12 +302,20 @@ impl RowAccumulator for AvgRowAccumulator {
         )
     }
 
-    fn update_scalar(
+    fn update_scalar_values(
         &mut self,
         values: &[ScalarValue],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let value = &values[0];
+        sum::update_avg_to_row(self.state_index(), accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
         sum::update_avg_to_row(self.state_index(), accessor, value)
     }
 
