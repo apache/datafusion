@@ -605,17 +605,12 @@ impl LogicalPlan {
         expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
-                    if id.is_empty() {
+                    if id.is_empty() || id == "$0" {
                         return Err(DataFusionError::Plan(
                             "Empty placeholder id".to_string(),
                         ));
-                    } else if id == "$0" {
-                        return Err(DataFusionError::Plan(
-                            "Invalid placeholder id: $0".to_string(),
-                        ));
                     }
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
-                    dbg!(&id);
                     let idx = id[1..].parse::<usize>().map_err(|e| {
                         DataFusionError::Internal(format!(
                             "Failed to parse placeholder id: {e}"
