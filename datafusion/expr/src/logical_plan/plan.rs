@@ -606,7 +606,7 @@ impl LogicalPlan {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
                     if id.is_empty() {
-                        return Err(DataFusionError::Internal(
+                        return Err(DataFusionError::Plan(
                             "Empty placeholder id".to_string(),
                         ));
                     }
