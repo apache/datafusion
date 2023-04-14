@@ -318,7 +318,11 @@ impl ExecutionPlan for UnionExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "UnionExec")
+                write!(f, "UnionExec")?;
+                if self.partition_aware {
+                    write!(f, ": partition_aware=true")?;
+                }
+                Ok(())
             }
         }
     }
