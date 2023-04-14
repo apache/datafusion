@@ -289,7 +289,7 @@ impl<T> Transformed<T> {
 /// Helper trait for implementing [`TreeNode`] that have children stored as Arc's
 ///
 /// If some trait object, such as `dyn T`, implements this trait,
-/// its related Arc<dyn T> will automatically implement [`TreeNode`]
+/// its related `Arc<dyn T>` will automatically implement [`TreeNode`]
 pub trait DynTreeNode {
     /// Returns all children of the specified TreeNode
     fn arc_children(&self) -> Vec<Arc<Self>>;
@@ -303,7 +303,7 @@ pub trait DynTreeNode {
 }
 
 /// Blanket implementation for Arc for any tye that implements
-/// [`DynTreeNode`] (such as Arc<dyn PhysicalExpr>)
+/// [`DynTreeNode`] (such as [`Arc<dyn PhysicalExpr>`])
 impl<T: DynTreeNode + ?Sized> TreeNode for Arc<T> {
     fn apply_children<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where

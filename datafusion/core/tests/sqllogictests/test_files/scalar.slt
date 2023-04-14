@@ -26,10 +26,213 @@ CREATE TABLE t1(
   c INT,
   d INT
 ) as VALUES
-  (1, 100, 567, 1024), 
-  (2, 1000, 123, 256), 
+  (1, 100, 567, 1024),
+  (2, 1000, 123, 256),
   (3, 10000, 978, 2048)
 ;
+
+# abs scalar function
+query RRR rowsort
+select abs(64), abs(0), abs(-64);
+----
+64 0 64
+
+# abs scalar nulls
+query R rowsort
+select abs(null);
+----
+NULL
+
+# acos scalar function
+query RRR rowsort
+select acos(0), acos(0.5), acos(1);
+----
+1.570796326795 1.047197551197 0
+
+# acos scalar nulls
+query R rowsort
+select acos(null);
+----
+NULL
+
+# acosh scalar function
+# cosh(x) = (exp(x) + exp(-x)) / 2
+query RRR rowsort
+select acosh((exp(1) + exp(-1)) / 2), acosh((exp(2) + exp(-2)) / 2), acosh((exp(3) + exp(-3)) / 2);
+----
+1 2 3
+
+# acosh scalar nulls
+query R rowsort
+select acosh(null);
+----
+NULL
+
+# asin scalar function
+query RRR rowsort
+select asin(0), asin(0.5), asin(1);
+----
+0 0.523598775598 1.570796326795
+
+# asin scalar nulls
+query R rowsort
+select asin(null);
+----
+NULL
+
+# asinh scalar function
+# sinh(x) = (exp(x) - exp(-x)) / 2
+query RRR rowsort
+select asinh((exp(1) - exp(-1)) / 2), asinh((exp(2) - exp(-2)) / 2), asinh((exp(3) - exp(-3)) / 2);
+----
+1 2 3
+
+# asinh scalar nulls
+query R rowsort
+select asinh(null);
+----
+NULL
+
+# atan scalar function
+query RRR rowsort
+select atan(0), atan(cbrt(3)), atan(1);
+----
+0 0.964539792856 0.785398163397
+
+# atan scalar nulls
+query R rowsort
+select atan(null);
+----
+NULL
+
+# atanh scalar function
+# tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+query RRR rowsort
+select atanh((exp(2) - 1) / (exp(2) + 1)), atanh((exp(4) - 1) / (exp(4) + 1)), atanh((exp(6) - 1) / (exp(6) + 1));
+----
+1 2 3
+
+# atanh scalar nulls
+query R rowsort
+select atanh(null);
+----
+NULL
+
+# atan2 scalar function
+query RRR rowsort
+select atan2(0, 1), atan2(1, 2), atan2(2, 2);
+----
+0 0.4636476 0.7853982
+
+# atan2 scalar nulls
+query R rowsort
+select atan2(null, 64);
+----
+NULL
+
+# atan2 scalar nulls 1
+query R rowsort
+select atan2(2, null);
+----
+NULL
+
+# atan2 scalar nulls 2
+query R rowsort
+select atan2(null, null);
+----
+NULL
+
+# cbrt scalar function
+query RRR rowsort
+select cbrt(0), cbrt(8), cbrt(27);
+----
+0 2 3
+
+# cbrt scalar nulls
+query R rowsort
+select cbrt(null);
+----
+NULL
+
+# ceil scalar function
+query RRR rowsort
+select ceil(1.6), ceil(1.5), ceil(1.4);
+----
+2 2 2
+
+# ceil scalar nulls
+query R rowsort
+select ceil(null);
+----
+NULL
+
+# cos scalar function
+query RRR rowsort
+select cos(0), cos(pi() / 3), cos(pi() / 2);
+----
+1 0.5 0
+
+# cos scalar nulls
+query R rowsort
+select cos(null);
+----
+NULL
+
+# cosh scalar function
+# cosh(x) = (exp(x) + exp(-x)) / 2
+query RRR rowsort
+select cosh(1), cosh(2), cosh(3);
+----
+1.543080634815 3.762195691084 10.067661995778
+
+# cosh scalar nulls
+query R rowsort
+select cosh(null);
+----
+NULL
+
+# exp scalar function
+query RRR rowsort
+select exp(0), exp(1), exp(2);
+----
+1 2.718281828459 7.389056098931
+
+# exp scalar nulls
+query R rowsort
+select exp(null);
+----
+NULL
+
+# floor scalar function
+query RRR rowsort
+select floor(1.4), floor(1.5), floor(1.6);
+----
+1 1 1
+
+# floor scalar nulls
+query R rowsort
+select floor(null);
+----
+NULL
+
+# ln scalar function
+query RRR rowsort
+select ln(1), ln(exp(1)), ln(3);
+----
+0 1 1.098612288668
+
+# ln scalar nulls
+query R rowsort
+select ln(null);
+----
+NULL
+
+# ln scalar ops with zero edgecases
+# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+query R rowsort
+select ln(0);
+----
+-Infinity
 
 # log scalar function
 query RR rowsort
@@ -48,28 +251,194 @@ Infinity 2 2
 
 # log scalar nulls
 query RR rowsort
-select log(null, 64) a, log(null) b
+select log(null, 64) a, log(null) b;
 ----
 NULL NULL
 
 # log scalar nulls 1
 query RR rowsort
-select log(2, null) a, log(null) b
+select log(2, null) a, log(null) b;
 ----
 NULL NULL
 
 # log scalar nulls 2
 query RR rowsort
-select log(null, null) a, log(null) b
+select log(null, null) a, log(null) b;
 ----
 NULL NULL
 
 # log scalar ops with zero edgecases
 # please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
 query RR rowsort
-select log(0) a, log(1, 64) b
+select log(0) a, log(1, 64) b;
 ----
 -Infinity Infinity
+
+# log10 scalar function
+query RRR rowsort
+select log10(1), log10(10), log10(100);
+----
+0 1 2
+
+# log10 scalar nulls
+query R rowsort
+select log10(null);
+----
+NULL
+
+# log10 scalar ops with zero edgecases
+# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+query R rowsort
+select log10(0);
+----
+-Infinity
+
+# log2 scalar function
+query RRR rowsort
+select log2(1), log2(2), log2(4);
+----
+0 1 2
+
+# log2 scalar nulls
+query R rowsort
+select log2(null);
+----
+NULL
+
+# log2 scalar ops with zero edgecases
+# please see https://github.com/apache/arrow-datafusion/pull/5245#issuecomment-1426828382
+query R rowsort
+select log2(0);
+----
+-Infinity
+
+# pi scalar function
+query RRR rowsort
+select pi(), pi() / 2, pi() / 3;
+----
+3.14159265359 1.570796326795 1.047197551197
+
+# power scalar function
+query III rowsort
+select power(2, 0), power(2, 1), power(2, 2);
+----
+1 2 4
+
+# power scalar nulls
+query R rowsort
+select power(null, 64);
+----
+NULL
+
+# power scalar nulls 1
+query I rowsort
+select power(2, null);
+----
+NULL
+
+# power scalar nulls 2
+query R rowsort
+select power(null, null);
+----
+NULL
+
+# round scalar function
+query RRR rowsort
+select round(1.4), round(1.5), round(1.6);
+----
+1 2 2
+
+# round scalar nulls
+query R rowsort
+select round(null);
+----
+NULL
+
+# signum scalar function
+query RRR rowsort
+select signum(-2), signum(0), signum(2);
+----
+-1 1 1
+
+# signum scalar nulls
+query R rowsort
+select signum(null);
+----
+NULL
+
+# sin scalar function
+query RRR rowsort
+select sin(0), sin(pi() / 3), sin(pi() / 2);
+----
+0 0.866025403784 1
+
+# sin scalar nulls
+query R rowsort
+select sin(null);
+----
+NULL
+
+# sinh scalar function
+# sinh(x) = (exp(x) - exp(-x)) / 2
+query RRR rowsort
+select sinh(1), sinh(2), sinh(3);
+----
+1.175201193644 3.626860407847 10.01787492741
+
+# sinh scalar nulls
+query R rowsort
+select sinh(null);
+----
+NULL
+
+# sqrt scalar function
+query RRR rowsort
+select sqrt(0), sqrt(4), sqrt(9);
+----
+0 2 3
+
+# sqrt scalar nulls
+query R rowsort
+select sqrt(null);
+----
+NULL
+
+# tan scalar function
+query RRR rowsort
+select tan(0), tan(pi() / 6), tan(pi() / 4);
+----
+0 0.57735026919 1
+
+# tan scalar nulls
+query R rowsort
+select tan(null);
+----
+NULL
+
+# tanh scalar function
+# tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+query RRR rowsort
+select tanh(1), tanh(2), tanh(3);
+----
+0.761594155956 0.964027580076 0.995054753687
+
+# tanh scalar nulls
+query R rowsort
+select tanh(null);
+----
+NULL
+
+# trunc scalar function
+query RRR rowsort
+select trunc(1.5), trunc(2.71), trunc(3.1415);
+----
+1 2 3
+
+# trunc scalar nulls
+query R rowsort
+select trunc(null);
+----
+NULL
 
 # bitwise and with column and scalar
 query I rowsort
@@ -110,3 +479,320 @@ select d << 2 from t1;
 1024
 4096
 8192
+
+statement ok
+drop table t1
+
+
+statement ok
+create table t1(c1 varchar) as values ('a'), ('b'), ('c'), (null);
+
+# case_when()
+query I
+SELECT
+CASE WHEN c1 = 'a' THEN 1
+ WHEN c1 = 'b' THEN 2
+ END
+FROM t1
+----
+1
+2
+NULL
+NULL
+
+# case_when_else()
+query I
+SELECT
+CASE WHEN c1 = 'a' THEN 1
+ WHEN c1 = 'b' THEN 2
+ ELSE 999 END
+FROM t1
+----
+1
+2
+999
+999
+
+# case_when_with_base_expr()
+query I
+SELECT
+CASE c1 WHEN 'a' THEN 1
+ WHEN 'b' THEN 2
+ END
+FROM t1
+----
+1
+2
+NULL
+NULL
+
+# case_when_else_with_base_expr()
+query I
+SELECT
+CASE c1 WHEN 'a' THEN 1
+ WHEN 'b' THEN 2
+ ELSE 999 END
+FROM t1
+----
+1
+2
+999
+999
+
+# case_when_else_with_null_contant()
+query I
+ SELECT
+CASE WHEN c1 = 'a' THEN 1
+ WHEN NULL THEN 2
+ ELSE 999 END
+FROM t1
+----
+1
+999
+999
+999
+
+statement ok
+drop table t1
+
+
+query T
+SELECT CASE WHEN NULL THEN 'foo' ELSE 'bar' END
+----
+bar
+
+# case_expr_with_null()
+query I
+select case when b is null then null else b end from (select a,b from (values (1,null),(2,3)) as t (a,b)) a;
+----
+NULL
+3
+
+query I
+select case when b is null then null else b end from (select a,b from (values (1,1),(2,3)) as t (a,b)) a;
+----
+1
+3
+
+# case_expr_with_nulls()
+query I
+select case when b is null then null when b < 3 then null when b >=3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a
+----
+NULL
+NULL
+4
+
+query I
+select case b when 1 then null when 2 then null when 3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a;
+----
+NULL
+NULL
+4
+
+# csv_query_sum_cast() {
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+# c8 = i32; c6 = i64
+query TTT
+SELECT arrow_typeof(c8), arrow_typeof(c6), arrow_typeof(c8 + c6) FROM aggregate_test_100 limit 1;
+----
+Int32 Int64 Int64
+
+
+statement ok
+drop table aggregate_test_100
+
+statement ok
+create table test_boolean(c1 boolean) as values (false), (null), (true);
+
+statement ok
+create table test_int32(c1 int) as values (0), (1), (null), (3);
+
+## Note that test_float has a NaN (which is not possible to create in SQL) so it is registered via rust.
+
+# query_not()
+
+query B
+SELECT NOT c1 FROM test_boolean
+----
+true
+NULL
+false
+
+
+# query_is_null()
+
+# Note the last value is NaN (not NULL)
+query R
+SELECT c1 from test_float;
+----
+1
+NULL
+NaN
+
+
+query B
+SELECT c1 IS NULL FROM test_float
+----
+false
+true
+false
+
+# query_is_not_null()
+query B
+SELECT c1 IS NOT NULL FROM test_float
+----
+true
+false
+true
+
+
+# query_is_true()
+query B
+SELECT c1 IS TRUE as t FROM test_boolean
+----
+false
+false
+true
+
+# query_is_false()
+query B
+SELECT c1 IS FALSE as f FROM test_boolean
+----
+true
+false
+false
+
+# query_is_not_true()
+
+query B
+SELECT c1 IS NOT TRUE as nt FROM test_boolean
+----
+true
+true
+false
+
+# query_is_not_false()
+query B
+SELECT c1 IS NOT FALSE as nf FROM test_boolean
+----
+false
+true
+true
+
+
+# query_is_unknown()
+query B
+SELECT c1 IS UNKNOWN as t FROM test_boolean
+----
+false
+true
+false
+
+# query_is_not_unknown()
+query B
+SELECT c1 IS NOT UNKNOWN as t FROM test_boolean
+----
+true
+false
+true
+
+
+# query_without_from()
+
+query I
+SELECT 1
+----
+1
+
+query IIR
+SELECT 1+2, 3/4, cos(0)
+----
+3 0 1
+
+
+# query_scalar_minus_array()
+query I
+SELECT 4 - c1 FROM test_int32
+----
+4
+3
+NULL
+1
+
+# test_string_concat_operator()
+# concat 2 strings
+query T
+SELECT 'aa' || 'b'
+----
+aab
+
+# concat 4 strings as a string concat pipe.
+query T
+SELECT 'aa' || 'b' || 'cc' || 'd'
+----
+aabccd
+
+# concat 2 strings and NULL, output should be NULL
+query T
+SELECT 'aa' || NULL || 'd'
+----
+NULL
+
+# concat 1 strings and 2 numeric
+query T
+SELECT 'a' || 42 || 23.3
+----
+a4223.3
+
+# test_not_expressions()
+
+query BB
+SELECT not(true), not(false)
+----
+false true
+
+query BB
+SELECT not(1), not(0)
+----
+-2 -1
+
+query ?B
+SELECT null, not(null)
+----
+NULL NULL
+
+query error DataFusion error: Error during planning: NOT or BITWISE_NOT not supported for datatype: 'Utf8'
+SELECT NOT('hi')
+
+# test_negative_expressions()
+
+query ??
+SELECT null, -null
+----
+NULL NULL
+
+statement ok
+drop table test_boolean
+
+statement ok
+drop table test_int32

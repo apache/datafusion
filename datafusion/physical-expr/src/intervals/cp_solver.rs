@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
@@ -122,6 +123,19 @@ use super::IntervalBound;
 pub struct ExprIntervalGraph {
     graph: StableGraph<ExprIntervalGraphNode, usize>,
     root: NodeIndex,
+}
+
+impl ExprIntervalGraph {
+    /// Estimate size of bytes including `Self`.
+    pub fn size(&self) -> usize {
+        let node_memory_usage = self.graph.node_count()
+            * (std::mem::size_of::<ExprIntervalGraphNode>()
+                + std::mem::size_of::<NodeIndex>());
+        let edge_memory_usage = self.graph.edge_count()
+            * (std::mem::size_of::<usize>() + std::mem::size_of::<NodeIndex>() * 2);
+
+        std::mem::size_of_val(self) + node_memory_usage + edge_memory_usage
+    }
 }
 
 /// This object encapsulates all possible constraint propagation results.
@@ -241,9 +255,14 @@ pub fn propagate_arithmetic(
 /// If we have expression < 0, expression must have the range [-∞, 0].
 /// Currently, we only support strict inequalities since open/closed intervals
 /// are not implemented yet.
-fn comparison_operator_target(datatype: &DataType, op: &Operator) -> Result<Interval> {
+fn comparison_operator_target(
+    left_datatype: &DataType,
+    op: &Operator,
+    right_datatype: &DataType,
+) -> Result<Interval> {
+    let datatype = coerce_types(left_datatype, &Operator::Minus, right_datatype)?;
     let unbounded = IntervalBound::make_unbounded(datatype)?;
-    let zero = ScalarValue::new_zero(datatype)?;
+    let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
         Operator::GtEq => Interval::new(IntervalBound::new(zero, false), unbounded),
         Operator::Gt => Interval::new(IntervalBound::new(zero, true), unbounded),
@@ -265,7 +284,11 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
-    let parent = comparison_operator_target(&left_child.get_datatype()?, op)?;
+    let parent = comparison_operator_target(
+        &left_child.get_datatype(),
+        op,
+        &right_child.get_datatype(),
+    )?;
     propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
 

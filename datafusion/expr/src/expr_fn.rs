@@ -226,6 +226,14 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     }
 }
 
+/// Returns an approximate value of π
+pub fn pi() -> Expr {
+    Expr::ScalarFunction {
+        fun: built_in_function::BuiltinScalarFunction::Pi,
+        args: vec![],
+    }
+}
+
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction {
@@ -450,9 +458,15 @@ scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Tan, tan, num, "tangent");
+scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
+scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
+scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
 scalar_expr!(Asin, asin, num, "inverse sine");
 scalar_expr!(Acos, acos, num, "inverse cosine");
 scalar_expr!(Atan, atan, num, "inverse tangent");
+scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
+scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
+scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
 scalar_expr!(
     Floor,
     floor,
@@ -536,9 +550,9 @@ scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
 scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
 scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
-scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index. ");
+scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
-scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matchs the `string`");
+scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
@@ -763,9 +777,15 @@ mod test {
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Tan, tan);
+        test_unary_scalar_expr!(Sinh, sinh);
+        test_unary_scalar_expr!(Cosh, cosh);
+        test_unary_scalar_expr!(Tanh, tanh);
         test_unary_scalar_expr!(Asin, asin);
         test_unary_scalar_expr!(Acos, acos);
         test_unary_scalar_expr!(Atan, atan);
+        test_unary_scalar_expr!(Asinh, asinh);
+        test_unary_scalar_expr!(Acosh, acosh);
+        test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_nary_scalar_expr!(Round, round, input);

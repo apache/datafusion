@@ -2787,12 +2787,7 @@ mod tests {
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c1")),
-            false,
-            Box::new(lit(0)),
-            Box::new(lit(10)),
-        ));
+        let expr = col("c1").between(lit(0), lit(10));
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
@@ -2901,12 +2896,7 @@ mod tests {
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c1")),
-            false,
-            Box::new(lit(0)),
-            Box::new(lit(10)),
-        ));
+        let expr = col("c1").between(lit(0), lit(10));
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
@@ -2920,24 +2910,14 @@ mod tests {
     #[test]
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c2")),
-            false,
-            Box::new(lit(3)),
-            Box::new(lit(4)),
-        ));
+        let expr = col("c2").between(lit(3), lit(4));
         assert_eq!(
             simplify(expr),
             and(col("c2").gt_eq(lit(3)), col("c2").lt_eq(lit(4)))
         );
 
         // c2 not between 3 and 4 is c2 < 3 or c2 > 4
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c2")),
-            true,
-            Box::new(lit(3)),
-            Box::new(lit(4)),
-        ));
+        let expr = col("c2").not_between(lit(3), lit(4));
         assert_eq!(
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))

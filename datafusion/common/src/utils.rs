@@ -19,12 +19,15 @@
 
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
+use arrow::compute;
 use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
+use arrow_array::types::UInt32Type;
+use arrow_array::PrimitiveArray;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -260,6 +263,24 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
+/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+pub fn get_arrayref_at_indices(
+    arrays: &[ArrayRef],
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<Vec<ArrayRef>> {
+    arrays
+        .iter()
+        .map(|array| {
+            compute::take(
+                array.as_ref(),
+                indices,
+                None, // None: no index check
+            )
+            .map_err(DataFusionError::ArrowError)
+        })
+        .collect()
+}
+
 pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
     parse_identifiers(s)
         .unwrap_or_default()
@@ -271,10 +292,45 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+/// This function "takes" the elements at `indices` from the slice `items`.
+pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
+    items: &[T],
+    indices: impl IntoIterator<Item = I>,
+) -> Result<Vec<T>> {
+    indices
+        .into_iter()
+        .map(|idx| items.get(*idx.borrow()).cloned())
+        .collect::<Option<Vec<T>>>()
+        .ok_or_else(|| {
+            DataFusionError::Execution(
+                "Expects indices to be in the range of searched vector".to_string(),
+            )
+        })
+}
+
+/// This function finds the longest prefix of the form 0, 1, 2, ... within the
+/// collection `sequence`. Examples:
+/// - For 0, 1, 2, 4, 5; we would produce 3, meaning 0, 1, 2 is the longest satisfying
+/// prefix.
+/// - For 1, 2, 3, 4; we would produce 0, meaning there is no such prefix.
+pub fn longest_consecutive_prefix<T: Borrow<usize>>(
+    sequence: impl IntoIterator<Item = T>,
+) -> usize {
+    let mut count = 0;
+    for item in sequence {
+        if !count.eq(item.borrow()) {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
     use arrow_array::Array;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;
@@ -578,5 +634,56 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_arrayref_at_indices() -> Result<()> {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+        ];
+
+        let row_indices_vec: Vec<Vec<u32>> = vec![
+            // Get rows 0 and 1
+            vec![0, 1],
+            // Get rows 0 and 1
+            vec![0, 2],
+            // Get rows 1 and 3
+            vec![1, 3],
+            // Get rows 2 and 4
+            vec![2, 4],
+        ];
+        for row_indices in row_indices_vec {
+            let indices = PrimitiveArray::from_iter_values(row_indices.iter().cloned());
+            let chunk = get_arrayref_at_indices(&arrays, &indices)?;
+            for (arr_orig, arr_chunk) in arrays.iter().zip(&chunk) {
+                for (idx, orig_idx) in row_indices.iter().enumerate() {
+                    let res1 = ScalarValue::try_from_array(arr_orig, *orig_idx as usize)?;
+                    let res2 = ScalarValue::try_from_array(arr_chunk, idx)?;
+                    assert_eq!(res1, res2);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_at_indices() -> Result<()> {
+        let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(get_at_indices(&in_vec, [0, 2])?, vec![1, 3]);
+        assert_eq!(get_at_indices(&in_vec, [4, 2])?, vec![5, 3]);
+        // 7 is outside the range
+        assert!(get_at_indices(&in_vec, [7]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_longest_consecutive_prefix() {
+        assert_eq!(longest_consecutive_prefix([0, 3, 4]), 1);
+        assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
+        assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
+        assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
     }
 }
