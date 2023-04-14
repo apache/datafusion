@@ -24,7 +24,6 @@ use std::fmt::{Display, Formatter};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};

@@ -261,7 +261,7 @@ fn comparison_operator_target(
     right_datatype: &DataType,
 ) -> Result<Interval> {
     let datatype = coerce_types(left_datatype, &Operator::Minus, right_datatype)?;
-    let unbounded = IntervalBound::make_unbounded(datatype)?;
+    let unbounded = IntervalBound::make_unbounded(datatype.clone())?;
     let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
         Operator::GtEq => Interval::new(IntervalBound::new(zero, false), unbounded),
@@ -285,9 +285,9 @@ pub fn propagate_comparison(
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let parent = comparison_operator_target(
-        &left_child.get_datatype(),
+        &left_child.get_datatype()?,
         op,
-        &right_child.get_datatype(),
+        &right_child.get_datatype()?,
     )?;
     propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
