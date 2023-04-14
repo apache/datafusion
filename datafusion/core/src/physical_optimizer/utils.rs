@@ -17,11 +17,10 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
-use super::optimizer::PhysicalOptimizerRule;
 use std::borrow::Borrow;
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -30,34 +29,10 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
-use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use datafusion_common::tree_node::Transformed;
+use crate::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
-use std::sync::Arc;
-
-/// Convenience rule for writing optimizers: recursively invoke
-/// optimize on plan's children and then return a node of the same
-/// type. Useful for optimizer rules which want to leave the type
-/// of plan unchanged but still apply to the children.
-pub fn optimize_children(
-    optimizer: &impl PhysicalOptimizerRule,
-    plan: Arc<dyn ExecutionPlan>,
-    config: &ConfigOptions,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let children = plan
-        .children()
-        .iter()
-        .map(|child| optimizer.optimize(Arc::clone(child), config))
-        .collect::<Result<Vec<_>>>()?;
-
-    if children.is_empty() {
-        Ok(Arc::clone(&plan))
-    } else {
-        with_new_children_if_necessary(plan, children).map(Transformed::into)
-    }
-}
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
@@ -204,6 +179,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_sorted() {
+        assert!(is_sorted::<usize>([]));
+        assert!(is_sorted([0]));
         assert!(is_sorted([0, 3, 4]));
         assert!(is_sorted([0, 1, 2]));
         assert!(is_sorted([0, 1, 4]));
@@ -218,5 +195,7 @@ mod tests {
         assert_eq!(set_difference([0, 3, 4], [1, 2, 4]), vec![0, 3]);
         // return value should have same ordering with the in1
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
+        assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
+        assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
     }
 }

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod count_wildcard_rule;
-mod inline_table_scan;
-pub(crate) mod type_coercion;
+pub mod count_wildcard_rule;
+pub mod inline_table_scan;
+pub mod type_coercion;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;

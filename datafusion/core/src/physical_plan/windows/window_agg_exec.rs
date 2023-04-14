@@ -65,7 +65,8 @@ pub struct WindowAggExec {
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Partition by indices that define ordering
+    /// Partition by indices that defines preset for existing ordering
+    // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
 }
 
@@ -114,8 +115,7 @@ impl WindowAggExec {
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering();
-        let sort_keys = sort_keys.unwrap_or(&[]);
+        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
         get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 }
@@ -320,7 +320,7 @@ impl WindowAggStream {
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
-            return Err(DataFusionError::Execution(
+            return Err(DataFusionError::Internal(
                 "All partition by columns should have an ordering".to_string(),
             ));
         }

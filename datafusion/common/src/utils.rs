@@ -340,6 +340,7 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 mod tests {
     use arrow::array::Float64Array;
     use arrow_array::Array;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;

@@ -36,6 +36,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::window::{
     BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
 };
+use std::borrow::Borrow;
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -191,24 +192,34 @@ fn create_built_in_window_expr(
     })
 }
 
-pub(crate) fn calc_requirements(
-    partition_by_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_sort_exprs: &[PhysicalSortExpr],
+pub(crate) fn calc_requirements<
+    T: Borrow<Arc<dyn PhysicalExpr>>,
+    S: Borrow<PhysicalSortExpr>,
+>(
+    partition_by_exprs: impl IntoIterator<Item = T>,
+    orderby_sort_exprs: impl IntoIterator<Item = S>,
 ) -> Option<Vec<PhysicalSortRequirement>> {
-    let mut sort_reqs = vec![];
-    for partition_by in partition_by_exprs {
-        sort_reqs.push(PhysicalSortRequirement::new(partition_by.clone(), None))
-    }
-    for sort_expr in orderby_sort_exprs {
-        let contains = sort_reqs.iter().any(|e| sort_expr.expr.eq(e.expr()));
-        if !contains {
-            sort_reqs.push(PhysicalSortRequirement::from(sort_expr.clone()));
+    let mut sort_reqs = partition_by_exprs
+        .into_iter()
+        .map(|partition_by| {
+            PhysicalSortRequirement::new(partition_by.borrow().clone(), None)
+        })
+        .collect::<Vec<_>>();
+    for element in orderby_sort_exprs.into_iter() {
+        let PhysicalSortExpr { expr, options } = element.borrow();
+        if !sort_reqs.iter().any(|e| e.expr().eq(expr)) {
+            sort_reqs.push(PhysicalSortRequirement::new(expr.clone(), Some(*options)));
         }
     }
     // Convert empty result to None. Otherwise wrap result inside Some()
     (!sort_reqs.is_empty()).then_some(sort_reqs)
 }
 
+/// This function calculates the indices such that when partition by expressions reordered with this indices
+/// resulting expressions define a preset for existing ordering.
+// For instance, if input is ordered by a, b, c and PARTITION BY b, a is used
+// This vector will be [1, 0]. It means that when we iterate b,a columns with the order [1, 0]
+// resulting vector (a, b) is a preset of the existing ordering (a, b, c).
 pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
@@ -260,7 +271,8 @@ mod tests {
         let b = Field::new("b", DataType::Int32, true);
         let c = Field::new("c", DataType::Int32, true);
         let d = Field::new("d", DataType::Int32, true);
-        let schema = Arc::new(Schema::new(vec![a, b, c, d]));
+        let e = Field::new("e", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
         Ok(schema)
     }
 
@@ -300,6 +312,7 @@ mod tests {
             (vec!["b", "a"], vec![1, 0]),
             (vec!["b", "a", "c"], vec![1, 0, 2]),
             (vec!["d", "b", "a"], vec![2, 1]),
+            (vec!["d", "e", "a"], vec![2]),
         ];
         for (pb_names, expected) in test_data {
             let pb_exprs = pb_names
@@ -373,7 +386,7 @@ mod tests {
                     expected = Some(vec![res]);
                 }
             }
-            assert_eq!(calc_requirements(&partitionbys, &orderbys), expected);
+            assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
         Ok(())
     }

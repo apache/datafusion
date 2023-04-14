@@ -23,13 +23,13 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::Operator;
-use std::borrow::Borrow;
 
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -154,19 +154,14 @@ pub fn normalize_expr_with_equivalence_properties(
     expr.clone()
         .transform(&|expr| {
             let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                        for class in eq_properties {
-                            if class.contains(column) {
-                                normalized = Some(Arc::new(class.head().clone()));
-                                break;
-                            }
+                expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                    for class in eq_properties {
+                        if class.contains(column) {
+                            return Some(Arc::new(class.head().clone()) as _);
                         }
-                        normalized
                     }
-                    None => None,
-                };
+                    None
+                });
             Ok(if let Some(normalized_form) = normalized_form {
                 Transformed::Yes(normalized_form)
             } else {
@@ -354,6 +349,37 @@ fn requirements_compatible_concrete<F: FnOnce() -> EquivalenceProperties>(
     }
 }
 
+/// This function maps back requirement after ProjectionExec
+/// to the Executor for its input.
+// Specifically, `ProjectionExec` changes index of `Column`s in the schema of its input executor.
+// This function changes requirement given according to ProjectionExec schema to the requirement
+// according to schema of input executor to the ProjectionExec.
+// For instance, Column{"a", 0} would turn to Column{"a", 1}. Please note that this function assumes that
+// name of the Column is unique. If we have a requirement such that Column{"a", 0}, Column{"a", 1}.
+// This function will produce incorrect result (It will only emit single Column as a result).
+pub fn map_columns_before_projection(
+    parent_required: &[Arc<dyn PhysicalExpr>],
+    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    let column_mapping = proj_exprs
+        .iter()
+        .filter_map(|(expr, name)| {
+            expr.as_any()
+                .downcast_ref::<Column>()
+                .map(|column| (name.clone(), column.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    parent_required
+        .iter()
+        .filter_map(|r| {
+            r.as_any()
+                .downcast_ref::<Column>()
+                .and_then(|c| column_mapping.get(c.name()))
+        })
+        .map(|e| Arc::new(e.clone()) as _)
+        .collect()
+}
+
 /// This function returns all `Arc<dyn PhysicalExpr>`s inside the given
 /// `PhysicalSortExpr` sequence.
 pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
@@ -398,39 +424,6 @@ fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
     targets
         .into_iter()
         .filter_map(|target| items.iter().position(|e| e.eq(target.borrow())))
-        .collect()
-}
-
-/// This function maps back requirement after ProjectionExec
-/// to the Executor for its input.
-// Specifically, `ProjectionExec` changes index of `Column`s in the schema of its input executor.
-// This function changes requirement given according to ProjectionExec schema to the requirement
-// according to schema of input executor to the ProjectionExec.
-// For instance, Column{"a", 0} would turn to Column{"a", 1}. Please note that this function assumes that
-// name of the Column is unique. If we have a requirement such that Column{"a", 0}, Column{"a", 1}.
-// This function will produce incorrect result (It will only emit single Column as a result).
-pub fn map_columns_before_projection(
-    parent_required: &[Arc<dyn PhysicalExpr>],
-    proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
-) -> Vec<Arc<dyn PhysicalExpr>> {
-    let column_mapping = proj_exprs
-        .iter()
-        .filter_map(|(expr, name)| {
-            expr.as_any()
-                .downcast_ref::<Column>()
-                .map(|column| (name.clone(), column.clone()))
-        })
-        .collect::<HashMap<_, _>>();
-    parent_required
-        .iter()
-        .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
-        })
-        .map(|e| Arc::new(e.clone()) as _)
         .collect()
 }
 

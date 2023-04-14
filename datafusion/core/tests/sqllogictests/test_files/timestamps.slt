@@ -674,6 +674,7 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 
 # Interval - Timestamp => error
 statement error DataFusion error: Error during planning: Interval\(MonthDayNano\) - Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
+
 SELECT i - ts1 from FOO;
 
 statement ok

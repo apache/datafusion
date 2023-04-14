@@ -213,6 +213,10 @@ impl<'a> RowReader<'a> {
         get_idx!(i64, self, idx, 8)
     }
 
+    fn get_decimal128(&self, idx: usize) -> i128 {
+        get_idx!(i128, self, idx, 16)
+    }
+
     fn get_utf8(&self, idx: usize) -> &str {
         self.assert_index_valid(idx);
         let offset_size = self.get_u64(idx);
@@ -255,6 +259,14 @@ impl<'a> RowReader<'a> {
     fn get_date64_opt(&self, idx: usize) -> Option<i64> {
         if self.is_valid_at(idx) {
             Some(self.get_date64(idx))
+        } else {
+            None
+        }
+    }
+
+    fn get_decimal128_opt(&self, idx: usize) -> Option<i128> {
+        if self.is_valid_at(idx) {
+            Some(self.get_decimal128(idx))
         } else {
             None
         }
@@ -328,6 +340,7 @@ fn_read_field!(f64, Float64Builder);
 fn_read_field!(date32, Date32Builder);
 fn_read_field!(date64, Date64Builder);
 fn_read_field!(utf8, StringBuilder);
+fn_read_field!(decimal128, Decimal128Builder);
 
 pub(crate) fn read_field_binary(
     to: &mut Box<dyn ArrayBuilder>,
@@ -374,6 +387,7 @@ fn read_field(
         Date64 => read_field_date64(to, col_idx, row),
         Utf8 => read_field_utf8(to, col_idx, row),
         Binary => read_field_binary(to, col_idx, row),
+        Decimal128(_, _) => read_field_decimal128(to, col_idx, row),
         _ => unimplemented!(),
     }
 }
@@ -401,6 +415,7 @@ fn read_field_null_free(
         Date64 => read_field_date64_null_free(to, col_idx, row),
         Utf8 => read_field_utf8_null_free(to, col_idx, row),
         Binary => read_field_binary_null_free(to, col_idx, row),
+        Decimal128(_, _) => read_field_decimal128_null_free(to, col_idx, row),
         _ => unimplemented!(),
     }
 }

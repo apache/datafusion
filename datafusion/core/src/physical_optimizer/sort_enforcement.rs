@@ -690,91 +690,6 @@ fn analyze_window_sort_removal(
     Ok(None)
 }
 
-fn can_skip_sort(
-    partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: &[PhysicalSortExpr],
-    input: &Arc<dyn ExecutionPlan>,
-) -> Result<Option<(bool, PartitionSearchMode)>> {
-    let physical_ordering = if let Some(physical_ordering) = input.output_ordering() {
-        physical_ordering
-    } else {
-        // If there is no physical ordering, there is no way to remove a
-        // sort, so immediately return.
-        return Ok(None);
-    };
-    let orderby_exprs = convert_to_expr(orderby_keys);
-    let physical_ordering_exprs = convert_to_expr(physical_ordering);
-    let equal_properties = || input.equivalence_properties();
-    // indices of the order by expressions among input ordering expressions
-    let ob_indices = get_indices_of_matching_exprs(
-        &orderby_exprs,
-        &physical_ordering_exprs,
-        equal_properties,
-    );
-    let contains_all_orderbys = ob_indices.len() == orderby_exprs.len();
-    if !contains_all_orderbys {
-        // If all order by expressions are not in the input ordering. There is no way to remove a sort
-        // immediately return
-        return Ok(None);
-    }
-    // indices of the partition by expressions among input ordering expressions
-    let pb_indices = get_indices_of_matching_exprs(
-        partitionby_exprs,
-        &physical_ordering_exprs,
-        equal_properties,
-    );
-    let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
-    // Indices of order by columns that doesn't seen in partition by
-    // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
-    let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
-    if !is_sorted(&unique_ob_indices) {
-        // ORDER BY indices should be ascending ordered
-        return Ok(None);
-    }
-    let first_n = longest_consecutive_prefix(ordered_merged_indices);
-    let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
-    let consecutive_till_ob_end = first_n > furthest_ob_index;
-    if !consecutive_till_ob_end {
-        return Ok(None);
-    }
-    let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
-    let expected_orderby_columns =
-        get_at_indices(orderby_keys, find_indices(&ob_indices, &unique_ob_indices)?)?;
-    let should_reverse = if let Some(should_reverse) = check_alignments(
-        &input.schema(),
-        &input_orderby_columns,
-        &expected_orderby_columns,
-    )? {
-        should_reverse
-    } else {
-        // If ordering directions are not aligned. We cannot calculate result without changing existing ordering.
-        return Ok(None);
-    };
-
-    let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
-    // Determine how many elements in the partition by columns defines a consecutive range from zero.
-    let first_n = longest_consecutive_prefix(&ordered_pb_indices);
-    let mode = if first_n == partitionby_exprs.len() {
-        // All of the partition by columns defines a consecutive range from zero.
-        PartitionSearchMode::Sorted
-    } else if first_n > 0 {
-        // All of the partition by columns defines a consecutive range from zero.
-        let ordered_range = &ordered_pb_indices[0..first_n];
-        let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
-        let partially_ordered_indices = get_indices_of_matching_exprs(
-            &input_pb_exprs,
-            partitionby_exprs,
-            equal_properties,
-        );
-        PartitionSearchMode::PartiallySorted(partially_ordered_indices)
-    } else {
-        // None of the partition by columns defines a consecutive range from zero.
-        PartitionSearchMode::Linear
-    };
-
-    Ok(Some((should_reverse, mode)))
-}
-
 /// Updates child to remove the unnecessary `CoalescePartitions` below it.
 fn update_child_to_remove_coalesce(
     child: &mut Arc<dyn ExecutionPlan>,
@@ -891,6 +806,91 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
+fn can_skip_sort(
+    partitionby_exprs: &[Arc<dyn PhysicalExpr>],
+    orderby_keys: &[PhysicalSortExpr],
+    input: &Arc<dyn ExecutionPlan>,
+) -> Result<Option<(bool, PartitionSearchMode)>> {
+    let physical_ordering = if let Some(physical_ordering) = input.output_ordering() {
+        physical_ordering
+    } else {
+        // If there is no physical ordering, there is no way to remove a
+        // sort, so immediately return.
+        return Ok(None);
+    };
+    let orderby_exprs = convert_to_expr(orderby_keys);
+    let physical_ordering_exprs = convert_to_expr(physical_ordering);
+    let equal_properties = || input.equivalence_properties();
+    // indices of the order by expressions among input ordering expressions
+    let ob_indices = get_indices_of_matching_exprs(
+        &orderby_exprs,
+        &physical_ordering_exprs,
+        equal_properties,
+    );
+    let contains_all_orderbys = ob_indices.len() == orderby_exprs.len();
+    if !contains_all_orderbys {
+        // If all order by expressions are not in the input ordering. There is no way to remove a sort
+        // immediately return
+        return Ok(None);
+    }
+    // indices of the partition by expressions among input ordering expressions
+    let pb_indices = get_indices_of_matching_exprs(
+        partitionby_exprs,
+        &physical_ordering_exprs,
+        equal_properties,
+    );
+    let ordered_merged_indices = merge_and_order_indices(&pb_indices, &ob_indices);
+    // Indices of order by columns that doesn't seen in partition by
+    // Equivalently (Order by columns) ∖ (Partition by columns) where `∖` represents set difference.
+    let unique_ob_indices = set_difference(&ob_indices, &pb_indices);
+    if !is_sorted(&unique_ob_indices) {
+        // ORDER BY indices should be ascending ordered
+        return Ok(None);
+    }
+    let first_n = longest_consecutive_prefix(ordered_merged_indices);
+    let furthest_ob_index = *unique_ob_indices.last().unwrap_or(&0);
+    let consecutive_till_ob_end = first_n > furthest_ob_index;
+    if !consecutive_till_ob_end {
+        return Ok(None);
+    }
+    let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
+    let expected_orderby_columns =
+        get_at_indices(orderby_keys, find_indices(&ob_indices, &unique_ob_indices)?)?;
+    let should_reverse = if let Some(should_reverse) = check_alignments(
+        &input.schema(),
+        &input_orderby_columns,
+        &expected_orderby_columns,
+    )? {
+        should_reverse
+    } else {
+        // If ordering directions are not aligned. We cannot calculate result without changing existing ordering.
+        return Ok(None);
+    };
+
+    let ordered_pb_indices = pb_indices.iter().copied().sorted().collect::<Vec<_>>();
+    // Determine how many elements in the partition by columns defines a consecutive range from zero.
+    let first_n = longest_consecutive_prefix(&ordered_pb_indices);
+    let mode = if first_n == partitionby_exprs.len() {
+        // All of the partition by columns defines a consecutive range from zero.
+        PartitionSearchMode::Sorted
+    } else if first_n > 0 {
+        // All of the partition by columns defines a consecutive range from zero.
+        let ordered_range = &ordered_pb_indices[0..first_n];
+        let input_pb_exprs = get_at_indices(&physical_ordering_exprs, ordered_range)?;
+        let partially_ordered_indices = get_indices_of_matching_exprs(
+            &input_pb_exprs,
+            partitionby_exprs,
+            equal_properties,
+        );
+        PartitionSearchMode::PartiallySorted(partially_ordered_indices)
+    } else {
+        // None of the partition by columns defines a consecutive range from zero.
+        PartitionSearchMode::Linear
+    };
+
+    Ok(Some((should_reverse, mode)))
+}
+
 fn check_alignments(
     schema: &SchemaRef,
     physical_ordering: &[PhysicalSortExpr],
@@ -940,13 +940,12 @@ fn check_alignment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::file_type::FileCompressionType;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig, ParquetExec};
+    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::joins::SortMergeJoinExec;
@@ -961,6 +960,7 @@ mod tests {
     };
     use crate::physical_plan::{displayable, Partitioning};
     use crate::prelude::SessionContext;
+    use crate::test::csv_exec_sorted;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
@@ -2813,32 +2813,6 @@ mod tests {
             },
             None,
             None,
-        ))
-    }
-
-    // Created a sorted Csv exec
-    fn csv_exec_sorted(
-        schema: &SchemaRef,
-        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-        infinite_source: bool,
-    ) -> Arc<dyn ExecutionPlan> {
-        let sort_exprs = sort_exprs.into_iter().collect();
-
-        Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: Some(sort_exprs),
-                infinite_source,
-            },
-            false,
-            0,
-            FileCompressionType::UNCOMPRESSED,
         ))
     }
 

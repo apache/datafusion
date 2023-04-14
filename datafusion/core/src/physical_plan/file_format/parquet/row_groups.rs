@@ -53,7 +53,13 @@ pub(crate) fn prune_row_groups(
     let mut filtered = Vec::with_capacity(groups.len());
     for (idx, metadata) in groups.iter().enumerate() {
         if let Some(range) = &range {
-            let offset = metadata.column(0).file_offset();
+            // figure out where the first dictionary page (or first data page are)
+            // note don't use the location of metadata
+            // <https://github.com/apache/arrow-datafusion/issues/5995>
+            let col = metadata.column(0);
+            let offset = col
+                .dictionary_page_offset()
+                .unwrap_or_else(|| col.data_page_offset());
             if offset < range.start || offset >= range.end {
                 continue;
             }

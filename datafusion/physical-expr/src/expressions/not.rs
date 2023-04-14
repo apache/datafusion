@@ -77,8 +77,8 @@ impl PhysicalExpr for NotExpr {
             DataType::Int32 => Ok(DataType::Int32),
             DataType::Int64 => Ok(DataType::Int64),
             DataType::Null => Ok(DataType::Null),
-            _ => Err(DataFusionError::Internal(format!(
-                "Can't NOT or BITWISE_NOT datatype: '{:?}'",
+            _ => Err(DataFusionError::Plan(format!(
+                "NOT or BITWISE_NOT not supported for datatype: '{:?}'",
                 data_type
             ))),
         }

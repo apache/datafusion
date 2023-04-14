@@ -1192,9 +1192,9 @@ pub fn seconds_add_array<const INTERVAL_MODE: i8>(
 
 #[inline]
 pub fn milliseconds_add(ts_ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ms / 1000;
-    let nsecs = ((ts_ms % 1000) * 1_000_000) as u32;
-    do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_millis())
+    let secs = ts_ms.div_euclid(1000);
+    let nsecs = ts_ms.rem_euclid(1000) * 1_000_000;
+    do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_millis())
 }
 
 #[inline]
@@ -1203,21 +1203,18 @@ pub fn milliseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let mut secs = ts_ms / 1000;
-    let mut nsecs = ((ts_ms % 1000) * 1_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_ms.div_euclid(1000);
+    let nsecs = ts_ms.rem_euclid(1000) * 1_000_000;
     do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_millis())
 }
 
 #[inline]
 pub fn microseconds_add(ts_us: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_us / 1_000_000;
-    let nsecs = ((ts_us % 1_000_000) * 1000) as u32;
-    do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_nanos() / 1000)
+    let secs = ts_us.div_euclid(1_000_000);
+    let nsecs = ts_us.rem_euclid(1_000_000) * 1_000;
+    do_date_time_math(secs, nsecs as u32, scalar, sign)
+        .map(|dt| dt.timestamp_nanos() / 1000)
 }
 
 #[inline]
@@ -1226,21 +1223,17 @@ pub fn microseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let mut secs = ts_us / 1_000_000;
-    let mut nsecs = ((ts_us % 1_000_000) * 1000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_us.div_euclid(1_000_000);
+    let nsecs = ts_us.rem_euclid(1_000_000) * 1_000;
     do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_nanos() / 1000)
 }
 
 #[inline]
 pub fn nanoseconds_add(ts_ns: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let secs = ts_ns / 1_000_000_000;
-    let nsecs = (ts_ns % 1_000_000_000) as u32;
-    do_date_time_math(secs, nsecs, scalar, sign).map(|dt| dt.timestamp_nanos())
+    let secs = ts_ns.div_euclid(1_000_000_000);
+    let nsecs = ts_ns.rem_euclid(1_000_000_000);
+    do_date_time_math(secs, nsecs as u32, scalar, sign).map(|dt| dt.timestamp_nanos())
 }
 
 #[inline]
@@ -1249,12 +1242,8 @@ pub fn nanoseconds_add_array<const INTERVAL_MODE: i8>(
     interval: i128,
     sign: i32,
 ) -> Result<i64> {
-    let mut secs = ts_ns / 1_000_000_000;
-    let mut nsecs = (ts_ns % 1_000_000_000) as i32;
-    if nsecs < 0 {
-        secs -= 1;
-        nsecs += 1_000_000_000;
-    }
+    let secs = ts_ns.div_euclid(1_000_000_000);
+    let nsecs = ts_ns.rem_euclid(1_000_000_000);
     do_date_time_math_array::<INTERVAL_MODE>(secs, nsecs as u32, interval, sign)
         .map(|dt| dt.timestamp_nanos())
 }
@@ -1297,7 +1286,7 @@ fn do_date_time_math(
 ) -> Result<NaiveDateTime> {
     let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs} scalar {scalar:?} sign {sign}"
+            "Could not convert to NaiveDateTime: secs {secs} nsecs {nsecs} scalar {scalar:?} sign {sign}"
         ))
     })?;
     do_date_math(prior, scalar, sign)
@@ -1312,7 +1301,7 @@ fn do_date_time_math_array<const INTERVAL_MODE: i8>(
 ) -> Result<NaiveDateTime> {
     let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Could not conert to NaiveDateTime: secs {secs} nsecs {nsecs}"
+            "Could not convert to NaiveDateTime: secs {secs} nsecs {nsecs}"
         ))
     })?;
     do_date_math_array::<_, INTERVAL_MODE>(prior, interval, sign)
@@ -1768,6 +1757,27 @@ impl ScalarValue {
             DataType::UInt64 => ScalarValue::UInt64(Some(0)),
             DataType::Float32 => ScalarValue::Float32(Some(0.0)),
             DataType::Float64 => ScalarValue::Float64(Some(0.0)),
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                ScalarValue::TimestampSecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                ScalarValue::TimestampMillisecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                ScalarValue::TimestampMicrosecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                ScalarValue::TimestampNanosecond(Some(0), tz.clone())
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                ScalarValue::IntervalYearMonth(Some(0))
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                ScalarValue::IntervalDayTime(Some(0))
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                ScalarValue::IntervalMonthDayNano(Some(0))
+            }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a zero scalar from data_type \"{datatype:?}\""

@@ -127,6 +127,8 @@ pub struct BoundedWindowAggExec {
     // `ordered_partition_by_indices` would be 1, 0.
     // Similarly, if window expression contains PARTITION BY a,b
     // `ordered_partition_by_indices` would be 0, 1.
+    /// Partition by indices that defines preset for existing ordering
+    // see `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
     /// Whether is source unbounded.
     pub source_unbounded: bool,
