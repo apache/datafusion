@@ -520,24 +520,6 @@ from (values
 2022-02-01T00:00:00
 2022-03-01T00:00:00
 
-# month interval with specified start time
-query P
-select date_bin(INTERVAL '1 month', column1, '1970-01-01T00:00:00Z')
-from (values
-  (timestamp '2022-01-01 00:00:00'),
-  (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
-  (timestamp '2022-02-02 00:00:00'),
-  (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
-) as sq
-----
-2022-01-01T00:00:00
-2022-01-01T00:00:00
-2022-01-01T00:00:00
-2022-02-01T00:00:00
-2022-02-01T00:00:00
-2022-03-01T00:00:00
 
 # year interval in date_bin with default start time
 query P
@@ -604,26 +586,7 @@ from (values
 2022-03-01T00:00:00
 
 
-# month interval with specified start time
-query P
-select date_bin('1 month', column1, '1970-01-01T00:00:00Z')
-from (values
-  (timestamp '2022-01-01 00:00:00'),
-  (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
-  (timestamp '2022-02-02 00:00:00'),
-  (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
-) as sq
-----
-2022-01-01T00:00:00
-2022-01-01T00:00:00
-2022-01-01T00:00:00
-2022-02-01T00:00:00
-2022-02-01T00:00:00
-2022-03-01T00:00:00
-
-# month interval with start date is end of the month plus some minutes
+# month interval with start date end of the month plus some minutes
 # Note the datetime '2022-03-31 00:00:00'. Its bin is NOT '2022-03-31 00:15:00' which is after its time
 # Its bin is '2022-02-28T00:15:00'
 query P
@@ -705,13 +668,13 @@ from (values
 
 # month interval on constant
 query P
-SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z', '1970-01-01T00:00:00Z');
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
 ----
 2022-01-01T00:00:00
 
 # five months interval on constant
 query P
-SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z');
 ----
 2021-09-01T00:00:00
 
@@ -747,19 +710,19 @@ SELECT DATE_BIN('3 month', '2022-01-01T00:00:00Z', '2022-05-05T17:56:21Z');
 
 # year interval on constant
 query P
-SELECT DATE_BIN('1 year', '2022-01-01 00:00:00Z', '1970-01-01T00:00:00Z');
+SELECT DATE_BIN('1 year', '2022-01-01 00:00:00Z');
 ----
 2022-01-01T00:00:00
 
 # 3-year interval on constant
 query P
-SELECT DATE_BIN('3 year', '2022-01-01 00:00:00Z', '1970-01-01T00:00:00Z');
+SELECT DATE_BIN('3 year', '2022-01-01 00:00:00Z');
 ----
 2021-01-01T00:00:00
 
 # 3 year 1 months = 37 months
 query P
-SELECT DATE_BIN('3 years 1 months', '2022-09-01 00:00:00Z', '1970-01-01T00:00:00Z');
+SELECT DATE_BIN('3 years 1 months', '2022-09-01 00:00:00Z');
 ----
 2022-06-01T00:00:00
 
