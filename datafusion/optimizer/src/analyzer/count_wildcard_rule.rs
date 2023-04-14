@@ -26,6 +26,7 @@ use crate::analyzer::AnalyzerRule;
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 /// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
+#[derive(Default)]
 pub struct CountWildcardRule {}
 
 impl CountWildcardRule {

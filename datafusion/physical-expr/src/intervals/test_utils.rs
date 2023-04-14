@@ -19,9 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::expressions::{BinaryExpr, Literal};
+use crate::expressions::{BinaryExpr, DateTimeIntervalExpr, Literal};
 use crate::PhysicalExpr;
-use datafusion_common::ScalarValue;
+use arrow_schema::Schema;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Operator;
 
 #[allow(clippy::too_many_arguments)]
@@ -55,4 +56,54 @@ pub fn gen_conjunctive_numerical_expr(
     let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
     let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
     Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
+}
+
+#[allow(clippy::too_many_arguments)]
+/// This test function generates a conjunctive statement with
+/// two scalar values with the following form:
+/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
+pub fn gen_conjunctive_temporal_expr(
+    left_col: Arc<dyn PhysicalExpr>,
+    right_col: Arc<dyn PhysicalExpr>,
+    op_1: Operator,
+    op_2: Operator,
+    op_3: Operator,
+    op_4: Operator,
+    a: ScalarValue,
+    b: ScalarValue,
+    c: ScalarValue,
+    d: ScalarValue,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let left_and_1 = Arc::new(DateTimeIntervalExpr::try_new(
+        left_col.clone(),
+        op_1,
+        Arc::new(Literal::new(a)),
+        schema,
+    )?);
+    let left_and_2 = Arc::new(DateTimeIntervalExpr::try_new(
+        right_col.clone(),
+        op_2,
+        Arc::new(Literal::new(b)),
+        schema,
+    )?);
+    let right_and_1 = Arc::new(DateTimeIntervalExpr::try_new(
+        left_col,
+        op_3,
+        Arc::new(Literal::new(c)),
+        schema,
+    )?);
+    let right_and_2 = Arc::new(DateTimeIntervalExpr::try_new(
+        right_col,
+        op_4,
+        Arc::new(Literal::new(d)),
+        schema,
+    )?);
+    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
+    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
+    Ok(Arc::new(BinaryExpr::new(
+        left_expr,
+        Operator::And,
+        right_expr,
+    )))
 }
