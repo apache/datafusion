@@ -174,8 +174,7 @@ impl ExecutionPlan for WindowAggExec {
             let partition_bys = self
                 .ordered_partition_by_indices
                 .iter()
-                .map(|idx| &partition_bys[*idx])
-                .collect::<Vec<_>>();
+                .map(|idx| &partition_bys[*idx]);
             vec![calc_requirements(partition_bys, order_keys)]
         }
     }
