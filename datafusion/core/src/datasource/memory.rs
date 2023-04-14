@@ -527,7 +527,7 @@ mod tests {
             vec![vec![batch.clone()]],
             vec![vec![batch.clone()], vec![batch]],
         )
-            .await?;
+        .await?;
         // Ensure that the table now contains three batches of data in the same partition
         assert_eq!(resulting_data_in_table[0].len(), 3);
         Ok(())
@@ -553,7 +553,7 @@ mod tests {
                 vec![batch.clone(), batch],
             ],
         )
-            .await?;
+        .await?;
         // Ensure that each partition in the table now contains three batches of data
         assert_eq!(resulting_data_in_table[0].len(), 3);
         assert_eq!(resulting_data_in_table[1].len(), 3);

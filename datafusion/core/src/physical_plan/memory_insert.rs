@@ -554,9 +554,9 @@ mod tests {
         }
     }
 
-    // Test the lock-free mode by inserting a large number of batches into a table.
+    // Test the less-lock mode by inserting a large number of batches into a table.
     #[tokio::test]
-    async fn test_lock_free_mode() -> Result<()> {
+    async fn test_one_to_one_mode() -> Result<()> {
         let num_batches = 10000;
         // Create a new session context
         let session_ctx = SessionContext::new();
@@ -579,6 +579,7 @@ mod tests {
             schema.clone(),
             vec![single_partition],
             None,
+            false
         )?);
         let plan = initial_table
             .insert_into(&session_ctx.state(), input)
@@ -620,6 +621,7 @@ mod tests {
                 single_partition,
             ],
             None,
+            false
         )?);
         let plan = initial_table
             .insert_into(&session_ctx.state(), input)
