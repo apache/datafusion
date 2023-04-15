@@ -18,9 +18,9 @@
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan,
-        InitialPhysicalPlan, AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan,
-        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
     },
     AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
     OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -379,7 +379,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
                 AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
-                    PlanType::AnalyzedLogicalPlan { 
+                    PlanType::AnalyzedLogicalPlan {
                         analyzer_name:analyzer_name.clone()
                     }
                 }
