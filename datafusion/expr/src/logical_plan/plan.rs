@@ -1902,7 +1902,7 @@ mod tests {
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFSchema, TableReference};
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {

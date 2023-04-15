@@ -256,7 +256,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
                             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                                new_proj, alias,
+                                new_proj,
+                                alias.clone(),
                             )?))
                         }
                     },
@@ -593,9 +594,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::SubqueryAlias(aliased_relation) => {
                 let input: LogicalPlan =
                     into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .alias(&aliased_relation.alias)?
-                    .build()
+                let alias = from_owned_table_reference(
+                    aliased_relation.alias.as_ref(),
+                    "SubqueryAlias",
+                )?;
+                LogicalPlanBuilder::from(input).alias(alias)?.build()
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
@@ -1069,7 +1072,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
-                            alias: alias.clone(),
+                            alias: Some(alias.to_owned_reference().into()),
                         },
                     ))),
                 })

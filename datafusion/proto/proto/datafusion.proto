@@ -294,8 +294,9 @@ message SelectionExecNode {
 }
 
 message SubqueryAliasNode {
+  reserved 2; // Was string alias
   LogicalPlanNode input = 1;
-  string alias = 2;
+  OwnedTableReference alias = 3;
 }
 
 // logical expressions
