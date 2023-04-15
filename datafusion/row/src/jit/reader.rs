@@ -18,7 +18,6 @@
 //! Accessing row from raw bytes with JIT
 
 use crate::jit::fn_name;
-use crate::layout::RowType;
 use crate::reader::RowReader;
 use crate::reader::*;
 use crate::reg_fn;
@@ -39,11 +38,10 @@ pub fn read_as_batch_jit(
     schema: Arc<Schema>,
     offsets: &[usize],
     assembler: &Assembler,
-    row_type: RowType,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema, row_type);
+    let mut row = RowReader::new(&schema);
     register_read_functions(assembler)?;
     let gen_func = gen_read_row(&schema, assembler)?;
     let mut jit = assembler.create_jit();
@@ -84,8 +82,6 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
     reg_fn!(asm, read_field_f64, reader_param.clone(), None);
     reg_fn!(asm, read_field_date32, reader_param.clone(), None);
     reg_fn!(asm, read_field_date64, reader_param.clone(), None);
-    reg_fn!(asm, read_field_utf8, reader_param.clone(), None);
-    reg_fn!(asm, read_field_binary, reader_param.clone(), None);
     reg_fn!(asm, read_field_bool_null_free, reader_param.clone(), None);
     reg_fn!(asm, read_field_u8_null_free, reader_param.clone(), None);
     reg_fn!(asm, read_field_u16_null_free, reader_param.clone(), None);
@@ -99,8 +95,6 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
     reg_fn!(asm, read_field_f64_null_free, reader_param.clone(), None);
     reg_fn!(asm, read_field_date32_null_free, reader_param.clone(), None);
     reg_fn!(asm, read_field_date64_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_utf8_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_binary_null_free, reader_param, None);
     Ok(())
 }
 
@@ -134,8 +128,6 @@ fn gen_read_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunct
                 Float64 => b.call_stmt("read_field_f64", params)?,
                 Date32 => b.call_stmt("read_field_date32", params)?,
                 Date64 => b.call_stmt("read_field_date64", params)?,
-                Utf8 => b.call_stmt("read_field_utf8", params)?,
-                Binary => b.call_stmt("read_field_binary", params)?,
                 _ => unimplemented!(),
             }
         } else {
@@ -153,8 +145,6 @@ fn gen_read_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunct
                 Float64 => b.call_stmt("read_field_f64_null_free", params)?,
                 Date32 => b.call_stmt("read_field_date32_null_free", params)?,
                 Date64 => b.call_stmt("read_field_date64_null_free", params)?,
-                Utf8 => b.call_stmt("read_field_utf8_null_free", params)?,
-                Binary => b.call_stmt("read_field_binary_null_free", params)?,
                 _ => unimplemented!(),
             }
         }
