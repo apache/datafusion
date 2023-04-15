@@ -1182,7 +1182,6 @@ impl FromStr for JoinType {
     }
 }
 
-
 /// Join constraint
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinConstraint {
