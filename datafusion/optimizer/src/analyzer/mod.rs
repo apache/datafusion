@@ -195,6 +195,7 @@ fn check_correlations_in_subquery(
         | LogicalPlan::TableScan(_)
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Limit(_)
+        | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
             inner_plan.apply_children(&mut |plan| {
