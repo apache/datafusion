@@ -170,6 +170,23 @@ pub struct JsonOpener {
     object_store: Arc<dyn ObjectStore>,
 }
 
+impl JsonOpener {
+    /// Returns a  [`JsonOpener`]
+    pub fn new(
+        batch_size: usize,
+        projected_schema: SchemaRef,
+        file_compression_type: FileCompressionType,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            batch_size,
+            projected_schema,
+            file_compression_type,
+            object_store,
+        }
+    }
+}
+
 impl FileOpener for JsonOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let store = self.object_store.clone();

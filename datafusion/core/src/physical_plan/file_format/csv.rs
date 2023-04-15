@@ -200,6 +200,27 @@ pub struct CsvConfig {
 }
 
 impl CsvConfig {
+    /// Returns a [`CsvConfig`]
+    pub fn new(
+        batch_size: usize,
+        file_schema: SchemaRef,
+        file_projection: Option<Vec<usize>>,
+        has_header: bool,
+        delimiter: u8,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            batch_size,
+            file_schema,
+            file_projection,
+            has_header,
+            delimiter,
+            object_store,
+        }
+    }
+}
+
+impl CsvConfig {
     fn open<R: std::io::Read>(&self, reader: R) -> csv::Reader<R> {
         let datetime_format = None;
         csv::Reader::new(
@@ -233,6 +254,19 @@ impl CsvConfig {
 pub struct CsvOpener {
     config: Arc<CsvConfig>,
     file_compression_type: FileCompressionType,
+}
+
+impl CsvOpener {
+    /// Returns a [`CsvOpener`]
+    pub fn new(
+        config: Arc<CsvConfig>,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        Self {
+            config,
+            file_compression_type,
+        }
+    }
 }
 
 impl FileOpener for CsvOpener {
