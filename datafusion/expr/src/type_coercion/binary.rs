@@ -458,9 +458,6 @@ fn mathematics_numerical_coercion(
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
             mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
         }
-        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
-        }
         (Dictionary(key_type, value_type), _) => {
             let value_type =
                 mathematics_numerical_coercion(mathematics_op, value_type, rhs_type);
