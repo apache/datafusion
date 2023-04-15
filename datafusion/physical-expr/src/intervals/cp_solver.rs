@@ -450,19 +450,13 @@ impl ExprIntervalGraph {
     ///  // Provide intervals for leaf variables (here, there is only one).
     ///  let intervals = vec![(
     ///     left_index,
-    ///     Interval::new(
-    ///         IntervalBound::new(ScalarValue::Int32(Some(10)), true),
-    ///         IntervalBound::new(ScalarValue::Int32(Some(20)), true),
-    ///     ),
-    ///     )];
+    ///     Interval::make(Some(10), Some(20), (true, true)),
+    ///  )];
     ///  // Evaluate bounds for the composite expression:
     ///  graph.assign_intervals(&intervals);
     ///  assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
-    ///     &Interval::new(
-    ///         IntervalBound::new(ScalarValue::Int32(Some(20)), true),
-    ///         IntervalBound::new(ScalarValue::Int32(Some(30)), true),
-    ///     )
+    ///     &Interval::make(Some(20), Some(30), (true, true)),
     ///  )
     ///
     /// ```
@@ -572,40 +566,28 @@ mod tests {
         exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
         left_interval: (Option<i32>, Option<i32>),
         right_interval: (Option<i32>, Option<i32>),
-        left_waited: (Option<i32>, Option<i32>),
-        right_waited: (Option<i32>, Option<i32>),
+        left_expected: (Option<i32>, Option<i32>),
+        right_expected: (Option<i32>, Option<i32>),
         result: PropagationResult,
     ) -> Result<()> {
         let col_stats = vec![
             (
                 exprs_with_interval.0.clone(),
-                Interval::new(
-                    IntervalBound::new(ScalarValue::Int32(left_interval.0), false),
-                    IntervalBound::new(ScalarValue::Int32(left_interval.1), false),
-                ),
+                Interval::make(left_interval.0, left_interval.1, (false, false)),
             ),
             (
                 exprs_with_interval.1.clone(),
-                Interval::new(
-                    IntervalBound::new(ScalarValue::Int32(right_interval.0), false),
-                    IntervalBound::new(ScalarValue::Int32(right_interval.1), false),
-                ),
+                Interval::make(right_interval.0, right_interval.1, (false, false)),
             ),
         ];
         let expected = vec![
             (
                 exprs_with_interval.0.clone(),
-                Interval::new(
-                    IntervalBound::new(ScalarValue::Int32(left_waited.0), false),
-                    IntervalBound::new(ScalarValue::Int32(left_waited.1), false),
-                ),
+                Interval::make(left_expected.0, left_expected.1, (false, false)),
             ),
             (
                 exprs_with_interval.1.clone(),
-                Interval::new(
-                    IntervalBound::new(ScalarValue::Int32(right_waited.0), false),
-                    IntervalBound::new(ScalarValue::Int32(right_waited.1), false),
-                ),
+                Interval::make(right_expected.0, right_expected.1, (false, false)),
             ),
         ];
         let mut graph = ExprIntervalGraph::try_new(expr)?;
