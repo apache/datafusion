@@ -41,8 +41,8 @@ async fn main() -> Result<()> {
     let path = object_store::path::Path::from("demo.json");
     let data = bytes::Bytes::from(
         r#"{"num":5,"str":"test"}
-    {"num":2,"str":"hello"}
-    {"num":4,"str":"foo"}"#,
+        {"num":2,"str":"hello"}
+        {"num":4,"str":"foo"}"#,
     );
     object_store.put(&path, data).await.unwrap();
 
