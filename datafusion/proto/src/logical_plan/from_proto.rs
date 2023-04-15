@@ -18,11 +18,12 @@
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan,
+        InitialPhysicalPlan, AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan,
         OptimizedLogicalPlan, OptimizedPhysicalPlan,
     },
-    CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
-    PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
@@ -377,6 +378,12 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                     )
                 }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
+                AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
+                    PlanType::AnalyzedLogicalPlan { 
+                        analyzer_name:analyzer_name.clone()
+                    }
+                }
+                FinalAnalyzedLogicalPlan(_) => PlanType::FinalAnalyzedLogicalPlan,
                 OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedLogicalPlan {
                         optimizer_name: optimizer_name.clone(),

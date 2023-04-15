@@ -835,7 +835,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed."))"#,
             &format!("{err:?}")
         );
         Ok(())
@@ -914,7 +914,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.\")",
+            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed."))"#,
             &format!("{err:?}")
         );
         Ok(())
