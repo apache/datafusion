@@ -133,28 +133,25 @@ fn word_aligned_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usiz
 ///
 /// Note all schemas can be supported in the row format
 pub fn row_supported(schema: &Schema) -> bool {
-    schema
-        .fields()
-        .iter()
-        .all(|f| {
-            let dt = f.data_type();
-            use DataType::*;
-            matches!(
-                dt,
-                Boolean
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | Float32
-                    | Float64
-                    | Date32
-                    | Date64
-                    | Decimal128(_, _)
-            )
-        })
+    schema.fields().iter().all(|f| {
+        let dt = f.data_type();
+        use DataType::*;
+        matches!(
+            dt,
+            Boolean
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | Float32
+                | Float64
+                | Date32
+                | Date64
+                | Decimal128(_, _)
+        )
+    })
 }

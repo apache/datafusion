@@ -244,8 +244,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "not supported yet")]
     fn test_unsupported_type_read() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", Utf8, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Utf8, false)]));
         let vector = vec![0; 1024];
         let row_offsets = vec![0];
         read_as_batch(&vector, schema, &row_offsets).unwrap();
