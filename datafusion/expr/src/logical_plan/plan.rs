@@ -1177,7 +1177,7 @@ impl FromStr for JoinType {
             "RIGHTANTI" => Ok(JoinType::RightAnti),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "The join type {s} does not exist or is not implemented"
-            )))
+            ))),
         }
     }
 }
