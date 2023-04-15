@@ -98,7 +98,7 @@ expressions such as `col("a") + col("b")` to be used.
 | log2(x)               | base 2 logarithm                                  |
 | pi()                  | approximate value of π                            |
 | power(base, exponent) | base raised to the power of exponent              |
-| radians(x)            | converts radians to degrees                       |
+| radians(x)            | converts degrees to radians                       |
 | round(x)              | round to nearest integer                          |
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |
