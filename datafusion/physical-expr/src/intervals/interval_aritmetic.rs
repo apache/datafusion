@@ -489,7 +489,68 @@ fn cast_scalar_value(
 mod tests {
     use crate::intervals::{Interval, IntervalBound};
     use datafusion_common::{Result, ScalarValue};
-    use ScalarValue::{Boolean, Int64};
+    use ScalarValue::Boolean;
+
+    fn open_open_i64(lower: Option<i64>, upper: Option<i64>) -> Interval {
+        Interval {
+            lower: IntervalBound {
+                value: ScalarValue::Int64(lower),
+                open: true,
+            },
+            upper: IntervalBound {
+                value: ScalarValue::Int64(upper),
+                open: true,
+            },
+        }
+    }
+    fn open_close_i64(lower: Option<i64>, upper: Option<i64>) -> Interval {
+        Interval {
+            lower: IntervalBound {
+                value: ScalarValue::Int64(lower),
+                open: true,
+            },
+            upper: IntervalBound {
+                value: ScalarValue::Int64(upper),
+                open: false,
+            },
+        }
+    }
+    fn close_open_i64(lower: Option<i64>, upper: Option<i64>) -> Interval {
+        Interval {
+            lower: IntervalBound {
+                value: ScalarValue::Int64(lower),
+                open: false,
+            },
+            upper: IntervalBound {
+                value: ScalarValue::Int64(upper),
+                open: true,
+            },
+        }
+    }
+    fn close_close_i64(lower: Option<i64>, upper: Option<i64>) -> Interval {
+        Interval {
+            lower: IntervalBound {
+                value: ScalarValue::Int64(lower),
+                open: false,
+            },
+            upper: IntervalBound {
+                value: ScalarValue::Int64(upper),
+                open: false,
+            },
+        }
+    }
+    fn close_close_boolean(lower: Option<bool>, upper: Option<bool>) -> Interval {
+        Interval {
+            lower: IntervalBound {
+                value: ScalarValue::Boolean(lower),
+                open: false,
+            },
+            upper: IntervalBound {
+                value: ScalarValue::Boolean(upper),
+                open: false,
+            },
+        }
+    }
 
     #[test]
     fn intersect_test() -> Result<()> {
@@ -734,65 +795,28 @@ mod tests {
     fn sub_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(200)), false),
-                    IntervalBound::new(Int64(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(0)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                close_open_i64(Some(200), None),
+                open_close_i64(None, Some(0)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(300)), true),
-                    IntervalBound::new(Int64(Some(150)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(-50)), false),
-                    IntervalBound::new(Int64(Some(-100)), true),
-                ),
+                close_open_i64(Some(100), Some(200)),
+                open_close_i64(Some(300), Some(150)),
+                close_open_i64(Some(-50), Some(-100)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(200)), true),
-                    IntervalBound::new(Int64(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(0)), true),
-                ),
+                close_open_i64(Some(100), Some(200)),
+                open_open_i64(Some(200), None),
+                open_open_i64(None, Some(0)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(11)), false),
-                    IntervalBound::new(Int64(Some(11)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(-10)), false),
-                    IntervalBound::new(Int64(Some(-10)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                close_close_i64(Some(11), Some(11)),
+                close_close_i64(Some(-10), Some(-10)),
             ),
         ];
-
         for case in cases {
-            assert_eq!(case.0.sub(case.1)?, case.2)
+            assert_eq!(case.0.sub(&case.1)?, case.2)
         }
         Ok(())
     }
@@ -801,65 +825,28 @@ mod tests {
     fn add_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(400)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_close_i64(None, Some(200)),
+                open_close_i64(None, Some(400)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(-300)), false),
-                    IntervalBound::new(Int64(Some(150)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(-200)), false),
-                    IntervalBound::new(Int64(Some(350)), true),
-                ),
+                close_open_i64(Some(100), Some(200)),
+                close_open_i64(Some(-300), Some(150)),
+                close_open_i64(Some(-200), Some(350)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(200)), true),
-                    IntervalBound::new(Int64(None), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(300)), true),
-                    IntervalBound::new(Int64(None), true),
-                ),
+                close_open_i64(Some(100), Some(200)),
+                open_open_i64(Some(200), None),
+                open_open_i64(Some(300), None),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(11)), false),
-                    IntervalBound::new(Int64(Some(11)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(12)), false),
-                    IntervalBound::new(Int64(Some(12)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                close_close_i64(Some(11), Some(11)),
+                close_close_i64(Some(12), Some(12)),
             ),
         ];
-
         for case in cases {
-            assert_eq!(case.0.add(case.1)?, case.2)
+            assert_eq!(case.0.add(&case.1)?, case.2)
         }
         Ok(())
     }
@@ -868,91 +855,36 @@ mod tests {
     fn lt_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_close_i64(None, Some(100)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_open_i64(None, Some(100)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), true),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(0)), false),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                open_open_i64(Some(100), Some(200)),
+                close_close_i64(Some(0), Some(100)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_close_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                open_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(true), Some(true)),
             ),
         ];
-
         for case in cases {
             assert_eq!(case.0.lt(&case.1), case.2)
         }
@@ -963,91 +895,36 @@ mod tests {
     fn gt_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_close_i64(None, Some(100)),
+                close_close_boolean(Some(false), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_open_i64(None, Some(100)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), true),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(0)), false),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                open_open_i64(Some(100), Some(200)),
+                close_close_i64(Some(0), Some(100)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_close_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                open_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(false)),
             ),
         ];
-
         for case in cases {
             assert_eq!(case.0.gt(&case.1), case.2)
         }
@@ -1058,91 +935,36 @@ mod tests {
     fn lt_eq_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_close_i64(None, Some(100)),
+                close_close_boolean(Some(false), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_open_i64(None, Some(100)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_close_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(false)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                close_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                open_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(true), Some(true)),
             ),
         ];
-
         for case in cases {
             assert_eq!(case.0.lt_eq(&case.1), case.2)
         }
@@ -1153,91 +975,36 @@ mod tests {
     fn gt_eq_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_close_i64(None, Some(100)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_open_i64(None, Some(100)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_close_i64(Some(1), Some(2)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(true)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(true), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(true)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                close_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(true)),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Boolean(Some(false)), false),
-                    IntervalBound::new(Boolean(Some(false)), false),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                open_open_i64(Some(1), Some(2)),
+                close_close_boolean(Some(false), Some(false)),
             ),
         ];
-
         for case in cases {
             assert_eq!(case.0.gt_eq(&case.1), case.2)
         }
@@ -1248,93 +1015,41 @@ mod tests {
     fn intersect_test_various_bounds() -> Result<()> {
         let cases = vec![
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
-                Some(Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(100)), false),
-                )),
+                close_close_i64(Some(100), Some(200)),
+                open_close_i64(None, Some(100)),
+                Some(close_close_i64(Some(100), Some(100))),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), false),
-                    IntervalBound::new(Int64(Some(200)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(None), true),
-                    IntervalBound::new(Int64(Some(100)), true),
-                ),
+                close_close_i64(Some(100), Some(200)),
+                open_open_i64(None, Some(100)),
                 None,
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(100)), true),
-                    IntervalBound::new(Int64(Some(200)), true),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(0)), false),
-                    IntervalBound::new(Int64(Some(100)), false),
-                ),
+                open_open_i64(Some(100), Some(200)),
+                close_close_i64(Some(0), Some(100)),
                 None,
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Some(Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                )),
+                close_close_i64(Some(2), Some(2)),
+                close_close_i64(Some(1), Some(2)),
+                Some(close_close_i64(Some(2), Some(2))),
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(2)), false),
-                    IntervalBound::new(Int64(Some(2)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
+                close_close_i64(Some(2), Some(2)),
+                close_open_i64(Some(1), Some(2)),
                 None,
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(1)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
+                close_close_i64(Some(1), Some(1)),
+                open_open_i64(Some(1), Some(2)),
                 None,
             ),
             (
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), false),
-                    IntervalBound::new(Int64(Some(3)), false),
-                ),
-                Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                ),
-                Some(Interval::new(
-                    IntervalBound::new(Int64(Some(1)), true),
-                    IntervalBound::new(Int64(Some(2)), true),
-                )),
+                close_close_i64(Some(1), Some(3)),
+                open_open_i64(Some(1), Some(2)),
+                Some(open_open_i64(Some(1), Some(2))),
             ),
         ];
-
         for case in cases {
             assert_eq!(case.0.intersect(&case.1)?, case.2)
         }
