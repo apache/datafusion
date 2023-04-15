@@ -195,8 +195,6 @@ fn write_typed_field_stmt(
         Float64 => b.call_stmt("write_field_f64", params)?,
         Date32 => b.call_stmt("write_field_date32", params)?,
         Date64 => b.call_stmt("write_field_date64", params)?,
-        Utf8 => b.call_stmt("write_field_utf8", params)?,
-        Binary => b.call_stmt("write_field_binary", params)?,
         _ => unimplemented!(),
     }
     Ok(())
