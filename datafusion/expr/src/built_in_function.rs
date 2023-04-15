@@ -52,6 +52,8 @@ pub enum BuiltinScalarFunction {
     Cos,
     /// cos
     Cosh,
+    /// degrees
+    Degrees,
     /// Digest
     Digest,
     /// exp
@@ -70,6 +72,8 @@ pub enum BuiltinScalarFunction {
     Pi,
     /// power
     Power,
+    /// radians
+    Radians,
     /// round
     Round,
     /// signum
@@ -222,6 +226,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
             BuiltinScalarFunction::Cosh => Volatility::Immutable,
+            BuiltinScalarFunction::Degrees => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
@@ -258,6 +263,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
+            BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -322,6 +328,7 @@ impl FromStr for BuiltinScalarFunction {
             "ceil" => BuiltinScalarFunction::Ceil,
             "cos" => BuiltinScalarFunction::Cos,
             "cosh" => BuiltinScalarFunction::Cosh,
+            "degrees" => BuiltinScalarFunction::Degrees,
             "exp" => BuiltinScalarFunction::Exp,
             "floor" => BuiltinScalarFunction::Floor,
             "ln" => BuiltinScalarFunction::Ln,
@@ -330,6 +337,7 @@ impl FromStr for BuiltinScalarFunction {
             "log2" => BuiltinScalarFunction::Log2,
             "pi" => BuiltinScalarFunction::Pi,
             "power" | "pow" => BuiltinScalarFunction::Power,
+            "radians" => BuiltinScalarFunction::Radians,
             "round" => BuiltinScalarFunction::Round,
             "signum" => BuiltinScalarFunction::Signum,
             "sin" => BuiltinScalarFunction::Sin,
