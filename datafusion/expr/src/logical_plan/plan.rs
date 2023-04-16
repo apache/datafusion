@@ -1813,6 +1813,13 @@ pub enum Partitioning {
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
+    /// The LogicalPlan which results from applying an analyzer pass
+    AnalyzedLogicalPlan {
+        /// The name of the analyzer which produced this plan
+        analyzer_name: String,
+    },
+    /// The LogicalPlan after all analyzer passes have been applied
+    FinalAnalyzedLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
@@ -1835,6 +1842,10 @@ impl Display for PlanType {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
+            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                write!(f, "logical_plan after {analyzer_name}")
+            }
+            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
                 write!(f, "logical_plan after {optimizer_name}")
             }

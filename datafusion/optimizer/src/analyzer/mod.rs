@@ -80,19 +80,29 @@ impl Analyzer {
 
     /// Analyze the logical plan by applying analyzer rules, and
     /// do necessary check and fail the invalid plans
-    pub fn execute_and_check(
+    pub fn execute_and_check<F>(
         &self,
         plan: &LogicalPlan,
         config: &ConfigOptions,
-    ) -> Result<LogicalPlan> {
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
+    {
         let start_time = Instant::now();
         let mut new_plan = plan.clone();
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in &self.rules {
-            new_plan = rule.analyze(new_plan, config)?;
+            new_plan = rule.analyze(new_plan, config).map_err(|e| {
+                DataFusionError::Context(rule.name().to_string(), Box::new(e))
+            })?;
+            observer(&new_plan, rule.as_ref());
         }
-        check_plan(&new_plan)?;
+        // for easier display in explain output
+        check_plan(&new_plan).map_err(|e| {
+            DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
+        })?;
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)

@@ -1675,9 +1675,37 @@ impl SessionState {
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
-            let analyzed_plan = self
-                .analyzer
-                .execute_and_check(e.plan.as_ref(), self.options())?;
+            // analyze & capture output of each rule
+            let analyzed_plan = match self.analyzer.execute_and_check(
+                e.plan.as_ref(),
+                self.options(),
+                |analyzed_plan, analyzer| {
+                    let analyzer_name = analyzer.name().to_string();
+                    let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
+                    stringified_plans.push(analyzed_plan.to_stringified(plan_type));
+                },
+            ) {
+                Ok(plan) => plan,
+                Err(DataFusionError::Context(analyzer_name, err)) => {
+                    let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
+                    stringified_plans
+                        .push(StringifiedPlan::new(plan_type, err.to_string()));
+
+                    return Ok(LogicalPlan::Explain(Explain {
+                        verbose: e.verbose,
+                        plan: e.plan.clone(),
+                        stringified_plans,
+                        schema: e.schema.clone(),
+                        logical_optimization_succeeded: false,
+                    }));
+                }
+                Err(e) => return Err(e),
+            };
+
+            // to delineate the analyzer & optimizer phases in explain output
+            stringified_plans
+                .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
+
             // optimize the child plan, capturing the output of each optimizer
             let (plan, logical_optimization_succeeded) = match self.optimizer.optimize(
                 &analyzed_plan,
@@ -1706,7 +1734,9 @@ impl SessionState {
                 logical_optimization_succeeded,
             }))
         } else {
-            let analyzed_plan = self.analyzer.execute_and_check(plan, self.options())?;
+            let analyzed_plan =
+                self.analyzer
+                    .execute_and_check(plan, self.options(), |_, _| {})?;
             self.optimizer.optimize(&analyzed_plan, self, |_, _| {})
         }
     }

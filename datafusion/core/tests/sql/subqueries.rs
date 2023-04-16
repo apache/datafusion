@@ -185,7 +185,7 @@ async fn invalid_scalar_subquery() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let err = dataframe.into_optimized_plan().err().unwrap();
     assert_eq!(
-        "Plan(\"Scalar subquery should only return one column\")",
+        r#"Context("check_analyzed_plan", Plan("Scalar subquery should only return one column"))"#,
         &format!("{err:?}")
     );
 
@@ -203,7 +203,7 @@ async fn subquery_not_allowed() -> Result<()> {
     let err = dataframe.into_optimized_plan().err().unwrap();
 
     assert_eq!(
-        "Plan(\"In/Exist subquery can not be used in Sort plan nodes\")",
+        r#"Context("check_analyzed_plan", Plan("In/Exist subquery can not be used in Sort plan nodes"))"#,
         &format!("{err:?}")
     );
 

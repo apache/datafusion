@@ -1245,6 +1245,12 @@ pub mod arrow_type {
 pub struct EmptyMessage {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AnalyzedLogicalPlanType {
+    #[prost(string, tag = "1")]
+    pub analyzer_name: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OptimizedLogicalPlanType {
     #[prost(string, tag = "1")]
     pub optimizer_name: ::prost::alloc::string::String,
@@ -1258,7 +1264,7 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 5, 6")]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -1268,6 +1274,10 @@ pub mod plan_type {
     pub enum PlanTypeEnum {
         #[prost(message, tag = "1")]
         InitialLogicalPlan(super::EmptyMessage),
+        #[prost(message, tag = "7")]
+        AnalyzedLogicalPlan(super::AnalyzedLogicalPlanType),
+        #[prost(message, tag = "8")]
+        FinalAnalyzedLogicalPlan(super::EmptyMessage),
         #[prost(message, tag = "2")]
         OptimizedLogicalPlan(super::OptimizedLogicalPlanType),
         #[prost(message, tag = "3")]
