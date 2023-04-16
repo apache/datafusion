@@ -64,9 +64,9 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let projection_exprs = generate_projection_expr(&projection, sub_plan)?;
             let plan = LogicalPlanBuilder::from(sub_plan.clone())
                 .project(projection_exprs)?
-                // This will ensure that the reference to the inlined table
-                // remains the same ensuring we don't have to change any of the
-                // parent nodes that reference this table.
+                // Ensures that the reference to the inlined table remains the
+                // same, meaning we don't have to change any of the parent nodes
+                // that reference this table.
                 .alias(table_name)?
                 .build()?;
             Transformed::Yes(plan)

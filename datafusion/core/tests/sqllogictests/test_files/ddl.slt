@@ -159,7 +159,7 @@ CREATE SCHEMA foo_schema;
 
 # Should be able to create view in "foo_schema".
 statement ok
-CREATE VIEW foo_schema.bar AS VALUES(1,2);
+CREATE VIEW foo_schema.bar AS (SELECT 1 as a, 2 as b);
 
 # And be able to query it.
 query II
@@ -167,7 +167,24 @@ SELECT * FROM foo_schema.bar;
 ----
 1 2
 
-# TODO: Drop schema for cleanup
+# Make sure we can query individual columns with various qualifications.
+
+query I
+SELECT a FROM foo_schema.bar;
+----
+1
+
+query I
+SELECT bar.a FROM foo_schema.bar;
+----
+1
+
+query I
+SELECT foo_schema.bar.a FROM foo_schema.bar;
+----
+1
+
+# TODO: Drop schema for cleanup, see #6027
 # statement ok
 # DROP SCHEMA foo_schema;
 
