@@ -40,49 +40,32 @@ pub fn binary_operator_data_type(
         // (or the return datatype cannot be inferred)
         coerce_types(lhs_type, op, rhs_type)?
     } else {
-        let lhs_type = match lhs_type {
-            DataType::Decimal128(_, _) | DataType::Null => lhs_type.clone(),
-            DataType::Dictionary(_, value_type)
-                if matches!(**value_type, DataType::Decimal128(_, _)) =>
-            {
-                lhs_type.clone()
-            }
-            _ => coerce_numeric_type_to_decimal(lhs_type).ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Could not coerce numeric type to decimal: {:?}",
-                    lhs_type
-                ))
-            })?,
+        let (coerced_lhs_type, coerced_rhs_type) =
+            math_decimal_coercion(lhs_type, rhs_type);
+        let lhs_type = if let Some(lhs_type) = coerced_lhs_type {
+            lhs_type
+        } else {
+            lhs_type.clone()
         };
-
-        let rhs_type = match rhs_type {
-            DataType::Decimal128(_, _) | DataType::Null => rhs_type.clone(),
-            DataType::Dictionary(_, value_type)
-                if matches!(**value_type, DataType::Decimal128(_, _)) =>
-            {
-                rhs_type.clone()
-            }
-            _ => coerce_numeric_type_to_decimal(rhs_type).ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Could not coerce numeric type to decimal: {:?}",
-                    rhs_type
-                ))
-            })?,
+        let rhs_type = if let Some(rhs_type) = coerced_rhs_type {
+            rhs_type
+        } else {
+            rhs_type.clone()
         };
 
         match op {
-            // For Plus and Minus, the result type is the same as the input type which is already promoted
             Operator::Plus
             | Operator::Minus
             | Operator::Divide
             | Operator::Multiply
             | Operator::Modulo => decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
+                .or_else(|| coerce_types(&lhs_type, op, &rhs_type).ok())
                 .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "Could not get return type for {:?} between {:?} and {:?}",
-                    op, lhs_type, rhs_type
-                ))
-            })?,
+                    DataFusionError::Internal(format!(
+                        "Could not get return type for {:?} between {:?} and {:?}",
+                        op, lhs_type, rhs_type
+                    ))
+                })?,
             _ => coerce_types(&lhs_type, op, &rhs_type)?,
         }
     };
