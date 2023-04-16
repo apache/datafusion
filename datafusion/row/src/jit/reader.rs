@@ -94,7 +94,7 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
     reg_fn!(asm, read_field_f32_null_free, reader_param.clone(), None);
     reg_fn!(asm, read_field_f64_null_free, reader_param.clone(), None);
     reg_fn!(asm, read_field_date32_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date64_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_date64_null_free, reader_param, None);
     Ok(())
 }
 

@@ -118,7 +118,7 @@ fn register_write_functions(asm: &Assembler) -> Result<()> {
     reg_fn!(asm, write_field_f32, reader_param.clone(), None);
     reg_fn!(asm, write_field_f64, reader_param.clone(), None);
     reg_fn!(asm, write_field_date32, reader_param.clone(), None);
-    reg_fn!(asm, write_field_date64, reader_param.clone(), None);
+    reg_fn!(asm, write_field_date64, reader_param, None);
     Ok(())
 }
 
