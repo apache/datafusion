@@ -507,10 +507,10 @@ select date_bin(INTERVAL '1 month', column1)
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00')
 ) as sq
 ----
 2022-01-01T00:00:00
@@ -526,15 +526,15 @@ query P
 select date_bin(INTERVAL '1 year', column1)
 from (values
   (timestamp '2022-01-01 00:00:00'),
-  (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2023-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00')
 ) as sq
 ----
 2022-01-01T00:00:00
-2022-01-01T00:00:00
+2023-01-01T00:00:00
 2022-01-01T00:00:00
 2022-01-01T00:00:00
 2022-01-01T00:00:00
@@ -553,10 +553,10 @@ select date_bin('1 month', column1)
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00')
 ) as sq
 ----
 2022-01-01T00:00:00
@@ -572,10 +572,10 @@ select date_bin('2 month', column1)
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00')
 ) as sq
 ----
 2022-01-01T00:00:00
@@ -587,17 +587,29 @@ from (values
 
 
 # month interval with start date end of the month plus some minutes
+#
+# The the return of `date_bin` is the start of the bin. The bin width is one year.
+# The source data must be inside the bin.
+# Since the origin is '1970-12-31T00:15:00Z', the start of the bins are
+#   '1970-12-31T00:15:00Z',
+#   '1971-12-31T00:15:00Z',
+#   ...,
+#   '2021-12-31T00:15:00Z',
+#   '2022-12-31T00:15:00Z',
+#   ...
+#
 # Note the datetime '2022-03-31 00:00:00'. Its bin is NOT '2022-03-31 00:15:00' which is after its time
 # Its bin is '2022-02-28T00:15:00'
+#
 query P
 select date_bin('1 month', column1, '1970-12-31T00:15:00Z')
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00')
 ) as sq
 ----
 2021-12-31T00:15:00
@@ -613,10 +625,10 @@ select date_bin('2 months', column1, '1970-12-31T00:15:00Z')
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00')
 ) as sq
 ----
 2021-12-31T00:15:00
@@ -632,11 +644,11 @@ select date_bin('1 year', column1)
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
   (timestamp '2022-03-31 00:00:00'),
-  (timestamp '2023-10-28 01:33:00')  
+  (timestamp '2023-10-28 01:33:00')
 ) as sq
 ----
 2022-01-01T00:00:00
@@ -653,10 +665,11 @@ select date_bin('1 year', column1, '1970-12-31T00:15:00Z')
 from (values
   (timestamp '2022-01-01 00:00:00'),
   (timestamp '2022-01-01 01:00:00'),
-  (timestamp '2022-01-02 00:00:00'), 
+  (timestamp '2022-01-02 00:00:00'),
   (timestamp '2022-02-02 00:00:00'),
   (timestamp '2022-02-15 00:00:00'),
-  (timestamp '2022-03-31 00:00:00') 
+  (timestamp '2022-03-31 00:00:00'),
+  (timestamp '2023-03-31 00:00:00')
 ) as sq
 ----
 2021-12-31T00:15:00
@@ -665,6 +678,7 @@ from (values
 2021-12-31T00:15:00
 2021-12-31T00:15:00
 2021-12-31T00:15:00
+2022-12-31T00:15:00
 
 # month interval on constant
 query P
