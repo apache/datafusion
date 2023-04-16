@@ -77,30 +77,34 @@ impl FromStr for AggregateFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<AggregateFunction> {
         Ok(match name {
-            "min" => AggregateFunction::Min,
-            "max" => AggregateFunction::Max,
-            "count" => AggregateFunction::Count,
+            // general
             "avg" => AggregateFunction::Avg,
+            "count" => AggregateFunction::Count,
+            "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
-            "sum" => AggregateFunction::Sum,
             "median" => AggregateFunction::Median,
-            "approx_distinct" => AggregateFunction::ApproxDistinct,
+            "min" => AggregateFunction::Min,
+            "sum" => AggregateFunction::Sum,
             "array_agg" => AggregateFunction::ArrayAgg,
-            "var" => AggregateFunction::Variance,
-            "var_samp" => AggregateFunction::Variance,
-            "var_pop" => AggregateFunction::VariancePop,
-            "stddev" => AggregateFunction::Stddev,
-            "stddev_samp" => AggregateFunction::Stddev,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "covar" => AggregateFunction::Covariance,
-            "covar_samp" => AggregateFunction::Covariance,
-            "covar_pop" => AggregateFunction::CovariancePop,
+            // statistical
             "corr" => AggregateFunction::Correlation,
+            "covar" => AggregateFunction::Covariance,
+            "covar_pop" => AggregateFunction::CovariancePop,
+            "covar_samp" => AggregateFunction::Covariance,
+            "stddev" => AggregateFunction::Stddev,
+            "stddev_pop" => AggregateFunction::StddevPop,
+            "stddev_samp" => AggregateFunction::Stddev,
+            "var" => AggregateFunction::Variance,
+            "var_pop" => AggregateFunction::VariancePop,
+            "var_samp" => AggregateFunction::Variance,
+            // approximate
+            "approx_distinct" => AggregateFunction::ApproxDistinct,
+            "approx_median" => AggregateFunction::ApproxMedian,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_percentile_cont_with_weight" => {
                 AggregateFunction::ApproxPercentileContWithWeight
             }
-            "approx_median" => AggregateFunction::ApproxMedian,
+            // other
             "grouping" => AggregateFunction::Grouping,
             _ => {
                 return Err(DataFusionError::Plan(format!(
