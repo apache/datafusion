@@ -20,6 +20,7 @@
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
+use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 /// Enum of all built-in aggregate functions
@@ -145,7 +146,7 @@ pub fn return_type(
         AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
-        AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
+        AggregateFunction::ArrayAgg => Ok(DataType::List(Arc::new(Field::new(
             "item",
             coerced_data_types[0].clone(),
             true,

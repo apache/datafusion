@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod count_wildcard_rule;
-mod inline_table_scan;
-pub(crate) mod type_coercion;
+pub mod count_wildcard_rule;
+pub mod inline_table_scan;
+pub mod type_coercion;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
@@ -80,19 +80,29 @@ impl Analyzer {
 
     /// Analyze the logical plan by applying analyzer rules, and
     /// do necessary check and fail the invalid plans
-    pub fn execute_and_check(
+    pub fn execute_and_check<F>(
         &self,
         plan: &LogicalPlan,
         config: &ConfigOptions,
-    ) -> Result<LogicalPlan> {
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
+    {
         let start_time = Instant::now();
         let mut new_plan = plan.clone();
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in &self.rules {
-            new_plan = rule.analyze(new_plan, config)?;
+            new_plan = rule.analyze(new_plan, config).map_err(|e| {
+                DataFusionError::Context(rule.name().to_string(), Box::new(e))
+            })?;
+            observer(&new_plan, rule.as_ref());
         }
-        check_plan(&new_plan)?;
+        // for easier display in explain output
+        check_plan(&new_plan).map_err(|e| {
+            DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
+        })?;
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
@@ -195,6 +205,7 @@ fn check_correlations_in_subquery(
         | LogicalPlan::TableScan(_)
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Limit(_)
+        | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
             inner_plan.apply_children(&mut |plan| {

@@ -255,3 +255,13 @@ query B
 select column1 not ilike column2 from t;
 ----
 false
+
+query B
+select column1 is distinct from column2 from t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from t;
+----
+false

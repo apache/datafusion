@@ -605,6 +605,11 @@ impl LogicalPlan {
         expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
+                    if id.is_empty() || id == "$0" {
+                        return Err(DataFusionError::Plan(
+                            "Empty placeholder id".to_string(),
+                        ));
+                    }
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
                     let idx = id[1..].parse::<usize>().map_err(|e| {
                         DataFusionError::Internal(format!(
@@ -1808,6 +1813,13 @@ pub enum Partitioning {
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
+    /// The LogicalPlan which results from applying an analyzer pass
+    AnalyzedLogicalPlan {
+        /// The name of the analyzer which produced this plan
+        analyzer_name: String,
+    },
+    /// The LogicalPlan after all analyzer passes have been applied
+    FinalAnalyzedLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
@@ -1830,6 +1842,10 @@ impl Display for PlanType {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
+            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                write!(f, "logical_plan after {analyzer_name}")
+            }
+            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
                 write!(f, "logical_plan after {optimizer_name}")
             }
@@ -2329,5 +2345,40 @@ mod tests {
         let schemas = plan.all_schemas();
         assert_eq!(1, schemas.len());
         assert_eq!(0, schemas[0].fields().len());
+    }
+
+    #[test]
+    fn test_replace_invalid_placeholder() {
+        // test empty placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(Expr::Placeholder {
+                id: "".into(),
+                data_type: Some(DataType::Int32),
+            }))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        plan.replace_params_with_values(&[42i32.into()])
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+
+        // test $0 placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(Expr::Placeholder {
+                id: "$0".into(),
+                data_type: Some(DataType::Int32),
+            }))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        plan.replace_params_with_values(&[42i32.into()])
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
     }
 }

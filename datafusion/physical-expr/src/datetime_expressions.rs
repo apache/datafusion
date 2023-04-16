@@ -175,7 +175,7 @@ pub fn make_now(
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,
-            Some("+00:00".to_owned()),
+            Some("+00:00".into()),
         )))
     }
 }
@@ -402,7 +402,7 @@ pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         // Default to unix EPOCH
         let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             Some(0),
-            Some("+00:00".to_owned()),
+            Some("+00:00".into()),
         ));
         date_bin_impl(&args[0], &args[1], &origin)
     } else if args.len() == 3 {

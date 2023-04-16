@@ -159,7 +159,7 @@ fn shift_with_default_value(
 
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(arrow::array::make_array(array.data_ref().clone()))
+        Ok(array.clone())
     } else if offset == i64::MIN || offset.abs() >= value_len {
         create_empty_array(value, array.data_type(), array.len())
     } else {

@@ -23,11 +23,12 @@ use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
     },
-    CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
+    OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
@@ -151,7 +152,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Timestamp(time_unit, timezone) => {
                 Self::Timestamp(protobuf::Timestamp {
                     time_unit: protobuf::TimeUnit::from(time_unit) as i32,
-                    timezone: timezone.to_owned().unwrap_or_default(),
+                    timezone: timezone.as_deref().unwrap_or("").to_string(),
                 })
             }
             DataType::Date32 => Self::Date32(EmptyMessage {}),
@@ -188,21 +189,21 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: struct_fields
                     .iter()
-                    .map(|field| field.try_into())
+                    .map(|field| field.as_ref().try_into())
                     .collect::<Result<Vec<_>, Error>>()?,
             }),
-            DataType::Union(union_types, type_ids, union_mode) => {
+            DataType::Union(fields, union_mode) => {
                 let union_mode = match union_mode {
                     UnionMode::Sparse => protobuf::UnionMode::Sparse,
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types
+                    union_types: fields
                         .iter()
-                        .map(|field| field.try_into())
+                        .map(|(_, field)| field.as_ref().try_into())
                         .collect::<Result<Vec<_>, Error>>()?,
                     union_mode: union_mode.into(),
-                    type_ids: type_ids.iter().map(|x| *x as i32).collect(),
+                    type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
             }
             DataType::Dictionary(key_type, value_type) => {
@@ -262,7 +263,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::try_from)
+                .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
         })
     }
@@ -276,7 +277,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::try_from)
+                .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
         })
     }
@@ -287,7 +288,7 @@ impl TryFrom<&DFField> for protobuf::DfField {
 
     fn try_from(f: &DFField) -> Result<Self, Self::Error> {
         Ok(Self {
-            field: Some(f.field().try_into()?),
+            field: Some(f.field().as_ref().try_into()?),
             qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
                 relation: r.to_string(),
             }),
@@ -317,6 +318,16 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
             plan_type: match stringified_plan.clone().plan_type {
                 PlanType::InitialLogicalPlan => Some(protobuf::PlanType {
                     plan_type_enum: Some(InitialLogicalPlan(EmptyMessage {})),
+                }),
+                PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                    Some(protobuf::PlanType {
+                        plan_type_enum: Some(AnalyzedLogicalPlan(
+                            AnalyzedLogicalPlanType { analyzer_name },
+                        )),
+                    })
+                }
+                PlanType::FinalAnalyzedLogicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalAnalyzedLogicalPlan(EmptyMessage {})),
                 }),
                 PlanType::OptimizedLogicalPlan { optimizer_name } => {
                     Some(protobuf::PlanType {
@@ -1045,7 +1056,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampMicrosecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(
                                 *s,
@@ -1057,7 +1068,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampNanosecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(
                                 *s,
@@ -1090,7 +1101,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampSecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeSecondValue(*s),
                         ),
@@ -1100,7 +1111,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampMillisecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(
                                 *s,
@@ -1219,7 +1230,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
                 let fields = fields
                     .iter()
-                    .map(|f| f.try_into())
+                    .map(|f| f.as_ref().try_into())
                     .collect::<Result<Vec<protobuf::Field>, _>>()?;
 
                 Ok(protobuf::ScalarValue {
@@ -1325,6 +1336,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
+            BuiltinScalarFunction::Pi => Self::Pi,
             BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Struct => Self::StructFun,
             BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,

@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_common::ToDFSchema;
@@ -575,16 +575,16 @@ impl ListingTable {
         })?;
 
         // Add the partition columns to the file schema
-        let mut table_fields = file_schema.fields().clone();
+        let mut builder = SchemaBuilder::from(file_schema.fields());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
-            table_fields.push(Field::new(part_col_name, part_col_type.clone(), false));
+            builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
         let infinite_source = options.infinite_source;
 
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
-            table_schema: Arc::new(Schema::new(table_fields)),
+            table_schema: Arc::new(builder.finish()),
             options,
             definition: None,
             collected_statistics: Default::default(),
@@ -836,7 +836,7 @@ mod tests {
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Schema};
     use chrono::DateTime;
     use datafusion_common::assert_contains;
     use rstest::*;

@@ -24,6 +24,7 @@ use std::fmt::{Display, Formatter};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
@@ -202,12 +203,20 @@ impl Interval {
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         let lower = if self.lower.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(self.lower.get_datatype())
+            ScalarValue::try_from(&coerce_types(
+                &self.get_datatype(),
+                &Operator::Plus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.lower.add(&rhs.lower)
         }?;
         let upper = if self.upper.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(self.upper.get_datatype())
+            ScalarValue::try_from(coerce_types(
+                &self.get_datatype(),
+                &Operator::Plus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.upper.add(&rhs.upper)
         }?;
@@ -221,12 +230,20 @@ impl Interval {
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         let lower = if self.lower.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(self.lower.get_datatype())
+            ScalarValue::try_from(coerce_types(
+                &self.get_datatype(),
+                &Operator::Minus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.lower.sub(&rhs.upper)
         }?;
         let upper = if self.upper.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(self.upper.get_datatype())
+            ScalarValue::try_from(coerce_types(
+                &self.get_datatype(),
+                &Operator::Minus,
+                &rhs.get_datatype(),
+            )?)
         } else {
             self.upper.sub(&rhs.lower)
         }?;
