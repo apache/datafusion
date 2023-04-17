@@ -2660,7 +2660,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Plus,
-            create_decimal_array(&[Some(247), None, None, Some(247), Some(246)], 10, 0),
+            create_decimal_array(&[Some(247), None, None, Some(247), Some(246)], 11, 0),
         )?;
 
         Ok(())
@@ -2879,7 +2879,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Minus,
-            create_decimal_array(&[Some(-1), None, None, Some(1), Some(0)], 10, 0),
+            create_decimal_array(&[Some(-1), None, None, Some(1), Some(0)], 11, 0),
         )?;
 
         Ok(())
@@ -3092,7 +3092,7 @@ mod tests {
             Operator::Multiply,
             create_decimal_array(
                 &[Some(15252), None, None, Some(15252), Some(15129)],
-                10,
+                21,
                 0,
             ),
         )?;
@@ -3308,7 +3308,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Divide,
-            create_decimal_array(&[Some(0), None, None, Some(1), Some(1)], 10, 0),
+            create_decimal_array(&[Some(0), None, None, Some(1), Some(1)], 21, 11),
         )?;
 
         Ok(())
