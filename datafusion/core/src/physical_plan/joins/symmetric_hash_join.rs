@@ -48,7 +48,7 @@ use parking_lot::Mutex;
 
 use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
+use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
@@ -813,18 +813,12 @@ fn update_filter_expr_interval(
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:
-    let infinite = ScalarValue::try_from(value.get_datatype())?;
+    let unbounded = IntervalBound::make_unbounded(value.get_datatype())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval {
-            lower: infinite,
-            upper: value,
-        }
+        Interval::new(unbounded, IntervalBound::new(value, false))
     } else {
-        Interval {
-            lower: value,
-            upper: infinite,
-        }
+        Interval::new(IntervalBound::new(value, false), unbounded)
     };
     // Set the calculated interval for the sorted filter expression:
     sorted_expr.set_interval(interval);
@@ -861,9 +855,9 @@ fn determine_prune_length(
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
-        interval.upper.clone()
+        interval.upper.value.clone()
     } else {
-        interval.lower.clone()
+        interval.lower.value.clone()
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned
@@ -1735,6 +1729,7 @@ mod tests {
                 5,
                 3,
                 10,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
             1 => gen_conjunctive_numeric_expr(
@@ -1748,6 +1743,7 @@ mod tests {
                 5,
                 3,
                 10,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
             2 => gen_conjunctive_numeric_expr(
@@ -1761,6 +1757,7 @@ mod tests {
                 5,
                 3,
                 10,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
             3 => gen_conjunctive_numeric_expr(
@@ -1774,6 +1771,7 @@ mod tests {
                 5,
                 3,
                 10,
+                (Operator::Gt, Operator::Lt),
             ),
             // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
             4 => gen_conjunctive_numeric_expr(
@@ -1787,6 +1785,49 @@ mod tests {
                 5,
                 30,
                 3,
+                (Operator::Gt, Operator::Lt),
+            ),
+            // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
+            5 => gen_conjunctive_numeric_expr(
+                left_col,
+                right_col,
+                Operator::Minus,
+                Operator::Plus,
+                Operator::Plus,
+                Operator::Minus,
+                2,
+                5,
+                7,
+                3,
+                (Operator::GtEq, Operator::LtEq),
+            ),
+            // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+            6 => gen_conjunctive_numeric_expr(
+                left_col,
+                right_col,
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Plus,
+                Operator::Plus,
+                28,
+                11,
+                21,
+                39,
+                (Operator::Gt, Operator::LtEq),
+            ),
+            // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+            7 => gen_conjunctive_numeric_expr(
+                left_col,
+                right_col,
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Minus,
+                Operator::Plus,
+                28,
+                11,
+                21,
+                39,
+                (Operator::GtEq, Operator::Lt),
             ),
             _ => unreachable!(),
         }
@@ -2066,7 +2107,7 @@ mod tests {
             (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -2141,7 +2182,7 @@ mod tests {
         (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -2232,7 +2273,7 @@ mod tests {
             (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -2772,6 +2813,7 @@ mod tests {
             3,
             0,
             3,
+            (Operator::Gt, Operator::Lt),
         );
         let column_indices = vec![
             ColumnIndex {
