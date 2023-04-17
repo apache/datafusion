@@ -324,6 +324,11 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#natural-join">
+     NATURAL JOIN
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#cross-join">
      CROSS JOIN
     </a>
@@ -457,7 +462,7 @@ By default <code class="docutils literal notranslate"><span class="pre">ALL</spa
 </section>
 <section id="join-clause">
 <h2>JOIN clause<a class="headerlink" href="#join-clause" title="Permalink to this heading">¶</a></h2>
-<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, and <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>.</p>
+<p>DataFusion supports <code class="docutils literal notranslate"><span class="pre">INNER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">LEFT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">RIGHT</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">FULL</span> <span class="pre">OUTER</span> <span class="pre">JOIN</span></code>, <code class="docutils literal notranslate"><span class="pre">NATURAL</span> <span class="pre">JOIN</span></code> and <code class="docutils literal notranslate"><span class="pre">CROSS</span> <span class="pre">JOIN</span></code>.</p>
 <p>The following examples are based on this table:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">----------+----------+</span>
@@ -517,6 +522,19 @@ either side of the join where there is not a match.</p>
 | 1        | 2        |          |          |
 |          |          | 1        | 2        |
 +----------+----------+----------+----------+
+</pre></div>
+</div>
+</section>
+<section id="natural-join">
+<h3>NATURAL JOIN<a class="headerlink" href="#natural-join" title="Permalink to this heading">¶</a></h3>
+<p>A natural join defines an inner join based on common column names found between the input tables. When no common
+column names are found, it behaves like a cross join.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from x natural join x y;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
 </pre></div>
 </div>
 </section>

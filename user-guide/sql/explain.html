@@ -343,7 +343,7 @@ EXPLAIN [ANALYZE] [VERBOSE] statement
 <section id="id1">
 <h2>EXPLAIN<a class="headerlink" href="#id1" title="Permalink to this heading">¶</a></h2>
 <p>Shows the execution plan of a statement.
-If you need more details output, try to use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code>.</p>
+If you need more detailed output, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code>.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
 +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                           |
@@ -366,7 +366,7 @@ If you need more details output, try to use <code class="docutils literal notran
 <section id="explain-analyze">
 <h2>EXPLAIN ANALYZE<a class="headerlink" href="#explain-analyze" title="Permalink to this heading">¶</a></h2>
 <p>Shows the execution plan and metrics of a statement.
-If you need more information output, try to use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span> <span class="pre">VERBOSE</span></code>.</p>
+If you need more information output, use <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span> <span class="pre">VERBOSE</span></code>.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
 +-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type         | plan                                                                                                                                                      |

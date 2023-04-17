@@ -279,13 +279,23 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-database">
+   CREATE DATABASE
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#create-schema">
+   CREATE SCHEMA
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#create-external-table">
    CREATE EXTERNAL TABLE
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#cautions-when-using-the-with-order-clause">
-     Cautions When Using the WITH ORDER Clause
+     Cautions when using the WITH ORDER Clause
     </a>
    </li>
   </ul>
@@ -358,6 +368,28 @@
 -->
 <section id="ddl">
 <h1>DDL<a class="headerlink" href="#ddl" title="Permalink to this heading">¶</a></h1>
+<section id="create-database">
+<h2>CREATE DATABASE<a class="headerlink" href="#create-database" title="Permalink to this heading">¶</a></h2>
+<p>Create catalog with specified name.</p>
+<pre>
+CREATE DATABASE [ IF NOT EXISTS ] <i><b>catalog</i></b>
+</pre>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- create catalog cat</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">DATABASE</span><span class="w"> </span><span class="n">cat</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="create-schema">
+<h2>CREATE SCHEMA<a class="headerlink" href="#create-schema" title="Permalink to this heading">¶</a></h2>
+<p>Create schema under specified catalog, or the default DataFusion catalog if not specified.</p>
+<pre>
+CREATE SCHEMA [ IF NOT EXISTS ] [ <i><b>catalog.</i></b> ] <b><i>schema_name</i></b>
+</pre>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- create schema emu under catalog cat</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">SCHEMA</span><span class="w"> </span><span class="n">cat</span><span class="p">.</span><span class="n">emu</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="create-external-table">
 <h2>CREATE EXTERNAL TABLE<a class="headerlink" href="#create-external-table" title="Permalink to this heading">¶</a></h2>
 <p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. It is not necessary
@@ -399,7 +431,7 @@ inferred based on scanning a subset of the file.</p>
 <p>When creating an output from a data source that is already ordered by an expression, you can pre-specify the order of
 the data using the <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause. This applies even if the expression used for sorting is complex,
 allowing for greater flexibility.</p>
-<p>Here’s an example of how to use <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> query</p>
+<p>Here’s an example of how to use <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="n">c1</span><span class="w">  </span><span class="nb">VARCHAR</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
 <span class="w">    </span><span class="n">c2</span><span class="w">  </span><span class="nb">INT</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
@@ -421,13 +453,13 @@ allowing for greater flexibility.</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>where <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause specifies the sort order:</p>
+<p>Where <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause specifies the sort order:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
          [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
 </pre></div>
 </div>
 <section id="cautions-when-using-the-with-order-clause">
-<h3>Cautions When Using the WITH ORDER Clause<a class="headerlink" href="#cautions-when-using-the-with-order-clause" title="Permalink to this heading">¶</a></h3>
+<h3>Cautions when using the WITH ORDER Clause<a class="headerlink" href="#cautions-when-using-the-with-order-clause" title="Permalink to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>It’s important to understand that using the <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause in the <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> statement only specifies the order in which the data should be read from the external file. If the data in the file is not already sorted according to the specified order, then the results may not be correct.</p></li>
 <li><p>It’s also important to note that the <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause does not affect the ordering of the data in the original external file.</p></li>
@@ -475,7 +507,7 @@ DROP TABLE [ IF EXISTS ] <b><i>table_name</i></b>;
 <h2>CREATE VIEW<a class="headerlink" href="#create-view" title="Permalink to this heading">¶</a></h2>
 <p>View is a virtual table based on the result of a SQL query. It can be created from an existing table or values list.</p>
 <pre>
-CREATE VIEW <i><b>view_name</b></i> AS statement;
+CREATE [ OR REPLACE ] VIEW <i><b>view_name</b></i> AS statement;
 </pre>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">users</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">),(</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">),(</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">),(</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">);</span>
 <span class="k">CREATE</span><span class="w"> </span><span class="k">VIEW</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">column1</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">users</span><span class="p">;</span>
