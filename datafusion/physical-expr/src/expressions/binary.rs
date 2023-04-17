@@ -504,6 +504,7 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
@@ -799,11 +800,7 @@ impl PhysicalExpr for BinaryExpr {
             //       changes accordingly.
             return Ok(vec![]);
         } else if self.op.is_comparison_operator() {
-            if let Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(false)),
-            } = interval
-            {
+            if interval == &Interval::CERTAINLY_FALSE {
                 // TODO: We will handle strictly false clauses by negating
                 //       the comparison operator (e.g. GT to LE, LT to GE)
                 //       once open/closed intervals are supported.

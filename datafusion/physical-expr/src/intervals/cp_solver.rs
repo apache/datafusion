@@ -37,6 +37,8 @@ use crate::intervals::interval_aritmetic::{
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
+use super::IntervalBound;
+
 // Interval arithmetic provides a way to perform mathematical operations on
 // intervals, which represent a range of possible values rather than a single
 // point value. This allows for the propagation of ranges through mathematical
@@ -184,10 +186,10 @@ impl ExprIntervalGraphNode {
         let expr = node.expression().clone();
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
-            let interval = Interval {
-                lower: value.clone(),
-                upper: value.clone(),
-            };
+            let interval = Interval::new(
+                IntervalBound::new(value.clone(), false),
+                IntervalBound::new(value.clone(), false),
+            );
             ExprIntervalGraphNode::new_with_interval(expr, interval)
         } else {
             ExprIntervalGraphNode::new(expr)
@@ -259,17 +261,13 @@ fn comparison_operator_target(
     right_datatype: &DataType,
 ) -> Result<Interval> {
     let datatype = coerce_types(left_datatype, &Operator::Minus, right_datatype)?;
-    let unbounded = ScalarValue::try_from(&datatype)?;
+    let unbounded = IntervalBound::make_unbounded(&datatype)?;
     let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
-        Operator::Gt => Interval {
-            lower: zero,
-            upper: unbounded,
-        },
-        Operator::Lt => Interval {
-            lower: unbounded,
-            upper: zero,
-        },
+        Operator::GtEq => Interval::new(IntervalBound::new(zero, false), unbounded),
+        Operator::Gt => Interval::new(IntervalBound::new(zero, true), unbounded),
+        Operator::LtEq => Interval::new(unbounded, IntervalBound::new(zero, false)),
+        Operator::Lt => Interval::new(unbounded, IntervalBound::new(zero, true)),
         _ => unreachable!(),
     })
 }
@@ -287,9 +285,9 @@ pub fn propagate_comparison(
     right_child: &Interval,
 ) -> Result<(Option<Interval>, Option<Interval>)> {
     let parent = comparison_operator_target(
-        &left_child.get_datatype(),
+        &left_child.get_datatype()?,
         op,
-        &right_child.get_datatype(),
+        &right_child.get_datatype()?,
     )?;
     propagate_arithmetic(&Operator::Minus, &parent, left_child, right_child)
 }
@@ -437,7 +435,7 @@ impl ExprIntervalGraph {
     ///  use datafusion_common::ScalarValue;
     ///  use datafusion_expr::Operator;
     ///  use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-    ///  use datafusion_physical_expr::intervals::{Interval, ExprIntervalGraph};
+    ///  use datafusion_physical_expr::intervals::{Interval, IntervalBound, ExprIntervalGraph};
     ///  use datafusion_physical_expr::PhysicalExpr;
     ///  let expr = Arc::new(BinaryExpr::new(
     ///             Arc::new(Column::new("gnz", 0)),
@@ -452,19 +450,13 @@ impl ExprIntervalGraph {
     ///  // Provide intervals for leaf variables (here, there is only one).
     ///  let intervals = vec![(
     ///     left_index,
-    ///     Interval {
-    ///         lower: ScalarValue::Int32(Some(10)),
-    ///         upper: ScalarValue::Int32(Some(20)),
-    ///         },
-    ///     )];
+    ///     Interval::make(Some(10), Some(20), (true, true)),
+    ///  )];
     ///  // Evaluate bounds for the composite expression:
     ///  graph.assign_intervals(&intervals);
     ///  assert_eq!(
     ///     graph.evaluate_bounds().unwrap(),
-    ///     &Interval {
-    ///         lower: ScalarValue::Int32(Some(20)),
-    ///         upper: ScalarValue::Int32(Some(30))
-    ///     }
+    ///     &Interval::make(Some(20), Some(30), (true, true)),
     ///  )
     ///
     /// ```
@@ -528,20 +520,15 @@ impl ExprIntervalGraph {
         leaf_bounds: &mut [(usize, Interval)],
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
-        match self.evaluate_bounds()? {
-            Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(false)),
-            } => Ok(PropagationResult::Infeasible),
-            Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(true)),
-            } => {
-                let result = self.propagate_constraints();
-                self.update_intervals(leaf_bounds);
-                result
-            }
-            _ => Ok(PropagationResult::CannotPropagate),
+        let bounds = self.evaluate_bounds()?;
+        if bounds == &Interval::CERTAINLY_FALSE {
+            Ok(PropagationResult::Infeasible)
+        } else if bounds == &Interval::UNCERTAIN {
+            let result = self.propagate_constraints();
+            self.update_intervals(leaf_bounds);
+            result
+        } else {
+            Ok(PropagationResult::CannotPropagate)
         }
     }
 }
@@ -719,20 +706,20 @@ mod tests {
             expr,
             (left_col, right_col),
             Interval {
-                lower: ScalarValue::Int32(Some(10)),
-                upper: ScalarValue::Int32(Some(20)),
+                lower: IntervalBound::new(ScalarValue::Int32(Some(10)), true),
+                upper: IntervalBound::new(ScalarValue::Int32(Some(20)), true),
             },
             Interval {
-                lower: ScalarValue::Int32(Some(100)),
-                upper: ScalarValue::Int32(None),
+                lower: IntervalBound::new(ScalarValue::Int32(Some(100)), true),
+                upper: IntervalBound::new(ScalarValue::Int32(None), true),
             },
             Interval {
-                lower: ScalarValue::Int32(Some(10)),
-                upper: ScalarValue::Int32(Some(20)),
+                lower: IntervalBound::new(ScalarValue::Int32(Some(10)), true),
+                upper: IntervalBound::new(ScalarValue::Int32(Some(20)), true),
             },
             Interval {
-                lower: ScalarValue::Int32(Some(100)),
-                upper: ScalarValue::Int32(None),
+                lower: IntervalBound::new(ScalarValue::Int32(Some(100)), true),
+                upper: IntervalBound::new(ScalarValue::Int32(None), true),
             },
             PropagationResult::Infeasible,
         )?;
@@ -764,6 +751,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(11 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(33 as $type)),
+                    (Operator::GtEq, Operator::Lt)
                 );
                 // l > r + 10 AND r > l - 30
                 let l_gt_r = 10 as $type;
@@ -818,6 +806,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
+                    (Operator::GtEq, Operator::Lt)
                 );
                 // l > r + 6 AND r > l - 7
                 let l_gt_r = 6 as $type;
@@ -872,6 +861,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
+                    (Operator::GtEq, Operator::Lt)
                 );
                 // l > r + 6 AND r > l - 13
                 let l_gt_r = 6 as $type;
@@ -926,6 +916,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
+                    (Operator::GtEq, Operator::Lt)
                 );
                 // l > r + 5 AND r > l - 13
                 let l_gt_r = 5 as $type;
@@ -980,6 +971,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(30 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
+                    (Operator::GtEq, Operator::Lt)
                 );
                 // l > r + 5 AND r > l - 27
                 let l_gt_r = 5 as $type;
@@ -1008,6 +1000,123 @@ mod tests {
     integer_float_case_5!(case_5_i64, generate_case_i64, i64, Int64);
     integer_float_case_5!(case_5_f64, generate_case_f64, f64, Float64);
     integer_float_case_5!(case_5_f32, generate_case_f32, f32, Float32);
+
+    #[rstest]
+    #[test]
+    fn case_6(
+        #[values(0, 1, 2, 123, 756, 63, 345, 6443, 12341, 142, 123, 8900)] seed: u64,
+        #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
+        #[values(Operator::Lt, Operator::LtEq)] less_op: Operator
+    ) -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark - 1 >= right_watermark + 5 AND left_watermark - 10 <= right_watermark + 3
+
+        let expr = gen_conjunctive_numeric_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Minus,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Plus,
+            1,
+            5,
+            10,
+            3,
+            (greater_op, less_op),
+        );
+        // l >= r + 6 AND r >= l - 13
+        let l_gt_r = 6;
+        let r_gt_l = -13;
+
+        generate_case_i32::<true>(expr, left_col, right_col, seed, l_gt_r, r_gt_l)?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[test]
+    fn case_7(
+        #[values(0, 1, 2, 123, 77, 93, 104, 624, 115, 613, 8365, 9345)] seed: u64,
+    ) -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark + 4 >= right_watermark + 5 AND left_watermark - 20 < right_watermark - 5
+
+        let expr = gen_conjunctive_numeric_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Minus,
+            4,
+            5,
+            20,
+            5,
+            (Operator::GtEq, Operator::Lt),
+        );
+        // l >= r + 1 AND r > l - 15
+        let l_gt_r = 1;
+        let r_gt_l = -15;
+        generate_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            seed,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        // Descending tests
+        // l >= r + 1 AND r > l - 15
+        let r_lt_l = -l_gt_r;
+        let l_lt_r = -r_gt_l;
+        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[test]
+    fn case_8(
+        #[values(0, 1, 2, 24, 53, 412, 364, 345, 737, 1010, 52, 1554)] seed: u64,
+    ) -> Result<()> {
+        let left_col = Arc::new(Column::new("left_watermark", 0));
+        let right_col = Arc::new(Column::new("right_watermark", 0));
+        // left_watermark + 4 >= right_watermark + 5 AND left_watermark - 20 < right_watermark - 5
+
+        let expr = gen_conjunctive_numeric_expr(
+            left_col.clone(),
+            right_col.clone(),
+            Operator::Plus,
+            Operator::Plus,
+            Operator::Minus,
+            Operator::Minus,
+            4,
+            5,
+            20,
+            5,
+            (Operator::Gt, Operator::LtEq),
+        );
+        // l >= r + 1 AND r > l - 15
+        let l_gt_r = 1;
+        let r_gt_l = -15;
+        generate_case::<true>(
+            expr.clone(),
+            left_col.clone(),
+            right_col.clone(),
+            seed,
+            l_gt_r,
+            r_gt_l,
+        )?;
+        // Descending tests
+        // l >= r + 1 AND r > l - 15
+        let r_lt_l = -l_gt_r;
+        let l_lt_r = -r_gt_l;
+        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
+
+        Ok(())
+    }
 
     #[test]
     fn test_gather_node_indices_dont_remove() -> Result<()> {

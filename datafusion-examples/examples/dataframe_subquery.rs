@@ -43,7 +43,7 @@ async fn where_scalar_subquery(ctx: &SessionContext) -> Result<()> {
     ctx.table("t1")
         .await?
         .filter(
-            exists(Arc::new(
+            scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
                     .filter(col("t1.c1").eq(col("t2.c1")))?

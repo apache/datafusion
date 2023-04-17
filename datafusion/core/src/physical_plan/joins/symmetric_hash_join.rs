@@ -48,7 +48,7 @@ use parking_lot::Mutex;
 
 use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval};
+use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
@@ -813,18 +813,12 @@ fn update_filter_expr_interval(
     // Convert the array to a ScalarValue:
     let value = ScalarValue::try_from_array(&array, 0)?;
     // Create a ScalarValue representing positive or negative infinity for the same data type:
-    let infinite = ScalarValue::try_from(value.get_datatype())?;
+    let unbounded = IntervalBound::make_unbounded(value.get_datatype())?;
     // Update the interval with lower and upper bounds based on the sort option:
     let interval = if sorted_expr.origin_sorted_expr().options.descending {
-        Interval {
-            lower: infinite,
-            upper: value,
-        }
+        Interval::new(unbounded, IntervalBound::new(value, false))
     } else {
-        Interval {
-            lower: value,
-            upper: infinite,
-        }
+        Interval::new(IntervalBound::new(value, false), unbounded)
     };
     // Set the calculated interval for the sorted filter expression:
     sorted_expr.set_interval(interval);
@@ -861,9 +855,9 @@ fn determine_prune_length(
 
     // Get the lower or upper interval based on the sort direction
     let target = if origin_sorted_expr.options.descending {
-        interval.upper.clone()
+        interval.upper.value.clone()
     } else {
-        interval.lower.clone()
+        interval.lower.value.clone()
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned
@@ -2130,7 +2124,7 @@ mod tests {
             (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -2205,7 +2199,7 @@ mod tests {
         (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -2296,7 +2290,7 @@ mod tests {
             (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6)] case_expr: usize,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
