@@ -75,7 +75,3 @@ rstest = "0.17.0"
 [[bench]]
 harness = false
 name = "in_list"
-
-[[bench]]
-harness = false
-name = "date_bin"

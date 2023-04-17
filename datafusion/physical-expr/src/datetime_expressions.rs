@@ -420,10 +420,12 @@ enum Interval {
 }
 
 impl Interval {
-    fn bin_fn(&self) -> (i64, fn(i64, i64, i64) -> i64) {
+    fn bin(&self, source: i64, origin: i64) -> i64 {
         match self {
-            Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
-            Interval::Months(months) => (*months, date_bin_months_interval),
+            Interval::Nanoseconds(nanos) => {
+                date_bin_nanos_interval(*nanos, source, origin)
+            }
+            Interval::Months(months) => date_bin_months_interval(*months, source, origin),
         }
     }
 }
@@ -506,8 +508,7 @@ fn date_bin_impl(
         )),
     };
 
-    let (stride, stride_fn) = stride.bin_fn();
-    let f = |x: Option<i64>| x.map(|x| stride_fn(stride, x, origin));
+    let f = |x: Option<i64>| x.map(|x| stride.bin(x, origin));
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
