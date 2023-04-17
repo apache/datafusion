@@ -74,22 +74,28 @@ impl IntervalBound {
     /// The result is unbounded if either is; otherwise, their values are
     /// added. The result is closed if both original bounds are closed, or open
     /// otherwise.
-    pub fn add<const UPPER: bool, T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
-        if self.is_unbounded() || other.is_unbounded() {
+    pub fn add<const UPPER: bool, T: Borrow<IntervalBound>>(
+        &self,
+        other: T,
+    ) -> Result<IntervalBound> {
+        let rhs = other.borrow();
+        if self.is_unbounded() || rhs.is_unbounded() {
             IntervalBound::make_unbounded(coerce_types(
-                &lhs.get_datatype(),
+                &self.get_datatype(),
                 &Operator::Plus,
                 &rhs.get_datatype(),
             )?)
-        } else if matches!(self.get_datatype(), DataType::Float64 | DataType::Float32)
-        {
-            alter_round_mode_for_float_operation::<UPPER, _>(&self.value, &other.value, |lhs, rhs| {
-                lhs.add(rhs)
-            }).map(|v| IntervalBound::new(v, self.open || other.open))
+        } else if matches!(self.get_datatype(), DataType::Float64 | DataType::Float32) {
+            alter_round_mode_for_float_operation::<UPPER, _>(
+                &self.value,
+                &rhs.value,
+                |lhs, rhs| lhs.add(rhs),
+            )
+            .map(|v| IntervalBound::new(v, self.open || rhs.open))
         } else {
             self.value
-                .add(&other.value)
-                .map(|v| IntervalBound::new(v, self.open || other.open))
+                .add(&rhs.value)
+                .map(|v| IntervalBound::new(v, self.open || rhs.open))
         }
     }
 
@@ -97,7 +103,10 @@ impl IntervalBound {
     /// The result is unbounded if either is; otherwise, their values are
     /// subtracted. The result is closed if both original bounds are closed,
     /// or open otherwise.
-    pub fn sub<const UPPER: bool, T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
+    pub fn sub<const UPPER: bool, T: Borrow<IntervalBound>>(
+        &self,
+        other: T,
+    ) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
             IntervalBound::make_unbounded(coerce_types(
@@ -105,11 +114,14 @@ impl IntervalBound {
                 &Operator::Minus,
                 &rhs.get_datatype(),
             )?)
-        } else if matches!(self.get_datatype(), DataType::Float64 | DataType::Float32){
-            alter_round_mode_for_float_operation::<UPPER, _>(&self.value, &other.value, |lhs, rhs| {
-                lhs.sub(rhs)
-            }).map(|v| IntervalBound::new(v, self.open || other.open))
-        }else {
+        } else if matches!(self.get_datatype(), DataType::Float64 | DataType::Float32) {
+            alter_round_mode_for_float_operation::<UPPER, _>(
+                &self.value,
+                &rhs.value,
+                |lhs, rhs| lhs.sub(rhs),
+            )
+            .map(|v| IntervalBound::new(v, self.open || rhs.open))
+        } else {
             self.value
                 .sub(&rhs.value)
                 .map(|v| IntervalBound::new(v, self.open || rhs.open))
@@ -421,6 +433,7 @@ impl Interval {
     /// Note that this represents all possible values the difference can take
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+        let rhs = other.borrow();
         Ok(Interval::new(
             self.lower.sub::<false, _>(&rhs.upper)?,
             self.upper.sub::<true, _>(&rhs.lower)?,
@@ -1092,10 +1105,7 @@ mod tests {
     macro_rules! create_interval {
         ($test_func:ident, $type:ty, $SCALAR:ident) => {
             fn $test_func(lower: $type, upper: $type) -> Interval {
-                Interval {
-                    lower: ScalarValue::$SCALAR(Some(lower)),
-                    upper: ScalarValue::$SCALAR(Some(upper)),
-                }
+                Interval::make(Some(lower as $type), Some(upper as $type), (true, true))
             }
         };
     }
@@ -1116,12 +1126,28 @@ mod tests {
                 ) {
                     (
                         Interval {
-                            lower: ScalarValue::$SCALAR(Some(result_lower)),
-                            upper: ScalarValue::$SCALAR(Some(result_upper)),
+                            lower:
+                                IntervalBound {
+                                    value: ScalarValue::$SCALAR(Some(result_lower)),
+                                    ..
+                                },
+                            upper:
+                                IntervalBound {
+                                    value: ScalarValue::$SCALAR(Some(result_upper)),
+                                    ..
+                                },
                         },
                         Interval {
-                            lower: ScalarValue::$SCALAR(Some(without_fe_lower)),
-                            upper: ScalarValue::$SCALAR(Some(without_fe_upper)),
+                            lower:
+                                IntervalBound {
+                                    value: ScalarValue::$SCALAR(Some(without_fe_lower)),
+                                    ..
+                                },
+                            upper:
+                                IntervalBound {
+                                    value: ScalarValue::$SCALAR(Some(without_fe_upper)),
+                                    ..
+                                },
                         },
                     ) => {
                         if waiting_change.0 {

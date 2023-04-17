@@ -1734,6 +1734,7 @@ mod tests {
                         ScalarValue::$SCALAR(Some(5 as $type)),
                         ScalarValue::$SCALAR(Some(3 as $type)),
                         ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
                     ),
                     // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
                     1 => gen_conjunctive_numerical_expr(
@@ -1749,6 +1750,7 @@ mod tests {
                         ScalarValue::$SCALAR(Some(5 as $type)),
                         ScalarValue::$SCALAR(Some(3 as $type)),
                         ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
                     ),
                     // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
                     2 => gen_conjunctive_numerical_expr(
@@ -1764,6 +1766,7 @@ mod tests {
                         ScalarValue::$SCALAR(Some(5 as $type)),
                         ScalarValue::$SCALAR(Some(3 as $type)),
                         ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
                     ),
                     // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
                     3 => gen_conjunctive_numerical_expr(
@@ -1779,6 +1782,7 @@ mod tests {
                         ScalarValue::$SCALAR(Some(5 as $type)),
                         ScalarValue::$SCALAR(Some(3 as $type)),
                         ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
                     ),
                     // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
                     4 => gen_conjunctive_numerical_expr(
@@ -1794,6 +1798,55 @@ mod tests {
                         ScalarValue::$SCALAR(Some(5 as $type)),
                         ScalarValue::$SCALAR(Some(30 as $type)),
                         ScalarValue::$SCALAR(Some(3 as $type)),
+                        (Operator::Gt, Operator::Lt),
+                    ),
+                    // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
+                    5 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Minus,
+                        ),
+                        ScalarValue::$SCALAR(Some(2 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(7 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        (Operator::GtEq, Operator::LtEq),
+                    ),
+                    // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                    6 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Plus,
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(28 as $type)),
+                        ScalarValue::$SCALAR(Some(11 as $type)),
+                        ScalarValue::$SCALAR(Some(21 as $type)),
+                        ScalarValue::$SCALAR(Some(39 as $type)),
+                        (Operator::Gt, Operator::LtEq),
+                    ),
+                    // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                    7 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Plus,
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(28 as $type)),
+                        ScalarValue::$SCALAR(Some(11 as $type)),
+                        ScalarValue::$SCALAR(Some(21 as $type)),
+                        ScalarValue::$SCALAR(Some(39 as $type)),
+                        (Operator::GtEq, Operator::Lt),
                     ),
                     _ => panic!("No case"),
                 }
@@ -2832,6 +2885,7 @@ mod tests {
             ScalarValue::Int32(Some(3)),
             ScalarValue::Int32(Some(0)),
             ScalarValue::Int32(Some(3)),
+            (Operator::Gt, Operator::Lt),
         );
         let column_indices = vec![
             ColumnIndex {
@@ -3071,7 +3125,7 @@ mod tests {
         (99, 12),
         )]
         cardinality: (i32, i32),
-        #[values(0, 1, 2, 3, 4)] case_expr: usize,
+        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
     ) -> Result<()> {
         let config = SessionConfig::new().with_repartition_joins(false);
         let session_ctx = SessionContext::with_config(config);

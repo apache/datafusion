@@ -597,8 +597,8 @@ mod tests {
         assert_eq!(exp_result, result);
         col_stat_nodes.iter().zip(expected_nodes.iter()).for_each(
             |((_, calculated_interval_node), (_, expected))| {
-                assert!(calculated_interval_node.lower <= expected.lower);
-                assert!(calculated_interval_node.upper >= expected.upper);
+                assert!(calculated_interval_node.lower.value <= expected.lower.value);
+                assert!(calculated_interval_node.upper.value >= expected.upper.value);
             },
         );
         Ok(())
@@ -663,22 +663,26 @@ mod tests {
                 experiment(
                     expr,
                     (left_col, right_col),
-                    Interval {
-                        lower: ScalarValue::$SCALAR(left_interval.0),
-                        upper: ScalarValue::$SCALAR(left_interval.1),
-                    },
-                    Interval {
-                        lower: ScalarValue::$SCALAR(right_interval.0),
-                        upper: ScalarValue::$SCALAR(right_interval.1),
-                    },
-                    Interval {
-                        lower: ScalarValue::$SCALAR(left_waited.0),
-                        upper: ScalarValue::$SCALAR(left_waited.1),
-                    },
-                    Interval {
-                        lower: ScalarValue::$SCALAR(right_waited.0),
-                        upper: ScalarValue::$SCALAR(right_waited.1),
-                    },
+                    Interval::make(
+                        left_interval.0.map(|value| value as $type),
+                        left_interval.1.map(|value| value as $type),
+                        (true, true),
+                    ),
+                    Interval::make(
+                        right_interval.0.map(|value| value as $type),
+                        right_interval.1.map(|value| value as $type),
+                        (true, true),
+                    ),
+                    Interval::make(
+                        left_waited.0.map(|value| value as $type),
+                        left_waited.1.map(|value| value as $type),
+                        (true, true),
+                    ),
+                    Interval::make(
+                        right_waited.0.map(|value| value as $type),
+                        right_waited.1.map(|value| value as $type),
+                        (true, true),
+                    ),
                     PropagationResult::Success,
                 )?;
                 Ok(())
@@ -733,6 +737,8 @@ mod tests {
             fn $test_func(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
+                #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
+                #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
@@ -751,7 +757,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(11 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(33 as $type)),
-                    (Operator::GtEq, Operator::Lt)
+                    (greater_op, less_op),
                 );
                 // l > r + 10 AND r > l - 30
                 let l_gt_r = 10 as $type;
@@ -788,6 +794,8 @@ mod tests {
             fn $test_func(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
+                #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
+                #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
@@ -806,7 +814,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
-                    (Operator::GtEq, Operator::Lt)
+                    (greater_op, less_op),
                 );
                 // l > r + 6 AND r > l - 7
                 let l_gt_r = 6 as $type;
@@ -843,6 +851,8 @@ mod tests {
             fn $test_func(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
+                #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
+                #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
@@ -861,7 +871,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
-                    (Operator::GtEq, Operator::Lt)
+                    (greater_op, less_op),
                 );
                 // l > r + 6 AND r > l - 13
                 let l_gt_r = 6 as $type;
@@ -898,6 +908,8 @@ mod tests {
             fn $test_func(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
+                #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
+                #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
@@ -916,7 +928,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
                     ScalarValue::$SCALAR(Some(10 as $type)),
-                    (Operator::GtEq, Operator::Lt)
+                    (greater_op, less_op),
                 );
                 // l > r + 5 AND r > l - 13
                 let l_gt_r = 5 as $type;
@@ -953,6 +965,8 @@ mod tests {
             fn $test_func(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
+                #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
+                #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
@@ -971,7 +985,7 @@ mod tests {
                     ScalarValue::$SCALAR(Some(5 as $type)),
                     ScalarValue::$SCALAR(Some(30 as $type)),
                     ScalarValue::$SCALAR(Some(3 as $type)),
-                    (Operator::GtEq, Operator::Lt)
+                    (greater_op, less_op),
                 );
                 // l > r + 5 AND r > l - 27
                 let l_gt_r = 5 as $type;
@@ -1006,23 +1020,25 @@ mod tests {
     fn case_6(
         #[values(0, 1, 2, 123, 756, 63, 345, 6443, 12341, 142, 123, 8900)] seed: u64,
         #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
-        #[values(Operator::Lt, Operator::LtEq)] less_op: Operator
+        #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
     ) -> Result<()> {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
         // left_watermark - 1 >= right_watermark + 5 AND left_watermark - 10 <= right_watermark + 3
 
-        let expr = gen_conjunctive_numeric_expr(
+        let expr = gen_conjunctive_numerical_expr(
             left_col.clone(),
             right_col.clone(),
-            Operator::Minus,
-            Operator::Plus,
-            Operator::Minus,
-            Operator::Plus,
-            1,
-            5,
-            10,
-            3,
+            (
+                Operator::Minus,
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Plus,
+            ),
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int32(Some(5)),
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Int32(Some(3)),
             (greater_op, less_op),
         );
         // l >= r + 6 AND r >= l - 13
@@ -1030,90 +1046,6 @@ mod tests {
         let r_gt_l = -13;
 
         generate_case_i32::<true>(expr, left_col, right_col, seed, l_gt_r, r_gt_l)?;
-
-        Ok(())
-    }
-
-    #[rstest]
-    #[test]
-    fn case_7(
-        #[values(0, 1, 2, 123, 77, 93, 104, 624, 115, 613, 8365, 9345)] seed: u64,
-    ) -> Result<()> {
-        let left_col = Arc::new(Column::new("left_watermark", 0));
-        let right_col = Arc::new(Column::new("right_watermark", 0));
-        // left_watermark + 4 >= right_watermark + 5 AND left_watermark - 20 < right_watermark - 5
-
-        let expr = gen_conjunctive_numeric_expr(
-            left_col.clone(),
-            right_col.clone(),
-            Operator::Plus,
-            Operator::Plus,
-            Operator::Minus,
-            Operator::Minus,
-            4,
-            5,
-            20,
-            5,
-            (Operator::GtEq, Operator::Lt),
-        );
-        // l >= r + 1 AND r > l - 15
-        let l_gt_r = 1;
-        let r_gt_l = -15;
-        generate_case::<true>(
-            expr.clone(),
-            left_col.clone(),
-            right_col.clone(),
-            seed,
-            l_gt_r,
-            r_gt_l,
-        )?;
-        // Descending tests
-        // l >= r + 1 AND r > l - 15
-        let r_lt_l = -l_gt_r;
-        let l_lt_r = -r_gt_l;
-        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
-
-        Ok(())
-    }
-
-    #[rstest]
-    #[test]
-    fn case_8(
-        #[values(0, 1, 2, 24, 53, 412, 364, 345, 737, 1010, 52, 1554)] seed: u64,
-    ) -> Result<()> {
-        let left_col = Arc::new(Column::new("left_watermark", 0));
-        let right_col = Arc::new(Column::new("right_watermark", 0));
-        // left_watermark + 4 >= right_watermark + 5 AND left_watermark - 20 < right_watermark - 5
-
-        let expr = gen_conjunctive_numeric_expr(
-            left_col.clone(),
-            right_col.clone(),
-            Operator::Plus,
-            Operator::Plus,
-            Operator::Minus,
-            Operator::Minus,
-            4,
-            5,
-            20,
-            5,
-            (Operator::Gt, Operator::LtEq),
-        );
-        // l >= r + 1 AND r > l - 15
-        let l_gt_r = 1;
-        let r_gt_l = -15;
-        generate_case::<true>(
-            expr.clone(),
-            left_col.clone(),
-            right_col.clone(),
-            seed,
-            l_gt_r,
-            r_gt_l,
-        )?;
-        // Descending tests
-        // l >= r + 1 AND r > l - 15
-        let r_lt_l = -l_gt_r;
-        let l_lt_r = -r_gt_l;
-        generate_case::<false>(expr, left_col, right_col, seed, l_lt_r, r_lt_l)?;
 
         Ok(())
     }
