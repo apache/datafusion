@@ -266,7 +266,7 @@ fn optimize_scalar(
     let subqry_plan = subqry_plan
         .aggregate(group_by, aggr.aggr_expr.clone())?
         .project(proj)?
-        .alias(&subqry_alias)?
+        .alias(subqry_alias.clone())?
         .build()?;
 
     // qualify the join columns for outside the subquery

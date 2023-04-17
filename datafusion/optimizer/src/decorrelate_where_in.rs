@@ -183,7 +183,7 @@ fn optimize_where_in(
 
     let right = LogicalPlanBuilder::from(subquery_input)
         .project(projection_exprs)?
-        .alias(&subquery_alias)?
+        .alias(subquery_alias.clone())?
         .build()?;
 
     // join our sub query into the main plan

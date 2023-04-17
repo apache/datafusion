@@ -381,7 +381,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply an alias
-    pub fn alias(self, alias: impl Into<String>) -> Result<Self> {
+    pub fn alias(self, alias: impl Into<OwnedTableReference>) -> Result<Self> {
         Ok(Self::from(subquery_alias(self.plan, alias)?))
     }
 
@@ -1236,7 +1236,7 @@ pub fn project(
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn subquery_alias(
     plan: LogicalPlan,
-    alias: impl Into<String>,
+    alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
     Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
         plan, alias,

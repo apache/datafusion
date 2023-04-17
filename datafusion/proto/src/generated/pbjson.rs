@@ -20231,15 +20231,15 @@ impl serde::Serialize for SubqueryAliasNode {
         if self.input.is_some() {
             len += 1;
         }
-        if !self.alias.is_empty() {
+        if self.alias.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.SubqueryAliasNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
-        if !self.alias.is_empty() {
-            struct_ser.serialize_field("alias", &self.alias)?;
+        if let Some(v) = self.alias.as_ref() {
+            struct_ser.serialize_field("alias", v)?;
         }
         struct_ser.end()
     }
@@ -20315,13 +20315,13 @@ impl<'de> serde::Deserialize<'de> for SubqueryAliasNode {
                             if alias__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("alias"));
                             }
-                            alias__ = Some(map.next_value()?);
+                            alias__ = map.next_value()?;
                         }
                     }
                 }
                 Ok(SubqueryAliasNode {
                     input: input__,
-                    alias: alias__.unwrap_or_default(),
+                    alias: alias__,
                 })
             }
         }

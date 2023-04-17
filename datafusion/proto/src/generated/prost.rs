@@ -448,8 +448,8 @@ pub struct SelectionExecNode {
 pub struct SubqueryAliasNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(string, tag = "2")]
-    pub alias: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub alias: ::core::option::Option<OwnedTableReference>,
 }
 /// logical expressions
 #[allow(clippy::derive_partial_eq_without_eq)]
