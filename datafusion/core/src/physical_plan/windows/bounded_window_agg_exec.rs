@@ -80,25 +80,6 @@ pub enum PartitionSearchMode {
     Sorted,
 }
 
-impl PartialOrd for PartitionSearchMode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (PartitionSearchMode::Sorted, PartitionSearchMode::Sorted)
-            | (PartitionSearchMode::Linear, PartitionSearchMode::Linear) => {
-                Some(Ordering::Equal)
-            }
-            (
-                PartitionSearchMode::PartiallySorted(lhs),
-                PartitionSearchMode::PartiallySorted(rhs),
-            ) => Some(lhs.len().cmp(&rhs.len())),
-            (PartitionSearchMode::PartiallySorted(_), PartitionSearchMode::Linear)
-            | (PartitionSearchMode::Sorted, _) => Some(Ordering::Greater),
-            (PartitionSearchMode::PartiallySorted(_), PartitionSearchMode::Sorted)
-            | (PartitionSearchMode::Linear, _) => Some(Ordering::Less),
-        }
-    }
-}
-
 /// Window execution plan
 #[derive(Debug)]
 pub struct BoundedWindowAggExec {
@@ -373,10 +354,18 @@ impl ExecutionPlan for BoundedWindowAggExec {
 /// Trait that specifies how we search for (or calculate) partitions. It has two
 /// implementations: [`SortedSearch`] and [`LinearSearch`].
 trait PartitionSearcher: Send {
-    /// This method constructs output columns using the result of each window expression.
+    /// This method constructs output columns using the result of each window expression
+    /// (each entry in the output vector comes from a window expression).
+    /// Executor when producing output concatenates `input_buffer` (corresponding section), and
+    /// result of this function to generate output `RecordBatch`. `input_buffer` is used to determine
+    /// which sections of the window expression results should be used to generate output.
+    /// `partition_buffers` contains corresponding section of the `RecordBatch` for each partition.
+    /// `window_agg_states` stores per partition state for each window expression.
+    /// None case means that no result is generated
+    /// Some(Vec<ArrayRef>) is the result of each window expression.
     fn calculate_out_columns(
         &mut self,
-        input_buffer: &mut RecordBatch,
+        input_buffer: &RecordBatch,
         window_agg_states: &[PartitionWindowAggStates],
         partition_buffers: &mut PartitionBatches,
         window_expr: &[Arc<dyn WindowExpr>],
@@ -495,7 +484,7 @@ impl PartitionSearcher for LinearSearch {
     // Above section corresponds to calculated result which can be emitted without breaking input buffer ordering.
     fn calculate_out_columns(
         &mut self,
-        input_buffer: &mut RecordBatch,
+        input_buffer: &RecordBatch,
         window_agg_states: &[PartitionWindowAggStates],
         partition_buffers: &mut PartitionBatches,
         window_expr: &[Arc<dyn WindowExpr>],
@@ -603,11 +592,13 @@ impl LinearSearch {
             input_buffer_hashes: VecDeque::new(),
             random_state: Default::default(),
             ordered_partition_by_indices,
-            row_map_batch: RawTable::with_capacity(0),
-            row_map_out: RawTable::with_capacity(0),
+            row_map_batch: RawTable::with_capacity(256),
+            row_map_out: RawTable::with_capacity(256),
         }
     }
 
+    /// Calculates partition by expression results for each window expression
+    /// on `record_batch`.
     fn evaluate_partition_by_column_values(
         &self,
         record_batch: &RecordBatch,
@@ -625,6 +616,8 @@ impl LinearSearch {
             .collect()
     }
 
+    /// Calculate indices of each partition (according to PARTITION BY expression)
+    /// `columns` contain partition by expression results.
     fn get_per_partition_indices(
         &mut self,
         columns: &[ArrayRef],
@@ -644,7 +637,6 @@ impl LinearSearch {
                 let row = get_row_at_idx(columns, row_idx as usize).unwrap();
                 // Handle hash collusions with an equality check:
                 row.eq(&result[*group_idx].0)
-                // equal_rows(row_idx, res[*group_idx].1[0], columns, columns, true).unwrap()
             });
             if let Some((_, group_idx)) = entry {
                 result[*group_idx].1.push(row_idx)
@@ -665,7 +657,7 @@ impl LinearSearch {
     /// stores indices of the rows for which the partition is constructed.
     fn calc_partition_output_indices(
         &mut self,
-        input_buffer: &mut RecordBatch,
+        input_buffer: &RecordBatch,
         window_agg_states: &[PartitionWindowAggStates],
         window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Vec<(PartitionKey, Vec<u32>)>> {
@@ -729,7 +721,7 @@ impl PartitionSearcher for SortedSearch {
     /// This method constructs new output columns using the result of each window expression.
     fn calculate_out_columns(
         &mut self,
-        _input_buffer: &mut RecordBatch,
+        _input_buffer: &RecordBatch,
         window_agg_states: &[PartitionWindowAggStates],
         partition_buffers: &mut PartitionBatches,
         _window_expr: &[Arc<dyn WindowExpr>],
@@ -943,7 +935,7 @@ impl BoundedWindowAggStream {
 
         let schema = self.schema.clone();
         let window_expr_out = self.search_mode.calculate_out_columns(
-            &mut self.input_buffer,
+            &self.input_buffer,
             &self.window_agg_states,
             &mut self.partition_buffers,
             &self.window_expr,

@@ -655,7 +655,8 @@ fn analyze_window_sort_removal(
         } else {
             if partition_search_mode != PartitionSearchMode::Sorted {
                 // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
-                // Hence if `PartitionSearchMode` is not `Sorted` we should satisfy required ordering.
+                // Hence, if `partition_search_mode` is not `PartitionSearchMode::Sorted` we should convert
+                // input ordering such that it can work with PartitionSearchMode::Sorted (add `SortExec`).
                 // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
                 let reqs = window_exec
                     .required_input_ordering()
@@ -792,6 +793,15 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
+/// Compares physical ordering (output ordering of input executor) and with
+/// `partitionby_exprs` and `orderby_keys`
+/// to decide whether existing ordering is sufficient to run current window executor.
+/// A `None` return value indicates that we can not remove the sort in question (input ordering is not
+/// sufficient to run current window executor).
+/// A `Some((bool, PartitionSearchMode))` value indicates window executor can be run with existing input ordering
+/// (Hence we can remove `SortExec` before it).
+/// `bool` represents whether we should reverse window executor to remove `SortExec` before it.
+/// `PartitionSearchMode` represents, in which mode Window Executor should work with existing ordering.
 fn can_skip_sort(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
     orderby_keys: &[PhysicalSortExpr],
