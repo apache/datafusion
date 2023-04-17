@@ -16,17 +16,19 @@
 // under the License.
 
 //! Interval arithmetic library
+
 use std::borrow::Borrow;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-use crate::aggregate::min_max::{max, min};
-use crate::intervals::alter_round_mode_for_float_operation;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
+
+use crate::aggregate::min_max::{max, min};
+use crate::intervals::alter_fp_rounding_mode;
 
 /// This type represents a single endpoint of an [`Interval`]. An endpoint can
 /// be open or closed, denoting whether the interval includes or excludes the
@@ -80,23 +82,21 @@ impl IntervalBound {
     ) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
-            IntervalBound::make_unbounded(coerce_types(
+            return IntervalBound::make_unbounded(coerce_types(
                 &self.get_datatype(),
                 &Operator::Plus,
                 &rhs.get_datatype(),
-            )?)
-        } else if matches!(self.get_datatype(), DataType::Float64 | DataType::Float32) {
-            alter_round_mode_for_float_operation::<UPPER, _>(
-                &self.value,
-                &rhs.value,
-                |lhs, rhs| lhs.add(rhs),
-            )
-            .map(|v| IntervalBound::new(v, self.open || rhs.open))
-        } else {
-            self.value
-                .add(&rhs.value)
-                .map(|v| IntervalBound::new(v, self.open || rhs.open))
+            )?);
         }
+        match self.get_datatype() {
+            DataType::Float64 | DataType::Float32 => {
+                alter_fp_rounding_mode::<UPPER, _>(&self.value, &rhs.value, |lhs, rhs| {
+                    lhs.add(rhs)
+                })
+            }
+            _ => self.value.add(&rhs.value),
+        }
+        .map(|v| IntervalBound::new(v, self.open || rhs.open))
     }
 
     /// This function subtracts the given `IntervalBound` from `self`.
@@ -109,23 +109,21 @@ impl IntervalBound {
     ) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
-            IntervalBound::make_unbounded(coerce_types(
+            return IntervalBound::make_unbounded(coerce_types(
                 &self.get_datatype(),
                 &Operator::Minus,
                 &rhs.get_datatype(),
-            )?)
-        } else if matches!(self.get_datatype(), DataType::Float64 | DataType::Float32) {
-            alter_round_mode_for_float_operation::<UPPER, _>(
-                &self.value,
-                &rhs.value,
-                |lhs, rhs| lhs.sub(rhs),
-            )
-            .map(|v| IntervalBound::new(v, self.open || rhs.open))
-        } else {
-            self.value
-                .sub(&rhs.value)
-                .map(|v| IntervalBound::new(v, self.open || rhs.open))
+            )?);
         }
+        match self.get_datatype() {
+            DataType::Float64 | DataType::Float32 => {
+                alter_fp_rounding_mode::<UPPER, _>(&self.value, &rhs.value, |lhs, rhs| {
+                    lhs.sub(rhs)
+                })
+            }
+            _ => self.value.sub(&rhs.value),
+        }
+        .map(|v| IntervalBound::new(v, self.open || rhs.open))
     }
 
     /// This function chooses one of the given `IntervalBound`s according to

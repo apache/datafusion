@@ -245,7 +245,7 @@ fn apply_subrules_and_check_finiteness_requirements(
 mod util_tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
-    use datafusion_physical_expr::intervals::cp_solver::check_support;
+    use datafusion_physical_expr::intervals::check_support;
     use datafusion_physical_expr::PhysicalExpr;
     use std::sync::Arc;
 
