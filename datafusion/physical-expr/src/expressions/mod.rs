@@ -24,7 +24,6 @@ mod cast;
 mod column;
 mod datetime;
 mod get_indexed_field;
-mod if_fun;
 mod in_list;
 mod is_not_null;
 mod is_null;
@@ -81,7 +80,6 @@ pub use cast::{
 pub use column::{col, Column, UnKnownColumn};
 pub use datetime::DateTimeIntervalExpr;
 pub use get_indexed_field::GetIndexedFieldExpr;
-pub use if_fun::if_func;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
