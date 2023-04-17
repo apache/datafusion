@@ -33,7 +33,6 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 
-use crate::physical_plan::windows::BoundedWindowAggExec;
 use std::sync::Arc;
 
 /// The [`PipelineFixer`] rule tries to modify a given plan so that it can
@@ -65,7 +64,6 @@ impl PhysicalOptimizerRule for PipelineFixer {
         let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
-            Box::new(replace_window_with_linear),
         ];
         let state = pipeline.transform_up(&|p| apply_subrules(p, &subrules))?;
         Ok(state.plan)
@@ -185,34 +183,6 @@ fn hash_join_swap_subrule(
     } else {
         None
     }
-}
-
-/// This subrule adjusts a given [`BoundedWindowExec`] so that it does not
-/// require its partition columns to have an ordering. With this adjustment,
-/// these operators will use hash tables for partitioning instead of relying
-/// on ordering. This enables us to achieve pipelining in many cases.
-fn replace_window_with_linear(
-    mut input: PipelineStatePropagator,
-) -> Option<Result<PipelineStatePropagator>> {
-    if let Some(exec) = input.plan.as_any().downcast_ref::<BoundedWindowAggExec>() {
-        // BoundedWindowAggExec always has single child, zero-indexing is safe.
-        if input.children_unbounded[0] {
-            let parent = exec.input();
-            let new_exec = BoundedWindowAggExec::try_new(
-                exec.window_expr().to_vec(),
-                parent.clone(),
-                parent.schema(),
-                exec.partition_keys.clone(),
-                exec.partition_search_mode.clone(),
-                true,
-            );
-            return Some(new_exec.map(|exec| {
-                input.plan = Arc::new(exec) as _;
-                input
-            }));
-        }
-    }
-    None
 }
 
 /// This function swaps sides of a hash join to make it runnable even if one of its

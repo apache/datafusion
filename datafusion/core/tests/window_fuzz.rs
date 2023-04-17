@@ -471,7 +471,6 @@ async fn run_window_test(
             schema.clone(),
             vec![],
             search_mode,
-            true,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;

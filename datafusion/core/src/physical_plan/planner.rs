@@ -603,7 +603,6 @@ impl DefaultPhysicalPlanner {
                             physical_input_schema,
                             physical_partition_keys,
                             PartitionSearchMode::Sorted,
-                            false,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(

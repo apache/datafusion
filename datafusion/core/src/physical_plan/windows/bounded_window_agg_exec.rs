@@ -104,8 +104,6 @@ pub struct BoundedWindowAggExec {
     // `ordered_partition_by_indices` would be 0, 1.
     // See `get_ordered_partition_by_indices` for more details.
     ordered_partition_by_indices: Vec<usize>,
-    /// Whether the source is unbounded
-    pub source_unbounded: bool,
 }
 
 impl BoundedWindowAggExec {
@@ -116,7 +114,6 @@ impl BoundedWindowAggExec {
         input_schema: SchemaRef,
         partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         partition_search_mode: PartitionSearchMode,
-        source_unbounded: bool,
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
@@ -149,7 +146,6 @@ impl BoundedWindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             partition_search_mode,
             ordered_partition_by_indices,
-            source_unbounded,
         })
     }
 
@@ -278,7 +274,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.input_schema.clone(),
             self.partition_keys.clone(),
             self.partition_search_mode.clone(),
-            self.source_unbounded,
         )?))
     }
 

@@ -575,16 +575,12 @@ fn analyze_window_sort_removal(
     sort_tree: &mut ExecTree,
     window_exec: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
-    let (window_expr, partition_keys, source_unbounded) = if let Some(exec) =
+    let (window_expr, partition_keys) = if let Some(exec) =
         window_exec.as_any().downcast_ref::<BoundedWindowAggExec>()
     {
-        (
-            exec.window_expr(),
-            &exec.partition_keys,
-            exec.source_unbounded,
-        )
+        (exec.window_expr(), &exec.partition_keys)
     } else if let Some(exec) = window_exec.as_any().downcast_ref::<WindowAggExec>() {
-        (exec.window_expr(), &exec.partition_keys, false)
+        (exec.window_expr(), &exec.partition_keys)
     } else {
         return Err(DataFusionError::Plan(
             "Expects to receive either WindowAggExec of BoundedWindowAggExec".to_string(),
@@ -614,6 +610,7 @@ fn analyze_window_sort_removal(
     }
 
     let (should_reverse, partition_search_mode) = search_flags;
+    let source_unbounded = unbounded_output(window_exec);
     if searching
         || !(source_unbounded || partition_search_mode == PartitionSearchMode::Sorted)
     {
@@ -650,7 +647,6 @@ fn analyze_window_sort_removal(
                 new_schema,
                 partition_keys.to_vec(),
                 partition_search_mode,
-                source_unbounded,
             )?) as _
         } else {
             if partition_search_mode != PartitionSearchMode::Sorted {
@@ -937,6 +933,21 @@ fn check_alignment(
     } else {
         None
     })
+}
+
+// Get unbounded_output information for the executor
+fn unbounded_output(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let res = if plan.children().is_empty() {
+        plan.unbounded_output(&[])
+    } else {
+        let children_unbounded_output = plan
+            .children()
+            .iter()
+            .map(unbounded_output)
+            .collect::<Vec<_>>();
+        plan.unbounded_output(&children_unbounded_output)
+    };
+    res.unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -2769,7 +2780,6 @@ mod tests {
                 input.schema(),
                 vec![],
                 Sorted,
-                false,
             )
             .unwrap(),
         )
