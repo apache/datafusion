@@ -704,7 +704,7 @@ SELECT DATE_BIN('1 month', '2022-04-01T00:00:00Z', '2021-05-01T00:04:00Z');
 ----
 2022-03-01T00:04:00
 
-# origin is May 51 (last date of the month) to produce bin on Feb 28
+# origin is May 31 (last date of the month) to produce bin on Feb 28
 query P
 SELECT DATE_BIN('3 month', '2022-04-01T00:00:00Z', '2021-05-31T00:04:00Z');
 ----
