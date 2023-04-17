@@ -23,12 +23,13 @@ use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 
 use crate::analyzer::type_coercion::TypeCoercion;
+use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
-use log::{debug, trace};
+use log::debug;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -97,6 +98,7 @@ impl Analyzer {
             new_plan = rule.analyze(new_plan, config).map_err(|e| {
                 DataFusionError::Context(rule.name().to_string(), Box::new(e))
             })?;
+            log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
         // for easier display in explain output
@@ -107,12 +109,6 @@ impl Analyzer {
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
-}
-
-/// Log the plan in debug/tracing mode after some part of the optimizer runs
-fn log_plan(description: &str, plan: &LogicalPlan) {
-    debug!("{description}:\n{}\n", plan.display_indent());
-    trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
 /// Do necessary check and fail the invalid plan
