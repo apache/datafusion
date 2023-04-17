@@ -118,38 +118,38 @@ pub fn to_substrait_rel(
                     .collect()
             });
 
-            if let Some(struct_items) = projection {
-                Ok(Box::new(Rel {
-                    rel_type: Some(RelType::Read(Box::new(ReadRel {
-                        common: None,
-                        base_schema: Some(NamedStruct {
-                            names: scan
-                                .source
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|f| f.name().to_owned())
-                                .collect(),
-                            r#struct: None,
-                        }),
-                        filter: None,
-                        best_effort_filter: None,
-                        projection: Some(MaskExpression {
-                            select: Some(StructSelect { struct_items }),
-                            maintain_singular_struct: false,
-                        }),
-                        advanced_extension: None,
-                        read_type: Some(ReadType::NamedTable(NamedTable {
-                            names: scan.table_name.to_vec(),
-                            advanced_extension: None,
-                        })),
-                    }))),
-                }))
+            let projection = if let Some(struct_items) = projection {
+                Some(MaskExpression {
+                    select: Some(StructSelect { struct_items }),
+                    maintain_singular_struct: false,
+                })
             } else {
-                Err(DataFusionError::NotImplemented(
-                    "TableScan without projection is not supported".to_string(),
-                ))
-            }
+                None
+            };
+
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Read(Box::new(ReadRel {
+                    common: None,
+                    base_schema: Some(NamedStruct {
+                        names: scan
+                            .source
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().to_owned())
+                            .collect(),
+                        r#struct: None,
+                    }),
+                    filter: None,
+                    best_effort_filter: None,
+                    projection,
+                    advanced_extension: None,
+                    read_type: Some(ReadType::NamedTable(NamedTable {
+                        names: scan.table_name.to_vec(),
+                        advanced_extension: None,
+                    })),
+                }))),
+            }))
         }
         LogicalPlan::Projection(p) => {
             let expressions = p
