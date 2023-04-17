@@ -2104,7 +2104,7 @@ mod tests {
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
     use datafusion_common::{ColumnStatistics, Result, Statistics};
-    use datafusion_expr::type_coercion::binary::coerce_types;
+    use datafusion_expr::type_coercion::binary::{coerce_types, math_decimal_coercion};
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -2745,7 +2745,7 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = create_decimal_array(
             &[Some(value + 1), None, Some(value), Some(value + 2)],
-            10,
+            11,
             0,
         );
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
@@ -2964,7 +2964,7 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = create_decimal_array(
             &[Some(value - 1), None, Some(value - 2), Some(value)],
-            10,
+            11,
             0,
         );
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
@@ -3178,7 +3178,7 @@ mod tests {
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array =
-            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 10, 0);
+            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 21, 0);
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
 
         apply_arithmetic_scalar(
@@ -3391,8 +3391,16 @@ mod tests {
         let a = DictionaryArray::try_new(&keys, &decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array =
-            create_decimal_array(&[Some(61), None, Some(61), Some(62)], 10, 0);
+        let decimal_array = create_decimal_array(
+            &[
+                Some(6150000000000),
+                None,
+                Some(6100000000000),
+                Some(6200000000000),
+            ],
+            21,
+            11,
+        );
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
 
         apply_arithmetic_scalar(
@@ -4769,38 +4777,47 @@ mod tests {
         Ok(())
     }
 
-    fn apply_arithmetic_op(
+    fn apply_decimal_arithmetic_op(
         schema: &SchemaRef,
         left: &ArrayRef,
         right: &ArrayRef,
         op: Operator,
         expected: ArrayRef,
     ) -> Result<()> {
-        let op_type = coerce_types(left.data_type(), &op, right.data_type())?;
-        let left_expr = if left.data_type().eq(&op_type) {
-            col("a", schema)?
+        let (lhs_op_type, rhs_op_type) =
+            math_decimal_coercion(left.data_type(), right.data_type());
+
+        let (left_expr, lhs_type) = if let Some(lhs_op_type) = lhs_op_type {
+            (
+                try_cast(col("a", schema)?, schema, lhs_op_type.clone())?,
+                lhs_op_type,
+            )
         } else {
-            try_cast(col("a", schema)?, schema, op_type.clone())?
+            (col("a", schema)?, left.data_type().clone())
         };
 
-        let right_expr = if right.data_type().eq(&op_type) {
-            col("b", schema)?
+        let (right_expr, rhs_type) = if let Some(rhs_op_type) = rhs_op_type {
+            (
+                try_cast(col("b", schema)?, schema, rhs_op_type.clone())?,
+                rhs_op_type,
+            )
         } else {
-            try_cast(col("b", schema)?, schema, op_type.clone())?
+            (col("b", schema)?, right.data_type().clone())
         };
 
         let coerced_schema = Schema::new(vec![
             Field::new(
                 schema.field(0).name(),
-                op_type.clone(),
+                lhs_type.clone(),
                 schema.field(0).is_nullable(),
             ),
             Field::new(
                 schema.field(1).name(),
-                op_type,
+                rhs_type.clone(),
                 schema.field(1).is_nullable(),
             ),
         ]);
+
         let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
@@ -4840,7 +4857,7 @@ mod tests {
             13,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -4851,18 +4868,18 @@ mod tests {
 
         // subtract: decimal array subtract int32 array
         let schema = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Int32, true),
             Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Int32, true),
         ]));
         let expect = Arc::new(create_decimal_array(
             &[Some(-12177), None, Some(-12178), Some(-12276)],
             13,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
-            &int32_array,
             &decimal_array,
+            &int32_array,
             Operator::Minus,
             expect,
         )
@@ -4874,10 +4891,10 @@ mod tests {
             21,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
-            &int32_array,
             &decimal_array,
+            &int32_array,
             Operator::Multiply,
             expect,
         )
@@ -4898,7 +4915,7 @@ mod tests {
             23,
             11,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -4917,7 +4934,7 @@ mod tests {
             10,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -4960,7 +4977,7 @@ mod tests {
             Some(124.22),
             Some(125.24),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -4980,7 +4997,7 @@ mod tests {
             Some(121.78),
             Some(122.76),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -4996,7 +5013,7 @@ mod tests {
             Some(150.06),
             Some(153.76),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -5016,7 +5033,7 @@ mod tests {
             Some(100.81967213114754),
             Some(100.0),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -5036,7 +5053,7 @@ mod tests {
             Some(1.0000000000000027),
             Some(8.881784197001252e-16),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -5079,7 +5096,11 @@ mod tests {
             schema,
             vec![left_decimal_array, right_decimal_array],
             Operator::Divide,
-            create_decimal_array(&[Some(123456700), None], 25, 3),
+            create_decimal_array(
+                &[Some(12345670000000000000000000000000000), None],
+                38,
+                29,
+            ),
         )?;
 
         Ok(())

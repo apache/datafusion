@@ -629,6 +629,27 @@ pub fn decimal_op_mathematics_type(
                 _ => None,
             }
         }
+        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+            decimal_op_mathematics_type(
+                mathematics_op,
+                lhs_value_type.as_ref(),
+                rhs_value_type.as_ref(),
+            )
+        }
+        (Dictionary(key_type, value_type), _) => {
+            let value_type = decimal_op_mathematics_type(
+                mathematics_op,
+                value_type.as_ref(),
+                right_decimal_type,
+            );
+            value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
+        }
+        (_, Dictionary(_, value_type)) => decimal_op_mathematics_type(
+            mathematics_op,
+            left_decimal_type,
+            value_type.as_ref(),
+        ),
         _ => None,
     }
 }
