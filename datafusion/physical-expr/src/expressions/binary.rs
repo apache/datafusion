@@ -3308,7 +3308,17 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Divide,
-            create_decimal_array(&[Some(0), None, None, Some(1), Some(1)], 21, 11),
+            create_decimal_array(
+                &[
+                    Some(99193548387), // 0.99193548387
+                    None,
+                    None,
+                    Some(100813008130), // 1.0081300813
+                    Some(100000000000), // 1.0
+                ],
+                21,
+                11,
+            ),
         )?;
 
         Ok(())

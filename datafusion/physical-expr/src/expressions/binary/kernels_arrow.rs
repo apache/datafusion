@@ -425,7 +425,10 @@ pub(crate) fn divide_dyn_opt_decimal(
 
     let mul = 10_i128.pow(scale as u32);
     let array = multiply_scalar_dyn::<Decimal128Type>(left, mul)?;
-    let array = decimal_array_with_precision_scale(array, precision, scale)?;
+
+    // Restore to original precision and scale (metadata only)
+    let (org_precision, org_scale) = get_precision_scale(right.data_type())?;
+    let array = decimal_array_with_precision_scale(array, org_precision, org_scale)?;
     let array = divide_dyn_opt(&array, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
