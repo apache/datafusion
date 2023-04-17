@@ -612,7 +612,7 @@ fn analyze_window_sort_removal(
     let (should_reverse, partition_search_mode) = search_flags;
     let source_unbounded = unbounded_output(window_exec);
     if searching
-        || !(source_unbounded || partition_search_mode == PartitionSearchMode::Sorted)
+        || (!source_unbounded && partition_search_mode != PartitionSearchMode::Sorted)
     {
         // If we can not skip the sort or removing it is not helpful, return:
         return Ok(None);
