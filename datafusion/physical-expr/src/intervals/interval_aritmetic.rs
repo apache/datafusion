@@ -28,7 +28,7 @@ use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
-use crate::intervals::alter_fp_rounding_mode;
+use crate::intervals::rounding::alter_fp_rounding_mode;
 
 /// This type represents a single endpoint of an [`Interval`]. An endpoint can
 /// be open or closed, denoting whether the interval includes or excludes the
@@ -1060,7 +1060,7 @@ mod tests {
     // This function tests if valid constructions produce standardized objects
     // ([false, false], [false, true], [true, true]) for boolean intervals.
     #[test]
-    fn non_standard_interval_constructs() -> Result<()> {
+    fn non_standard_interval_constructs() {
         let cases = vec![
             (
                 IntervalBound::new(Boolean(None), true),
@@ -1097,31 +1097,32 @@ mod tests {
         for case in cases {
             assert_eq!(Interval::new(case.0, case.1), case.2)
         }
-        Ok(())
     }
 
-    macro_rules! create_interval {
-        ($test_func:ident, $type:ty, $SCALAR:ident) => {
-            fn $test_func(lower: $type, upper: $type) -> Interval {
-                Interval::make(Some(lower as $type), Some(upper as $type), (true, true))
+    macro_rules! capture_mode_change {
+        ($TEST_FN_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
+            paste::item! {
+                capture_mode_change_helper!($TEST_FN_NAME,
+                                            [<create_interval_ $TYPE>],
+                                            $TYPE,
+                                            $SCALAR);
             }
         };
     }
 
-    create_interval!(create_f32_interval, f32, Float32);
-    create_interval!(create_f64_interval, f64, Float64);
+    macro_rules! capture_mode_change_helper {
+        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
+            fn $CREATE_FN_NAME(lower: $TYPE, upper: $TYPE) -> Interval {
+                Interval::make(Some(lower as $TYPE), Some(upper as $TYPE), (true, true))
+            }
 
-    macro_rules! capture_mode_change {
-        ($test_func:ident, $interval_create:ident, $type:ty, $SCALAR:ident) => {
-            fn $test_func(input: ($type, $type), waiting_change: (bool, bool)) {
-                assert!(waiting_change.0 || waiting_change.1);
-                let interval1 = $interval_create(input.0, input.1);
-                let interval2 = $interval_create(input.1, input.0);
+            fn $TEST_FN_NAME(input: ($TYPE, $TYPE), expect_low: bool, expect_high: bool) {
+                assert!(expect_low || expect_high);
+                let interval1 = $CREATE_FN_NAME(input.0, input.0);
+                let interval2 = $CREATE_FN_NAME(input.1, input.1);
                 let result = interval1.add(&interval2).unwrap();
-                match (
-                    result,
-                    $interval_create(input.0 + input.1, input.0 + input.1),
-                ) {
+                let without_fe = $CREATE_FN_NAME(input.0 + input.1, input.0 + input.1);
+                match (result, without_fe) {
                     (
                         Interval {
                             lower:
@@ -1148,12 +1149,10 @@ mod tests {
                                 },
                         },
                     ) => {
-                        if waiting_change.0 {
-                            assert!(result_lower < without_fe_lower);
-                        }
-                        if waiting_change.1 {
-                            assert!(result_upper > without_fe_upper);
-                        }
+                        assert!(
+                            (!expect_low || result_lower < without_fe_lower)
+                                && (!expect_high || result_upper > without_fe_upper)
+                        );
                     }
                     _ => unreachable!(),
                 }
@@ -1161,8 +1160,8 @@ mod tests {
         };
     }
 
-    capture_mode_change!(capture_mode_change_f32, create_f32_interval, f32, Float32);
-    capture_mode_change!(capture_mode_change_f64, create_f64_interval, f64, Float64);
+    capture_mode_change!(capture_mode_change_f32, f32, Float32);
+    capture_mode_change!(capture_mode_change_f64, f64, Float64);
 
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
@@ -1173,22 +1172,22 @@ mod tests {
         // Lower is affected
         let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
         let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
-        capture_mode_change_f32((lower, upper), (true, false));
+        capture_mode_change_f32((lower, upper), true, false);
 
         // Upper is affected
         let lower = f32::from_bits(1072693248); //111111111100000000000000000000
         let upper = f32::from_bits(715827883); //101010101010101010101010101011
-        capture_mode_change_f32((lower, upper), (false, true));
+        capture_mode_change_f32((lower, upper), false, true);
 
         // Lower is affected
         let lower = 1.0; // 0x3FF0000000000000
         let upper = 0.3; // 0x3FD3333333333333
-        capture_mode_change_f64((lower, upper), (true, false));
+        capture_mode_change_f64((lower, upper), true, false);
 
         // Upper is affected
         let lower = 1.4999999999999998; // 0x3FF7FFFFFFFFFFFF
         let upper = 0.000_000_000_000_000_022_044_604_925_031_31; // 0x3C796A6B413BB21F
-        capture_mode_change_f64((lower, upper), (false, true));
+        capture_mode_change_f64((lower, upper), false, true);
     }
 
     #[cfg(any(

@@ -19,10 +19,8 @@
 
 pub mod cp_solver;
 pub mod interval_aritmetic;
-
-mod rounding;
+pub mod rounding;
 
 pub mod test_utils;
 pub use cp_solver::{check_support, ExprIntervalGraph};
 pub use interval_aritmetic::*;
-pub use rounding::alter_fp_rounding_mode;
