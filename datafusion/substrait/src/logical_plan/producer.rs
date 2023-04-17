@@ -118,14 +118,10 @@ pub fn to_substrait_rel(
                     .collect()
             });
 
-            let projection = if let Some(struct_items) = projection {
-                Some(MaskExpression {
-                    select: Some(StructSelect { struct_items }),
-                    maintain_singular_struct: false,
-                })
-            } else {
-                None
-            };
+            let projection = projection.map(|struct_items| MaskExpression {
+                select: Some(StructSelect { struct_items }),
+                maintain_singular_struct: false,
+            });
 
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
