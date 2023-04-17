@@ -4808,12 +4808,12 @@ mod tests {
         let coerced_schema = Schema::new(vec![
             Field::new(
                 schema.field(0).name(),
-                lhs_type.clone(),
+                lhs_type,
                 schema.field(0).is_nullable(),
             ),
             Field::new(
                 schema.field(1).name(),
-                rhs_type.clone(),
+                rhs_type,
                 schema.field(1).is_nullable(),
             ),
         ]);
