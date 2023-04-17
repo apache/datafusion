@@ -340,7 +340,20 @@ struct GroupOrderInfo {
 }
 
 impl GroupedHashAggregateStream {
-    // Get indices for each group.
+    /// Calculate indices for each group, according to `group_values`.
+    /// Returns `GroupOrderInfo` for each unique group. This struct contains corresponding
+    /// indices for the group, hash value of the group key(may not be unique, because of collisions),
+    /// and `OwnedRow` representation of the group key(unique identifier)
+    // For instance, for table
+    // a, b
+    // 1, 1
+    // 1, 1
+    // 2, 2
+    // 1, 2
+    // 2, 3
+    // GROUP BY a would produce
+    // [0, 1, 3] for group '1',
+    // [2, 4] for group '2'.
     fn get_per_group_indices(
         &mut self,
         group_values: &[ArrayRef],
@@ -756,6 +769,9 @@ impl std::fmt::Debug for AggregationState {
 }
 
 impl GroupedHashAggregateStream {
+    /// Prune the groups from the `self.aggr_state.group_states` which are in
+    /// `GroupStatus::Emitted`(this status means that result of this group emitted/outputted already, and
+    /// we are sure that these groups cannot receive new rows.) status.
     fn prune(&mut self) {
         let n_partition = self.aggr_state.group_states.len();
         self.aggr_state
