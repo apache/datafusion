@@ -400,7 +400,7 @@ pub struct PartitionBatchState {
     pub record_batch: RecordBatch,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
-    /// number of rows emitted for each partition
+    /// Number of rows emitted for each partition
     pub n_out_row: usize,
 }
 

@@ -593,16 +593,18 @@ fn analyze_window_sort_removal(
     let partitionby_exprs = window_expr[0].partition_by();
     let orderby_sort_keys = window_expr[0].order_by();
 
-    let mut res = None;
+    let mut searching = true;
+    let mut search_flags = (false, PartitionSearchMode::Sorted);
     for sort_any in sort_tree.get_leaves() {
         // Variable `sort_any` will either be a `SortExec` or a
         // `SortPreservingMergeExec`, and both have a single child.
         // Therefore, we can use the 0th index without loss of generality.
-        let sort_input = sort_any.children()[0].clone();
-        if let Some(new_res) =
-            can_skip_sort(partitionby_exprs, orderby_sort_keys, &sort_input)?
+        let sort_input = &sort_any.children()[0];
+        if let Some(flags) =
+            can_skip_sort(partitionby_exprs, orderby_sort_keys, sort_input)?
         {
-            if new_res == *res.get_or_insert(new_res.clone()) {
+            if searching || search_flags == flags {
+                (searching, search_flags) = (false, flags);
                 continue;
             }
         }
@@ -610,14 +612,12 @@ fn analyze_window_sort_removal(
         // uniform; then sort removal is not possible -- we immediately return.
         return Ok(None);
     }
-    let (should_reverse, partition_search_mode) = if let Some(res) = res {
-        if !source_unbounded && !matches!(res.1, PartitionSearchMode::Sorted) {
-            // Skipping sort. Removing it, is not helpful in this case.
-            return Ok(None);
-        }
-        res
-    } else {
-        // cannot skip sort
+
+    let (should_reverse, partition_search_mode) = search_flags;
+    if searching
+        || !(source_unbounded || partition_search_mode == PartitionSearchMode::Sorted)
+    {
+        // If we can not skip the sort or removing it is not helpful, return:
         return Ok(None);
     };
 
@@ -653,29 +653,23 @@ fn analyze_window_sort_removal(
                 source_unbounded,
             )?) as _
         } else {
-            match partition_search_mode {
-                PartitionSearchMode::Sorted => Arc::new(WindowAggExec::try_new(
-                    window_expr,
-                    new_child,
-                    new_schema,
-                    partition_keys.to_vec(),
-                )?) as _,
-                _ => {
-                    // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
-                    // Hence if `PartitionSearchMode` is not `Sorted` we should satisfy required ordering.
-                    // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
-                    let reqs = window_exec.required_input_ordering()[0].clone();
-                    let reqs = reqs.unwrap_or(vec![]);
-                    let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
-                    add_sort_above(&mut new_child, sort_expr)?;
-                    Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        new_child,
-                        new_schema,
-                        partition_keys.to_vec(),
-                    )?) as _
-                }
-            }
+            if partition_search_mode != PartitionSearchMode::Sorted {
+                // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
+                // Hence if `PartitionSearchMode` is not `Sorted` we should satisfy required ordering.
+                // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
+                let reqs = window_exec
+                    .required_input_ordering()
+                    .swap_remove(0)
+                    .unwrap_or(vec![]);
+                let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
+                add_sort_above(&mut new_child, sort_expr)?;
+            };
+            Arc::new(WindowAggExec::try_new(
+                window_expr,
+                new_child,
+                new_schema,
+                partition_keys.to_vec(),
+            )?) as _
         };
         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
     }
@@ -819,10 +813,9 @@ fn can_skip_sort(
         &physical_ordering_exprs,
         equal_properties,
     );
-    let contains_all_orderbys = ob_indices.len() == orderby_exprs.len();
-    if !contains_all_orderbys {
-        // If all order by expressions are not in the input ordering. There is no way to remove a sort
-        // immediately return
+    if ob_indices.len() != orderby_exprs.len() {
+        // If all order by expressions are not in the input ordering,
+        // there is no way to remove a sort -- immediately return:
         return Ok(None);
     }
     // indices of the partition by expressions among input ordering expressions
