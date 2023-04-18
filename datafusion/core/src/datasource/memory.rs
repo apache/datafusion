@@ -19,13 +19,13 @@
 //! queried by DataFusion. This allows data to be pre-loaded into memory and then
 //! repeatedly queried without incurring additional file I/O overhead.
 
-use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use futures::StreamExt;
 use tokio::sync::RwLock;
 
 use crate::datasource::{TableProvider, TableType};
@@ -59,8 +59,7 @@ impl MemTable {
                 batches: Arc::new(
                     partitions
                         .into_iter()
-                        .map(RwLock::new)
-                        .map(Arc::new)
+                        .map(|e| Arc::new(RwLock::new(e)))
                         .collect::<Vec<_>>(),
                 ),
             })
@@ -187,7 +186,7 @@ impl TableProvider for MemTable {
             ));
         }
 
-        if self.batches.len() == 0 {
+        if self.batches.is_empty() {
             return Err(DataFusionError::Plan(
                 "The table must have partitions.".to_string(),
             ));

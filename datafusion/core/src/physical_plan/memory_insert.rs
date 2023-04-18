@@ -16,23 +16,24 @@
 // under the License.
 
 //! Execution plan for writing in-memory batches of data
-//!
-use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
-};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_common::Statistics;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortExpr;
-use futures::FutureExt;
-use futures::{ready, Stream, StreamExt};
+
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
+
+use crate::physical_plan::{
+    DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream,
+};
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{Result, Statistics};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::PhysicalSortExpr;
+use futures::FutureExt;
+use futures::{ready, Stream, StreamExt};
 use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 
 // Type alias for partition data
@@ -88,7 +89,7 @@ impl ExecutionPlan for MemoryWriteExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         // If the partition count of the MemTable is one, we want to require SinglePartition
-        // since it would cause better plans in plan optimizer.
+        // since it would induce better plans in plan optimizer.
         if self.batches.len() == 1 {
             vec![Distribution::SinglePartition]
         } else {
@@ -129,7 +130,7 @@ impl ExecutionPlan for MemoryWriteExec {
         let data = self.input.execute(partition, context)?;
         if batch_count >= self.input.output_partitioning().partition_count() {
             // If the number of input partitions matches the number of MemTable partitions,
-            // use the less lock acquiring implementation.
+            // use a lightweight implementation that doesn't utilize as many locks.
             let table_partition = self.batches[partition].clone();
             Ok(Box::pin(MemorySinkOneToOneStream::try_new(
                 table_partition,
@@ -146,6 +147,7 @@ impl ExecutionPlan for MemoryWriteExec {
             )?))
         }
     }
+
     fn fmt_as(
         &self,
         t: DisplayFormatType,
@@ -184,13 +186,18 @@ impl MemoryWriteExec {
     }
 }
 
-// SinkState represents the different states of the MemorySinkStream when processing record batches.
+/// This object encodes the different states of the [`MemorySinkStream`] when
+/// processing record batches.
 enum MemorySinkStreamState {
-    Pull, // The state when the stream is pulling data from the input.
-    Write { maybe_batch: Option<RecordBatch> }, // The state when the stream is writing data to the table partition.
+    // The stream is pulling data from the input.
+    Pull,
+    // The stream is writing data to the table partition.
+    Write { maybe_batch: Option<RecordBatch> },
 }
 
-/// Iterator over record batches in a memory-backed storage with a locked design.
+/// A stream that saves record batches in memory-backed storage.
+/// Can work even when multiple input partitions map to the same table
+/// partition, achieves buffer exclusivity by locking before writing.
 pub struct MemorySinkStream {
     /// Stream of record batches to be inserted into the memory table.
     data: SendableRecordBatchStream,
@@ -203,7 +210,7 @@ pub struct MemorySinkStream {
 }
 
 impl MemorySinkStream {
-    /// Create a new instance of MemorySinkStream with the provided parameters.
+    /// Create a new `MemorySinkStream` with the provided parameters.
     pub fn try_new(
         table_partition: Arc<RwLock<Vec<RecordBatch>>>,
         data: SendableRecordBatchStream,
@@ -217,9 +224,9 @@ impl MemorySinkStream {
         })
     }
 
-    /// Implementation of the poll_next method.
-    /// Continuously polls the record batch stream, switching between the Pull and Write states.
-    /// In case of error, returns the error immediately.
+    /// Implementation of the `poll_next` method. Continuously polls the record
+    /// batch stream, switching between the Pull and Write states. In case of
+    /// an error, returns the error immediately.
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -273,7 +280,8 @@ impl RecordBatchStream for MemorySinkStream {
     }
 }
 
-// SinkState represents the different states of the MemorySinkStream when processing record batches.
+/// This object encodes the different states of the [`MemorySinkOneToOneStream`]
+/// when processing record batches.
 enum MemorySinkOneToOneStreamState {
     Acquire,
     Pull {
@@ -281,7 +289,9 @@ enum MemorySinkOneToOneStreamState {
     },
 }
 
-/// Iterator over record batches in a memory-backed storage with a less lock acquiring design.
+/// A stream that saves record batches in memory-backed storage.
+/// Assumes that every table partition has at most one corresponding input
+/// partition, so it locks the table partition only once.
 pub struct MemorySinkOneToOneStream {
     /// Stream of record batches to be inserted into the memory table.
     data: SendableRecordBatchStream,
@@ -294,7 +304,7 @@ pub struct MemorySinkOneToOneStream {
 }
 
 impl MemorySinkOneToOneStream {
-    /// Create a new instance of MemorySinkOneToOneStream with the provided parameters.
+    /// Create a new `MemorySinkOneToOneStream` with the provided parameters.
     pub fn try_new(
         table_partition: Arc<RwLock<Vec<RecordBatch>>>,
         data: SendableRecordBatchStream,
@@ -308,9 +318,10 @@ impl MemorySinkOneToOneStream {
         })
     }
 
-    /// Implementation of the poll_next method.
-    /// Continuously polls the record batch stream and pushes the batches to the table partition.
-    /// In case of error, returns the error immediately.
+    /// Implementation of the `poll_next` method. Continuously polls the record
+    /// batch stream and pushes batches to their corresponding table partition,
+    /// which are lock-acquired only once. In case of an error, returns the
+    /// error immediately.
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
