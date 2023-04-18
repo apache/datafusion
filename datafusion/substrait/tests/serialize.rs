@@ -54,12 +54,9 @@ mod tests {
 
     #[tokio::test]
     async fn table_scan_without_projection() -> Result<()> {
-        let ctx = create_context().await.unwrap();
-        let table = provider_as_source(ctx.table_provider("data").await.unwrap());
-        let table_scan = LogicalPlanBuilder::scan("data", table, None)
-            .unwrap()
-            .build()
-            .unwrap();
+        let ctx = create_context().await?;
+        let table = provider_as_source(ctx.table_provider("data").await?);
+        let table_scan = LogicalPlanBuilder::scan("data", table, None)?.build()?;
         let convert_result = producer::to_substrait_plan(&table_scan);
         assert!(convert_result.is_ok());
 
