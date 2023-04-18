@@ -128,7 +128,7 @@ impl Task {
         }
     }
 
-    /// Call [`Pipeline::poll_partition`], attempting to make progress on query execution
+    /// Call `Pipeline::poll_partition`, attempting to make progress on query execution
     pub fn do_work(self) {
         assert!(is_worker(), "Task::do_work called outside of worker pool");
         if self.context.is_cancelled() {
@@ -324,7 +324,9 @@ impl ExecutionContext {
 
 struct TaskWaker {
     /// Store a weak reference to the [`ExecutionContext`] to avoid reference cycles if this
-    /// [`Waker`] is stored within a [`Pipeline`] owned by the [`ExecutionContext`]
+    /// [`Waker`] is stored within a `Pipeline` owned by the [`ExecutionContext`]
+    ///
+    /// [`Waker`]: std::task::Waker
     context: Weak<ExecutionContext>,
 
     /// A counter that stores the number of times this has been awoken
@@ -338,9 +340,8 @@ struct TaskWaker {
     /// This ensures that a given [`Task`] is not enqueued multiple times
     ///
     /// We store an integer, as opposed to a boolean, so that wake ups that
-    /// occur during [`Pipeline::poll_partition`] can be detected and handled
+    /// occur during `Pipeline::poll_partition` can be detected and handled
     /// after it has finished executing
-    ///
     wake_count: AtomicUsize,
 
     /// The index of the pipeline within `query` to poll
