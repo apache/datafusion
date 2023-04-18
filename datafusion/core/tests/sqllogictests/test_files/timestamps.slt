@@ -710,6 +710,25 @@ SELECT DATE_BIN('3 month', '2022-04-01T00:00:00Z', '2021-05-31T00:04:00Z');
 ----
 2022-02-28T00:04:00
 
+# origin is on Feb 29 and interval is one month. The bins will be:
+# '2000-02-29T00:00:00'
+# '2000-01-29T00:00:00'
+# '1999-12-29T00:00:00'
+# ....
+# Reason: Even though 29 (or 28 for non-leap year) is the last date of Feb but it
+# is not last date of other month. Months' chrono consider a month before or after that
+# will land on the same 29th date.
+query P
+select date_bin('1 month', timestamp '2000-01-31T00:00:00', timestamp '2000-02-29T00:00:00');
+----
+2000-01-29T00:00:00
+
+# similar for the origin March 29
+query P
+select date_bin('1 month', timestamp '2000-01-31T00:00:00', timestamp '2000-03-29T00:00:00');
+----
+2000-01-29T00:00:00
+
 # any value of origin
 query P
 SELECT DATE_BIN('3 month', '2022-01-01T00:00:00Z', '2021-05-05T17:56:21Z');
