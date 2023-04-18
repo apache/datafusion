@@ -183,23 +183,18 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
     expr.clone()
         .transform(&|expr| {
             let normalized_form: Option<OrderedColumn> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let mut normalized: Option<OrderedColumn> = None;
-                        for class in eq_properties {
-                            let ordered_column = OrderedColumn {
-                                col: column.clone(),
-                                options: sort_options.map(|elem| elem.into()),
-                            };
-                            if class.contains(&ordered_column) {
-                                normalized = Some(class.head().clone());
-                                break;
-                            }
+                expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                    for class in eq_properties {
+                        let ordered_column = OrderedColumn {
+                            col: column.clone(),
+                            options: sort_options.map(|elem| elem.into()),
+                        };
+                        if class.contains(&ordered_column) {
+                            return Some(class.head().clone());
                         }
-                        normalized
                     }
-                    None => None,
-                };
+                    None
+                });
             Ok(if let Some(normalized_form) = normalized_form {
                 Transformed::Yes(Arc::new(normalized_form.col) as _)
             } else {
