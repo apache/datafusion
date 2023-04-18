@@ -247,12 +247,12 @@ config_namespace! {
 
         /// If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded
-        pub pushdown_filters: bool, default = false
+        pub pushdown_filters: bool, default = true
 
         /// If true, filter expressions evaluated during the parquet decoding operation
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
-        pub reorder_filters: bool, default = false
+        pub reorder_filters: bool, default = true
     }
 }
 
