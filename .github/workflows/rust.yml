@@ -138,7 +138,7 @@ jobs:
 
   # Run `cargo test doc` (test documentation examples)
   linux-test-doc:
-    name: cargo test --doc (amd64)
+    name: cargo test doc (amd64)
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
@@ -159,7 +159,7 @@ jobs:
 
   # Run `cargo doc` to ensure
   linux-rustdoc:
-    name: cargo --doc
+    name: cargo doc
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
