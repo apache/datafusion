@@ -27,8 +27,8 @@ use crate::{
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
     physical_optimizer::{
-        aggregate_statistics::AggregateStatistics, join_selection::JoinSelection,
-        optimizer::PhysicalOptimizerRule,
+        aggregate_statistics::AggregateStatistics, interleave::Interleave,
+        join_selection::JoinSelection, optimizer::PhysicalOptimizerRule,
     },
 };
 use datafusion_expr::{
@@ -1330,6 +1330,8 @@ impl SessionState {
             // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // distribution. Please make sure that the whole plan tree is determined before this rule.
             Arc::new(EnforceDistribution::new()),
+            // Try to interleave before enforcing sorting.
+            Arc::new(Interleave::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule

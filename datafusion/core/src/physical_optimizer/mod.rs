@@ -23,6 +23,7 @@ pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
 pub mod dist_enforcement;
 pub mod global_sort_selection;
+pub mod interleave;
 pub mod join_selection;
 pub mod optimizer;
 pub mod pipeline_checker;
