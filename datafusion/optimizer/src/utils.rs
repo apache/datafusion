@@ -32,6 +32,7 @@ use datafusion_expr::{
     logical_plan::{Filter, LogicalPlan},
     Expr, Operator,
 };
+use log::{debug, trace};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -537,6 +538,12 @@ pub(crate) fn collect_subquery_cols(
         cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
+}
+
+/// Log the plan in debug/tracing mode after some part of the optimizer runs
+pub fn log_plan(description: &str, plan: &LogicalPlan) {
+    debug!("{description}:\n{}\n", plan.display_indent());
+    trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
 #[cfg(test)]

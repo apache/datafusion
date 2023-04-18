@@ -36,7 +36,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue, TableReference,
+    Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1304,20 +1304,20 @@ pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// The alias for the input relation
-    pub alias: String,
+    pub alias: OwnedTableReference,
     /// The schema with qualified field names
     pub schema: DFSchemaRef,
 }
 
 impl SubqueryAlias {
-    pub fn try_new(plan: LogicalPlan, alias: impl Into<String>) -> Result<Self> {
+    pub fn try_new(
+        plan: LogicalPlan,
+        alias: impl Into<OwnedTableReference>,
+    ) -> Result<Self> {
         let alias = alias.into();
-        let table_ref = TableReference::bare(&alias);
         let schema: Schema = plan.schema().as_ref().clone().into();
-        let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(
-            table_ref.to_owned_reference(),
-            &schema,
-        )?);
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1813,6 +1813,13 @@ pub enum Partitioning {
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
+    /// The LogicalPlan which results from applying an analyzer pass
+    AnalyzedLogicalPlan {
+        /// The name of the analyzer which produced this plan
+        analyzer_name: String,
+    },
+    /// The LogicalPlan after all analyzer passes have been applied
+    FinalAnalyzedLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
@@ -1835,6 +1842,10 @@ impl Display for PlanType {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
+            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                write!(f, "logical_plan after {analyzer_name}")
+            }
+            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
                 write!(f, "logical_plan after {optimizer_name}")
             }
@@ -1902,7 +1913,7 @@ mod tests {
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFSchema, TableReference};
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
