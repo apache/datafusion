@@ -49,7 +49,7 @@ pub mod window;
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
 pub use equivalence::EquivalenceProperties;
-pub use equivalence::EquivalentClass;
+pub use equivalence::EquivalentClassGen;
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;

@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::equivalence::{EquivalentClass, OrderedColumn, OrderingEquivalenceProperties};
+use crate::equivalence::{
+    EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
+    OrderingEquivalentClass,
+};
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{
     EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -150,7 +153,7 @@ pub fn normalize_out_expr_with_alias_schema(
 
 pub fn normalize_expr_with_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
-    eq_properties: &[EquivalentClass<Column>],
+    eq_properties: &[EquivalentClass],
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -175,7 +178,7 @@ pub fn normalize_expr_with_equivalence_properties(
 pub fn normalize_expr_with_ordering_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     sort_options: Option<SortOptions>,
-    eq_properties: &[EquivalentClass<OrderedColumn>],
+    eq_properties: &[OrderingEquivalentClass],
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -209,7 +212,7 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
 
 pub fn normalize_sort_expr_with_equivalence_properties(
     sort_expr: PhysicalSortExpr,
-    eq_properties: &[EquivalentClass<OrderedColumn>],
+    eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortExpr {
     let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
         sort_expr.expr.clone(),
@@ -244,7 +247,7 @@ pub fn normalize_sort_expr_with_equivalence_properties(
 
 pub fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[EquivalentClass<OrderedColumn>],
+    eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortRequirement {
     let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
         sort_requirement.expr().clone(),

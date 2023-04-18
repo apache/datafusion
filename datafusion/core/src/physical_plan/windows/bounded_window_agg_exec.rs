@@ -59,7 +59,7 @@ use datafusion_physical_expr::window::{
     PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, EquivalentClass, PhysicalExpr, PhysicalSortRequirement,
+    EquivalenceProperties, EquivalentClassGen, PhysicalExpr, PhysicalSortRequirement,
 };
 use indexmap::IndexMap;
 use log::debug;
@@ -201,7 +201,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .classes()
             .iter()
             .map(|elem| (*elem).clone().into())
-            .collect::<Vec<EquivalentClass<OrderedColumn>>>();
+            .collect::<Vec<EquivalentClassGen<OrderedColumn>>>();
         res.extend(eq_classes);
         let mut eq_classes = vec![];
         let out_ordering = self.output_ordering().unwrap_or(&[]);
@@ -240,7 +240,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
                     }
                 }
 
-                eq_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
+                eq_classes.push(EquivalentClassGen::new(column.clone(), columns.clone()));
             }
         }
         res
