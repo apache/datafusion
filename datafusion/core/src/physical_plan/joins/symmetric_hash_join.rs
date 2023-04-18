@@ -1883,9 +1883,9 @@ mod tests {
         type Item = f64;
 
         fn next(&mut self) -> Option<Self::Item> {
-            let new_value = self.rng.gen_range(self.prev..self.max);
-            self.prev = new_value;
-            Some(new_value)
+            let value = self.rng.gen_range(self.prev..self.max);
+            self.prev = value;
+            Some(value)
         }
     }
 

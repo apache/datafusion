@@ -605,87 +605,46 @@ mod tests {
     }
 
     macro_rules! generate_cases {
-        ($func_name:ident, $type:ty, $SCALAR:ident) => {
-            fn $func_name<const ASC: bool>(
+        ($FUNC_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
+            fn $FUNC_NAME<const ASC: bool>(
                 expr: Arc<dyn PhysicalExpr>,
                 left_col: Arc<dyn PhysicalExpr>,
                 right_col: Arc<dyn PhysicalExpr>,
                 seed: u64,
-                expr_left: $type,
-                expr_right: $type,
+                expr_left: $TYPE,
+                expr_right: $TYPE,
             ) -> Result<()> {
                 let mut r = StdRng::seed_from_u64(seed);
 
-                let (left_interval, right_interval, left_waited, right_waited) = if ASC {
-                    let left = (Some(r.gen_range((0 as $type)..(1000 as $type))), None);
-                    let right = (Some(r.gen_range((0 as $type)..(1000 as $type))), None);
+                let (left_given, right_given, left_expected, right_expected) = if ASC {
+                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
                     (
-                        left,
-                        right,
-                        (
-                            Some(<$type>::max(
-                                left.0.unwrap(),
-                                right.0.unwrap() + expr_left,
-                            )),
-                            None,
-                        ),
-                        (
-                            Some(<$type>::max(
-                                right.0.unwrap(),
-                                left.0.unwrap() + expr_right,
-                            )),
-                            None,
-                        ),
+                        (Some(left), None),
+                        (Some(right), None),
+                        (Some(<$TYPE>::max(left, right + expr_left)), None),
+                        (Some(<$TYPE>::max(right, left + expr_right)), None),
                     )
                 } else {
-                    let left = (None, Some(r.gen_range((0 as $type)..(1000 as $type))));
-                    let right = (None, Some(r.gen_range((0 as $type)..(1000 as $type))));
+                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
                     (
-                        left,
-                        right,
-                        (
-                            None,
-                            Some(<$type>::min(
-                                left.1.unwrap(),
-                                right.1.unwrap() + expr_left,
-                            )),
-                        ),
-                        (
-                            None,
-                            Some(<$type>::min(
-                                right.1.unwrap(),
-                                left.1.unwrap() + expr_right,
-                            )),
-                        ),
+                        (None, Some(left)),
+                        (None, Some(right)),
+                        (None, Some(<$TYPE>::min(left, right + expr_left))),
+                        (None, Some(<$TYPE>::min(right, left + expr_right))),
                     )
                 };
 
                 experiment(
                     expr,
                     (left_col, right_col),
-                    Interval::make(
-                        left_interval.0.map(|value| value as $type),
-                        left_interval.1.map(|value| value as $type),
-                        (true, true),
-                    ),
-                    Interval::make(
-                        right_interval.0.map(|value| value as $type),
-                        right_interval.1.map(|value| value as $type),
-                        (true, true),
-                    ),
-                    Interval::make(
-                        left_waited.0.map(|value| value as $type),
-                        left_waited.1.map(|value| value as $type),
-                        (true, true),
-                    ),
-                    Interval::make(
-                        right_waited.0.map(|value| value as $type),
-                        right_waited.1.map(|value| value as $type),
-                        (true, true),
-                    ),
+                    Interval::make(left_given.0, left_given.1, (true, true)),
+                    Interval::make(right_given.0, right_given.1, (true, true)),
+                    Interval::make(left_expected.0, left_expected.1, (true, true)),
+                    Interval::make(right_expected.0, right_expected.1, (true, true)),
                     PropagationResult::Success,
-                )?;
-                Ok(())
+                )
             }
         };
     }
@@ -698,8 +657,8 @@ mod tests {
     fn testing_not_possible() -> Result<()> {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
-        // left_watermark > right_watermark + 5
 
+        // left_watermark > right_watermark + 5
         let left_and_1 = Arc::new(BinaryExpr::new(
             left_col.clone(),
             Operator::Plus,
@@ -709,32 +668,19 @@ mod tests {
         experiment(
             expr,
             (left_col, right_col),
-            Interval {
-                lower: IntervalBound::new(ScalarValue::Int32(Some(10)), true),
-                upper: IntervalBound::new(ScalarValue::Int32(Some(20)), true),
-            },
-            Interval {
-                lower: IntervalBound::new(ScalarValue::Int32(Some(100)), true),
-                upper: IntervalBound::new(ScalarValue::Int32(None), true),
-            },
-            Interval {
-                lower: IntervalBound::new(ScalarValue::Int32(Some(10)), true),
-                upper: IntervalBound::new(ScalarValue::Int32(Some(20)), true),
-            },
-            Interval {
-                lower: IntervalBound::new(ScalarValue::Int32(Some(100)), true),
-                upper: IntervalBound::new(ScalarValue::Int32(None), true),
-            },
+            Interval::make(Some(10), Some(20), (true, true)),
+            Interval::make(Some(100), None, (true, true)),
+            Interval::make(Some(10), Some(20), (true, true)),
+            Interval::make(Some(100), None, (true, true)),
             PropagationResult::Infeasible,
-        )?;
-        Ok(())
+        )
     }
 
     macro_rules! integer_float_case_1 {
-        ($test_func:ident, $generate_case_func:ident, $type:ty, $SCALAR:ident) => {
+        ($TEST_FUNC_NAME:ident, $GENERATE_CASE_FUNC_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
             #[rstest]
             #[test]
-            fn $test_func(
+            fn $TEST_FUNC_NAME(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
                 #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
@@ -742,8 +688,8 @@ mod tests {
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
 
+                // left_watermark + 1 > right_watermark + 11 AND left_watermark + 3 < right_watermark + 33
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
@@ -753,16 +699,16 @@ mod tests {
                         Operator::Plus,
                         Operator::Plus,
                     ),
-                    ScalarValue::$SCALAR(Some(1 as $type)),
-                    ScalarValue::$SCALAR(Some(11 as $type)),
-                    ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(33 as $type)),
+                    ScalarValue::$SCALAR(Some(1 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(11 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(3 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(33 as $TYPE)),
                     (greater_op, less_op),
                 );
                 // l > r + 10 AND r > l - 30
-                let l_gt_r = 10 as $type;
-                let r_gt_l = -30 as $type;
-                $generate_case_func::<true>(
+                let l_gt_r = 10 as $TYPE;
+                let r_gt_l = -30 as $TYPE;
+                $GENERATE_CASE_FUNC_NAME::<true>(
                     expr.clone(),
                     left_col.clone(),
                     right_col.clone(),
@@ -774,10 +720,9 @@ mod tests {
                 // r < l - 10 AND l < r + 30
                 let r_lt_l = -l_gt_r;
                 let l_lt_r = -r_gt_l;
-                $generate_case_func::<false>(
+                $GENERATE_CASE_FUNC_NAME::<false>(
                     expr, left_col, right_col, seed, l_lt_r, r_lt_l,
-                )?;
-                Ok(())
+                )
             }
         };
     }
@@ -788,10 +733,10 @@ mod tests {
     integer_float_case_1!(case_1_f32, generate_case_f32, f32, Float32);
 
     macro_rules! integer_float_case_2 {
-        ($test_func:ident, $generate_case_func:ident, $type:ty, $SCALAR:ident) => {
+        ($TEST_FUNC_NAME:ident, $GENERATE_CASE_FUNC_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
             #[rstest]
             #[test]
-            fn $test_func(
+            fn $TEST_FUNC_NAME(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
                 #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
@@ -799,8 +744,8 @@ mod tests {
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
 
+                // left_watermark - 1 > right_watermark + 5 AND left_watermark + 3 < right_watermark + 10
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
@@ -810,16 +755,16 @@ mod tests {
                         Operator::Plus,
                         Operator::Plus,
                     ),
-                    ScalarValue::$SCALAR(Some(1 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
-                    ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(1 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(5 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(3 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(10 as $TYPE)),
                     (greater_op, less_op),
                 );
                 // l > r + 6 AND r > l - 7
-                let l_gt_r = 6 as $type;
-                let r_gt_l = -7 as $type;
-                $generate_case_func::<true>(
+                let l_gt_r = 6 as $TYPE;
+                let r_gt_l = -7 as $TYPE;
+                $GENERATE_CASE_FUNC_NAME::<true>(
                     expr.clone(),
                     left_col.clone(),
                     right_col.clone(),
@@ -831,10 +776,9 @@ mod tests {
                 // r < l - 6 AND l < r + 7
                 let r_lt_l = -l_gt_r;
                 let l_lt_r = -r_gt_l;
-                $generate_case_func::<false>(
+                $GENERATE_CASE_FUNC_NAME::<false>(
                     expr, left_col, right_col, seed, l_lt_r, r_lt_l,
-                )?;
-                Ok(())
+                )
             }
         };
     }
@@ -845,10 +789,10 @@ mod tests {
     integer_float_case_2!(case_2_f32, generate_case_f32, f32, Float32);
 
     macro_rules! integer_float_case_3 {
-        ($test_func:ident, $generate_case_func:ident, $type:ty, $SCALAR:ident) => {
+        ($TEST_FUNC_NAME:ident, $GENERATE_CASE_FUNC_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
             #[rstest]
             #[test]
-            fn $test_func(
+            fn $TEST_FUNC_NAME(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
                 #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
@@ -856,8 +800,8 @@ mod tests {
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
 
+                // left_watermark - 1 > right_watermark + 5 AND left_watermark - 3 < right_watermark + 10
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
@@ -867,16 +811,16 @@ mod tests {
                         Operator::Minus,
                         Operator::Plus,
                     ),
-                    ScalarValue::$SCALAR(Some(1 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
-                    ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(1 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(5 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(3 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(10 as $TYPE)),
                     (greater_op, less_op),
                 );
                 // l > r + 6 AND r > l - 13
-                let l_gt_r = 6 as $type;
-                let r_gt_l = -13 as $type;
-                $generate_case_func::<true>(
+                let l_gt_r = 6 as $TYPE;
+                let r_gt_l = -13 as $TYPE;
+                $GENERATE_CASE_FUNC_NAME::<true>(
                     expr.clone(),
                     left_col.clone(),
                     right_col.clone(),
@@ -888,10 +832,9 @@ mod tests {
                 // r < l - 6 AND l < r + 13
                 let r_lt_l = -l_gt_r;
                 let l_lt_r = -r_gt_l;
-                $generate_case_func::<false>(
+                $GENERATE_CASE_FUNC_NAME::<false>(
                     expr, left_col, right_col, seed, l_lt_r, r_lt_l,
-                )?;
-                Ok(())
+                )
             }
         };
     }
@@ -902,10 +845,10 @@ mod tests {
     integer_float_case_3!(case_3_f32, generate_case_f32, f32, Float32);
 
     macro_rules! integer_float_case_4 {
-        ($test_func:ident, $generate_case_func:ident, $type:ty, $SCALAR:ident) => {
+        ($TEST_FUNC_NAME:ident, $GENERATE_CASE_FUNC_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
             #[rstest]
             #[test]
-            fn $test_func(
+            fn $TEST_FUNC_NAME(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
                 #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
@@ -913,8 +856,8 @@ mod tests {
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
 
+                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
@@ -924,16 +867,16 @@ mod tests {
                         Operator::Minus,
                         Operator::Plus,
                     ),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
-                    ScalarValue::$SCALAR(Some(3 as $type)),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
+                    ScalarValue::$SCALAR(Some(10 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(5 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(3 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(10 as $TYPE)),
                     (greater_op, less_op),
                 );
                 // l > r + 5 AND r > l - 13
-                let l_gt_r = 5 as $type;
-                let r_gt_l = -13 as $type;
-                $generate_case_func::<true>(
+                let l_gt_r = 5 as $TYPE;
+                let r_gt_l = -13 as $TYPE;
+                $GENERATE_CASE_FUNC_NAME::<true>(
                     expr.clone(),
                     left_col.clone(),
                     right_col.clone(),
@@ -945,10 +888,9 @@ mod tests {
                 // r < l - 5 AND l < r + 13
                 let r_lt_l = -l_gt_r;
                 let l_lt_r = -r_gt_l;
-                $generate_case_func::<false>(
+                $GENERATE_CASE_FUNC_NAME::<false>(
                     expr, left_col, right_col, seed, l_lt_r, r_lt_l,
-                )?;
-                Ok(())
+                )
             }
         };
     }
@@ -959,10 +901,10 @@ mod tests {
     integer_float_case_4!(case_4_f32, generate_case_f32, f32, Float32);
 
     macro_rules! integer_float_case_5 {
-        ($test_func:ident, $generate_case_func:ident, $type:ty, $SCALAR:ident) => {
+        ($TEST_FUNC_NAME:ident, $GENERATE_CASE_FUNC_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
             #[rstest]
             #[test]
-            fn $test_func(
+            fn $TEST_FUNC_NAME(
                 #[values(0, 1, 2, 3, 4, 12, 32, 314, 3124, 123, 125, 211, 215, 4123)]
                 seed: u64,
                 #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
@@ -970,8 +912,8 @@ mod tests {
             ) -> Result<()> {
                 let left_col = Arc::new(Column::new("left_watermark", 0));
                 let right_col = Arc::new(Column::new("right_watermark", 0));
-                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
 
+                // left_watermark - 10 > right_watermark - 5 AND left_watermark - 30 < right_watermark - 3
                 let expr = gen_conjunctive_numerical_expr(
                     left_col.clone(),
                     right_col.clone(),
@@ -981,16 +923,16 @@ mod tests {
                         Operator::Minus,
                         Operator::Minus,
                     ),
-                    ScalarValue::$SCALAR(Some(10 as $type)),
-                    ScalarValue::$SCALAR(Some(5 as $type)),
-                    ScalarValue::$SCALAR(Some(30 as $type)),
-                    ScalarValue::$SCALAR(Some(3 as $type)),
+                    ScalarValue::$SCALAR(Some(10 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(5 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(30 as $TYPE)),
+                    ScalarValue::$SCALAR(Some(3 as $TYPE)),
                     (greater_op, less_op),
                 );
                 // l > r + 5 AND r > l - 27
-                let l_gt_r = 5 as $type;
-                let r_gt_l = -27 as $type;
-                $generate_case_func::<true>(
+                let l_gt_r = 5 as $TYPE;
+                let r_gt_l = -27 as $TYPE;
+                $GENERATE_CASE_FUNC_NAME::<true>(
                     expr.clone(),
                     left_col.clone(),
                     right_col.clone(),
@@ -1002,10 +944,9 @@ mod tests {
                 // r < l - 5 AND l < r + 27
                 let r_lt_l = -l_gt_r;
                 let l_lt_r = -r_gt_l;
-                $generate_case_func::<false>(
+                $GENERATE_CASE_FUNC_NAME::<false>(
                     expr, left_col, right_col, seed, l_lt_r, r_lt_l,
-                )?;
-                Ok(())
+                )
             }
         };
     }
@@ -1024,8 +965,8 @@ mod tests {
     ) -> Result<()> {
         let left_col = Arc::new(Column::new("left_watermark", 0));
         let right_col = Arc::new(Column::new("right_watermark", 0));
-        // left_watermark - 1 >= right_watermark + 5 AND left_watermark - 10 <= right_watermark + 3
 
+        // left_watermark - 1 >= right_watermark + 5 AND left_watermark - 10 <= right_watermark + 3
         let expr = gen_conjunctive_numerical_expr(
             left_col.clone(),
             right_col.clone(),
@@ -1045,9 +986,7 @@ mod tests {
         let l_gt_r = 6;
         let r_gt_l = -13;
 
-        generate_case_i32::<true>(expr, left_col, right_col, seed, l_gt_r, r_gt_l)?;
-
-        Ok(())
+        generate_case_i32::<true>(expr, left_col, right_col, seed, l_gt_r, r_gt_l)
     }
 
     #[test]
@@ -1089,6 +1028,7 @@ mod tests {
         assert_eq!(prev_node_count, final_node_count);
         Ok(())
     }
+
     #[test]
     fn test_gather_node_indices_remove() -> Result<()> {
         // Expression: a@0 + b@1 + 1 > y@0 - z@1, given a@0 + b@1.
