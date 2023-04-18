@@ -175,7 +175,7 @@ pub fn normalize_expr_with_equivalence_properties(
         .unwrap_or(expr)
 }
 
-pub fn normalize_expr_with_equivalence_properties2(
+pub fn normalize_expr_with_ordering_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     sort_options: Option<SortOptions>,
     eq_properties: &[OrderingEquivalentClass],
@@ -213,7 +213,7 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     sort_expr: PhysicalSortExpr,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortExpr {
-    let normalized_expr = normalize_expr_with_equivalence_properties2(
+    let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
         sort_expr.expr.clone(),
         Some(sort_expr.options),
         eq_properties,
@@ -248,7 +248,7 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement: PhysicalSortRequirement,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortRequirement {
-    let normalized_expr = normalize_expr_with_equivalence_properties2(
+    let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
         sort_requirement.expr().clone(),
         sort_requirement.options(),
         eq_properties,
@@ -282,7 +282,6 @@ fn ordering_satisfy_concrete<F: FnOnce() -> OrderingEquivalenceProperties>(
     required: &[PhysicalSortExpr],
     equal_properties: F,
 ) -> bool {
-    let eq_properties = equal_properties();
     if required.len() > provided.len() {
         false
     } else if required
@@ -291,7 +290,7 @@ fn ordering_satisfy_concrete<F: FnOnce() -> OrderingEquivalenceProperties>(
         .all(|(req, given)| req.eq(given))
     {
         true
-    } else if let eq_classes @ [_, ..] = eq_properties.classes() {
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
         required
             .iter()
             .map(|e| {
