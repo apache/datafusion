@@ -51,7 +51,7 @@ use crate::physical_plan::windows::{
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_physical_expr::equivalence::{
-    OrderedColumn, OrderingEquivalenceProperties, OrderingEquivalentClass, SortOptions2,
+    OrderedColumn, OrderingEquivalenceProperties, SortOptions2,
 };
 use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::window::{
@@ -201,7 +201,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .classes()
             .iter()
             .map(|elem| (*elem).clone().into())
-            .collect::<Vec<OrderingEquivalentClass>>();
+            .collect::<Vec<EquivalentClass<OrderedColumn>>>();
         res.extend(eq_classes);
         let mut eq_classes = vec![];
         let out_ordering = self.output_ordering().unwrap_or(&[]);

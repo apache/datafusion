@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::equivalence::{
-    EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
-    OrderingEquivalentClass,
-};
+use crate::equivalence::{EquivalentClass, OrderedColumn, OrderingEquivalenceProperties};
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{
     EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
@@ -153,7 +150,7 @@ pub fn normalize_out_expr_with_alias_schema(
 
 pub fn normalize_expr_with_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
-    eq_properties: &[EquivalentClass],
+    eq_properties: &[EquivalentClass<Column>],
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -178,7 +175,7 @@ pub fn normalize_expr_with_equivalence_properties(
 pub fn normalize_expr_with_ordering_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     sort_options: Option<SortOptions>,
-    eq_properties: &[OrderingEquivalentClass],
+    eq_properties: &[EquivalentClass<OrderedColumn>],
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -189,7 +186,13 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
                             col: column.clone(),
                             options: sort_options.map(|elem| elem.into()),
                         };
-                        if class.contains(&ordered_column) {
+                        let ordered_column2 = OrderedColumn {
+                            col: column.clone(),
+                            options: None,
+                        };
+                        if class.contains(&ordered_column)
+                            || class.contains(&ordered_column2)
+                        {
                             return Some(class.head().clone());
                         }
                     }
@@ -206,7 +209,7 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
 
 pub fn normalize_sort_expr_with_equivalence_properties(
     sort_expr: PhysicalSortExpr,
-    eq_properties: &[OrderingEquivalentClass],
+    eq_properties: &[EquivalentClass<OrderedColumn>],
 ) -> PhysicalSortExpr {
     let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
         sort_expr.expr.clone(),
@@ -241,7 +244,7 @@ pub fn normalize_sort_expr_with_equivalence_properties(
 
 pub fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[OrderingEquivalentClass],
+    eq_properties: &[EquivalentClass<OrderedColumn>],
 ) -> PhysicalSortRequirement {
     let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
         sort_requirement.expr().clone(),
