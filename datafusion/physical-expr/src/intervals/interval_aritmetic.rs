@@ -1198,10 +1198,10 @@ mod tests {
     fn test_next_impl_add_intervals_f64() {
         let lower = 1.5;
         let upper = 1.5;
-        capture_mode_change_f64((lower, upper), (true, true));
+        capture_mode_change_f64((lower, upper), true, true);
 
         let lower = 1.5;
         let upper = 1.5;
-        capture_mode_change_f32((lower, upper), (true, true));
+        capture_mode_change_f32((lower, upper), true, true);
     }
 }
