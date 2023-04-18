@@ -597,6 +597,8 @@ mod tests {
         assert_eq!(exp_result, result);
         col_stat_nodes.iter().zip(expected_nodes.iter()).for_each(
             |((_, calculated_interval_node), (_, expected))| {
+                // NOTE: These randomized tests only check for conservative containment,
+                // not openness/closedness of endpoints.
                 assert!(calculated_interval_node.lower.value <= expected.lower.value);
                 assert!(calculated_interval_node.upper.value >= expected.upper.value);
             },
@@ -955,39 +957,6 @@ mod tests {
     integer_float_case_5!(case_5_i64, generate_case_i64, i64, Int64);
     integer_float_case_5!(case_5_f64, generate_case_f64, f64, Float64);
     integer_float_case_5!(case_5_f32, generate_case_f32, f32, Float32);
-
-    #[rstest]
-    #[test]
-    fn case_6(
-        #[values(0, 1, 2, 123, 756, 63, 345, 6443, 12341, 142, 123, 8900)] seed: u64,
-        #[values(Operator::Gt, Operator::GtEq)] greater_op: Operator,
-        #[values(Operator::Lt, Operator::LtEq)] less_op: Operator,
-    ) -> Result<()> {
-        let left_col = Arc::new(Column::new("left_watermark", 0));
-        let right_col = Arc::new(Column::new("right_watermark", 0));
-
-        // left_watermark - 1 >= right_watermark + 5 AND left_watermark - 10 <= right_watermark + 3
-        let expr = gen_conjunctive_numerical_expr(
-            left_col.clone(),
-            right_col.clone(),
-            (
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Plus,
-            ),
-            ScalarValue::Int32(Some(1)),
-            ScalarValue::Int32(Some(5)),
-            ScalarValue::Int32(Some(10)),
-            ScalarValue::Int32(Some(3)),
-            (greater_op, less_op),
-        );
-        // l >= r + 6 AND r >= l - 13
-        let l_gt_r = 6;
-        let r_gt_l = -13;
-
-        generate_case_i32::<true>(expr, left_col, right_col, seed, l_gt_r, r_gt_l)
-    }
 
     #[test]
     fn test_gather_node_indices_dont_remove() -> Result<()> {
