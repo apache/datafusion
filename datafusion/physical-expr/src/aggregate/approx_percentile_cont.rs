@@ -17,6 +17,7 @@
 
 use crate::aggregate::tdigest::TryIntoF64;
 use crate::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::{format_state_name, Literal};
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
@@ -111,6 +112,21 @@ impl ApproxPercentileCont {
             }
         };
         Ok(accumulator)
+    }
+}
+
+impl PartialEq for ApproxPercentileCont {
+    fn eq(&self, other: &ApproxPercentileCont) -> bool {
+        self.name == other.name
+            && self.input_data_type == other.input_data_type
+            && self.percentile == other.percentile
+            && self.tdigest_max_size == other.tdigest_max_size
+            && self.expr.len() == other.expr.len()
+            && self
+                .expr
+                .iter()
+                .zip(other.expr.iter())
+                .all(|(this, other)| this.eq(other))
     }
 }
 
@@ -210,9 +226,9 @@ impl AggregateExpr for ApproxPercentileCont {
                 DataType::Float64,
                 false,
             ),
-            Field::new(
+            Field::new_list(
                 format_state_name(&self.name, "centroids"),
-                DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
+                Field::new("item", DataType::Float64, true),
                 false,
             ),
         ])
@@ -229,6 +245,15 @@ impl AggregateExpr for ApproxPercentileCont {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for ApproxPercentileCont {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.eq(x))
+            .unwrap_or(false)
     }
 }
 
@@ -367,6 +392,11 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        if self.digest.count() == 0.0 {
+            return Err(DataFusionError::Execution(
+                "aggregate function needs at least one non-null element".to_string(),
+            ));
+        }
         let q = self.digest.estimate_quantile(self.percentile);
 
         // These acceptable return types MUST match the validation in

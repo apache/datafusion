@@ -50,7 +50,7 @@ to provide:
 ### Additional SQL Language Features
 
 - Decimal Support [#122](https://github.com/apache/arrow-datafusion/issues/122)
-- Complete support list on [status](https://github.com/apache/arrow-datafusion/blob/master/README.md#status)
+- Complete support list on [status](https://github.com/apache/arrow-datafusion/blob/main/README.md#status)
 - Timestamp Arithmetic [#194](https://github.com/apache/arrow-datafusion/issues/194)
 - SQL Parser extension point [#533](https://github.com/apache/arrow-datafusion/issues/533)
 - Support for nested structures (fields, lists, structs) [#119](https://github.com/apache/arrow-datafusion/issues/119)

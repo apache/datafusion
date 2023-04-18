@@ -36,9 +36,9 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     // Since ARRAY_AGG(DISTINCT) ordering is nondeterministic, check the schema and contents.
     assert_eq!(
         *actual[0].schema(),
-        Schema::new(vec![Field::new(
+        Schema::new(vec![Field::new_list(
             "ARRAYAGG(DISTINCT aggregate_test_100.c2)",
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, true))),
+            Field::new("item", DataType::UInt32, true),
             false
         ),])
     );
@@ -67,240 +67,6 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
         unreachable!();
     }
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = plan_and_collect(
-        &ctx,
-        "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Timestamp(Nanosecond, None).");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_count() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+----------------+-----------------+-----------------+---------------+",
-        "| COUNT(t.nanos) | COUNT(t.micros) | COUNT(t.millis) | COUNT(t.secs) |",
-        "+----------------+-----------------+-----------------+---------------+",
-        "| 3              | 3               | 3               | 3             |",
-        "+----------------+-----------------+-----------------+---------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_min() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+----------------------------+----------------------------+-------------------------+---------------------+",
-        "| MIN(t.nanos)               | MIN(t.micros)              | MIN(t.millis)           | MIN(t.secs)         |",
-        "+----------------------------+----------------------------+-------------------------+---------------------+",
-        "| 2011-12-13T11:13:10.123450 | 2011-12-13T11:13:10.123450 | 2011-12-13T11:13:10.123 | 2011-12-13T11:13:10 |",
-        "+----------------------------+----------------------------+-------------------------+---------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_max() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+-------------------------+-------------------------+-------------------------+---------------------+",
-        "| MAX(t.nanos)            | MAX(t.micros)           | MAX(t.millis)           | MAX(t.secs)         |",
-        "+-------------------------+-------------------------+-------------------------+---------------------+",
-        "| 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10 |",
-        "+-------------------------+-------------------------+-------------------------+---------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = plan_and_collect(
-        &ctx,
-        "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Time64(Nanosecond).");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_count() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+----------------+-----------------+-----------------+---------------+",
-        "| COUNT(t.nanos) | COUNT(t.micros) | COUNT(t.millis) | COUNT(t.secs) |",
-        "+----------------+-----------------+-----------------+---------------+",
-        "| 4              | 4               | 4               | 4             |",
-        "+----------------+-----------------+-----------------+---------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_min() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+--------------------+-----------------+---------------+-------------+",
-        "| MIN(t.nanos)       | MIN(t.micros)   | MIN(t.millis) | MIN(t.secs) |",
-        "+--------------------+-----------------+---------------+-------------+",
-        "| 18:06:30.243620451 | 18:06:30.243620 | 18:06:30.243  | 18:06:30    |",
-        "+--------------------+-----------------+---------------+-------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_max() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+--------------------+-----------------+---------------+-------------+",
-        "| MAX(t.nanos)       | MAX(t.micros)   | MAX(t.millis) | MAX(t.secs) |",
-        "+--------------------+-----------------+---------------+-------------+",
-        "| 21:06:28.247821084 | 21:06:28.247821 | 21:06:28.247  | 21:06:28    |",
-        "+--------------------+-----------------+---------------+-------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_avg() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = plan_and_collect(
-        &ctx,
-        "SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t",
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(results.to_string(), "Error during planning: The function Avg does not support inputs of type Timestamp(Nanosecond, None).");
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_decimal_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    // the data type of c1 is decimal(10,3)
-    ctx.register_table("d_table", table_with_decimal()).unwrap();
-    let result = plan_and_collect(&ctx, "select sum(c1) from d_table")
-        .await
-        .unwrap();
-    let expected = vec![
-        "+-----------------+",
-        "| SUM(d_table.c1) |",
-        "+-----------------+",
-        "| 100.000         |",
-        "+-----------------+",
-    ];
-    assert_eq!(
-        &DataType::Decimal128(20, 3),
-        result[0].schema().field(0).data_type()
-    );
-    assert_batches_sorted_eq!(expected, &result);
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_decimal_avg() -> Result<()> {
-    let ctx = SessionContext::new();
-    // the data type of c1 is decimal(10,3)
-    ctx.register_table("d_table", table_with_decimal()).unwrap();
-    let result = plan_and_collect(&ctx, "select avg(c1) from d_table")
-        .await
-        .unwrap();
-    let expected = vec![
-        "+-----------------+",
-        "| AVG(d_table.c1) |",
-        "+-----------------+",
-        "| 5.0000000       |",
-        "+-----------------+",
-    ];
-    assert_eq!(
-        &DataType::Decimal128(14, 7),
-        result[0].schema().field(0).data_type()
-    );
-    assert_batches_sorted_eq!(expected, &result);
     Ok(())
 }
 
@@ -735,6 +501,49 @@ async fn count_aggregated_cube() -> Result<()> {
 }
 
 #[tokio::test]
+async fn count_multi_expr() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                None,
+                None,
+            ])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", data)?;
+    let sql = "SELECT count(c1, c2) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------------------+",
+        "| COUNT(test.c1,test.c2) |",
+        "+------------------------+",
+        "| 2                      |",
+        "+------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_avg() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
@@ -962,11 +771,11 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
         "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
         "| c1 | c2 | min1                           | min2      | max1                           | max2       | avg1               | min3                           | cnt1 | sum1         |",
         "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
-        "| a  | 1  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 774637006 | waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs | 4015442341 | 2437927011         | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 5    | 6094771121.5 |",
-        "| a  | 2  | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 145294611 | ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8 | 3717551163 | 2267588664         | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 3    | 3401364777   |",
+        "| a  | 1  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 774637006 | waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs | 4015442341 | 2437927011.0       | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 5    | 6094771121.5 |",
+        "| a  | 2  | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 145294611 | ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8 | 3717551163 | 2267588664.0       | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 3    | 3401364777.0 |",
         "| a  | 3  | Amn2K87Db5Es3dFQO9cw9cvpAM6h35 | 431948861 | oLZ21P2JEDooxV1pU31cIxQHEeeoLu | 3998790955 | 2225685115.1666665 | Amn2K87Db5Es3dFQO9cw9cvpAM6h35 | 6    | 6676994872.5 |",
-        "| a  | 4  | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 466439833 | ydkwycaISlYSlEq3TlkS2m15I2pcp8 | 2502326480 | 1655431654         | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 4    | 3310812222.5 |",
-        "| a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770   |",
+        "| a  | 4  | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 466439833 | ydkwycaISlYSlEq3TlkS2m15I2pcp8 | 2502326480 | 1655431654.0       | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 4    | 3310812222.5 |",
+        "| a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770.0 |",
         "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
     ];
     assert_batches_eq!(expected, &actual);

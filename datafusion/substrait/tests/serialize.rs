@@ -17,8 +17,7 @@
 
 #[cfg(test)]
 mod tests {
-
-    use datafusion_substrait::consumer::from_substrait_plan;
+    use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use datafusion_substrait::serializer;
 
     use datafusion::error::Result;
@@ -41,8 +40,6 @@ mod tests {
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
-        // #[allow(deprecated)]
-        // let plan = ctx.optimize(&plan)?;
         let plan_str_ref = format!("{plan_ref:?}");
         let plan_str = format!("{plan:?}");
         assert_eq!(plan_str_ref, plan_str);

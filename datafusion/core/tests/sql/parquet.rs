@@ -166,6 +166,39 @@ async fn fixed_size_binary_columns() {
 }
 
 #[tokio::test]
+async fn window_fn_timestamp_tz() {
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "t0",
+        "tests/parquet/data/timestamp_with_tz.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let sql = "SELECT count, LAG(timestamp, 1) OVER (ORDER BY timestamp) FROM t0";
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
+
+    let mut num_rows = 0;
+    for batch in results {
+        num_rows += batch.num_rows();
+        assert_eq!(2, batch.num_columns());
+
+        let ty = batch.column(0).data_type().clone();
+        assert_eq!(DataType::Int64, ty);
+
+        let ty = batch.column(1).data_type().clone();
+        assert_eq!(
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+            ty
+        );
+    }
+
+    assert_eq!(131072, num_rows);
+}
+
+#[tokio::test]
 async fn parquet_single_nan_schema() {
     let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
@@ -199,16 +232,12 @@ async fn parquet_list_columns() {
     .unwrap();
 
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
+        Field::new_list(
             "int64_list",
-            DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+            Field::new("item", DataType::Int64, true),
             true,
         ),
-        Field::new(
-            "utf8_list",
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
-            true,
-        ),
+        Field::new_list("utf8_list", Field::new("item", DataType::Utf8, true), true),
     ]));
 
     let sql = "SELECT int64_list, utf8_list FROM list_columns";

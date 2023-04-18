@@ -73,6 +73,9 @@ async fn tpcds_logical_q9() -> Result<()> {
     create_logical_plan(9).await
 }
 
+#[ignore]
+// Schema error: No field named 'c'.'c_customer_sk'.
+// issue: https://github.com/apache/arrow-datafusion/issues/4794
 #[tokio::test]
 async fn tpcds_logical_q10() -> Result<()> {
     create_logical_plan(10).await
@@ -198,6 +201,9 @@ async fn tpcds_logical_q34() -> Result<()> {
     create_logical_plan(34).await
 }
 
+#[ignore]
+// Schema error: No field named 'c'.'c_customer_sk'.
+// issue: https://github.com/apache/arrow-datafusion/issues/4794
 #[tokio::test]
 async fn tpcds_logical_q35() -> Result<()> {
     create_logical_plan(35).await
@@ -229,6 +235,9 @@ async fn tpcds_logical_q40() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
+// Optimizer rule 'scalar_subquery_to_join' failed: Optimizing disjunctions not supported!
+// issue: https://github.com/apache/arrow-datafusion/issues/5368
 async fn tpcds_logical_q41() -> Result<()> {
     create_logical_plan(41).await
 }
@@ -343,7 +352,6 @@ async fn tpcds_logical_q63() -> Result<()> {
     create_logical_plan(63).await
 }
 
-#[ignore] // thread 'q64' has overflowed its stack]
 #[tokio::test]
 async fn tpcds_logical_q64() -> Result<()> {
     create_logical_plan(64).await

@@ -16,12 +16,10 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
-use datafusion_common::{Column, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn plan_table_with_joins(
@@ -133,37 +131,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
                 let join_schema = left.schema().join(right.schema())?;
-
                 // parse ON expression
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
-
-                // ambiguous check
-                ensure_any_column_reference_is_unambiguous(
-                    &expr,
-                    &[left.schema().clone(), right.schema().clone()],
-                )?;
-
-                // normalize all columns in expression
-                let using_columns = expr.to_columns()?;
-                let filter = normalize_col_with_schemas(
-                    expr,
-                    &[left.schema(), right.schema()],
-                    &[using_columns],
-                )?;
-
                 LogicalPlanBuilder::from(left)
                     .join(
                         right,
                         join_type,
                         (Vec::<Column>::new(), Vec::<Column>::new()),
-                        Some(filter),
+                        Some(expr),
                     )?
                     .build()
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(normalize_ident(x)))
+                    .map(|x| Column::from_name(self.normalizer.normalize(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?
@@ -196,64 +178,5 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "NONE constraint is not supported".to_string(),
             )),
         }
-    }
-}
-
-/// Ensure any column reference of the expression is unambiguous.
-/// Assume we have two schema:
-/// schema1: a, b ,c
-/// schema2: a, d, e
-///
-/// `schema1.a + schema2.a` is unambiguous.
-/// `a + d` is ambiguous, because `a` may come from schema1 or schema2.
-fn ensure_any_column_reference_is_unambiguous(
-    expr: &Expr,
-    schemas: &[DFSchemaRef],
-) -> Result<()> {
-    if schemas.len() == 1 {
-        return Ok(());
-    }
-    // all referenced columns in the expression that don't have relation
-    let referenced_cols = expr.to_columns()?;
-    let mut no_relation_cols = referenced_cols
-        .iter()
-        .filter_map(|col| {
-            if col.relation.is_none() {
-                Some((col.name.as_str(), 0))
-            } else {
-                None
-            }
-        })
-        .collect::<HashMap<&str, u8>>();
-    // find the name of the column existing in multi schemas.
-    let ambiguous_col_name = schemas
-        .iter()
-        .flat_map(|schema| schema.fields())
-        .map(|field| field.name())
-        .find(|col_name| {
-            no_relation_cols.entry(col_name).and_modify(|v| *v += 1);
-            matches!(
-                no_relation_cols.get_key_value(col_name.as_str()),
-                Some((_, 2..))
-            )
-        });
-
-    if let Some(col_name) = ambiguous_col_name {
-        let maybe_field = schemas
-            .iter()
-            .flat_map(|schema| {
-                schema
-                    .field_with_unqualified_name(col_name)
-                    .map(|f| f.qualified_name())
-                    .ok()
-            })
-            .collect::<Vec<_>>();
-        Err(DataFusionError::Plan(format!(
-            "reference \'{}\' is ambiguous, could be {};",
-            col_name,
-            maybe_field.join(","),
-        )))
-    } else {
-        Ok(())
     }
 }

@@ -18,8 +18,9 @@
 //! Simplify expressions optimizer rule and implementation
 
 use super::{ExprSimplifier, SimplifyContext};
+use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
+use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -35,6 +36,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 /// is optimized to
 /// `Filter: b > 2`
 ///
+/// [`Expr`]: datafusion_expr::Expr
 #[derive(Default)]
 pub struct SimplifyExpressions {}
 
@@ -59,13 +61,12 @@ impl SimplifyExpressions {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
-        // to evaluate expression types. For example, a projection plan's schema will only include
-        // projected columns. With just the projected schema, it's not possible to infer types for
-        // expressions that references non-projected columns within the same project plan or its
-        // children plans.
-        let info = plan
-            .all_schemas()
+        // Pass down the `children merge schema` and `plan schema` to evaluate expression types.
+        // pass all `child schema` and `plan schema` isn't enough, because like `t1 semi join t2 on
+        // on t1.id = t2.id`, each individual schema can't contain all the columns in it.
+        let children_merge_schema = DFSchemaRef::new(merge_schema(plan.inputs()));
+        let schemas = vec![plan.schema(), &children_merge_schema];
+        let info = schemas
             .into_iter()
             .fold(SimplifyContext::new(execution_props), |context, schema| {
                 context.with_schema(schema.clone())
@@ -126,7 +127,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{or, Between, BinaryExpr, Cast, Operator};
+    use datafusion_expr::{or, BinaryExpr, Cast, Operator};
 
     use crate::OptimizerContext;
     use datafusion_expr::logical_plan::table_scan;
@@ -430,7 +431,8 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Error parsing 'I'M NOT A TIMESTAMP' as timestamp";
+        let expected =
+            "Error parsing timestamp from 'I'M NOT A TIMESTAMP': error parsing date";
         let actual = get_optimized_plan_err(&plan, &Utc::now());
         assert_contains!(actual, expected);
         Ok(())
@@ -670,12 +672,7 @@ mod tests {
     #[test]
     fn simplify_not_between() -> Result<()> {
         let table_scan = test_table_scan();
-        let qual = Expr::Between(Between::new(
-            Box::new(col("d")),
-            false,
-            Box::new(lit(1)),
-            Box::new(lit(10)),
-        ));
+        let qual = col("d").between(lit(1), lit(10));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())?
@@ -689,12 +686,7 @@ mod tests {
     #[test]
     fn simplify_not_not_between() -> Result<()> {
         let table_scan = test_table_scan();
-        let qual = Expr::Between(Between::new(
-            Box::new(col("d")),
-            true,
-            Box::new(lit(1)),
-            Box::new(lit(10)),
-        ));
+        let qual = col("d").not_between(lit(1), lit(10));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())?

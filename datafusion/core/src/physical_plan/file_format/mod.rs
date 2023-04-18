@@ -21,53 +21,97 @@ mod avro;
 #[cfg(test)]
 mod chunked_store;
 mod csv;
-mod delimited_stream;
 mod file_stream;
 mod json;
 mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::CsvExec;
-pub(crate) use self::delimited_stream::newline_delimited_stream;
+pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
-    array::{ArrayData, ArrayRef, DictionaryArray},
+    array::{ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
     buffer::Buffer,
-    datatypes::{DataType, Field, Schema, SchemaRef, UInt16Type},
+    datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
-pub use json::NdJsonExec;
+pub use json::{JsonOpener, NdJsonExec};
 
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
+use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
-use arrow::array::{new_null_array, UInt16BufferBuilder};
+use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
-use log::{debug, info};
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
+    marker::PhantomData,
     sync::Arc,
     vec,
 };
 
 use super::{ColumnStatistics, Statistics};
 
-/// convert logical type of partition column to physical type: Dictionary(UInt16, val_type)
-pub fn partition_type_wrap(val_type: DataType) -> DataType {
+/// Convert type to a type suitable for use as a [`ListingTable`]
+/// partition column. Returns `Dictionary(UInt16, val_type)`, which is
+/// a reasonable trade off between a reasonable number of partition
+/// values and space efficiency.
+///
+/// This use this to specify types for partition columns. However
+/// you MAY also choose not to dictionary-encode the data or to use a
+/// different dictionary type.
+///
+/// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
+pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
+}
+
+/// Convert a [`ScalarValue`] of partition columns to a type, as
+/// decribed in the documentation of [`wrap_partition_type_in_dict`],
+/// which can wrap the types.
+pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
+    ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
+}
+
+/// Get all of the [`PartitionedFile`] to be scanned for an [`ExecutionPlan`]
+pub fn get_scan_files(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<Vec<Vec<PartitionedFile>>>> {
+    let mut collector: Vec<Vec<Vec<PartitionedFile>>> = vec![];
+    plan.apply(&mut |plan| {
+        let plan_any = plan.as_any();
+        let file_groups =
+            if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
+                parquet_exec.base_config().file_groups.clone()
+            } else if let Some(avro_exec) = plan_any.downcast_ref::<AvroExec>() {
+                avro_exec.base_config().file_groups.clone()
+            } else if let Some(json_exec) = plan_any.downcast_ref::<NdJsonExec>() {
+                json_exec.base_config().file_groups.clone()
+            } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
+                csv_exec.base_config().file_groups.clone()
+            } else {
+                return Ok(VisitRecursion::Continue);
+            };
+
+        collector.push(file_groups);
+        Ok(VisitRecursion::Skip)
+    })?;
+    Ok(collector)
 }
 
 /// The base configurations to provide when creating a physical plan for
@@ -76,6 +120,9 @@ pub fn partition_type_wrap(val_type: DataType) -> DataType {
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
     /// [`RuntimeEnv::object_store`]
+    ///
+    /// [`ObjectStore`]: object_store::ObjectStore
+    /// [`RuntimeEnv::object_store`]: crate::execution::runtime_env::RuntimeEnv::object_store
     pub object_store_url: ObjectStoreUrl,
     /// Schema before `projection` is applied. It contains the all columns that may
     /// appear in the files. It does not include table partition columns
@@ -96,7 +143,7 @@ pub struct FileScanConfig {
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
-    /// The maximum number of records to read from this plan. If None,
+    /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
     /// The partitioning columns
@@ -262,6 +309,7 @@ impl SchemaAdapter {
 
     /// Map a column index in the table schema to a column index in a particular
     /// file schema
+    ///
     /// Panics if index is not in range for the table schema
     pub(crate) fn map_column_index(
         &self,
@@ -344,7 +392,7 @@ struct PartitionColumnProjector {
     /// An Arrow buffer initialized to zeros that represents the key array of all partition
     /// columns (partition columns are materialized by dictionary arrays with only one
     /// value in the dictionary, thus all the keys are equal to zero).
-    key_buffer_cache: Option<Buffer>,
+    key_buffer_cache: ZeroBufferGenerators,
     /// Mapping between the indexes in the list of partition columns and the target
     /// schema. Sorted by index in the target schema so that we can iterate on it to
     /// insert the partition columns in the target record batch.
@@ -355,8 +403,8 @@ struct PartitionColumnProjector {
 
 impl PartitionColumnProjector {
     // Create a projector to insert the partitioning columns into batches read from files
-    // - projected_schema: the target schema with both file and partitioning columns
-    // - table_partition_cols: all the partitioning column names
+    // - `projected_schema`: the target schema with both file and partitioning columns
+    // - `table_partition_cols`: all the partitioning column names
     fn new(projected_schema: SchemaRef, table_partition_cols: &[String]) -> Self {
         let mut idx_map = HashMap::new();
         for (partition_idx, partition_name) in table_partition_cols.iter().enumerate() {
@@ -370,15 +418,15 @@ impl PartitionColumnProjector {
 
         Self {
             projected_partition_indexes,
-            key_buffer_cache: None,
+            key_buffer_cache: Default::default(),
             projected_schema,
         }
     }
 
     // Transform the batch read from the file by inserting the partitioning columns
     // to the right positions as deduced from `projected_schema`
-    // - file_batch: batch read from the file, with internal projection applied
-    // - partition_values: the list of partition values, one for each partition column
+    // - `file_batch`: batch read from the file, with internal projection applied
+    // - `partition_values`: the list of partition values, one for each partition column
     fn project(
         &mut self,
         file_batch: RecordBatch,
@@ -396,11 +444,27 @@ impl PartitionColumnProjector {
         }
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
+            let mut partition_value = Cow::Borrowed(&partition_values[pidx]);
+
+            // check if user forgot to dict-encode the partition value
+            let field = self.projected_schema.field(sidx);
+            let expected_data_type = field.data_type();
+            let actual_data_type = partition_value.get_datatype();
+            if let DataType::Dictionary(key_type, _) = expected_data_type {
+                if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
+                    warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
+                    partition_value = Cow::Owned(ScalarValue::Dictionary(
+                        key_type.clone(),
+                        Box::new(partition_value.as_ref().clone()),
+                    ));
+                }
+            }
+
             cols.insert(
                 sidx,
-                create_dict_array(
+                create_output_array(
                     &mut self.key_buffer_cache,
-                    &partition_values[pidx],
+                    partition_value.as_ref(),
                     file_batch.num_rows(),
                 ),
             )
@@ -409,35 +473,147 @@ impl PartitionColumnProjector {
     }
 }
 
-fn create_dict_array(
-    key_buffer_cache: &mut Option<Buffer>,
-    val: &ScalarValue,
-    len: usize,
-) -> ArrayRef {
-    // build value dictionary
-    let dict_vals = val.to_array();
+#[derive(Debug, Default)]
+struct ZeroBufferGenerators {
+    gen_i8: ZeroBufferGenerator<i8>,
+    gen_i16: ZeroBufferGenerator<i16>,
+    gen_i32: ZeroBufferGenerator<i32>,
+    gen_i64: ZeroBufferGenerator<i64>,
+    gen_u8: ZeroBufferGenerator<u8>,
+    gen_u16: ZeroBufferGenerator<u16>,
+    gen_u32: ZeroBufferGenerator<u32>,
+    gen_u64: ZeroBufferGenerator<u64>,
+}
 
-    // build keys array
-    let sliced_key_buffer = match key_buffer_cache {
-        Some(buf) if buf.len() >= len * 2 => buf.slice(buf.len() - len * 2),
-        _ => {
-            let mut key_buffer_builder = UInt16BufferBuilder::new(len * 2);
-            key_buffer_builder.advance(len * 2); // keys are all 0
-            key_buffer_cache.insert(key_buffer_builder.finish()).clone()
+/// Generate a arrow [`Buffer`] that contains zero values.
+#[derive(Debug, Default)]
+struct ZeroBufferGenerator<T>
+where
+    T: ArrowNativeType,
+{
+    cache: Option<Buffer>,
+    _t: PhantomData<T>,
+}
+
+impl<T> ZeroBufferGenerator<T>
+where
+    T: ArrowNativeType,
+{
+    const SIZE: usize = std::mem::size_of::<T>();
+
+    fn get_buffer(&mut self, n_vals: usize) -> Buffer {
+        match &mut self.cache {
+            Some(buf) if buf.len() >= n_vals * Self::SIZE => {
+                buf.slice_with_length(0, n_vals * Self::SIZE)
+            }
+            _ => {
+                let mut key_buffer_builder = BufferBuilder::<T>::new(n_vals);
+                key_buffer_builder.advance(n_vals); // keys are all 0
+                self.cache.insert(key_buffer_builder.finish()).clone()
+            }
         }
-    };
+    }
+}
 
-    // create data type
-    let data_type = partition_type_wrap(val.get_datatype());
+fn create_dict_array<T>(
+    buffer_gen: &mut ZeroBufferGenerator<T>,
+    dict_val: &ScalarValue,
+    len: usize,
+    data_type: DataType,
+) -> ArrayRef
+where
+    T: ArrowNativeType,
+{
+    let dict_vals = dict_val.to_array();
+
+    let sliced_key_buffer = buffer_gen.get_buffer(len);
 
     // assemble pieces together
     let mut builder = ArrayData::builder(data_type)
         .len(len)
         .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.data().clone());
+    builder = builder.add_child_data(dict_vals.to_data());
     Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
     ))
+}
+
+fn create_output_array(
+    key_buffer_cache: &mut ZeroBufferGenerators,
+    val: &ScalarValue,
+    len: usize,
+) -> ArrayRef {
+    if let ScalarValue::Dictionary(key_type, dict_val) = &val {
+        match key_type.as_ref() {
+            DataType::Int8 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i8,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::Int16 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i16,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::Int32 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i32,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::Int64 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_i64,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt8 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u8,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt16 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u16,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt32 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u32,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            DataType::UInt64 => {
+                return create_dict_array(
+                    &mut key_buffer_cache.gen_u64,
+                    dict_val,
+                    len,
+                    val.get_datatype(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    val.to_array_of_size(len)
 }
 
 /// A single file or part of a file that should be read, along with its schema, statistics
@@ -557,7 +733,10 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::default(),
-            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
+            vec![(
+                "date".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            )],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -603,7 +782,10 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
+            vec![(
+                "date".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            )],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -634,9 +816,18 @@ mod tests {
             ("c", &vec![10, 11, 12]),
         );
         let partition_cols = vec![
-            ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
-            ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
-            ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
+            (
+                "year".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+            (
+                "month".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
+            (
+                "day".to_owned(),
+                wrap_partition_type_in_dict(DataType::Utf8),
+            ),
         ];
         // create a projected schema
         let conf = config_for_projection(
@@ -668,9 +859,15 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("26".to_owned())),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "2021".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "10".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "26".to_owned(),
+                    ))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -696,9 +893,15 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("27".to_owned())),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "2021".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "10".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "27".to_owned(),
+                    ))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -726,9 +929,15 @@ mod tests {
                 // file_batch is ok here because we kept all the file cols in the projection
                 file_batch,
                 &[
-                    ScalarValue::Utf8(Some("2021".to_owned())),
-                    ScalarValue::Utf8(Some("10".to_owned())),
-                    ScalarValue::Utf8(Some("28".to_owned())),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "2021".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "10".to_owned(),
+                    ))),
+                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                        "28".to_owned(),
+                    ))),
                 ],
             )
             .expect("Projection of partition columns into record batch failed");
@@ -740,6 +949,34 @@ mod tests {
             "| 1 | 3 | 5 | 2021 | 28  |",
             "| 3 | 4 | 6 | 2021 | 28  |",
             "+---+---+---+------+-----+",
+        ];
+        crate::assert_batches_eq!(expected, &[projected_batch]);
+
+        // forgot to dictionary-wrap the scalar value
+        let file_batch = build_table_i32(
+            ("a", &vec![0, 1, 2]),
+            ("b", &vec![-2, -1, 0]),
+            ("c", &vec![10, 11, 12]),
+        );
+        let projected_batch = proj
+            .project(
+                // file_batch is ok here because we kept all the file cols in the projection
+                file_batch,
+                &[
+                    ScalarValue::Utf8(Some("2021".to_owned())),
+                    ScalarValue::Utf8(Some("10".to_owned())),
+                    ScalarValue::Utf8(Some("26".to_owned())),
+                ],
+            )
+            .expect("Projection of partition columns into record batch failed");
+        let expected = vec![
+            "+---+----+----+------+-----+",
+            "| a | b  | c  | year | day |",
+            "+---+----+----+------+-----+",
+            "| 0 | -2 | 10 | 2021 | 26  |",
+            "| 1 | -1 | 11 | 2021 | 26  |",
+            "| 2 | 0  | 12 | 2021 | 26  |",
+            "+---+----+----+------+-----+",
         ];
         crate::assert_batches_eq!(expected, &[projected_batch]);
     }

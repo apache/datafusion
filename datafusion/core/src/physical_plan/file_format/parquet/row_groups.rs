@@ -53,7 +53,13 @@ pub(crate) fn prune_row_groups(
     let mut filtered = Vec::with_capacity(groups.len());
     for (idx, metadata) in groups.iter().enumerate() {
         if let Some(range) = &range {
-            let offset = metadata.column(0).file_offset();
+            // figure out where the first dictionary page (or first data page are)
+            // note don't use the location of metadata
+            // <https://github.com/apache/arrow-datafusion/issues/5995>
+            let col = metadata.column(0);
+            let offset = col
+                .dictionary_page_offset()
+                .unwrap_or_else(|| col.data_page_offset());
             if offset < range.start || offset >= range.end {
                 continue;
             }
@@ -75,7 +81,7 @@ pub(crate) fn prune_row_groups(
                 // stats filter array could not be built
                 // return a closure which will not filter out any row groups
                 Err(e) => {
-                    debug!("Error evaluating row group predicate values {}", e);
+                    debug!("Error evaluating row group predicate values {e}");
                     metrics.predicate_evaluation_errors.add(1);
                 }
             }
@@ -244,7 +250,10 @@ mod tests {
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::Schema;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_expr::{cast, col, lit};
+    use datafusion_common::ToDFSchema;
+    use datafusion_expr::{cast, col, lit, Expr};
+    use datafusion_physical_expr::execution_props::ExecutionProps;
+    use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
     use parquet::basic::LogicalType;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::{
@@ -258,8 +267,9 @@ mod tests {
     fn row_group_pruning_predicate_simple_expr() {
         use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
-        let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expr = col("c1").gt(lit(15));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
         let schema_descr = get_test_schema_descr(vec![(
@@ -290,8 +300,9 @@ mod tests {
     fn row_group_pruning_predicate_missing_stats() {
         use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
-        let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let expr = col("c1").gt(lit(15));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
 
@@ -324,12 +335,15 @@ mod tests {
     fn row_group_pruning_predicate_partial_expr() {
         use datafusion_expr::{col, lit};
         // test row group predicate with partially supported expression
-        // int > 1 and int % 2 => c1_max > 1 and true
-        let expr = col("c1").gt(lit(15)).and(col("c2").modulus(lit(2)));
+        // (int > 1) and ((int % 2) = 0) => c1_max > 1 and true
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]));
+        let expr = col("c1")
+            .gt(lit(15))
+            .and(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
 
         let schema_descr = get_test_schema_descr(vec![
@@ -362,7 +376,10 @@ mod tests {
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
-        let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
+        let expr = col("c1")
+            .gt(lit(15))
+            .or(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
@@ -399,11 +416,12 @@ mod tests {
     fn row_group_pruning_predicate_null_expr() {
         use datafusion_expr::{col, lit};
         // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
-        let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
+        let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
         let groups = gen_row_group_meta_data_for_pruning_predicate();
 
@@ -421,13 +439,14 @@ mod tests {
         // test row group predicate with an unknown (Null) expr
         //
         // int > 1 and bool = NULL => c1_max > 1 and null
-        let expr = col("c1")
-            .gt(lit(15))
-            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
+        let expr = col("c1")
+            .gt(lit(15))
+            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
         let groups = gen_row_group_meta_data_for_pruning_predicate();
 
@@ -448,7 +467,6 @@ mod tests {
 
         // INT32: c1 > 5, the c1 is decimal(9,2)
         // The type of scalar value if decimal(9,2), don't need to do cast
-        let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 2), false)]);
         let schema_descr = get_test_schema_descr(vec![(
@@ -462,6 +480,8 @@ mod tests {
             Some(2),
             None,
         )]);
+        let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
         let rgm1 = get_row_group_meta_data(
@@ -503,10 +523,6 @@ mod tests {
         // The c1 type is decimal(9,0) in the parquet file, and the type of scalar is decimal(5,2).
         // We should convert all type to the coercion type, which is decimal(11,2)
         // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
-        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
-            lit(ScalarValue::Decimal128(Some(500), 5, 2)),
-            Decimal128(11, 2),
-        ));
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 0), false)]);
         let schema_descr = get_test_schema_descr(vec![(
@@ -520,6 +536,11 @@ mod tests {
             Some(0),
             None,
         )]);
+        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
+            lit(ScalarValue::Decimal128(Some(500), 5, 2)),
+            Decimal128(11, 2),
+        ));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
         let rgm1 = get_row_group_meta_data(
@@ -564,7 +585,6 @@ mod tests {
         );
 
         // INT64: c1 < 5, the c1 is decimal(18,2)
-        let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
         let schema_descr = get_test_schema_descr(vec![(
@@ -578,6 +598,8 @@ mod tests {
             Some(2),
             None,
         )]);
+        let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
         let rgm1 = get_row_group_meta_data(
@@ -616,9 +638,6 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
-        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let schema_descr = get_test_schema_descr(vec![(
             "c1",
             PhysicalType::FIXED_LEN_BYTE_ARRAY,
@@ -630,6 +649,10 @@ mod tests {
             Some(2),
             Some(16),
         )]);
+        // cast the type of c1 to decimal(28,3)
+        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
         // we must use the big-endian when encode the i128 to bytes or vec[u8].
@@ -687,9 +710,6 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
-        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let schema_descr = get_test_schema_descr(vec![(
             "c1",
             PhysicalType::BYTE_ARRAY,
@@ -701,6 +721,10 @@ mod tests {
             Some(2),
             Some(16),
         )]);
+        // cast the type of c1 to decimal(28,3)
+        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
+        let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
         // we must use the big-endian when encode the i128 to bytes or vec[u8].
@@ -820,5 +844,11 @@ mod tests {
     fn parquet_file_metrics() -> ParquetFileMetrics {
         let metrics = Arc::new(ExecutionPlanMetricsSet::new());
         ParquetFileMetrics::new(0, "file.parquet", &metrics)
+    }
+
+    fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
+        let df_schema = schema.clone().to_dfschema().unwrap();
+        let execution_props = ExecutionProps::new();
+        create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
     }
 }

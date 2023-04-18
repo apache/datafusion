@@ -19,6 +19,32 @@
 
 # DDL
 
+## CREATE DATABASE
+
+Create catalog with specified name.
+
+<pre>
+CREATE DATABASE [ IF NOT EXISTS ] <i><b>catalog</i></b>
+</pre>
+
+```sql
+-- create catalog cat
+CREATE DATABASE cat;
+```
+
+## CREATE SCHEMA
+
+Create schema under specified catalog, or the default DataFusion catalog if not specified.
+
+<pre>
+CREATE SCHEMA [ IF NOT EXISTS ] [ <i><b>catalog.</i></b> ] <b><i>schema_name</i></b>
+</pre>
+
+```sql
+-- create schema emu under catalog cat
+CREATE SCHEMA cat.emu;
+```
+
 ## CREATE EXTERNAL TABLE
 
 Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary
@@ -62,6 +88,47 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
+
+When creating an output from a data source that is already ordered by an expression, you can pre-specify the order of
+the data using the `WITH ORDER` clause. This applies even if the expression used for sorting is complex,
+allowing for greater flexibility.
+
+Here's an example of how to use `WITH ORDER` clause.
+
+```sql
+CREATE EXTERNAL TABLE test (
+    c1  VARCHAR NOT NULL,
+    c2  INT NOT NULL,
+    c3  SMALLINT NOT NULL,
+    c4  SMALLINT NOT NULL,
+    c5  INT NOT NULL,
+    c6  BIGINT NOT NULL,
+    c7  SMALLINT NOT NULL,
+    c8  INT NOT NULL,
+    c9  BIGINT NOT NULL,
+    c10 VARCHAR NOT NULL,
+    c11 FLOAT NOT NULL,
+    c12 DOUBLE NOT NULL,
+    c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
+LOCATION '/path/to/aggregate_test_100.csv';
+```
+
+Where `WITH ORDER` clause specifies the sort order:
+
+```sql
+WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
+         [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
+```
+
+### Cautions when using the WITH ORDER Clause
+
+- It's important to understand that using the `WITH ORDER` clause in the `CREATE EXTERNAL TABLE` statement only specifies the order in which the data should be read from the external file. If the data in the file is not already sorted according to the specified order, then the results may not be correct.
+
+- It's also important to note that the `WITH ORDER` clause does not affect the ordering of the data in the original external file.
 
 If data sources are already partitioned in Hive style, `PARTITIONED BY` can be used for partition pruning.
 
@@ -112,7 +179,7 @@ DROP TABLE IF EXISTS nonexistent_table;
 View is a virtual table based on the result of a SQL query. It can be created from an existing table or values list.
 
 <pre>
-CREATE VIEW <i><b>view_name</b></i> AS statement;
+CREATE [ OR REPLACE ] VIEW <i><b>view_name</b></i> AS statement;
 </pre>
 
 ```sql

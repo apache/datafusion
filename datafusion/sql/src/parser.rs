@@ -18,6 +18,7 @@
 //! DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
+use sqlparser::ast::OrderByExpr;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
@@ -58,6 +59,8 @@ pub struct CreateExternalTable {
     pub location: String,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+    /// Ordered expressions
+    pub order_exprs: Vec<OrderByExpr>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
@@ -215,7 +218,7 @@ impl<'a> DFParser<'a> {
         }))
     }
 
-    /// Parse a SQL `CREATE` statementm handling `CREATE EXTERNAL TABLE`
+    /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()
@@ -251,6 +254,49 @@ impl<'a> DFParser<'a> {
             }
         }
         Ok(partitions)
+    }
+
+    /// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
+    pub fn parse_order_by_exprs(&mut self) -> Result<Vec<OrderByExpr>, ParserError> {
+        let mut values = vec![];
+        self.parser.expect_token(&Token::LParen)?;
+        loop {
+            values.push(self.parse_order_by_expr()?);
+            if !self.parser.consume_token(&Token::Comma) {
+                self.parser.expect_token(&Token::RParen)?;
+                return Ok(values);
+            }
+        }
+    }
+
+    /// Parse an ORDER BY sub-expression optionally followed by ASC or DESC.
+    pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, ParserError> {
+        let expr = self.parser.parse_expr()?;
+
+        let asc = if self.parser.parse_keyword(Keyword::ASC) {
+            Some(true)
+        } else if self.parser.parse_keyword(Keyword::DESC) {
+            Some(false)
+        } else {
+            None
+        };
+
+        let nulls_first = if self
+            .parser
+            .parse_keywords(&[Keyword::NULLS, Keyword::FIRST])
+        {
+            Some(true)
+        } else if self.parser.parse_keywords(&[Keyword::NULLS, Keyword::LAST]) {
+            Some(false)
+        } else {
+            None
+        };
+
+        Ok(OrderByExpr {
+            expr,
+            asc,
+            nulls_first,
+        })
     }
 
     // This is a copy of the equivalent implementation in sqlparser.
@@ -359,6 +405,12 @@ impl<'a> DFParser<'a> {
             vec![]
         };
 
+        let order_exprs = if self.parse_has_order() {
+            self.parse_order_by_exprs()?
+        } else {
+            vec![]
+        };
+
         let options = if self.parse_has_options() {
             self.parse_options()?
         } else {
@@ -376,6 +428,7 @@ impl<'a> DFParser<'a> {
             delimiter,
             location,
             table_partition_cols,
+            order_exprs,
             if_not_exists,
             file_compression_type,
             options,
@@ -399,7 +452,7 @@ impl<'a> DFParser<'a> {
         let token = self.parser.next_token();
         match &token.token {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            _ => self.expected("one of GZIP, BZIP2, XZ", token),
+            _ => self.expected("one of GZIP, BZIP2, XZ, ZSTD", token),
         }
     }
 
@@ -458,12 +511,17 @@ impl<'a> DFParser<'a> {
         self.parser
             .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
     }
+
+    fn parse_has_order(&mut self) -> bool {
+        self.parser.parse_keywords(&[Keyword::WITH, Keyword::ORDER])
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlparser::ast::{DataType, Ident};
+    use sqlparser::ast::Expr::Identifier;
+    use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
     use CompressionTypeVariant::UNCOMPRESSED;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
@@ -520,6 +578,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -537,6 +596,7 @@ mod tests {
             delimiter: '|',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -554,6 +614,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -574,6 +635,7 @@ mod tests {
                 delimiter: ',',
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
+                order_exprs: vec![],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
                 options: HashMap::new(),
@@ -586,6 +648,7 @@ mod tests {
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE XZ LOCATION 'foo.csv'", "XZ"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE ZSTD LOCATION 'foo.csv'", "ZSTD"),
         ];
         for (sql, file_compression_type) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
@@ -596,6 +659,7 @@ mod tests {
                 delimiter: ',',
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
+                order_exprs: vec![],
                 if_not_exists: false,
                 file_compression_type: CompressionTypeVariant::from_str(
                     file_compression_type,
@@ -615,6 +679,7 @@ mod tests {
             delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -631,6 +696,7 @@ mod tests {
             delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -647,6 +713,7 @@ mod tests {
             delimiter: ',',
             location: "foo.avro".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -664,6 +731,7 @@ mod tests {
             delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: true,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
@@ -686,6 +754,7 @@ mod tests {
             delimiter: ',',
             location: "blahblah".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::from([("k1".into(), "v1".into())]),
@@ -703,6 +772,7 @@ mod tests {
             delimiter: ',',
             location: "blahblah".into(),
             table_partition_cols: vec![],
+            order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             options: HashMap::from([
@@ -712,10 +782,138 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
+        // Ordered Col
+        let sqls = vec!["CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS FIRST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 NULLS LAST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS FIRST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 DESC NULLS LAST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS FIRST) LOCATION 'foo.csv'",
+                        "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 ASC NULLS LAST) LOCATION 'foo.csv'"];
+        let expected = vec![
+            (None, None),
+            (None, Some(true)),
+            (None, Some(false)),
+            (Some(true), None),
+            (Some(false), None),
+            (Some(false), Some(true)),
+            (Some(false), Some(false)),
+            (Some(true), Some(true)),
+            (Some(true), Some(false)),
+        ];
+        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected.into_iter()) {
+            let expected = Statement::CreateExternalTable(CreateExternalTable {
+                name: "t".into(),
+                columns: vec![make_column_def("c1", DataType::Int(None))],
+                file_type: "CSV".to_string(),
+                has_header: false,
+                delimiter: ',',
+                location: "foo.csv".into(),
+                table_partition_cols: vec![],
+                order_exprs: vec![OrderByExpr {
+                    expr: Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    }),
+                    asc,
+                    nulls_first,
+                }],
+                if_not_exists: false,
+                file_compression_type: UNCOMPRESSED,
+                options: HashMap::new(),
+            });
+            expect_parse_ok(sql, expected)?;
+        }
+
+        // Ordered Col
+        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(display)),
+                make_column_def("c2", DataType::Int(display)),
+            ],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![
+                OrderByExpr {
+                    expr: Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    }),
+                    asc: Some(true),
+                    nulls_first: None,
+                },
+                OrderByExpr {
+                    expr: Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                    }),
+                    asc: Some(false),
+                    nulls_first: Some(true),
+                },
+            ],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Ordered Binary op
+        let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 - c2 ASC) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(display)),
+                make_column_def("c2", DataType::Int(display)),
+            ],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![OrderByExpr {
+                expr: Expr::BinaryOp {
+                    left: Box::new(Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    })),
+                    op: BinaryOperator::Minus,
+                    right: Box::new(Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                    })),
+                },
+                asc: Some(true),
+                nulls_first: None,
+            }],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
         // Error cases: partition column does not support type
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'";
         expect_parse_error(sql, "sql parser error: Expected literal string, found: )");
+
+        // Error cases: partition column does not support type
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected (, found: c1");
+
+        // Error cases: partition column does not support type
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected ), found: LOCATION");
 
         // Error case: `with header` is an invalid syntax
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";

@@ -22,11 +22,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 
+use datafusion_common::tree_node::{
+    RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
+};
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
     col,
-    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
-    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
     Expr, ExprSchemable,
 };
@@ -236,11 +237,12 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
-            | LogicalPlan::SetVariable(_)
+            | LogicalPlan::Statement(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Unnest(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?
@@ -311,7 +313,7 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type)) => {
                 // todo: check `nullable`
-                let field = DFField::new(None, &id, data_type.clone(), true);
+                let field = DFField::new_unqualified(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(&id));
             }
@@ -420,17 +422,19 @@ impl ExprIdentifierVisitor<'_> {
     }
 }
 
-impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
-    fn pre_visit(mut self, _expr: &Expr) -> Result<Recursion<Self>> {
+impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
+    type N = Expr;
+
+    fn pre_visit(&mut self, _expr: &Expr) -> Result<VisitRecursion> {
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
         // put placeholder
         self.id_array.push((0, "".to_string()));
-        Ok(Recursion::Continue(self))
+        Ok(VisitRecursion::Continue)
     }
 
-    fn post_visit(mut self, expr: &Expr) -> Result<Self> {
+    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         self.series_number += 1;
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
@@ -447,7 +451,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
-            return Ok(self);
+            return Ok(VisitRecursion::Continue);
         }
         let mut desc = Self::desc_expr(expr);
         desc.push_str(&sub_expr_desc);
@@ -461,7 +465,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
-        Ok(self)
+        Ok(VisitRecursion::Continue)
     }
 }
 
@@ -472,7 +476,7 @@ fn expr_to_identifier(
     id_array: &mut Vec<(usize, Identifier)>,
     input_schema: DFSchemaRef,
 ) -> Result<()> {
-    expr.accept(ExprIdentifierVisitor {
+    expr.visit(&mut ExprIdentifierVisitor {
         expr_set,
         id_array,
         input_schema,
@@ -501,7 +505,9 @@ struct CommonSubexprRewriter<'a> {
     curr_index: usize,
 }
 
-impl ExprRewriter for CommonSubexprRewriter<'_> {
+impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
+    type N = Expr;
+
     fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
@@ -623,8 +629,8 @@ mod test {
 
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![
-                DFField::new(None, "a", DataType::Int64, false),
-                DFField::new(None, "c", DataType::Int64, false),
+                DFField::new_unqualified("a", DataType::Int64, false),
+                DFField::new_unqualified("c", DataType::Int64, false),
             ],
             Default::default(),
         )?);

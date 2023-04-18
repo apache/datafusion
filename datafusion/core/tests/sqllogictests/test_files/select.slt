@@ -20,10 +20,97 @@
 ## SELECT Tests
 ##########
 
-# all where empty
-query II
-SELECT * FROM aggregate_test_100 WHERE 1=2
+
+# select_values_list
+statement error DataFusion error: SQL error: ParserError\("Expected \(, found: EOF"\)
+VALUES
+
+statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+VALUES ()
+
+statement error DataFusion error: SQL error: ParserError\("Expected an expression:, found: \)"\)
+VALUES (1),()
+
+statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
+VALUES (1),(1,2)
+
+statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+VALUES (1),('2')
+
+statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 0
+VALUES (1),(2.0)
+
+statement error DataFusion error: Error during planning: Inconsistent data type across values list at row 1 column 1
+VALUES (1,2), (1,'2')
+
+query IT
+VALUES (1,'a'),(NULL,'b'),(3,'c')
 ----
+1 a
+NULL b
+3 c
+
+query IT
+VALUES (NULL,'a'),(NULL,'b'),(3,'c')
+----
+NULL a
+NULL b
+3 c
+
+query TT
+VALUES (NULL,'a'),(NULL,'b'),(NULL,'c')
+----
+NULL a
+NULL b
+NULL c
+
+query IT
+VALUES (1,'a'),(2,NULL),(3,'c')
+----
+1 a
+2 NULL
+3 c
+
+query IT
+VALUES (1,NULL),(2,NULL),(3,'c')
+----
+1 NULL
+2 NULL
+3 c
+
+query IIIIIIIIIIIIITTR
+VALUES (1,2,3,4,5,6,7,8,9,10,11,12,13,NULL,'F',3.5)
+----
+1 2 3 4 5 6 7 8 9 10 11 12 13 NULL F 3.5
+
+query IT
+SELECT * FROM (VALUES (1,'a'),(2,NULL)) AS t(c1, c2)
+----
+1 a
+2 NULL
+
+query TT
+EXPLAIN VALUES (1, 'a', -1, 1.1),(NULL, 'b', -3, 0.5)
+----
+logical_plan Values: (Int64(1), Utf8("a"), Int64(-1), Float64(1.1)), (Int64(NULL), Utf8("b"), Int64(-3), Float64(0.5))
+physical_plan ValuesExec
+
+query TT
+EXPLAIN VALUES ('1'::float)
+----
+logical_plan Values: (Float32(1) AS Utf8("1"))
+physical_plan ValuesExec
+
+query TT
+EXPLAIN VALUES (('1'||'2')::int unsigned)
+----
+logical_plan Values: (UInt32(12) AS Utf8("1") || Utf8("2"))
+physical_plan ValuesExec
+
+
+# all where empty
+statement ok
+SELECT * FROM aggregate_test_100 WHERE 1=2
 
 # Simple values function
 query I
@@ -38,7 +125,7 @@ VALUES (-1)
 -1
 
 # foo bar
-query IIC
+query IIB
 VALUES (2+1,2-1,2>1)
 ----
 3    1    true
@@ -51,8 +138,130 @@ VALUES (1),(2)
 2
 
 # multiple rows and columns from VALUES
-query IC rowsort
+query IT rowsort
 VALUES (1,'a'),(2,'b')
 ----
 1   a
 2   b
+
+# table foo for distinct order by
+statement ok
+CREATE TABLE foo AS VALUES
+(1, 2),
+(3, 4),
+(5, 6);
+
+# foo distinct
+query T
+select distinct '1' from foo;
+----
+1
+
+# foo order by
+query T
+select '1' from foo order by column1;
+----
+1
+1
+1
+
+# foo distinct order by
+statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions column1 must appear in select list
+select distinct '1' from foo order by column1;
+
+# distincts for float nan
+query BBBBBBBBBBBBBBBBB
+select
+    'nan'::double is distinct from 'nan'::double v1,
+    'nan'::double is not distinct from 'nan'::double v2,
+    'nan'::double is not distinct from null v3,
+    'nan'::double is distinct from null v4,
+    null is distinct from 'nan'::double v5,
+    null is not distinct from 'nan'::double v6,
+    'nan'::float is distinct from 'nan'::float v7,
+    'nan'::float is not distinct from 'nan'::float v8,
+    'nan'::float is not distinct from null v9,
+    'nan'::float is distinct from null v10,
+    null is distinct from 'nan'::float v11,
+    null is not distinct from 'nan'::float v12,
+    1::float is distinct from 2::float v13,
+    'nan'::float is distinct from 1::float v14,
+    'nan'::float is not distinct from 1::float v15,
+    1::float is not distinct from null v16,
+    1::float is distinct from null v17
+;
+----
+false true false true true false false true false true true false true true false false true
+
+# select limit clause
+query I
+select * from (select 1 a union all select 2) b order by a limit 1;
+----
+1
+
+# select limit clause invalid
+statement error DataFusion error: Error during planning: LIMIT must not be negative
+select * from (select 1 a union all select 2) b order by a limit -1;
+
+# select limit clause
+query I
+select * from (select 1 a union all select 2) b order by a limit null;
+----
+1
+2
+
+# select limit clause
+query I
+select * from (select 1 a union all select 2) b order by a limit 0;
+----
+
+# select case when type coercion with case expression
+query I
+select CASE 10.5 WHEN 0 THEN 1 ELSE 2 END;
+----
+2
+
+# select case when type coercion without case expression
+query I
+select CASE
+  WHEN 10 = 5 THEN 1
+  WHEN 'true' THEN 2
+  ELSE 3
+END;
+----
+2
+
+# Binary Expression for LargeUtf8
+# issue: https://github.com/apache/arrow-datafusion/issues/5893
+statement ok
+CREATE TABLE t as select arrow_cast('Bar', 'LargeUtf8') as column1, 'B%' as column2;
+
+query B
+select column1 like column2 from t;
+----
+true
+
+query B
+select column1 ilike column2 from t;
+----
+true
+
+query B
+select column1 not like column2 from t;
+----
+false
+
+query B
+select column1 not ilike column2 from t;
+----
+false
+
+query B
+select column1 is distinct from column2 from t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from t;
+----
+false

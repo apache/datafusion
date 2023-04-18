@@ -17,11 +17,12 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::expr_rewriter::rewrite_expr;
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
 };
+use datafusion_optimizer::analyzer::{Analyzer, AnalyzerRule};
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
@@ -46,10 +47,19 @@ pub fn main() -> Result<()> {
         logical_plan.display_indent()
     );
 
-    // now run the optimizer with our custom rule
-    let optimizer = Optimizer::with_rules(vec![Arc::new(MyRule {})]);
+    // run the analyzer with our custom rule
     let config = OptimizerContext::default().with_skip_failing_rules(false);
-    let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
+    let analyzer = Analyzer::with_rules(vec![Arc::new(MyAnalyzerRule {})]);
+    let analyzed_plan =
+        analyzer.execute_and_check(&logical_plan, config.options(), |_, _| {})?;
+    println!(
+        "Analyzed Logical Plan:\n\n{}\n",
+        analyzed_plan.display_indent()
+    );
+
+    // then run the optimizer with our custom rule
+    let optimizer = Optimizer::with_rules(vec![Arc::new(MyOptimizerRule {})]);
+    let optimized_plan = optimizer.optimize(&analyzed_plan, &config, observe)?;
     println!(
         "Optimized Logical Plan:\n\n{}\n",
         optimized_plan.display_indent()
@@ -66,11 +76,57 @@ fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
     )
 }
 
-struct MyRule {}
+/// An example analyzer rule that changes Int64 literals to UInt64
+struct MyAnalyzerRule {}
 
-impl OptimizerRule for MyRule {
+impl AnalyzerRule for MyAnalyzerRule {
+    fn analyze(&self, plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+        Self::analyze_plan(plan)
+    }
+
     fn name(&self) -> &str {
-        "my_rule"
+        "my_analyzer_rule"
+    }
+}
+
+impl MyAnalyzerRule {
+    fn analyze_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
+        plan.transform(&|plan| {
+            Ok(match plan {
+                LogicalPlan::Filter(filter) => {
+                    let predicate = Self::analyze_expr(filter.predicate.clone())?;
+                    Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        filter.input,
+                    )?))
+                }
+                _ => Transformed::No(plan),
+            })
+        })
+    }
+
+    fn analyze_expr(expr: Expr) -> Result<Expr> {
+        expr.transform(&|expr| {
+            // closure is invoked for all sub expressions
+            Ok(match expr {
+                Expr::Literal(ScalarValue::Int64(i)) => {
+                    // transform to UInt64
+                    Transformed::Yes(Expr::Literal(ScalarValue::UInt64(
+                        i.map(|i| i as u64),
+                    )))
+                }
+                _ => Transformed::No(expr),
+            })
+        })
+    }
+}
+
+/// An example optimizer rule that rewrite BETWEEN expression to binary compare expressions
+struct MyOptimizerRule {}
+
+impl OptimizerRule for MyOptimizerRule {
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
     }
 
     fn try_optimize(
@@ -105,9 +161,9 @@ impl OptimizerRule for MyRule {
 
 /// use rewrite_expr to modify the expression tree.
 fn my_rewrite(expr: Expr) -> Result<Expr> {
-    rewrite_expr(expr, |e| {
+    expr.transform(&|expr| {
         // closure is invoked for all sub expressions
-        match e {
+        Ok(match expr {
             Expr::Between(Between {
                 expr,
                 negated,
@@ -119,13 +175,13 @@ fn my_rewrite(expr: Expr) -> Result<Expr> {
                 let low: Expr = *low;
                 let high: Expr = *high;
                 if negated {
-                    Ok(expr.clone().lt(low).or(expr.gt(high)))
+                    Transformed::Yes(expr.clone().lt(low).or(expr.gt(high)))
                 } else {
-                    Ok(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
+                    Transformed::Yes(expr.clone().gt_eq(low).and(expr.lt_eq(high)))
                 }
             }
-            _ => Ok(e),
-        }
+            _ => Transformed::No(expr),
+        })
     })
 }
 

@@ -19,17 +19,22 @@ pub mod builder;
 pub mod display;
 mod extension;
 mod plan;
+mod statement;
 
 pub use builder::{table_scan, LogicalPlanBuilder};
 pub use plan::{
     Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DmlStatement,
-    DropTable, DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
-    JoinType, Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor, Prepare,
-    Projection, Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias,
-    TableScan, ToStringifiedPlan, Union, Values, Window, WriteOp,
+    CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DropTable,
+    DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType,
+    Limit, LogicalPlan, Partitioning, PlanType, Prepare, Projection, Repartition, Sort,
+    StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
+    Unnest, Values, Window,
+};
+pub use statement::{
+    DmlStatement, SetVariable, Statement, TransactionAccessMode, TransactionConclusion,
+    TransactionEnd, TransactionIsolationLevel, TransactionStart, WriteOp,
 };
 
 pub use display::display_schema;
 
-pub use extension::UserDefinedLogicalNode;
+pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};

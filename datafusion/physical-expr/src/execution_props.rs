@@ -27,10 +27,12 @@ use std::sync::Arc;
 ///
 /// It is important that this structure be cheap to create as it is
 /// done so during predicate pruning and expression simplification
-#[derive(Clone)]
+///
+/// [`LogicalPlan`]: datafusion_expr::LogicalPlan
+#[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
-    /// providers for scalar variables
+    /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
 }
 
@@ -73,7 +75,7 @@ impl ExecutionProps {
         old_provider
     }
 
-    /// Returns the provider for the var_type, if any
+    /// Returns the provider for the `var_type`, if any
     pub fn get_var_provider(
         &self,
         var_type: VarType,
@@ -81,5 +83,15 @@ impl ExecutionProps {
         self.var_providers
             .as_ref()
             .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn debug() {
+        let props = ExecutionProps::new();
+        assert_eq!("ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, var_providers: None }", format!("{props:?}"));
     }
 }

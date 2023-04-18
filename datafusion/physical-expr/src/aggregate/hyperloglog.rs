@@ -20,7 +20,7 @@
 //! `hyperloglog` is a module that contains a modified version
 //! of [redis's implementation](https://github.com/redis/redis/blob/4930d19e70c391750479951022e207e19111eb55/src/hyperloglog.c)
 //! with some modification based on strong assumption of usage
-//! within datafusion, so that [`crate::logical_plan::approx_distinct`] function can
+//! within datafusion, so that [`datafusion_expr::approx_distinct`] function can
 //! be efficiently implemented.
 //!
 //! Specifically, like Redis's version, this HLL structure uses
@@ -40,10 +40,10 @@ use std::marker::PhantomData;
 
 /// The greater is P, the smaller the error.
 const HLL_P: usize = 14_usize;
-/// the number of bits of the hash value used determining the number of leading zeros
+/// The number of bits of the hash value used determining the number of leading zeros
 const HLL_Q: usize = 64_usize - HLL_P;
 const NUM_REGISTERS: usize = 1_usize << HLL_P;
-/// mask to obtain index into the registers
+/// Mask to obtain index into the registers
 const HLL_P_MASK: u64 = (NUM_REGISTERS as u64) - 1;
 
 #[derive(Clone, Debug)]

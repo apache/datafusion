@@ -20,16 +20,16 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
+use crate::execution::memory_pool::MemoryReservation;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
-use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::ArrowError;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
+use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::{metadata, File};
@@ -38,6 +38,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+/// [`MemoryReservation`] used across query execution streams
+pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
 /// Stream of record batches
 pub struct SizedRecordBatchStream {
@@ -91,49 +94,6 @@ impl RecordBatchStream for SizedRecordBatchStream {
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
     stream.try_collect::<Vec<_>>().await
-}
-
-/// Merge two record batch references into a single record batch.
-/// All the record batches inside the slice must have the same schema.
-pub fn merge_batches(
-    first: &RecordBatch,
-    second: &RecordBatch,
-    schema: SchemaRef,
-) -> Result<RecordBatch> {
-    let columns = (0..schema.fields.len())
-        .map(|index| {
-            let first_column = first.column(index).as_ref();
-            let second_column = second.column(index).as_ref();
-            concat(&[first_column, second_column])
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()
-        .map_err(Into::<DataFusionError>::into)?;
-    RecordBatch::try_new(schema, columns).map_err(Into::into)
-}
-
-/// Merge a slice of record batch references into a single record batch, or
-/// return None if the slice itself is empty. All the record batches inside the
-/// slice must have the same schema.
-pub fn merge_multiple_batches(
-    batches: &[&RecordBatch],
-    schema: SchemaRef,
-) -> Result<Option<RecordBatch>> {
-    Ok(if batches.is_empty() {
-        None
-    } else {
-        let columns = (0..schema.fields.len())
-            .map(|index| {
-                concat(
-                    &batches
-                        .iter()
-                        .map(|batch| batch.column(index).as_ref())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Result<Vec<_>, ArrowError>>()
-            .map_err(Into::<DataFusionError>::into)?;
-        Some(RecordBatch::try_new(schema, columns)?)
-    })
 }
 
 /// Recursively builds a list of files in a directory with a given extension
@@ -322,7 +282,7 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
 
 /// Calculates the "meet" of given orderings.
 /// The meet is the finest ordering that satisfied by all the given
-/// orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
+/// orderings, see <https://en.wikipedia.org/wiki/Join_and_meet>.
 pub fn get_meet_of_orderings(
     given: &[Arc<dyn ExecutionPlan>],
 ) -> Option<&[PhysicalSortExpr]> {
@@ -525,7 +485,7 @@ mod tests {
             options: SortOptions::default(),
         }];
         let memory_exec = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?) as _;
-        let sort_exec = Arc::new(SortExec::try_new(sort_expr.clone(), memory_exec, None)?)
+        let sort_exec = Arc::new(SortExec::new(sort_expr.clone(), memory_exec))
             as Arc<dyn ExecutionPlan>;
         let memory_exec2 = Arc::new(MemoryExec::try_new(&[], schema, None)?) as _;
         // memory_exec2 doesn't have output ordering
@@ -610,9 +570,9 @@ mod tests {
 pub struct IPCWriter {
     /// path
     pub path: PathBuf,
-    /// Inner writer
+    /// inner writer
     pub writer: FileWriter<File>,
-    /// bathes written
+    /// batches written
     pub num_batches: u64,
     /// rows written
     pub num_rows: u64,

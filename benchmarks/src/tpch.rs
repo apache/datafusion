@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, SchemaBuilder, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use std::fs;
 use std::ops::{Div, Mul};
@@ -45,11 +45,9 @@ pub const TPCH_TABLES: &[&str] = &[
 
 /// The `.tbl` file contains a trailing column
 pub fn get_tbl_tpch_table_schema(table: &str) -> Schema {
-    let mut schema = get_tpch_table_schema(table);
-    schema
-        .fields
-        .push(Field::new("__placeholder", DataType::Utf8, false));
-    schema
+    let mut schema = SchemaBuilder::from(get_tpch_table_schema(table).fields);
+    schema.push(Field::new("__placeholder", DataType::Utf8, false));
+    schema.finish()
 }
 
 /// Get the schema for the benchmarks derived from TPC-H
@@ -476,7 +474,7 @@ pub async fn transform_actual_result(
     // we need to round the decimal columns and trim the Utf8 columns
     // we also need to rewrite the batches to use a compatible schema
     let ctx = SessionContext::new();
-    let fields = result[0]
+    let fields: Fields = result[0]
         .schema()
         .fields()
         .iter()
@@ -485,7 +483,7 @@ pub async fn transform_actual_result(
                 Some(i) => f.name()[i + 1..].to_string(),
                 _ => f.name().to_string(),
             };
-            f.clone().with_name(simple_name)
+            f.as_ref().clone().with_name(simple_name)
         })
         .collect();
     let result_schema = SchemaRef::new(Schema::new(fields));

@@ -213,15 +213,15 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
-    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
+    use url::Url;
 
     use super::*;
 
@@ -246,9 +246,10 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
+        let url = Url::parse("file://").unwrap();
         state
             .runtime_env()
-            .register_object_store("file", "", store.clone());
+            .register_object_store(&url, store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
@@ -323,10 +324,10 @@ mod tests {
             .infer_schema(&state, &object_store, &[meta.clone()])
             .await?;
 
-        let mut fields = actual_schema.fields().clone();
-        fields.push(Field::new("missing_col", DataType::Int32, true));
+        let mut builder = SchemaBuilder::from(actual_schema.fields());
+        builder.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(builder.finish());
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
@@ -409,10 +410,7 @@ mod tests {
             file_schema,
             statistics: Statistics::default(),
             limit: None,
-            table_partition_cols: vec![(
-                "date".to_owned(),
-                partition_type_wrap(DataType::Utf8),
-            )],
+            table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
             output_ordering: None,
             infinite_source: false,
         });

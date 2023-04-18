@@ -18,15 +18,16 @@
 [package]
 name = "datafusion-examples"
 description = "DataFusion usage examples"
-version = "17.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
-edition = "2021"
+keywords = ["arrow", "query", "sql"]
 publish = false
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [[example]]
 name = "avro_sql"
@@ -34,10 +35,11 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow = "32.0.0"
-arrow-flight = { version = "32.0.0", features = ["flight-sql-experimental"] }
-arrow-schema = "32.0.0"
+arrow = { workspace = true }
+arrow-flight = { workspace = true }
+arrow-schema = { workspace = true }
 async-trait = "0.1.41"
+bytes = "1.4"
 dashmap = "5.4"
 datafusion = { path = "../datafusion/core" }
 datafusion-common = { path = "../datafusion/common" }
@@ -49,11 +51,12 @@ futures = "0.3"
 log = "0.4"
 mimalloc = { version = "0.1", default-features = false }
 num_cpus = "1.13.0"
-object_store = { version = "0.5", features = ["aws"] }
+object_store = { version = "0.5.4", features = ["aws"] }
 prost = { version = "0.11", default-features = false }
 prost-derive = { version = "0.11", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.82"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-tonic = "0.8"
+tonic = "0.9"
+url = "2.2"
 uuid = "1.2"

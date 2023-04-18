@@ -58,7 +58,7 @@ impl TryCastExpr {
 
 impl fmt::Display for TryCastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {:?})", self.expr, self.cast_type)
+        write!(f, "TRY_CAST({} AS {:?})", self.expr, self.cast_type)
     }
 }
 
@@ -132,7 +132,7 @@ pub fn try_cast(
         Ok(Arc::new(TryCastExpr::new(expr, cast_type)))
     } else {
         Err(DataFusionError::NotImplemented(format!(
-            "Unsupported CAST from {expr_type:?} to {cast_type:?}"
+            "Unsupported TRY_CAST from {expr_type:?} to {cast_type:?}"
         )))
     }
 }
@@ -155,7 +155,7 @@ mod tests {
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
-    // 2. construct a physical expression of CAST(a AS B)
+    // 2. construct a physical expression of TRY_CAST(a AS B)
     // 3. evaluate the expression
     // 4. verify that the resulting expression is of type B
     // 5. verify that the resulting values are downcastable and correct
@@ -171,7 +171,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
                 format!("{}", expression)
             );
 
@@ -202,7 +202,7 @@ mod tests {
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
-    // 2. construct a physical expression of CAST(a AS B)
+    // 2. construct a physical expression of TRY_CAST(a AS B)
     // 3. evaluate the expression
     // 4. verify that the resulting expression is of type B
     // 5. verify that the resulting values are downcastable and correct
@@ -218,7 +218,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
                 format!("{}", expression)
             );
 
@@ -542,7 +542,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let result = try_cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
-        result.expect_err("expected Invalid CAST");
+        result.expect_err("expected Invalid TRY_CAST");
     }
 
     // create decimal array with the specified precision and scale

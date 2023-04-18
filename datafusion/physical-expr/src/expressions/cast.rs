@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::intervals::Interval;
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
@@ -68,6 +69,10 @@ impl CastExpr {
     pub fn cast_type(&self) -> &DataType {
         &self.cast_type
     }
+    /// The data type to cast to
+    pub fn cast_options(&self) -> &CastOptions {
+        &self.cast_options
+    }
 }
 
 impl fmt::Display for CastExpr {
@@ -110,6 +115,24 @@ impl PhysicalExpr for CastExpr {
                 safe: self.cast_options.safe,
             },
         )))
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        // Cast current node's interval to the right type:
+        children[0].cast_to(&self.cast_type, &self.cast_options)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        let child_interval = children[0];
+        // Get child's datatype:
+        let cast_type = child_interval.get_datatype()?;
+        Ok(vec![Some(
+            interval.cast_to(&cast_type, &self.cast_options)?,
+        )])
     }
 }
 
@@ -664,6 +687,22 @@ mod tests {
                     .contains("Cannot cast string '9.1' to value of Int32 type"))
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore] // TODO: https://github.com/apache/arrow-datafusion/issues/5396
+    fn test_cast_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let a = Int64Array::from(vec![100]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
+        let expression = cast_with_options(
+            col("a", &schema)?,
+            &schema,
+            DataType::Decimal128(38, 38),
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )?;
+        expression.evaluate(&batch)?;
         Ok(())
     }
 }

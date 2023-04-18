@@ -17,6 +17,7 @@
 
 //! DateTime expressions
 
+use arrow::array::Float64Builder;
 use arrow::compute::cast;
 use arrow::{
     array::TimestampNanosecondArray, compute::kernels::temporal, datatypes::TimeUnit,
@@ -27,8 +28,8 @@ use arrow::{
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
         ArrowNumericType, ArrowPrimitiveType, ArrowTemporalType, DataType,
-        IntervalDayTimeType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
+        IntervalDayTimeType, IntervalMonthDayNanoType, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
 };
 use chrono::prelude::*;
@@ -174,7 +175,7 @@ pub fn make_now(
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,
-            Some("+00:00".to_owned()),
+            Some("+00:00".into()),
         )))
     }
 }
@@ -221,7 +222,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
         })?
         .with_nanosecond(0);
     let value = match granularity {
-        "second" => value,
+        "second" | "millisecond" | "microsecond" => value,
         "minute" => value.and_then(|d| d.with_second(0)),
         "hour" => value
             .and_then(|d| d.with_second(0))
@@ -279,10 +280,41 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                (f)(*v)?,
-                tz_opt.clone(),
-            ))
+            let nano = (f)(*v)?;
+            match granularity.as_str() {
+                "minute" => {
+                    // cast to second
+                    let second = ScalarValue::TimestampSecond(
+                        Some(nano.unwrap() / 1_000_000_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(second)
+                }
+                "second" => {
+                    // cast to millisecond
+                    let mill = ScalarValue::TimestampMillisecond(
+                        Some(nano.unwrap() / 1_000_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(mill)
+                }
+                "millisecond" => {
+                    // cast to microsecond
+                    let micro = ScalarValue::TimestampMicrosecond(
+                        Some(nano.unwrap() / 1_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(micro)
+                }
+                _ => {
+                    // cast to nanosecond
+                    let nano = ScalarValue::TimestampNanosecond(
+                        Some(nano.unwrap()),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(nano)
+                }
+            }
         }
         ColumnarValue::Array(array) => {
             let array = as_timestamp_nanosecond_array(array)?;
@@ -318,18 +350,49 @@ fn date_bin_single(stride: i64, source: i64, origin: i64) -> i64 {
 
 /// DATE_BIN sql function
 pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 3 {
-        return Err(DataFusionError::Execution(
-            "DATE_BIN expected three arguments".to_string(),
+    if args.len() == 2 {
+        // Default to unix EPOCH
+        let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+            Some(0),
+            Some("+00:00".into()),
         ));
+        date_bin_impl(&args[0], &args[1], &origin)
+    } else if args.len() == 3 {
+        date_bin_impl(&args[0], &args[1], &args[2])
+    } else {
+        Err(DataFusionError::Execution(
+            "DATE_BIN expected two or three arguments".to_string(),
+        ))
     }
+}
 
-    let (stride, array, origin) = (&args[0], &args[1], &args[2]);
-
+fn date_bin_impl(
+    stride: &ColumnarValue,
+    array: &ColumnarValue,
+    origin: &ColumnarValue,
+) -> Result<ColumnarValue> {
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
             let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
+                .num_nanoseconds();
+            match nanos {
+                Some(v) => v,
+                _ => {
+                    return Err(DataFusionError::Execution(
+                        "DATE_BIN stride argument is too large".to_string(),
+                    ))
+                }
+            }
+        }
+        ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(v))) => {
+            let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
+            if months != 0 {
+                return Err(DataFusionError::NotImplemented(
+                    "DATE_BIN stride does not support month intervals".to_string(),
+                ));
+            }
+            let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
                 .num_nanoseconds();
             match nanos {
                 Some(v) => v,
@@ -478,6 +541,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "millisecond" => extract_date_part!(&array, millis),
         "microsecond" => extract_date_part!(&array, micros),
         "nanosecond" => extract_date_part!(&array, nanos),
+        "epoch" => extract_date_part!(&array, epoch),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{date_part}' not supported"
         ))),
@@ -535,6 +599,40 @@ where
     i64: From<T::Native>,
 {
     to_ticks(array, 1_000_000_000)
+}
+
+fn epoch<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    let mut b = Float64Builder::with_capacity(array.len());
+    match array.data_type() {
+        DataType::Timestamp(tu, _) => {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    b.append_null();
+                } else {
+                    let scale = match tu {
+                        TimeUnit::Second => 1,
+                        TimeUnit::Millisecond => 1_000,
+                        TimeUnit::Microsecond => 1_000_000,
+                        TimeUnit::Nanosecond => 1_000_000_000,
+                    };
+
+                    let n: i64 = array.value(i).into();
+                    b.append_value(n as f64 / scale as f64);
+                }
+            }
+        }
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "Can not convert {:?} to epoch",
+                array.data_type()
+            )))
+        }
+    }
+    Ok(b.finish())
 }
 
 #[cfg(test)]
@@ -747,32 +845,44 @@ mod tests {
         ]);
         assert!(res.is_ok());
 
-        //
-        // Fallible test cases
-        //
-
-        // invalid number of arguments
         let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expected three arguments"
-        );
+        assert!(res.is_ok());
 
-        // stride: invalid type
+        // stride supports month-day-nano
         let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
+        assert!(res.is_ok());
+
+        //
+        // Fallible test cases
+        //
+
+        // invalid number of arguments
+        let res =
+            date_bin(&[ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1)))]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(MonthDayNano)"
+            "Execution error: DATE_BIN expected two or three arguments"
         );
 
-        // stride: overflow
+        // stride: invalid type
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(YearMonth)"
+        );
+
+        // stride: overflow of day-time interval
         let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(i64::MAX))),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
@@ -781,6 +891,28 @@ mod tests {
         assert_eq!(
             res.err().unwrap().to_string(),
             "Execution error: DATE_BIN stride argument is too large"
+        );
+
+        // stride: overflow of month-day-nano interval
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(0, i32::MAX, 1)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN stride argument is too large"
+        );
+
+        // stride: month intervals
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::new_interval_mdn(1, 1, 1)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "This feature is not implemented: DATE_BIN stride does not support month intervals"
         );
 
         // origin: invalid type

@@ -45,6 +45,8 @@ pub struct MemoryExec {
     projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
+    // Optional sort information
+    sort_information: Option<Vec<PhysicalSortExpr>>,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -77,7 +79,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        self.sort_information.as_deref()
     }
 
     fn with_new_children(
@@ -144,7 +146,17 @@ impl MemoryExec {
             schema,
             projected_schema,
             projection,
+            sort_information: None,
         })
+    }
+
+    /// Set sort information
+    pub fn with_sort_information(
+        mut self,
+        sort_information: Vec<PhysicalSortExpr>,
+    ) -> Self {
+        self.sort_information = Some(sort_information);
+        self
     }
 }
 

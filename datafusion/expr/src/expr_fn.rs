@@ -28,15 +28,45 @@ use arrow::datatypes::DataType;
 use datafusion_common::{Column, Result};
 use std::sync::Arc;
 
-/// Create a column expression based on a qualified or unqualified column name
+/// Create a column expression based on a qualified or unqualified column name. Will
+/// normalize unquoted identifiers according to SQL rules (identifiers will become lowercase).
 ///
-/// example:
-/// ```
+/// For example:
+///
+/// ```rust
 /// # use datafusion_expr::col;
-/// let c = col("my_column");
+/// let c1 = col("a");
+/// let c2 = col("A");
+/// assert_eq!(c1, c2);
+///
+/// // note how quoting with double quotes preserves the case
+/// let c3 = col(r#""A""#);
+/// assert_ne!(c1, c3);
 /// ```
 pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
+}
+
+/// Create an unqualified column expression from the provided name, without normalizing
+/// the column.
+///
+/// For example:
+///
+/// ```rust
+/// # use datafusion_expr::{col, ident};
+/// let c1 = ident("A"); // not normalized staying as column 'A'
+/// let c2 = col("A"); // normalized via SQL rules becoming column 'a'
+/// assert_ne!(c1, c2);
+///
+/// let c3 = col(r#""A""#);
+/// assert_eq!(c1, c3);
+///
+/// let c4 = col("t1.a"); // parses as relation 't1' column 'a'
+/// let c5 = ident("t1.a"); // parses as column 't1.a'
+/// assert_ne!(c4, c5);
+/// ```
+pub fn ident(name: impl Into<String>) -> Expr {
+    Expr::Column(Column::from_name(name))
 }
 
 /// Return a new expression `left <op> right`
@@ -112,6 +142,51 @@ pub fn count(expr: Expr) -> Expr {
     ))
 }
 
+/// Return a new expression with bitwise AND
+pub fn bitwise_and(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseAnd,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise OR
+pub fn bitwise_or(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseOr,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise XOR
+pub fn bitwise_xor(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseXor,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise SHIFT RIGHT
+pub fn bitwise_shift_right(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseShiftRight,
+        Box::new(right),
+    ))
+}
+
+/// Return a new expression with bitwise SHIFT LEFT
+pub fn bitwise_shift_left(left: Expr, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::BitwiseShiftLeft,
+        Box::new(right),
+    ))
+}
+
 /// Create an expression to represent the count(distinct) aggregate function
 pub fn count_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
@@ -151,6 +226,14 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     }
 }
 
+/// Returns an approximate value of π
+pub fn pi() -> Expr {
+    Expr::ScalarFunction {
+        fun: built_in_function::BuiltinScalarFunction::Pi,
+        args: vec![],
+    }
+}
+
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction {
@@ -169,6 +252,16 @@ pub fn random() -> Expr {
 pub fn approx_distinct(expr: Expr) -> Expr {
     Expr::AggregateFunction(AggregateFunction::new(
         aggregate_function::AggregateFunction::ApproxDistinct,
+        vec![expr],
+        false,
+        None,
+    ))
+}
+
+/// Calculate the median for `expr`.
+pub fn median(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Median,
         vec![expr],
         false,
         None,
@@ -212,7 +305,10 @@ pub fn approx_percentile_cont_with_weight(
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::Exists {
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: false,
     }
 }
@@ -220,7 +316,10 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::Exists {
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: true,
     }
 }
@@ -229,7 +328,10 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     Expr::InSubquery {
         expr: Box::new(expr),
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: false,
     }
 }
@@ -238,14 +340,30 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     Expr::InSubquery {
         expr: Box::new(expr),
-        subquery: Subquery { subquery },
+        subquery: Subquery {
+            subquery,
+            outer_ref_columns: vec![],
+        },
         negated: true,
     }
 }
 
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::ScalarSubquery(Subquery { subquery })
+    Expr::ScalarSubquery(Subquery {
+        subquery,
+        outer_ref_columns: vec![],
+    })
+}
+
+/// Create an expression to represent the stddev() aggregate function
+pub fn stddev(expr: Expr) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Stddev,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create a grouping set
@@ -336,12 +454,19 @@ macro_rules! nary_scalar_expr {
 
 // math functions
 scalar_expr!(Sqrt, sqrt, num, "square root of a number");
+scalar_expr!(Cbrt, cbrt, num, "cube root of a number");
 scalar_expr!(Sin, sin, num, "sine");
 scalar_expr!(Cos, cos, num, "cosine");
 scalar_expr!(Tan, tan, num, "tangent");
+scalar_expr!(Sinh, sinh, num, "hyperbolic sine");
+scalar_expr!(Cosh, cosh, num, "hyperbolic cosine");
+scalar_expr!(Tanh, tanh, num, "hyperbolic tangent");
 scalar_expr!(Asin, asin, num, "inverse sine");
 scalar_expr!(Acos, acos, num, "inverse cosine");
 scalar_expr!(Atan, atan, num, "inverse tangent");
+scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
+scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
+scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
 scalar_expr!(
     Floor,
     floor,
@@ -354,7 +479,7 @@ scalar_expr!(
     num,
     "nearest integer greater than or equal to argument"
 );
-scalar_expr!(Round, round, num, "round to nearest integer");
+nary_scalar_expr!(Round, round, "round to nearest integer");
 scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
@@ -372,6 +497,7 @@ scalar_expr!(
     "returns the hexdecimal representation of an integer"
 );
 scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
+scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
@@ -424,9 +550,9 @@ scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
 scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
 scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
-scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index. ");
+scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
-scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matchs the `string`");
+scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
@@ -586,7 +712,7 @@ mod test {
     #[test]
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
-        let col_not_null = col("col2");
+        let col_not_null = ident("col2");
         assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
             format!("{:?}", col_not_null.is_not_null()),
@@ -647,15 +773,23 @@ mod test {
     #[test]
     fn scalar_function_definitions() {
         test_unary_scalar_expr!(Sqrt, sqrt);
+        test_unary_scalar_expr!(Cbrt, cbrt);
         test_unary_scalar_expr!(Sin, sin);
         test_unary_scalar_expr!(Cos, cos);
         test_unary_scalar_expr!(Tan, tan);
+        test_unary_scalar_expr!(Sinh, sinh);
+        test_unary_scalar_expr!(Cosh, cosh);
+        test_unary_scalar_expr!(Tanh, tanh);
         test_unary_scalar_expr!(Asin, asin);
         test_unary_scalar_expr!(Acos, acos);
         test_unary_scalar_expr!(Atan, atan);
+        test_unary_scalar_expr!(Asinh, asinh);
+        test_unary_scalar_expr!(Acosh, acosh);
+        test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Round, round);
+        test_nary_scalar_expr!(Round, round, input);
+        test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);

@@ -16,16 +16,37 @@
 // under the License.
 #![warn(missing_docs, clippy::needless_borrow)]
 
-//! [DataFusion](https://github.com/apache/arrow-datafusion)
-//! is an extensible query execution framework that uses
-//! [Apache Arrow](https://arrow.apache.org) as its in-memory format.
+//! [DataFusion] is an extensible query engine written in Rust that
+//! uses [Apache Arrow] as its in-memory format. DataFusion's [use
+//! cases] include building very fast database and analytic systems,
+//! customized to particular workloads.
 //!
-//! DataFusion supports both an SQL and a DataFrame API for building logical query plans
-//! as well as a query optimizer and execution engine capable of parallel execution
-//! against partitioned data sources (CSV and Parquet) using threads.
+//! "Out of the box," DataFusion quickly runs complex [SQL] and
+//! [`DataFrame`] queries using a sophisticated query planner, a columnar,
+//! multi-threaded, vectorized execution engine, and partitioned data
+//! sources (Parquet, CSV, JSON, and Avro).
 //!
-//! Below is an example of how to execute a query against data stored
-//! in a CSV file using a [`DataFrame`](dataframe::DataFrame):
+//! DataFusion can also be easily customized to support additional
+//! data sources, query languages, functions, custom operators and
+//! more.
+//!
+//! [DataFusion]: https://arrow.apache.org/datafusion/
+//! [Apache Arrow]: https://arrow.apache.org
+//! [use cases]: https://arrow.apache.org/datafusion/user-guide/introduction.html#use-cases
+//! [SQL]: https://arrow.apache.org/datafusion/user-guide/sql/index.html
+//! [`DataFrame`]: dataframe::DataFrame
+//!
+//! # Examples
+//!
+//! The main entry point for interacting with DataFusion is the
+//! [`SessionContext`].
+//!
+//! [`SessionContext`]: execution::context::SessionContext
+//!
+//! ## DataFrame
+//!
+//! To execute a query against data stored
+//! in a CSV file using a [`DataFrame`]:
 //!
 //! ```rust
 //! # use datafusion::prelude::*;
@@ -64,7 +85,9 @@
 //! # }
 //! ```
 //!
-//! and how to execute a query against a CSV using SQL:
+//! ## SQL
+//!
+//! To execute a query against a CSV file using [SQL]:
 //!
 //! ```
 //! # use datafusion::prelude::*;
@@ -78,7 +101,7 @@
 //! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
+//! let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
@@ -100,57 +123,109 @@
 //! # }
 //! ```
 //!
-//! ## Parse, Plan, Optimize, Execute
+//! ## More Examples
+//!
+//! There are many additional annotated examples of using DataFusion in the [datafusion-examples] directory.
+//!
+//! [datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples
+//!
+//! ## Customization and Extension
+//!
+//! DataFusion supports extension at many points:
+//!
+//! * read from any datasource ([`TableProvider`])
+//! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
+//! * build your own query langue or plans using the ([`LogicalPlanBuilder`])
+//! * declare and use user-defined scalar functions ([`ScalarUDF`])
+//! * declare and use user-defined aggregate functions ([`AggregateUDF`])
+//! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
+//! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
+//!
+//! You can find examples of each of them in the [datafusion-examples] directory.
+//!
+//! [`TableProvider`]: crate::datasource::TableProvider
+//! [`CatalogProvider`]: crate::catalog::catalog::CatalogProvider
+//! [`LogicalPlanBuilder`]: datafusion_expr::logical_plan::builder::LogicalPlanBuilder
+//! [`ScalarUDF`]: physical_plan::udf::ScalarUDF
+//! [`AggregateUDF`]: physical_plan::udaf::AggregateUDF
+//! [`QueryPlanner`]: execution::context::QueryPlanner
+//! [`OptimizerRule`]: datafusion_optimizer::optimizer::OptimizerRule
+//! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
+//!
+//! # Code Organization
+//!
+//! ## Overview  Presentations
+//!
+//! The following presentations offer high level overviews of the
+//! different components and how they interact together.
+//!
+//! - [Apr 2023]: The Apache Arrow DataFusion Architecture talks
+//!   - _Query Engine_: [recording](https://youtu.be/NVKujPxwSBA) and [slides](https://docs.google.com/presentation/d/1D3GDVas-8y0sA4c8EOgdCvEjVND4s2E7I6zfs67Y4j8/edit#slide=id.p)
+//!   - _Logical Plan and Expressions_: [recording](https://youtu.be/EzZTLiSJnhY) and [slides](https://docs.google.com/presentation/d/1ypylM3-w60kVDW7Q6S99AHzvlBgciTdjsAfqNP85K30)
+//!   - _Physical Plan and Execution_: [recording](https://youtu.be/2jkWU3_w6z0) and [slides](https://docs.google.com/presentation/d/1cA2WQJ2qg6tx6y4Wf8FH2WVSm9JQ5UgmBWATHdik0hg)
+//! - [February 2021]: How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
+//! - [July 2022]: DataFusion and Arrow: Supercharge Your Data Analytical Tool with a Rusty Query Engine: [recording](https://www.youtube.com/watch?v=Rii1VTn3seQ) and [slides](https://docs.google.com/presentation/d/1q1bPibvu64k2b7LPi7Yyb0k3gA1BiUYiUbEklqW1Ckc/view#slide=id.g11054eeab4c_0_1165)
+//! - [March 2021]: The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
+//! - [February 2021]: How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
+//!
+//! ## Architecture
 //!
 //! DataFusion is a fully fledged query engine capable of performing complex operations.
 //! Specifically, when DataFusion receives an SQL query, there are different steps
 //! that it passes through until a result is obtained. Broadly, they are:
 //!
-//! 1. The string is parsed to an Abstract syntax tree (AST) using [sqlparser](https://docs.rs/sqlparser/0.6.1/sqlparser/).
-//! 2. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical expressions on the AST to logical expressions [`Expr`s](datafusion_expr::Expr).
-//! 3. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical nodes on the AST to a [`LogicalPlan`](datafusion_expr::LogicalPlan).
-//! 4. [`OptimizerRules`](optimizer::optimizer::OptimizerRule) are applied to the [`LogicalPlan`](datafusion_expr::LogicalPlan) to optimize it.
-//! 5. The [`LogicalPlan`](datafusion_expr::LogicalPlan) is converted to an [`ExecutionPlan`](physical_plan::ExecutionPlan) by a [`PhysicalPlanner`](physical_plan::PhysicalPlanner)
-//! 6. The [`ExecutionPlan`](physical_plan::ExecutionPlan) is executed against data through the [`SessionContext`](execution::context::SessionContext)
+//! 1. The string is parsed to an Abstract syntax tree (AST) using [sqlparser].
+//! 2. The planner [`SqlToRel`] converts logical expressions on the AST to logical expressions [`Expr`]s.
+//! 3. The planner [`SqlToRel`] converts logical nodes on the AST to a [`LogicalPlan`].
+//! 4. [`OptimizerRule`]s are applied to the [`LogicalPlan`] to optimize it.
+//! 5. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a [`PhysicalPlanner`]
+//! 6. The [`ExecutionPlan`]is executed against data through the [`SessionContext`]
 //!
-//! With a [`DataFrame`](dataframe::DataFrame) API, steps 1-3 are not used as the DataFrame builds the [`LogicalPlan`](datafusion_expr::LogicalPlan) directly.
+//! With the [`DataFrame`] API, steps 1-3 are not used as the DataFrame builds the [`LogicalPlan`] directly.
 //!
 //! Phases 1-5 are typically cheap when compared to phase 6, and thus DataFusion puts a
 //! lot of effort to ensure that phase 6 runs efficiently and without errors.
 //!
 //! DataFusion's planning is divided in two main parts: logical planning and physical planning.
 //!
-//! ### Logical plan
+//! ### Logical planning
 //!
-//! Logical planning yields [`logical plans`](datafusion_expr::LogicalPlan) and [`logical expressions`](datafusion_expr::Expr).
-//! These are [`Schema`](arrow::datatypes::Schema)-aware traits that represent statements whose result is independent of how it should physically be executed.
+//! Logical planning yields [`LogicalPlan`]s and logical [`Expr`]
+//! expressions which are [`Schema`]aware and represent statements
+//! whose result is independent of how it should physically be
+//! executed.
 //!
-//! A [`LogicalPlan`](datafusion_expr::LogicalPlan) is a Directed Acyclic Graph (DAG) of other [`LogicalPlan`s](datafusion_expr::LogicalPlan) and each node contains logical expressions ([`Expr`s](logical_expr::Expr)).
-//! All of these are located in [`datafusion_expr`](datafusion_expr).
+//! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
+//! [`LogicalPlan`]s, and each node contains [`Expr`]s.  All of these
+//! are located in [`datafusion_expr`] module.
 //!
-//! ### Physical plan
+//! ### Physical planning
 //!
-//! A Physical plan ([`ExecutionPlan`](physical_plan::ExecutionPlan)) is a plan that can be executed against data.
-//! Contrarily to a logical plan, the physical plan has concrete information about how the calculation
-//! should be performed (e.g. what Rust functions are used) and how data should be loaded into memory.
+//! An [`ExecutionPlan`] (sometimes referred to as a "physical plan")
+//! is a plan that can be executed against data. Compared to a
+//! logical plan, the physical plan has concrete information about how
+//! calculations should be performed (e.g. what Rust functions are
+//! used) and how data should be loaded into memory.
 //!
-//! [`ExecutionPlan`](physical_plan::ExecutionPlan) uses the Arrow format as its in-memory representation of data, through the [arrow] crate.
-//! We recommend going through [its documentation](arrow) for details on how the data is physically represented.
+//! [`ExecutionPlan`]s uses the [Apache Arrow] format as its in-memory
+//! representation of data, through the [arrow] crate. The [arrow]
+//! crate documents how the memory is physically represented.
 //!
-//! A [`ExecutionPlan`](physical_plan::ExecutionPlan) is composed by nodes (implement the trait [`ExecutionPlan`](physical_plan::ExecutionPlan)),
-//! and each node is composed by physical expressions ([`PhysicalExpr`](physical_plan::PhysicalExpr))
-//! or aggreagate expressions ([`AggregateExpr`](physical_plan::AggregateExpr)).
-//! All of these are located in the module [`physical_plan`](physical_plan).
+//! A [`ExecutionPlan`] is composed by nodes (which each implement the
+//! [`ExecutionPlan`] trait). Each node can contain physical
+//! expressions ([`PhysicalExpr`]) or aggreagate expressions
+//! ([`AggregateExpr`]).  All of these are located in the
+//! [`physical_plan`] module.
 //!
 //! Broadly speaking,
 //!
-//! * an [`ExecutionPlan`](physical_plan::ExecutionPlan) receives a partition number and asyncronosly returns
-//!   an iterator over [`RecordBatch`](arrow::record_batch::RecordBatch)
-//!   (a node-specific struct that implements [`RecordBatchReader`](arrow::record_batch::RecordBatchReader))
-//! * a [`PhysicalExpr`](physical_plan::PhysicalExpr) receives a [`RecordBatch`](arrow::record_batch::RecordBatch)
-//!   and returns an [`Array`](arrow::array::Array)
-//! * an [`AggregateExpr`](physical_plan::AggregateExpr) receives [`RecordBatch`es](arrow::record_batch::RecordBatch)
-//!   and returns a [`RecordBatch`](arrow::record_batch::RecordBatch) of a single row(*)
+//! * an [`ExecutionPlan`] receives a partition number and
+//!   asynchronously returns an iterator over [`RecordBatch`] (a
+//!   node-specific struct that implements [`RecordBatchReader`])
+//! * a [`PhysicalExpr`] receives a [`RecordBatch`]
+//!   and returns an [`Array`]
+//! * an [`AggregateExpr`] receives a series of [`RecordBatch`]es
+//!   and returns a [`RecordBatch`] of a single row(*)
 //!
 //! (*) Technically, it aggregates the results on each partition and then merges the results into a single partition.
 //!
@@ -159,9 +234,9 @@
 //! * Projection: [`ProjectionExec`](physical_plan::projection::ProjectionExec)
 //! * Filter: [`FilterExec`](physical_plan::filter::FilterExec)
 //! * Grouped and non-grouped aggregations: [`AggregateExec`](physical_plan::aggregates::AggregateExec)
-//! * Hash Join: [`HashJoinExec`](physical_plan::hash_join::HashJoinExec)
-//! * Cross Join: [`CrossJoinExec`](physical_plan::cross_join::CrossJoinExec)
-//! * Sort Merge Join: [`SortMergeJoinExec`](physical_plan::sort_merge_join::SortMergeJoinExec)
+//! * Hash Join: [`HashJoinExec`](physical_plan::joins::HashJoinExec)
+//! * Cross Join: [`CrossJoinExec`](physical_plan::joins::CrossJoinExec)
+//! * Sort Merge Join: [`SortMergeJoinExec`](physical_plan::joins::SortMergeJoinExec)
 //! * Union: [`UnionExec`](physical_plan::union::UnionExec)
 //! * Sort: [`SortExec`](physical_plan::sorts::sort::SortExec)
 //! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
@@ -173,39 +248,24 @@
 //! * Scan from memory: [`MemoryExec`](physical_plan::memory::MemoryExec)
 //! * Explain the plan: [`ExplainExec`](physical_plan::explain::ExplainExec)
 //!
-//! ## Customize
+//! Future topics (coming soon):
+//! * Analyzer Rules
+//! * Resource management (memory and disk)
 //!
-//! DataFusion allows users to
-//! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`](execution::context::QueryPlanner))
-//! * declare and use user-defined scalar functions ([`ScalarUDF`](physical_plan::udf::ScalarUDF))
-//! * declare and use user-defined aggregate functions ([`AggregateUDF`](physical_plan::udaf::AggregateUDF))
-//!
-//! you can find examples of each of them in examples section.
-//!
-//! ## Examples
-//!
-//! Examples are located in [datafusion-examples directory](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples)
-//!
-//! Here's how to run them
-//!
-//! ```bash
-//! git clone https://github.com/apache/arrow-datafusion
-//! cd arrow-datafusion
-//! # Download test data
-//! git submodule update --init
-//!
-//! cargo run --example csv_sql
-//!
-//! cargo run --example parquet_sql
-//!
-//! cargo run --example dataframe
-//!
-//! cargo run --example dataframe_in_memory
-//!
-//! cargo run --example simple_udaf
-//!
-//! cargo run --example simple_udf
-//! ```
+//! [sqlparser]: https://docs.rs/sqlparser/latest/sqlparser
+//! [`SqlToRel`]: sql::planner::SqlToRel
+//! [`Expr`]: datafusion_expr::Expr
+//! [`LogicalPlan`]: datafusion_expr::LogicalPlan
+//! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
+//! [`ExecutionPlan`]: physical_plan::ExecutionPlan
+//! [`PhysicalPlanner`]: physical_plan::PhysicalPlanner
+//! [`Schema`]: arrow::datatypes::Schema
+//! [`datafusion_expr`]: datafusion_expr
+//! [`PhysicalExpr`]: physical_plan::PhysicalExpr
+//! [`AggregateExpr`]: physical_plan::AggregateExpr
+//! [`RecordBatch`]: arrow::record_batch::RecordBatch
+//! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
+//! [`Array`]: arrow::array::Array
 
 /// DataFusion crate version
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -17,8 +17,11 @@
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
+#[cfg(target_family = "windows")]
+use std::thread;
 
 use log::info;
+use sqllogictest::strict_column_validator;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 
@@ -32,16 +35,31 @@ mod utils;
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
-#[tokio::main]
 #[cfg(target_family = "windows")]
-pub async fn main() -> Result<(), Box<dyn Error>> {
-    println!("Skipping test on windows");
-    Ok(())
+pub fn main() {
+    // Tests from `tpch.slt` fail with stackoverflow with the default stack size.
+    thread::Builder::new()
+        .stack_size(2 * 1024 * 1024) // 2 MB
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async { run_tests().await })
+                .unwrap()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<(), Box<dyn Error>> {
+    run_tests().await
+}
+
+async fn run_tests() -> Result<(), Box<dyn Error>> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
@@ -67,6 +85,7 @@ async fn run_test_file(
     info!("Running with DataFusion runner: {}", path.display());
     let ctx = context_for_test_file(&relative_path).await;
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
+    runner.with_column_validator(strict_column_validator);
     runner.run_file_async(path).await?;
     Ok(())
 }
@@ -76,13 +95,10 @@ async fn run_test_file_with_postgres(
     relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     info!("Running with Postgres runner: {}", path.display());
-
     let postgres_client = Postgres::connect(relative_path).await?;
-
-    sqllogictest::Runner::new(postgres_client)
-        .run_file_async(path)
-        .await?;
-
+    let mut runner = sqllogictest::Runner::new(postgres_client);
+    runner.with_column_validator(strict_column_validator);
+    runner.run_file_async(path).await?;
     Ok(())
 }
 
@@ -90,15 +106,20 @@ async fn run_complete_file(
     path: &Path,
     relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
-    use sqllogictest::{default_validator, update_test_file};
+    use sqllogictest::default_validator;
 
     info!("Using complete mode to complete: {}", path.display());
 
     let ctx = context_for_test_file(&relative_path).await;
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     let col_separator = " ";
-    let validator = default_validator;
-    update_test_file(path, &mut runner, col_separator, validator)
+    runner
+        .update_test_file(
+            path,
+            col_separator,
+            default_validator,
+            strict_column_validator,
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -150,6 +171,10 @@ async fn context_for_test_file(relative_path: &Path) -> SessionContext {
         "aggregate.slt" | "select.slt" => {
             info!("Registering aggregate tables");
             setup::register_aggregate_tables(&ctx).await;
+        }
+        "scalar.slt" => {
+            info!("Registering scalar tables");
+            setup::register_scalar_tables(&ctx).await;
         }
         _ => {
             info!("Using default SessionContext");

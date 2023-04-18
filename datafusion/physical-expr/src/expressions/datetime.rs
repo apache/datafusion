@@ -15,30 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::unary;
-use arrow::datatypes::{
-    DataType, Date32Type, Date64Type, Schema, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-};
+use arrow::compute::try_unary;
+use arrow::datatypes::{DataType, Date32Type, Date64Type, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::{
-    as_date32_array, as_date64_array, as_timestamp_microsecond_array,
-    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
-    as_timestamp_second_array,
-};
-use datafusion_common::scalar::{
-    date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
-    seconds_add,
-};
+
+use datafusion_common::cast::*;
+use datafusion_common::scalar::*;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+
+use super::binary::{
+    interval_array_op, interval_scalar_interval_op, ts_array_op, ts_interval_array_op,
+    ts_scalar_interval_op, ts_scalar_ts_op,
+};
 
 /// Perform DATE/TIME/TIMESTAMP +/ INTERVAL math
 #[derive(Debug)]
@@ -59,27 +58,30 @@ impl DateTimeIntervalExpr {
         rhs: Arc<dyn PhysicalExpr>,
         input_schema: &Schema,
     ) -> Result<Self> {
-        match lhs.data_type(input_schema)? {
-            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                match rhs.data_type(input_schema)? {
-                    DataType::Interval(_) => match &op {
-                        Operator::Plus | Operator::Minus => Ok(Self {
-                            lhs,
-                            op,
-                            rhs,
-                            input_schema: input_schema.clone(),
-                        }),
-                        _ => Err(DataFusionError::Execution(format!(
-                            "Invalid operator '{op}' for DateIntervalExpr"
-                        ))),
-                    },
-                    other => Err(DataFusionError::Execution(format!(
-                        "Operation '{op}' not support for type {other}"
-                    ))),
-                }
-            }
-            other => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type '{other}' for DateIntervalExpr"
+        match (
+            lhs.data_type(input_schema)?,
+            op,
+            rhs.data_type(input_schema)?,
+        ) {
+            (
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            )
+            | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
+            | (DataType::Interval(_), Operator::Plus, DataType::Timestamp(_, _))
+            | (
+                DataType::Interval(_),
+                Operator::Plus | Operator::Minus,
+                DataType::Interval(_),
+            ) => Ok(Self {
+                lhs,
+                op,
+                rhs,
+                input_schema: input_schema.clone(),
+            }),
+            (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
+                "Invalid operation {op} between '{lhs}' and '{rhs}' for DateIntervalExpr"
             ))),
         }
     }
@@ -112,7 +114,11 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        self.lhs.data_type(input_schema)
+        coerce_types(
+            &self.lhs.data_type(input_schema)?,
+            &Operator::Minus,
+            &self.rhs.data_type(input_schema)?,
+        )
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -120,18 +126,8 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let dates = self.lhs.evaluate(batch)?;
-        let intervals = self.rhs.evaluate(batch)?;
-
-        // Unwrap interval to add
-        let intervals = match &intervals {
-            ColumnarValue::Scalar(interval) => interval,
-            _ => {
-                let msg = "Columnar execution is not yet supported for DateIntervalExpr";
-                return Err(DataFusionError::Execution(msg.to_string()));
-            }
-        };
-
+        let lhs_value = self.lhs.evaluate(batch)?;
+        let rhs_value = self.rhs.evaluate(batch)?;
         // Invert sign for subtraction
         let sign = match self.op {
             Operator::Plus => 1,
@@ -142,15 +138,63 @@ impl PhysicalExpr for DateTimeIntervalExpr {
                 return Err(DataFusionError::Internal(msg.to_string()));
             }
         };
+        // RHS is first checked. If it is a Scalar, there are 2 options:
+        // Either LHS is also a Scalar and matching operation is applied,
+        // or LHS is an Array and unary operations for related types are
+        // applied in evaluate_array function. If RHS is an Array, then
+        // LHS must also be, moreover; they must be the same Timestamp type.
+        match (lhs_value, rhs_value) {
+            (ColumnarValue::Scalar(operand_lhs), ColumnarValue::Scalar(operand_rhs)) => {
+                Ok(ColumnarValue::Scalar(if sign > 0 {
+                    operand_lhs.add(&operand_rhs)?
+                } else {
+                    operand_lhs.sub(&operand_rhs)?
+                }))
+            }
+            (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(operand_rhs)) => {
+                evaluate_temporal_array(array_lhs, sign, &operand_rhs)
+            }
 
-        match dates {
-            ColumnarValue::Scalar(operand) => Ok(ColumnarValue::Scalar(if sign > 0 {
-                operand.add(intervals)?
-            } else {
-                operand.sub(intervals)?
-            })),
-            ColumnarValue::Array(array) => evaluate_array(array, sign, intervals),
+            (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => {
+                evaluate_temporal_arrays(&array_lhs, sign, &array_rhs)
+            }
+            (_, _) => {
+                let msg = "If RHS of the operation is an array, then LHS also must be";
+                Err(DataFusionError::Internal(msg.to_string()))
+            }
         }
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        // Get children intervals:
+        let left_interval = children[0];
+        let right_interval = children[1];
+        // Calculate current node's interval:
+        apply_operator(&self.op, left_interval, right_interval)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        // Get children intervals. Graph brings
+        let left_interval = children[0];
+        let right_interval = children[1];
+        let (left, right) = if self.op.is_comparison_operator() {
+            if interval == &Interval::CERTAINLY_FALSE {
+                // TODO: We will handle strictly false clauses by negating
+                //       the comparison operator (e.g. GT to LE, LT to GE)
+                //       once open/closed intervals are supported.
+                return Ok(vec![]);
+            }
+            // Propagate the comparison operator.
+            propagate_comparison(&self.op, left_interval, right_interval)?
+        } else {
+            // Propagate the arithmetic operator.
+            propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
+        };
+        Ok(vec![left, right])
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -179,61 +223,77 @@ impl PartialEq<dyn Any> for DateTimeIntervalExpr {
     }
 }
 
-pub fn evaluate_array(
+pub fn evaluate_temporal_array(
     array: ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
-    let ret = match array.data_type() {
-        DataType::Date32 => {
+    match (array.data_type(), scalar.get_datatype()) {
+        // Date +- Interval
+        (DataType::Date32, DataType::Interval(_)) => {
             let array = as_date32_array(&array)?;
-            Arc::new(unary::<Date32Type, _, Date32Type>(array, |days| {
-                date32_add(days, scalar, sign).unwrap()
-            })) as ArrayRef
+            let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(array, |days| {
+                Ok(date32_add(days, scalar, sign)?)
+            })?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
         }
-        DataType::Date64 => {
+        (DataType::Date64, DataType::Interval(_)) => {
             let array = as_date64_array(&array)?;
-            Arc::new(unary::<Date64Type, _, Date64Type>(array, |ms| {
-                date64_add(ms, scalar, sign).unwrap()
-            })) as ArrayRef
+            let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(array, |ms| {
+                Ok(date64_add(ms, scalar, sign)?)
+            })?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
         }
-        DataType::Timestamp(TimeUnit::Second, _) => {
-            let array = as_timestamp_second_array(&array)?;
-            Arc::new(unary::<TimestampSecondType, _, TimestampSecondType>(
-                array,
-                |ts_s| seconds_add(ts_s, scalar, sign).unwrap(),
-            )) as ArrayRef
+        // Timestamp - Timestamp
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) if sign == -1 => {
+            ts_scalar_ts_op(array, scalar)
         }
-        DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let array = as_timestamp_millisecond_array(&array)?;
-            Arc::new(
-                unary::<TimestampMillisecondType, _, TimestampMillisecondType>(
-                    array,
-                    |ts_ms| milliseconds_add(ts_ms, scalar, sign).unwrap(),
-                ),
-            ) as ArrayRef
+        // Interval +- Interval
+        (DataType::Interval(_), DataType::Interval(_)) => {
+            interval_scalar_interval_op(array, sign, scalar)
         }
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let array = as_timestamp_microsecond_array(&array)?;
-            Arc::new(
-                unary::<TimestampMicrosecondType, _, TimestampMicrosecondType>(
-                    array,
-                    |ts_us| microseconds_add(ts_us, scalar, sign).unwrap(),
-                ),
-            ) as ArrayRef
+        // Timestamp +- Interval
+        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+            ts_scalar_interval_op(array, sign, scalar)
         }
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let array = as_timestamp_nanosecond_array(&array)?;
-            Arc::new(
-                unary::<TimestampNanosecondType, _, TimestampNanosecondType>(
-                    array,
-                    |ts_ns| nanoseconds_add(ts_ns, scalar, sign).unwrap(),
-                ),
-            ) as ArrayRef
-        }
-        _ => Err(DataFusionError::Execution(format!(
+        (_, _) => Err(DataFusionError::Execution(format!(
             "Invalid lhs type for DateIntervalExpr: {}",
             array.data_type()
+        )))?,
+    }
+}
+
+// This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
+// timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
+// the operation (+1 for addition and -1 for subtraction). It returns a ColumnarValue as output, which can hold
+// either a scalar or an array.
+pub fn evaluate_temporal_arrays(
+    array_lhs: &ArrayRef,
+    sign: i32,
+    array_rhs: &ArrayRef,
+) -> Result<ColumnarValue> {
+    let ret = match (array_lhs.data_type(), array_rhs.data_type()) {
+        // Timestamp - Timestamp operations, operands of only the same types are supported.
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+            ts_array_op(array_lhs, array_rhs)?
+        }
+        // Interval (+ , -) Interval operations
+        (DataType::Interval(_), DataType::Interval(_)) => {
+            interval_array_op(array_lhs, array_rhs, sign)?
+        }
+        // Timestamp (+ , -) Interval and Interval + Timestamp operations
+        // Interval - Timestamp operation is not rational hence not supported
+        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+            ts_interval_array_op(array_lhs, sign, array_rhs)?
+        }
+        (DataType::Interval(_), DataType::Timestamp(_, _)) if sign == 1 => {
+            ts_interval_array_op(array_rhs, sign, array_lhs)?
+        }
+        (_, _) => Err(DataFusionError::Execution(format!(
+            "Invalid array types for DateIntervalExpr: {} {} {}",
+            array_lhs.data_type(),
+            sign,
+            array_rhs.data_type()
         )))?,
     };
     Ok(ColumnarValue::Array(ret))
@@ -246,6 +306,7 @@ mod tests {
     use crate::execution_props::ExecutionProps;
     use arrow::array::{ArrayRef, Date32Builder};
     use arrow::datatypes::*;
+    use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
     use datafusion_common::delta::shift_months;
     use datafusion_common::{Column, Result, ToDFSchema};
@@ -639,5 +700,160 @@ mod tests {
 
         let res = cut.evaluate(&batch)?;
         Ok(res)
+    }
+
+    // In this test, ArrayRef of one element arrays is evaluated with some ScalarValues,
+    // aiming that evaluate_temporal_array function is working properly and shows the same
+    // behavior with ScalarValue arithmetic.
+    fn experiment(
+        timestamp_scalar: ScalarValue,
+        interval_scalar: ScalarValue,
+    ) -> Result<()> {
+        let timestamp_array = timestamp_scalar.to_array();
+        let interval_array = interval_scalar.to_array();
+
+        // timestamp + interval
+        if let ColumnarValue::Array(res1) =
+            evaluate_temporal_array(timestamp_array.clone(), 1, &interval_scalar)?
+        {
+            let res2 = timestamp_scalar.add(&interval_scalar)?.to_array();
+            assert_eq!(
+                &res1, &res2,
+                "Timestamp Scalar={} + Interval Scalar={}",
+                timestamp_scalar, interval_scalar
+            );
+        }
+
+        // timestamp - interval
+        if let ColumnarValue::Array(res1) =
+            evaluate_temporal_array(timestamp_array.clone(), -1, &interval_scalar)?
+        {
+            let res2 = timestamp_scalar.sub(&interval_scalar)?.to_array();
+            assert_eq!(
+                &res1, &res2,
+                "Timestamp Scalar={} - Interval Scalar={}",
+                timestamp_scalar, interval_scalar
+            );
+        }
+
+        // timestamp - timestamp
+        if let ColumnarValue::Array(res1) =
+            evaluate_temporal_array(timestamp_array.clone(), -1, &timestamp_scalar)?
+        {
+            let res2 = timestamp_scalar.sub(&timestamp_scalar)?.to_array();
+            assert_eq!(
+                &res1, &res2,
+                "Timestamp Scalar={} - Timestamp Scalar={}",
+                timestamp_scalar, timestamp_scalar
+            );
+        }
+
+        // interval - interval
+        if let ColumnarValue::Array(res1) =
+            evaluate_temporal_array(interval_array.clone(), -1, &interval_scalar)?
+        {
+            let res2 = interval_scalar.sub(&interval_scalar)?.to_array();
+            assert_eq!(
+                &res1, &res2,
+                "Interval Scalar={} - Interval Scalar={}",
+                interval_scalar, interval_scalar
+            );
+        }
+
+        // interval + interval
+        if let ColumnarValue::Array(res1) =
+            evaluate_temporal_array(interval_array, 1, &interval_scalar)?
+        {
+            let res2 = interval_scalar.add(&interval_scalar)?.to_array();
+            assert_eq!(
+                &res1, &res2,
+                "Interval Scalar={} + Interval Scalar={}",
+                interval_scalar, interval_scalar
+            );
+        }
+
+        Ok(())
+    }
+    #[test]
+    fn test_evalute_with_scalar() -> Result<()> {
+        // Timestamp (sec) & Interval (DayTime)
+        let timestamp_scalar = ScalarValue::TimestampSecond(
+            Some(
+                NaiveDate::from_ymd_opt(2023, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .timestamp(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_dt(0, 1_000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        // Timestamp (millisec) & Interval (DayTime)
+        let timestamp_scalar = ScalarValue::TimestampMillisecond(
+            Some(
+                NaiveDate::from_ymd_opt(2023, 1, 1)
+                    .unwrap()
+                    .and_hms_milli_opt(0, 0, 0, 0)
+                    .unwrap()
+                    .timestamp_millis(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_dt(0, 1_000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        // Timestamp (nanosec) & Interval (MonthDayNano)
+        let timestamp_scalar = ScalarValue::TimestampNanosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2023, 1, 1)
+                    .unwrap()
+                    .and_hms_nano_opt(0, 0, 0, 0)
+                    .unwrap()
+                    .timestamp_nanos(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_mdn(0, 0, 1_000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        // Timestamp (nanosec) & Interval (MonthDayNano), negatively resulting cases
+
+        let timestamp_scalar = ScalarValue::TimestampNanosecond(
+            Some(
+                NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .unwrap()
+                    .and_hms_nano_opt(0, 0, 0, 000)
+                    .unwrap()
+                    .timestamp_nanos(),
+            ),
+            None,
+        );
+
+        Arc::new(IntervalMonthDayNanoArray::from(vec![1_000])); // 1 us
+        let interval_scalar = ScalarValue::new_interval_mdn(0, 0, 1_000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        // Timestamp (sec) & Interval (YearMonth)
+        let timestamp_scalar = ScalarValue::TimestampSecond(
+            Some(
+                NaiveDate::from_ymd_opt(2023, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .timestamp(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_ym(0, 1);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        Ok(())
     }
 }

@@ -22,66 +22,94 @@ extern crate datafusion;
 
 mod data_utils;
 use crate::criterion::Criterion;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion::datasource::MemTable;
-use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-fn plan(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
+/// Create a logical plan from the specified sql
+fn logical_plan(ctx: &SessionContext, sql: &str) {
     let rt = Runtime::new().unwrap();
-    criterion::black_box(rt.block_on(ctx.lock().sql(sql)).unwrap());
+    criterion::black_box(rt.block_on(ctx.sql(sql)).unwrap());
 }
 
-/// Create schema representing a large table
-pub fn create_schema(column_prefix: &str) -> Schema {
-    let fields = (0..200)
+/// Create a physical ExecutionPlan (by way of logical plan)
+fn physical_plan(ctx: &SessionContext, sql: &str) {
+    let rt = Runtime::new().unwrap();
+    criterion::black_box(rt.block_on(async {
+        ctx.sql(sql)
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap()
+    }));
+}
+
+/// Create schema with the specified number of columns
+pub fn create_schema(column_prefix: &str, num_columns: usize) -> Schema {
+    let fields: Fields = (0..num_columns)
         .map(|i| Field::new(format!("{column_prefix}{i}"), DataType::Int32, true))
         .collect();
     Schema::new(fields)
 }
 
-pub fn create_table_provider(column_prefix: &str) -> Result<Arc<MemTable>> {
-    let schema = Arc::new(create_schema(column_prefix));
-    MemTable::try_new(schema, vec![]).map(Arc::new)
+pub fn create_table_provider(column_prefix: &str, num_columns: usize) -> Arc<MemTable> {
+    let schema = Arc::new(create_schema(column_prefix, num_columns));
+    MemTable::try_new(schema, vec![]).map(Arc::new).unwrap()
 }
 
-fn create_context() -> Result<Arc<Mutex<SessionContext>>> {
+fn create_context() -> SessionContext {
     let ctx = SessionContext::new();
-    ctx.register_table("t1", create_table_provider("a")?)?;
-    ctx.register_table("t2", create_table_provider("b")?)?;
-    Ok(Arc::new(Mutex::new(ctx)))
+    ctx.register_table("t1", create_table_provider("a", 200))
+        .unwrap();
+    ctx.register_table("t2", create_table_provider("b", 200))
+        .unwrap();
+    ctx.register_table("t700", create_table_provider("c", 700))
+        .unwrap();
+    ctx
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let ctx = create_context().unwrap();
+    let ctx = create_context();
 
-    c.bench_function("trivial join low numbered columns", |b| {
+    // Test simplest
+    // https://github.com/apache/arrow-datafusion/issues/5157
+    c.bench_function("logical_select_one_from_700", |b| {
+        b.iter(|| logical_plan(&ctx, "SELECT c1 FROM t700"))
+    });
+
+    // Test simplest
+    // https://github.com/apache/arrow-datafusion/issues/5157
+    c.bench_function("physical_select_one_from_700", |b| {
+        b.iter(|| physical_plan(&ctx, "SELECT c1 FROM t700"))
+    });
+
+    c.bench_function("logical_trivial_join_low_numbered_columns", |b| {
         b.iter(|| {
-            plan(
-                ctx.clone(),
+            logical_plan(
+                &ctx,
                 "SELECT t1.a2, t2.b2  \
                  FROM t1, t2 WHERE a1 = b1",
             )
         })
     });
 
-    c.bench_function("trivial join high numbered columns", |b| {
+    c.bench_function("logical_trivial_join_high_numbered_columns", |b| {
         b.iter(|| {
-            plan(
-                ctx.clone(),
+            logical_plan(
+                &ctx,
                 "SELECT t1.a99, t2.b99  \
                  FROM t1, t2 WHERE a199 = b199",
             )
         })
     });
 
-    c.bench_function("aggregate with join", |b| {
+    c.bench_function("logical_aggregate_with_join", |b| {
         b.iter(|| {
-            plan(
-                ctx.clone(),
+            logical_plan(
+                &ctx,
                 "SELECT t1.a99, MIN(t2.b1), MAX(t2.b199), AVG(t2.b123), COUNT(t2.b73)  \
                  FROM t1 JOIN t2 ON t1.a199 = t2.b199 GROUP BY t1.a99",
             )

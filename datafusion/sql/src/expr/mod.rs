@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod arrow_cast;
 mod binary_op;
 mod function;
 mod grouping_set;
@@ -26,10 +27,9 @@ mod unary_op;
 mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
 use arrow_schema::DataType;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -77,7 +77,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
-        let expr = infer_placeholder_types(expr, schema.clone())?;
+        let expr = infer_placeholder_types(expr, schema)?;
         Ok(expr)
     }
 
@@ -92,7 +92,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
                                 field.name() == &col.name
-                                    && field_q.ends_with(&format!(".{q}"))
+                                    && field_q.to_string().ends_with(&format!(".{q}"))
                             }
                             _ => false,
                         }) {
@@ -119,7 +119,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(value) => {
-                self.parse_value(value, &planner_context.prepare_param_data_types)
+                self.parse_value(value, planner_context.prepare_param_data_types())
             }
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
@@ -143,11 +143,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             ),
-            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id),
+            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(normalize_ident(id)), keys)
+                    plan_indexed(col(self.normalizer.normalize(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {column} instead"
@@ -160,7 +160,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan_indexed(expr, indexes)
             }
 
-            SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema),
+            SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
 
             SQLExpr::Case {
                 operand,
@@ -498,38 +498,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 }
 
-/// Find all `PlaceHolder` tokens in a logical plan, and try to infer their type from context
-fn infer_placeholder_types(expr: Expr, schema: DFSchema) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        let expr = match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let left = (*left).clone();
-                let right = (*right).clone();
-                let lt = left.get_type(&schema);
-                let rt = right.get_type(&schema);
-                let left = match (&left, rt) {
-                    (Expr::Placeholder { id, data_type }, Ok(dt)) => Expr::Placeholder {
-                        id: id.clone(),
-                        data_type: Some(data_type.clone().unwrap_or(dt)),
-                    },
-                    _ => left.clone(),
-                };
-                let right = match (&right, lt) {
-                    (Expr::Placeholder { id, data_type }, Ok(dt)) => Expr::Placeholder {
-                        id: id.clone(),
-                        data_type: Some(data_type.clone().unwrap_or(dt)),
-                    },
-                    _ => right.clone(),
-                };
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
-                })
+// modifies expr if it is a placeholder with datatype of right
+fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
+    if let Expr::Placeholder { id: _, data_type } = expr {
+        if data_type.is_none() {
+            let other_dt = other.get_type(schema);
+            match other_dt {
+                Err(e) => {
+                    return Err(e.context(format!(
+                        "Can not find type of {other} needed to infer type of {expr}"
+                    )))?;
+                }
+                Ok(dt) => {
+                    *data_type = Some(dt);
+                }
             }
-            _ => expr.clone(),
         };
-        Ok(expr)
+    }
+    Ok(())
+}
+
+/// Find all [`Expr::PlaceHolder`] tokens in a logical plan, and try to infer their type from context
+fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    expr.transform(&|mut expr| {
+        // Default to assuming the arguments are the same type
+        if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
+            rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
+            rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+        };
+        Ok(Transformed::Yes(expr))
     })
 }
 

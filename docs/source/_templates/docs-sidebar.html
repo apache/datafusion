@@ -1,7 +1,4 @@
 
-<a class="navbar-brand" href="{{ pathto(master_doc) }}">
-  <img src="{{ pathto('_static/images/' + logo, 1) }}" class="logo" alt="logo">
-</a>
 
 <form class="bd-search d-flex align-items-center" action="{{ pathto('search') }}" method="get">
   <i class="icon fas fa-search"></i>
@@ -16,4 +13,9 @@
     {{ generate_nav_html("sidebar", startdepth=0, maxdepth=4, collapse=False, includehidden=True, titles_only=True) }}
     {% endif %}
   </div>
+
+  <a class="navbar-brand" href="{{ pathto(master_doc) }}">
+    <img src="{{ pathto('_static/images/DataFusion-Logo-Background-White.png', 1) }}" class="logo" alt="logo">
+  </a>
 </nav>
+

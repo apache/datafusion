@@ -49,6 +49,12 @@ async fn main() -> Result<()> {
     let csv_df = example_read_csv_file_with_schema().await;
     csv_df.show().await?;
 
+    // Reading PARQUET file and print describe
+    let parquet_df = ctx
+        .read_parquet(filename, ParquetReadOptions::default())
+        .await?;
+    parquet_df.describe().await.unwrap().show().await?;
+
     Ok(())
 }
 

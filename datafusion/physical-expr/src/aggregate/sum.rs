@@ -37,6 +37,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
@@ -47,9 +48,10 @@ use datafusion_row::accessor::RowAccessor;
 #[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
-    data_type: DataType,
+    pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     nullable: bool,
+    pub pre_cast_to_sum_type: bool,
 }
 
 impl Sum {
@@ -64,6 +66,22 @@ impl Sum {
             expr,
             data_type,
             nullable: true,
+            pre_cast_to_sum_type: false,
+        }
+    }
+
+    pub fn new_with_pre_cast(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+        pre_cast_to_sum_type: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            expr,
+            data_type,
+            nullable: true,
+            pre_cast_to_sum_type,
         }
     }
 }
@@ -136,6 +154,20 @@ impl AggregateExpr for Sum {
     }
 }
 
+impl PartialEq<dyn Any> for Sum {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Debug)]
 struct SumAccumulator {
     sum: ScalarValue,
@@ -169,7 +201,13 @@ fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<Scal
 
 // sums the array and returns a ScalarValue of its corresponding type.
 pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<ScalarValue> {
-    let values = &cast(values, sum_type)?;
+    // TODO refine the cast kernel in arrow-rs
+    let cast_values = if values.data_type() != sum_type {
+        Some(cast(values, sum_type)?)
+    } else {
+        None
+    };
+    let values = cast_values.as_ref().unwrap_or(values);
     Ok(match values.data_type() {
         DataType::Decimal128(precision, scale) => {
             sum_decimal_batch(values, *precision, *scale)?
@@ -220,6 +258,9 @@ pub(crate) fn add_to_row(
         ScalarValue::Int64(rhs) => {
             sum_row!(index, accessor, rhs, i64)
         }
+        ScalarValue::Decimal128(rhs, _, _) => {
+            sum_row!(index, accessor, rhs, i128)
+        }
         _ => {
             let msg =
                 format!("Row sum updater is not expected to receive a scalar {s:?}");
@@ -236,7 +277,7 @@ impl Accumulator for SumAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.count += (values.len() - values.data().null_count()) as u64;
+        self.count += (values.len() - values.null_count()) as u64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.add(&delta)?;
         Ok(())
@@ -244,7 +285,7 @@ impl Accumulator for SumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.count -= (values.len() - values.data().null_count()) as u64;
+        self.count -= (values.len() - values.null_count()) as u64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
@@ -383,7 +424,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(6)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );

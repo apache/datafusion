@@ -25,18 +25,17 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::join_selection::swap_hash_join;
-use crate::physical_optimizer::pipeline_checker::{
-    check_finiteness_requirements, PipelineStatePropagator,
-};
+use crate::physical_optimizer::pipeline_checker::PipelineStatePropagator;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
-use crate::physical_plan::rewrite::TreeNodeRewritable;
+use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SymmetricHashJoinExec};
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
+
 use std::sync::Arc;
 
-/// The [PipelineFixer] rule tries to modify a given plan so that it can
+/// The [`PipelineFixer`] rule tries to modify a given plan so that it can
 /// accommodate its infinite sources, if there are any. If this is not
 /// possible, the rule emits a diagnostic error message.
 #[derive(Default)]
@@ -48,8 +47,13 @@ impl PipelineFixer {
         Self {}
     }
 }
+/// [`PipelineFixer`] subrules are functions of this type. Such functions take a
+/// single [`PipelineStatePropagator`] argument, which stores state variables
+/// indicating the unboundedness status of the current [`ExecutionPlan`] as
+/// the `PipelineFixer` rule traverses the entire plan tree.
 type PipelineFixerSubrule =
-    dyn Fn(&PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
+    dyn Fn(PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
+
 impl PhysicalOptimizerRule for PipelineFixer {
     fn optimize(
         &self,
@@ -57,8 +61,10 @@ impl PhysicalOptimizerRule for PipelineFixer {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
-        let physical_optimizer_subrules: Vec<Box<PipelineFixerSubrule>> =
-            vec![Box::new(hash_join_swap_subrule)];
+        let physical_optimizer_subrules: Vec<Box<PipelineFixerSubrule>> = vec![
+            Box::new(hash_join_convert_symmetric_subrule),
+            Box::new(hash_join_swap_subrule),
+        ];
         let state = pipeline.transform_up(&|p| {
             apply_subrules_and_check_finiteness_requirements(
                 p,
@@ -74,6 +80,44 @@ impl PhysicalOptimizerRule for PipelineFixer {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+/// This subrule checks if one can replace a hash join with a symmetric hash
+/// join so that the pipeline does not break due to the join operation in
+/// question. If possible, it makes this replacement; otherwise, it has no
+/// effect.
+fn hash_join_convert_symmetric_subrule(
+    input: PipelineStatePropagator,
+) -> Option<Result<PipelineStatePropagator>> {
+    let plan = input.plan;
+    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+        let ub_flags = input.children_unbounded;
+        let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
+        let new_plan = if left_unbounded && right_unbounded {
+            SymmetricHashJoinExec::try_new(
+                hash_join.left().clone(),
+                hash_join.right().clone(),
+                hash_join
+                    .on()
+                    .iter()
+                    .map(|(l, r)| (l.clone(), r.clone()))
+                    .collect(),
+                hash_join.filter().cloned(),
+                hash_join.join_type(),
+                hash_join.null_equals_null(),
+            )
+            .map(|e| Arc::new(e) as _)
+        } else {
+            Ok(plan)
+        };
+        Some(new_plan.map(|plan| PipelineStatePropagator {
+            plan,
+            unbounded: left_unbounded || right_unbounded,
+            children_unbounded: ub_flags,
+        }))
+    } else {
+        None
     }
 }
 
@@ -119,12 +163,12 @@ impl PhysicalOptimizerRule for PipelineFixer {
 ///
 /// ```
 fn hash_join_swap_subrule(
-    input: &PipelineStatePropagator,
+    input: PipelineStatePropagator,
 ) -> Option<Result<PipelineStatePropagator>> {
-    let plan = input.plan.clone();
-    let children = &input.children_unbounded;
+    let plan = input.plan;
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-        let (left_unbounded, right_unbounded) = (children[0], children[1]);
+        let ub_flags = input.children_unbounded;
+        let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
         let new_plan = if left_unbounded && !right_unbounded {
             if matches!(
                 *hash_join.join_type(),
@@ -140,12 +184,11 @@ fn hash_join_swap_subrule(
         } else {
             Ok(plan)
         };
-        let new_state = new_plan.map(|plan| PipelineStatePropagator {
+        Some(new_plan.map(|plan| PipelineStatePropagator {
             plan,
             unbounded: left_unbounded || right_unbounded,
-            children_unbounded: vec![left_unbounded, right_unbounded],
-        });
-        Some(new_state)
+            children_unbounded: ub_flags,
+        }))
     } else {
         None
     }
@@ -180,13 +223,55 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
 fn apply_subrules_and_check_finiteness_requirements(
     mut input: PipelineStatePropagator,
     physical_optimizer_subrules: &Vec<Box<PipelineFixerSubrule>>,
-) -> Result<Option<PipelineStatePropagator>> {
+) -> Result<Transformed<PipelineStatePropagator>> {
     for sub_rule in physical_optimizer_subrules {
-        if let Some(value) = sub_rule(&input).transpose()? {
+        if let Some(value) = sub_rule(input.clone()).transpose()? {
             input = value;
         }
     }
-    check_finiteness_requirements(input)
+    let is_unbounded = input
+        .plan
+        .unbounded_output(&input.children_unbounded)
+        // Treat the cases where executor cannot be run on unbounded data
+        // as generating unbounded data. These executors may be fixed during optimization
+        // (Sort will be removed, Window will be swapped etc.), If cannot
+        // be fixed Pipeline checker will generate error anyway.
+        .unwrap_or(true);
+    input.unbounded = is_unbounded;
+    Ok(Transformed::Yes(input))
+}
+
+#[cfg(test)]
+mod util_tests {
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
+    use datafusion_physical_expr::intervals::check_support;
+    use datafusion_physical_expr::PhysicalExpr;
+    use std::sync::Arc;
+
+    #[test]
+    fn check_expr_supported() {
+        let supported_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("a", 0)),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(check_support(&supported_expr));
+        let supported_expr_2 = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        assert!(check_support(&supported_expr_2));
+        let unsupported_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Or,
+            Arc::new(Column::new("a", 0)),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(!check_support(&unsupported_expr));
+        let unsupported_expr_2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Or,
+            Arc::new(NegativeExpr::new(Arc::new(Column::new("a", 0)))),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(!check_support(&unsupported_expr_2));
+    }
 }
 
 #[cfg(test)]
@@ -195,9 +280,11 @@ mod hash_join_tests {
     use crate::physical_optimizer::join_selection::swap_join_type;
     use crate::physical_optimizer::test_utils::SourceType;
     use crate::physical_plan::expressions::Column;
+    use crate::physical_plan::joins::PartitionMode;
     use crate::physical_plan::projection::ProjectionExec;
-    use crate::{physical_plan::joins::PartitionMode, test::exec::UnboundedExec};
+    use crate::test_util::UnboundedExec;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
 
     struct TestCase {
@@ -529,17 +616,28 @@ mod hash_join_tests {
         }
         Ok(())
     }
+
     #[allow(clippy::vtable_address_comparisons)]
     async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
         let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
         let left_exec = Arc::new(UnboundedExec::new(
-            left_unbounded,
-            Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+            (!left_unbounded).then_some(1),
+            RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Int32,
+                false,
+            )]))),
+            2,
         )) as Arc<dyn ExecutionPlan>;
         let right_exec = Arc::new(UnboundedExec::new(
-            right_unbounded,
-            Schema::new(vec![Field::new("b", DataType::Int32, false)]),
+            (!right_unbounded).then_some(1),
+            RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
+                "b",
+                DataType::Int32,
+                false,
+            )]))),
+            2,
         )) as Arc<dyn ExecutionPlan>;
 
         let join = HashJoinExec::try_new(
@@ -552,7 +650,7 @@ mod hash_join_tests {
             None,
             &t.initial_join_type,
             t.initial_mode,
-            &false,
+            false,
         )?;
 
         let initial_hash_join_state = PipelineStatePropagator {
@@ -561,7 +659,7 @@ mod hash_join_tests {
             children_unbounded: vec![left_unbounded, right_unbounded],
         };
         let optimized_hash_join =
-            hash_join_swap_subrule(&initial_hash_join_state).unwrap()?;
+            hash_join_swap_subrule(initial_hash_join_state).unwrap()?;
         let optimized_join_plan = optimized_hash_join.plan;
 
         // If swap did happen
