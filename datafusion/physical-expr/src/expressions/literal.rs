@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn literal_bounds_analysis() -> Result<()> {
-        let schema = Schema::new(vec![]);
+        let schema = Schema::empty();
         let context = AnalysisContext::new(&schema, vec![]);
 
         let literal_expr = lit(42i32);

@@ -252,6 +252,7 @@ fn adjust_input_keys_ordering(
         mode,
         group_by,
         aggr_expr,
+        filter_expr,
         input,
         input_schema,
         ..
@@ -264,6 +265,7 @@ fn adjust_input_keys_ordering(
                     &parent_required,
                     group_by,
                     aggr_expr,
+                    filter_expr,
                     input.clone(),
                     input_schema,
                 )?),
@@ -369,6 +371,7 @@ fn reorder_aggregate_keys(
     parent_required: &[Arc<dyn PhysicalExpr>],
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
+    filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
     agg_input: Arc<dyn ExecutionPlan>,
     input_schema: &SchemaRef,
 ) -> Result<PlanWithKeyRequirements> {
@@ -398,6 +401,7 @@ fn reorder_aggregate_keys(
                     mode,
                     group_by,
                     aggr_expr,
+                    filter_expr,
                     input,
                     input_schema,
                     ..
@@ -416,6 +420,7 @@ fn reorder_aggregate_keys(
                             AggregateMode::Partial,
                             new_partial_group_by,
                             aggr_expr.clone(),
+                            filter_expr.clone(),
                             input.clone(),
                             input_schema.clone(),
                         )?))
@@ -446,6 +451,7 @@ fn reorder_aggregate_keys(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
                         aggr_expr.to_vec(),
+                        filter_expr.to_vec(),
                         partial_agg,
                         input_schema.clone(),
                     )?);
@@ -1067,10 +1073,12 @@ mod tests {
                 AggregateMode::FinalPartitioned,
                 final_grouping,
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         group_by,
+                        vec![],
                         vec![],
                         input,
                         schema.clone(),

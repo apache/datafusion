@@ -256,7 +256,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
                             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                                new_proj, alias,
+                                new_proj,
+                                alias.clone(),
                             )?))
                         }
                     },
@@ -593,9 +594,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::SubqueryAlias(aliased_relation) => {
                 let input: LogicalPlan =
                     into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .alias(&aliased_relation.alias)?
-                    .build()
+                let alias = from_owned_table_reference(
+                    aliased_relation.alias.as_ref(),
+                    "SubqueryAlias",
+                )?;
+                LogicalPlanBuilder::from(input).alias(alias)?.build()
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
@@ -1069,7 +1072,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
-                            alias: alias.clone(),
+                            alias: Some(alias.to_owned_reference().into()),
                         },
                     ))),
                 })
@@ -1382,7 +1385,7 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
-    use arrow::datatypes::{Schema, SchemaRef};
+    use arrow::datatypes::{Fields, Schema, SchemaRef, UnionFields};
     use arrow::{
         array::ArrayRef,
         datatypes::{
@@ -1444,8 +1447,8 @@ mod roundtrip_tests {
         roundtrip_json_test(&proto);
     }
 
-    fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {
-        Box::new(Field::new(name, dt, nullable))
+    fn new_arc_field(name: &str, dt: DataType, nullable: bool) -> Arc<Field> {
+        Arc::new(Field::new(name, dt, nullable))
     }
 
     #[tokio::test]
@@ -1796,7 +1799,7 @@ mod roundtrip_tests {
             // Should fail due to empty values
             ScalarValue::Struct(
                 Some(vec![]),
-                Box::new(vec![Field::new("item", DataType::Int16, true)]),
+                vec![Field::new("item", DataType::Int16, true)].into(),
             ),
             // Should fail due to inconsistent types in the list
             ScalarValue::new_list(
@@ -1804,14 +1807,14 @@ mod roundtrip_tests {
                     ScalarValue::Int16(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                DataType::List(new_box_field("item", DataType::Int16, true)),
+                DataType::List(new_arc_field("item", DataType::Int16, true)),
             ),
             ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                DataType::List(new_box_field("item", DataType::Int16, true)),
+                DataType::List(new_arc_field("item", DataType::Int16, true)),
             ),
             ScalarValue::new_list(
                 Some(vec![
@@ -1824,7 +1827,7 @@ mod roundtrip_tests {
                 Some(vec![
                     ScalarValue::new_list(
                         None,
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        DataType::List(new_arc_field("level2", DataType::Float32, true)),
                     ),
                     ScalarValue::new_list(
                         Some(vec![
@@ -1834,20 +1837,20 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        DataType::List(new_arc_field("level2", DataType::Float32, true)),
                     ),
                     ScalarValue::new_list(
                         None,
-                        DataType::List(new_box_field(
+                        DataType::List(new_arc_field(
                             "lists are typed inconsistently",
                             DataType::Int16,
                             true,
                         )),
                     ),
                 ]),
-                DataType::List(new_box_field(
+                DataType::List(new_arc_field(
                     "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
+                    DataType::List(new_arc_field("level2", DataType::Float32, true)),
                     true,
                 )),
             ),
@@ -1943,19 +1946,19 @@ mod roundtrip_tests {
             ScalarValue::Time64Nanosecond(None),
             ScalarValue::TimestampNanosecond(Some(0), None),
             ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
-            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampNanosecond(None, None),
             ScalarValue::TimestampMicrosecond(Some(0), None),
             ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampMicrosecond(None, None),
             ScalarValue::TimestampMillisecond(Some(0), None),
             ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMillisecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampMillisecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampMillisecond(None, None),
             ScalarValue::TimestampSecond(Some(0), None),
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
-            ScalarValue::TimestampSecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampSecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampSecond(None, None),
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
@@ -1998,7 +2001,7 @@ mod roundtrip_tests {
                         DataType::Float32,
                     ),
                 ]),
-                DataType::List(new_box_field("item", DataType::Float32, true)),
+                DataType::List(new_arc_field("item", DataType::Float32, true)),
             ),
             ScalarValue::Dictionary(
                 Box::new(DataType::Int32),
@@ -2017,14 +2020,14 @@ mod roundtrip_tests {
                     ScalarValue::Int32(Some(23)),
                     ScalarValue::Boolean(Some(false)),
                 ]),
-                Box::new(vec![
+                Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Boolean, false),
                 ]),
             ),
             ScalarValue::Struct(
                 None,
-                Box::new(vec![
+                Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("a", DataType::Boolean, false),
                 ]),
@@ -2074,10 +2077,10 @@ mod roundtrip_tests {
             DataType::Utf8,
             DataType::LargeUtf8,
             // Recursive list tests
-            DataType::List(new_box_field("level1", DataType::Boolean, true)),
-            DataType::List(new_box_field(
+            DataType::List(new_arc_field("level1", DataType::Boolean, true)),
+            DataType::List(new_arc_field(
                 "Level1",
-                DataType::List(new_box_field("level2", DataType::Date32, true)),
+                DataType::List(new_arc_field("level2", DataType::Date32, true)),
                 true,
             )),
         ];
@@ -2136,10 +2139,10 @@ mod roundtrip_tests {
             DataType::LargeUtf8,
             DataType::Decimal128(7, 12),
             // Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Binary, true)),
-            DataType::List(new_box_field(
+            DataType::List(new_arc_field("Level1", DataType::Binary, true)),
+            DataType::List(new_arc_field(
                 "Level1",
-                DataType::List(new_box_field(
+                DataType::List(new_arc_field(
                     "Level2",
                     DataType::FixedSizeBinary(53),
                     false,
@@ -2147,11 +2150,11 @@ mod roundtrip_tests {
                 true,
             )),
             // Fixed size lists
-            DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
+            DataType::FixedSizeList(new_arc_field("Level1", DataType::Binary, true), 4),
             DataType::FixedSizeList(
-                new_box_field(
+                new_arc_field(
                     "Level1",
-                    DataType::List(new_box_field(
+                    DataType::List(new_arc_field(
                         "Level2",
                         DataType::FixedSizeBinary(53),
                         false,
@@ -2161,74 +2164,78 @@ mod roundtrip_tests {
                 41,
             ),
             // Struct Testing
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Struct(vec![
+            ])),
+            DataType::Struct(Fields::from(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
                 Field::new(
                     "nested_struct",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("nullable", DataType::Boolean, false),
                         Field::new("name", DataType::Utf8, false),
                         Field::new("datatype", DataType::Binary, false),
-                    ]),
+                    ])),
                     true,
                 ),
-            ]),
+            ])),
             DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ],
-                vec![7, 5, 3],
+                UnionFields::new(
+                    vec![7, 5, 3],
+                    vec![
+                        Field::new("nullable", DataType::Boolean, false),
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("datatype", DataType::Binary, false),
+                    ],
+                ),
                 UnionMode::Sparse,
             ),
             DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                    Field::new(
-                        "nested_struct",
-                        DataType::Struct(vec![
-                            Field::new("nullable", DataType::Boolean, false),
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("datatype", DataType::Binary, false),
-                        ]),
-                        true,
-                    ),
-                ],
-                vec![5, 8, 1],
+                UnionFields::new(
+                    vec![5, 8, 1],
+                    vec![
+                        Field::new("nullable", DataType::Boolean, false),
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("datatype", DataType::Binary, false),
+                        Field::new_struct(
+                            "nested_struct",
+                            vec![
+                                Field::new("nullable", DataType::Boolean, false),
+                                Field::new("name", DataType::Utf8, false),
+                                Field::new("datatype", DataType::Binary, false),
+                            ],
+                            true,
+                        ),
+                    ],
+                ),
                 UnionMode::Dense,
             ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
-                Box::new(DataType::Struct(vec![
+                Box::new(DataType::Struct(Fields::from(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
-                ])),
+                ]))),
             ),
             DataType::Dictionary(
                 Box::new(DataType::Decimal128(10, 50)),
                 Box::new(DataType::FixedSizeList(
-                    new_box_field("Level1", DataType::Binary, true),
+                    new_arc_field("Level1", DataType::Binary, true),
                     4,
                 )),
             ),
             DataType::Map(
-                new_box_field(
+                new_arc_field(
                     "entries",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("keys", DataType::Utf8, false),
                         Field::new("values", DataType::Int32, true),
-                    ]),
+                    ])),
                     true,
                 ),
                 false,
@@ -2263,7 +2270,7 @@ mod roundtrip_tests {
             ScalarValue::TimestampNanosecond(None, None),
             ScalarValue::List(
                 None,
-                Box::new(Field::new("item", DataType::Boolean, false)),
+                Arc::new(Field::new("item", DataType::Boolean, false)),
             ),
         ];
 

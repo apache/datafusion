@@ -99,3 +99,11 @@ where t1.t1_id not in ((
 ----
 22 b 2
 33 c 3
+
+# VALUES in subqueries, see 6017
+query I
+select t1_id
+from t1
+where t1_int = (select max(i) from (values (1)) as s(i));
+----
+11
