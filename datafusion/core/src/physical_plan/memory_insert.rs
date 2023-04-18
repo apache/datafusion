@@ -189,9 +189,9 @@ impl MemoryWriteExec {
 /// This object encodes the different states of the [`MemorySinkStream`] when
 /// processing record batches.
 enum MemorySinkStreamState {
-    // The stream is pulling data from the input.
+    /// The stream is pulling data from the input.
     Pull,
-    // The stream is writing data to the table partition.
+    /// The stream is writing data to the table partition.
     Write { maybe_batch: Option<RecordBatch> },
 }
 
@@ -283,8 +283,16 @@ impl RecordBatchStream for MemorySinkStream {
 /// This object encodes the different states of the [`MemorySinkOneToOneStream`]
 /// when processing record batches.
 enum MemorySinkOneToOneStreamState {
+    /// The `Acquire` variant represents the state where the [`MemorySinkOneToOneStream`]
+    /// is waiting to acquire the write lock on the shared partition to store the record batches.
     Acquire,
+
+    /// The `Pull` variant represents the state where the [`MemorySinkOneToOneStream`] has
+    /// acquired the write lock on the shared partition and can pull record batches from
+    /// the input stream to store in the partition.
     Pull {
+        /// The `partition` field contains an [`OwnedRwLockWriteGuard`] which wraps the
+        /// shared partition, providing exclusive write access to the underlying `Vec<RecordBatch>`.
         partition: OwnedRwLockWriteGuard<Vec<RecordBatch>>,
     },
 }
