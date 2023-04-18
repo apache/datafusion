@@ -873,9 +873,5 @@ fn col_to_scalar(
             return Ok(ScalarValue::Null);
         }
     }
-    let mut res = ScalarValue::try_from_array(array, row_index)?;
-    if res.is_null() {
-        res = ScalarValue::Null;
-    }
-    Ok(res)
+    ScalarValue::try_from_array(array, row_index)
 }
