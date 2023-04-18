@@ -125,9 +125,8 @@ impl FloatBits for f32 {
 
 impl FloatBits for f64 {
     type Item = u64;
-    const TINY_BITS: u64 = 0x1;
-    const NEG_TINY_BITS: u64 = 0x8000_0000_0000_0001;
-    // Smallest positive f64.
+    const TINY_BITS: u64 = 0x1; // Smallest positive f64.
+    const NEG_TINY_BITS: u64 = 0x8000_0000_0000_0001; // Smallest (in magnitude) negative f64.
     const CLEAR_SIGN_MASK: u64 = 0x7fff_ffff_ffff_ffff;
     const ONE: Self::Item = 1;
     const ZERO: Self::Item = 0;
@@ -227,36 +226,36 @@ pub fn next_down<F: FloatBits + Copy>(float: F) -> F {
 fn alter_fp_rounding_mode_conservative<const UPPER: bool, F>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-    cls: F,
+    operation: F,
 ) -> Result<ScalarValue>
 where
     F: FnOnce(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
 {
-    let mut res = cls(lhs, rhs)?;
-    match &mut res {
-        ScalarValue::Float64(Some(val)) => {
+    let mut result = operation(lhs, rhs)?;
+    match &mut result {
+        ScalarValue::Float64(Some(value)) => {
             if UPPER {
-                *val = next_up(*val)
+                *value = next_up(*value)
             } else {
-                *val = next_down(*val)
+                *value = next_down(*value)
             }
         }
-        ScalarValue::Float32(Some(val)) => {
+        ScalarValue::Float32(Some(value)) => {
             if UPPER {
-                *val = next_up(*val)
+                *value = next_up(*value)
             } else {
-                *val = next_down(*val)
+                *value = next_down(*value)
             }
         }
         _ => {}
     };
-    Ok(res)
+    Ok(result)
 }
 
 pub fn alter_fp_rounding_mode<const UPPER: bool, F>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
-    cls: F,
+    operation: F,
 ) -> Result<ScalarValue>
 where
     F: FnOnce(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
@@ -268,7 +267,7 @@ where
     unsafe {
         let current = fegetround();
         fesetround(if UPPER { FE_UPWARD } else { FE_DOWNWARD });
-        let result = cls(lhs, rhs);
+        let result = operation(lhs, rhs);
         fesetround(current);
         result
     }
@@ -276,7 +275,7 @@ where
         not(any(target_arch = "x86_64", target_arch = "aarch64")),
         target_os = "windows"
     ))]
-    alter_fp_rounding_mode_conservative::<UPPER, _>(lhs, rhs, cls)
+    alter_fp_rounding_mode_conservative::<UPPER, _>(lhs, rhs, operation)
 }
 
 #[cfg(test)]

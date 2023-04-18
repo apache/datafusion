@@ -1100,18 +1100,17 @@ mod tests {
     }
 
     macro_rules! capture_mode_change {
-        ($TEST_FN_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
+        ($TYPE:ty) => {
             paste::item! {
-                capture_mode_change_helper!($TEST_FN_NAME,
+                capture_mode_change_helper!([<capture_mode_change_ $TYPE>],
                                             [<create_interval_ $TYPE>],
-                                            $TYPE,
-                                            $SCALAR);
+                                            $TYPE);
             }
         };
     }
 
     macro_rules! capture_mode_change_helper {
-        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty, $SCALAR:ident) => {
+        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty) => {
             fn $CREATE_FN_NAME(lower: $TYPE, upper: $TYPE) -> Interval {
                 Interval::make(Some(lower as $TYPE), Some(upper as $TYPE), (true, true))
             }
@@ -1122,46 +1121,16 @@ mod tests {
                 let interval2 = $CREATE_FN_NAME(input.1, input.1);
                 let result = interval1.add(&interval2).unwrap();
                 let without_fe = $CREATE_FN_NAME(input.0 + input.1, input.0 + input.1);
-                match (result, without_fe) {
-                    (
-                        Interval {
-                            lower:
-                                IntervalBound {
-                                    value: ScalarValue::$SCALAR(Some(result_lower)),
-                                    ..
-                                },
-                            upper:
-                                IntervalBound {
-                                    value: ScalarValue::$SCALAR(Some(result_upper)),
-                                    ..
-                                },
-                        },
-                        Interval {
-                            lower:
-                                IntervalBound {
-                                    value: ScalarValue::$SCALAR(Some(without_fe_lower)),
-                                    ..
-                                },
-                            upper:
-                                IntervalBound {
-                                    value: ScalarValue::$SCALAR(Some(without_fe_upper)),
-                                    ..
-                                },
-                        },
-                    ) => {
-                        assert!(
-                            (!expect_low || result_lower < without_fe_lower)
-                                && (!expect_high || result_upper > without_fe_upper)
-                        );
-                    }
-                    _ => unreachable!(),
-                }
+                assert!(
+                    (!expect_low || result.lower.value < without_fe.lower.value)
+                        && (!expect_high || result.upper.value > without_fe.upper.value)
+                );
             }
         };
     }
 
-    capture_mode_change!(capture_mode_change_f32, f32, Float32);
-    capture_mode_change!(capture_mode_change_f64, f64, Float64);
+    capture_mode_change!(f32);
+    capture_mode_change!(f64);
 
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
