@@ -41,10 +41,7 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use arrow::array::{
-    new_null_array, Array, ArrayRef, PrimitiveArray,
-    UInt32Builder,
-};
+use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray, UInt32Builder};
 use arrow::compute::{cast, filter};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{compute, datatypes::SchemaRef, record_batch::RecordBatch};

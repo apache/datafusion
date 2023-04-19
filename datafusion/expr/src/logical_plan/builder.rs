@@ -1041,18 +1041,11 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
-    fn nullify_fields(fields: &[DFField]) -> Vec<DFField> {
-        fields
-            .iter()
-            .map(|f| f.clone().with_nullable(true))
-            .collect()
-    }
-
     let right_fields = right.fields();
     let left_fields = left.fields();
 
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner => {
+        JoinType::Inner | JoinType::Full | JoinType::Right => {
             // left then right
             left_fields
                 .iter()
@@ -1062,25 +1055,14 @@ pub fn build_join_schema(
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
+            let right_fields_nullable: Vec<DFField> = right_fields
+                .iter()
+                .map(|f| f.clone().with_nullable(true))
+                .collect();
+
             left_fields
                 .iter()
-                .chain(&nullify_fields(right_fields))
-                .cloned()
-                .collect()
-        }
-        JoinType::Right => {
-            // left then right, left set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                .iter()
-                .chain(right_fields.iter())
-                .cloned()
-                .collect()
-        }
-        JoinType::Full => {
-            // left then right, all set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                .iter()
-                .chain(&nullify_fields(right_fields))
+                .chain(&right_fields_nullable)
                 .cloned()
                 .collect()
         }
