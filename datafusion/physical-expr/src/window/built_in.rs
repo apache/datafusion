@@ -35,6 +35,7 @@ use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::WindowFrame;
 
@@ -122,8 +123,7 @@ impl WindowExpr for BuiltInWindowExpr {
             ScalarValue::iter_to_array(row_wise_results.into_iter())
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
-            let sort_partition_points =
-                self.evaluate_partition_points(num_rows, &columns)?;
+            let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
             evaluator.evaluate_with_rank(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
@@ -168,7 +168,7 @@ impl WindowExpr for BuiltInWindowExpr {
             let num_rows = record_batch.num_rows();
             let sort_partition_points = if evaluator.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
-                self.evaluate_partition_points(num_rows, &columns)?
+                evaluate_partition_ranges(num_rows, &columns)?
             } else {
                 vec![]
             };

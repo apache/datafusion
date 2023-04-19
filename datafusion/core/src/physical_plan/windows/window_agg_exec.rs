@@ -24,28 +24,28 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
-use crate::physical_plan::windows::calc_requirements;
+use crate::physical_plan::windows::{
+    calc_requirements, get_ordered_partition_by_indices,
+};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::compute::{
-    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
-};
+use arrow::compute::{concat, concat_batches};
+use arrow::datatypes::SchemaBuilder;
 use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::debug;
 use std::any::Any;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -65,6 +65,9 @@ pub struct WindowAggExec {
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Partition by indices that defines preset for existing ordering
+    // see `get_ordered_partition_by_indices` for more details.
+    ordered_partition_by_indices: Vec<usize>,
 }
 
 impl WindowAggExec {
@@ -78,6 +81,8 @@ impl WindowAggExec {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
 
+        let ordered_partition_by_indices =
+            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
         Ok(Self {
             input,
             window_expr,
@@ -85,6 +90,7 @@ impl WindowAggExec {
             input_schema,
             partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
+            ordered_partition_by_indices,
         })
     }
 
@@ -109,20 +115,9 @@ impl WindowAggExec {
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        let mut result = vec![];
-        // All window exprs have the same partition by, so we just use the first one:
-        let partition_by = self.window_expr()[0].partition_by();
+        // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
         let sort_keys = self.input.output_ordering().unwrap_or(&[]);
-        for item in partition_by {
-            if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
-                result.push(a.clone());
-            } else {
-                return Err(DataFusionError::Execution(
-                    "Partition key not found in sort keys".to_string(),
-                ));
-            }
-        }
-        Ok(result)
+        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 }
 
@@ -173,16 +168,21 @@ impl ExecutionPlan for WindowAggExec {
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
-        let requirements = calc_requirements(partition_bys, order_keys);
-        vec![requirements]
+        if self.ordered_partition_by_indices.len() < partition_bys.len() {
+            vec![calc_requirements(partition_bys, order_keys)]
+        } else {
+            let partition_bys = self
+                .ordered_partition_by_indices
+                .iter()
+                .map(|idx| &partition_bys[*idx]);
+            vec![calc_requirements(partition_bys, order_keys)]
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            //TODO support PartitionCollections if there is no common partition columns in the window_expr
             vec![Distribution::HashPartitioned(self.partition_keys.clone())]
         }
     }
@@ -215,7 +215,8 @@ impl ExecutionPlan for WindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
-        ));
+            self.ordered_partition_by_indices.clone(),
+        )?);
         Ok(stream)
     }
 
@@ -274,13 +275,14 @@ fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(input_schema.fields().len() + window_expr.len());
-    fields.extend_from_slice(input_schema.fields());
+    let capacity = input_schema.fields().len() + window_expr.len();
+    let mut builder = SchemaBuilder::with_capacity(capacity);
+    builder.extend(input_schema.fields().iter().cloned());
     // append results to the schema
     for expr in window_expr {
-        fields.push(expr.field()?);
+        builder.push(expr.field()?);
     }
-    Ok(Schema::new(fields))
+    Ok(builder.finish())
 }
 
 /// Compute the window aggregate columns
@@ -303,6 +305,7 @@ pub struct WindowAggStream {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
+    ordered_partition_by_indices: Vec<usize>,
 }
 
 impl WindowAggStream {
@@ -313,8 +316,15 @@ impl WindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
-    ) -> Self {
-        Self {
+        ordered_partition_by_indices: Vec<usize>,
+    ) -> Result<Self> {
+        // In WindowAggExec all partition by columns should be ordered.
+        if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
+            return Err(DataFusionError::Internal(
+                "All partition by columns should have an ordering".to_string(),
+            ));
+        }
+        Ok(Self {
             schema,
             input,
             batches: vec![],
@@ -322,7 +332,8 @@ impl WindowAggStream {
             window_expr,
             baseline_metrics,
             partition_by_sort_keys,
-        }
+            ordered_partition_by_indices,
+        })
     }
 
     fn compute_aggregates(&self) -> Result<RecordBatch> {
@@ -334,12 +345,12 @@ impl WindowAggStream {
         }
 
         let partition_by_sort_keys = self
-            .partition_by_sort_keys
+            .ordered_partition_by_indices
             .iter()
-            .map(|elem| elem.evaluate_to_sort_column(&batch))
+            .map(|idx| self.partition_by_sort_keys[*idx].evaluate_to_sort_column(&batch))
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
-            self.evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
+            evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
 
         let mut partition_results = vec![];
         // Calculate window cols
@@ -364,25 +375,6 @@ impl WindowAggStream {
         // calculate window cols
         batch_columns.extend_from_slice(&columns);
         Ok(RecordBatch::try_new(self.schema.clone(), batch_columns)?)
-    }
-
-    /// Evaluates the partition points given the sort columns. If the sort columns are
-    /// empty, then the result will be a single element vector spanning the entire batch.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        Ok(if partition_columns.is_empty() {
-            vec![Range {
-                start: 0,
-                end: num_rows,
-            }]
-        } else {
-            lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>()
-        })
     }
 }
 

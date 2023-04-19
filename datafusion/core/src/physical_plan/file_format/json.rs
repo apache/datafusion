@@ -162,11 +162,29 @@ impl ExecutionPlan for NdJsonExec {
     }
 }
 
-struct JsonOpener {
+/// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
+pub struct JsonOpener {
     batch_size: usize,
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+}
+
+impl JsonOpener {
+    /// Returns a  [`JsonOpener`]
+    pub fn new(
+        batch_size: usize,
+        projected_schema: SchemaRef,
+        file_compression_type: FileCompressionType,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            batch_size,
+            projected_schema,
+            file_compression_type,
+            object_store,
+        }
+    }
 }
 
 impl FileOpener for JsonOpener {
@@ -191,7 +209,8 @@ impl FileOpener for JsonOpener {
                         .build_decoder()?;
 
                     let s = s.map_err(DataFusionError::from);
-                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut input =
+                        file_compression_type.convert_stream(s.boxed())?.fuse();
                     let mut buffered = Bytes::new();
 
                     let s = stream::poll_fn(move |cx| {
@@ -271,7 +290,7 @@ pub async fn plan_to_json(
 #[cfg(test)]
 mod tests {
     use arrow::array::Array;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{Field, SchemaBuilder};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -471,11 +490,11 @@ mod tests {
         let (object_store_url, file_groups, actual_schema) =
             prepare_store(&state, file_compression_type.to_owned()).await;
 
-        let mut fields = actual_schema.fields().clone();
-        fields.push(Field::new("missing_col", DataType::Int32, true));
-        let missing_field_idx = fields.len() - 1;
+        let mut builder = SchemaBuilder::from(actual_schema.fields());
+        builder.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(builder.finish());
+        let missing_field_idx = file_schema.fields.len() - 1;
 
         let exec = NdJsonExec::new(
             FileScanConfig {

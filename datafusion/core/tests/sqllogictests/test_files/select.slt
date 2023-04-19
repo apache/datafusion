@@ -214,3 +214,54 @@ select * from (select 1 a union all select 2) b order by a limit null;
 query I
 select * from (select 1 a union all select 2) b order by a limit 0;
 ----
+
+# select case when type coercion with case expression
+query I
+select CASE 10.5 WHEN 0 THEN 1 ELSE 2 END;
+----
+2
+
+# select case when type coercion without case expression
+query I
+select CASE
+  WHEN 10 = 5 THEN 1
+  WHEN 'true' THEN 2
+  ELSE 3
+END;
+----
+2
+
+# Binary Expression for LargeUtf8
+# issue: https://github.com/apache/arrow-datafusion/issues/5893
+statement ok
+CREATE TABLE t as select arrow_cast('Bar', 'LargeUtf8') as column1, 'B%' as column2;
+
+query B
+select column1 like column2 from t;
+----
+true
+
+query B
+select column1 ilike column2 from t;
+----
+true
+
+query B
+select column1 not like column2 from t;
+----
+false
+
+query B
+select column1 not ilike column2 from t;
+----
+false
+
+query B
+select column1 is distinct from column2 from t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from t;
+----
+false

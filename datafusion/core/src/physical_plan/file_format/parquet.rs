@@ -826,7 +826,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, SchemaBuilder},
     };
     use chrono::{TimeZone, Utc};
     use datafusion_common::ScalarValue;
@@ -971,9 +971,9 @@ mod tests {
         field_name: &str,
         array: ArrayRef,
     ) -> RecordBatch {
-        let mut fields = batch.schema().fields().clone();
+        let mut fields = SchemaBuilder::from(batch.schema().fields());
         fields.push(Field::new(field_name, array.data_type().clone(), true));
-        let schema = Arc::new(Schema::new(fields));
+        let schema = Arc::new(fields.finish());
 
         let mut columns = batch.columns().to_vec();
         columns.push(array);
@@ -982,7 +982,7 @@ mod tests {
 
     fn create_batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
         columns.into_iter().fold(
-            RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
+            RecordBatch::new_empty(Arc::new(Schema::empty())),
             |batch, (field_name, arr)| add_to_batch(&batch, field_name, arr.clone()),
         )
     }
@@ -1009,11 +1009,8 @@ mod tests {
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
         // batch1: c1(string)
-        let batch1 = add_to_batch(
-            &RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
-            "c1",
-            c1,
-        );
+        let batch1 =
+            add_to_batch(&RecordBatch::new_empty(Arc::new(Schema::empty())), "c1", c1);
 
         // batch2: c1(string) and c2(int64)
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
@@ -1622,11 +1619,11 @@ mod tests {
             .infer_schema(&state, &store, &[meta.clone()])
             .await?;
 
-        let group_empty = vec![vec![file_range(&meta, 0, 5)]];
-        let group_contain = vec![vec![file_range(&meta, 5, i64::MAX)]];
+        let group_empty = vec![vec![file_range(&meta, 0, 2)]];
+        let group_contain = vec![vec![file_range(&meta, 2, i64::MAX)]];
         let group_all = vec![vec![
-            file_range(&meta, 0, 5),
-            file_range(&meta, 5, i64::MAX),
+            file_range(&meta, 0, 2),
+            file_range(&meta, 2, i64::MAX),
         ]];
 
         assert_parquet_read(&state, group_empty, None, file_schema.clone()).await?;

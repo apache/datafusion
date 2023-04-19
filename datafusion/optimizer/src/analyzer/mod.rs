@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod count_wildcard_rule;
-mod inline_table_scan;
+pub mod count_wildcard_rule;
+pub mod inline_table_scan;
+pub mod type_coercion;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 
+use crate::analyzer::type_coercion::TypeCoercion;
+use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
-use log::{debug, trace};
+use log::debug;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -64,8 +67,9 @@ impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
-            Arc::new(CountWildcardRule::new()),
             Arc::new(InlineTableScan::new()),
+            Arc::new(TypeCoercion::new()),
+            Arc::new(CountWildcardRule::new()),
         ];
         Self::with_rules(rules)
     }
@@ -77,29 +81,34 @@ impl Analyzer {
 
     /// Analyze the logical plan by applying analyzer rules, and
     /// do necessary check and fail the invalid plans
-    pub fn execute_and_check(
+    pub fn execute_and_check<F>(
         &self,
         plan: &LogicalPlan,
         config: &ConfigOptions,
-    ) -> Result<LogicalPlan> {
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn AnalyzerRule),
+    {
         let start_time = Instant::now();
         let mut new_plan = plan.clone();
 
         // TODO add common rule executor for Analyzer and Optimizer
         for rule in &self.rules {
-            new_plan = rule.analyze(new_plan, config)?;
+            new_plan = rule.analyze(new_plan, config).map_err(|e| {
+                DataFusionError::Context(rule.name().to_string(), Box::new(e))
+            })?;
+            log_plan(rule.name(), &new_plan);
+            observer(&new_plan, rule.as_ref());
         }
-        check_plan(&new_plan)?;
+        // for easier display in explain output
+        check_plan(&new_plan).map_err(|e| {
+            DataFusionError::Context("check_analyzed_plan".to_string(), Box::new(e))
+        })?;
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
-}
-
-/// Log the plan in debug/tracing mode after some part of the optimizer runs
-fn log_plan(description: &str, plan: &LogicalPlan) {
-    debug!("{description}:\n{}\n", plan.display_indent());
-    trace!("{description}::\n{}\n", plan.display_indent_schema());
 }
 
 /// Do necessary check and fail the invalid plan
@@ -192,6 +201,7 @@ fn check_correlations_in_subquery(
         | LogicalPlan::TableScan(_)
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Limit(_)
+        | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_) => {
             inner_plan.apply_children(&mut |plan| {

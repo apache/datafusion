@@ -1103,12 +1103,11 @@ async fn reduce_left_join_2() -> Result<()> {
     // the right part `(t2.t2_name != 'w' or t2.t2_int < 10)` could be push down left join side and remove in filter.
 
     let expected = vec![
-            "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Inner Join: t1.t1_id = t2.t2_id Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1188,11 +1187,10 @@ async fn reduce_right_join_2() -> Result<()> {
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
-            "Explain [plan_type:Utf8, plan:Utf8]",
-            "  Filter: t1.t1_int != t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Inner Join: t1.t1_id = t2.t2_id Filter: t1.t1_int != t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1770,6 +1768,171 @@ async fn right_semi_join() -> Result<()> {
         ];
         assert_batches_eq!(expected, &actual);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_and_aggregate_on_same_key() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+    let sql = "select distinct(t1.t1_id) from t1 inner join t2 on t1.t1_id = t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Aggregate: groupBy=[[t1.t1_id]], aggr=[[]] [t1_id:UInt32;N]",
+        "    Projection: t1.t1_id [t1_id:UInt32;N]",
+        "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t2_id:UInt32;N]",
+        "        TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let msg = format!("Creating physical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let expected =
+        vec![
+            "AggregateExec: mode=Single, gby=[t1_id@0 as t1_id], aggr=[]",
+            "  ProjectionExec: expr=[t1_id@0 as t1_id]",
+            "    CoalesceBatchesExec: target_batch_size=4096",
+            "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+            "        CoalesceBatchesExec: target_batch_size=4096",
+            "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+            "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "              MemoryExec: partitions=1, partition_sizes=[1]",
+            "        CoalesceBatchesExec: target_batch_size=4096",
+            "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+            "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "              MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let sql = "select count(*) from (select * from t1 inner join t2 on t1.t1_id = t2.t2_id) group by t1_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: COUNT(UInt8(1)) [COUNT(UInt8(1)):Int64;N]",
+        "    Aggregate: groupBy=[[t1.t1_id]], aggr=[[COUNT(UInt8(1))]] [t1_id:UInt32;N, COUNT(UInt8(1)):Int64;N]",
+        "      Projection: t1.t1_id [t1_id:UInt32;N]",
+        "        Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t2_id:UInt32;N]",
+        "          TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let msg = format!("Creating physical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let expected =
+        vec![
+            "ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]",
+            "  AggregateExec: mode=Single, gby=[t1_id@0 as t1_id], aggr=[COUNT(UInt8(1))]",
+            "    ProjectionExec: expr=[t1_id@0 as t1_id]",
+            "      CoalesceBatchesExec: target_batch_size=4096",
+            "        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+            "          CoalesceBatchesExec: target_batch_size=4096",
+            "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+            "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "                MemoryExec: partitions=1, partition_sizes=[1]",
+            "          CoalesceBatchesExec: target_batch_size=4096",
+            "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+            "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "                MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let sql =
+        "select count(distinct t1.t1_id) from t1 inner join t2 on t1.t1_id = t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: COUNT(alias1) AS COUNT(DISTINCT t1.t1_id) [COUNT(DISTINCT t1.t1_id):Int64;N]",
+        "    Aggregate: groupBy=[[]], aggr=[[COUNT(alias1)]] [COUNT(alias1):Int64;N]",
+        "      Aggregate: groupBy=[[t1.t1_id AS alias1]], aggr=[[]] [alias1:UInt32;N]",
+        "        Projection: t1.t1_id [t1_id:UInt32;N]",
+        "          Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t2_id:UInt32;N]",
+        "            TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "            TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // the Partial and FinalPartitioned Aggregate are not combined to Single Aggregate due to group by exprs are different
+    // TODO improve ReplaceDistinctWithAggregate rule to avoid unnecessary alias Cast
+    let msg = format!("Creating physical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let expected =
+        vec![
+            "ProjectionExec: expr=[COUNT(alias1)@0 as COUNT(DISTINCT t1.t1_id)]",
+            "  AggregateExec: mode=Final, gby=[], aggr=[COUNT(alias1)]",
+            "    CoalescePartitionsExec",
+            "      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(alias1)]",
+            "        AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]",
+            "          AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]",
+            "            ProjectionExec: expr=[t1_id@0 as t1_id]",
+            "              CoalesceBatchesExec: target_batch_size=4096",
+            "                HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+            "                  CoalesceBatchesExec: target_batch_size=4096",
+            "                    RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+            "                      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "                        MemoryExec: partitions=1, partition_sizes=[1]",
+            "                  CoalesceBatchesExec: target_batch_size=4096",
+            "                    RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+            "                      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "                        MemoryExec: partitions=1, partition_sizes=[1]",
+        ];
+
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
 
     Ok(())
 }

@@ -35,6 +35,7 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
@@ -55,9 +56,6 @@ use crate::physical_plan::{
 };
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{
-    make_sort_requirements_from_exprs, PhysicalSortRequirement,
-};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -230,8 +228,12 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![
-            Some(make_sort_requirements_from_exprs(&self.left_sort_exprs)),
-            Some(make_sort_requirements_from_exprs(&self.right_sort_exprs)),
+            Some(PhysicalSortRequirement::from_sort_exprs(
+                &self.left_sort_exprs,
+            )),
+            Some(PhysicalSortRequirement::from_sort_exprs(
+                &self.right_sort_exprs,
+            )),
         ]
     }
 
@@ -247,6 +249,17 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.output_ordering.as_deref()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        match self.join_type {
+            JoinType::Inner => vec![true, true],
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                vec![false, true]
+            }
+            _ => vec![false, false],
+        }
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -289,6 +302,15 @@ impl ExecutionPlan for SortMergeJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let left_partitions = self.left.output_partitioning().partition_count();
+        let right_partitions = self.right.output_partitioning().partition_count();
+        if left_partitions != right_partitions {
+            return Err(DataFusionError::Internal(format!(
+                "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+                 consider using RepartitionExec",
+            )));
+        }
+
         let (streamed, buffered, on_streamed, on_buffered) = match self.join_type {
             JoinType::Inner
             | JoinType::Left
@@ -465,6 +487,7 @@ struct StreamedBatch {
     // Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
 }
+
 impl StreamedBatch {
     fn new(batch: RecordBatch, on_column: &[Column]) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
@@ -528,6 +551,7 @@ struct BufferedBatch {
     /// Size estimation used for reserving / releasing memory
     pub size_estimation: usize,
 }
+
 impl BufferedBatch {
     fn new(batch: RecordBatch, range: Range<usize>, on_column: &[Column]) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
@@ -1142,6 +1166,7 @@ struct BufferedData {
     /// current scanning offset used in join_partial()
     pub scanning_offset: usize,
 }
+
 impl BufferedData {
     pub fn head_batch(&self) -> &BufferedBatch {
         self.batches.front().unwrap()
@@ -1729,7 +1754,7 @@ mod tests {
             vec![
                 SortOptions {
                     descending: true,
-                    nulls_first: false
+                    nulls_first: false,
                 };
                 2
             ],

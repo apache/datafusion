@@ -576,7 +576,6 @@ impl DefaultPhysicalPlanner {
                     }
 
                     let logical_input_schema = input.schema();
-
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
@@ -628,10 +627,10 @@ impl DefaultPhysicalPlanner {
                         &physical_input_schema,
                         session_state)?;
 
-                    let aggregates = aggr_expr
+                    let agg_filter = aggr_expr
                         .iter()
                         .map(|e| {
-                            create_aggregate_expr(
+                            create_aggregate_expr_and_maybe_filter(
                                 e,
                                 logical_input_schema,
                                 &physical_input_schema,
@@ -639,11 +638,13 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    let (aggregates, filters): (Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
+                        filters.clone(),
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -679,6 +680,7 @@ impl DefaultPhysicalPlanner {
                         next_partition_mode,
                         final_grouping_set,
                         aggregates,
+                        filters,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -822,7 +824,9 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?))
+                    let new_sort = SortExec::new(sort_expr, physical_input)
+                        .with_fetch(*fetch);
+                    Ok(Arc::new(new_sort))
                 }
                 LogicalPlan::Join(Join {
                     left,
@@ -923,21 +927,21 @@ impl DefaultPhysicalPlanner {
 
                     let join_filter = match filter {
                         Some(expr) => {
-                            // Extract columns from filter expression
+                            // Extract columns from filter expression and saved in a HashSet
                             let cols = expr.to_columns()?;
 
-                            // Collect left & right field indices
+                            // Collect left & right field indices, the field indices are sorted in ascending order
                             let left_field_indices = cols.iter()
                                 .filter_map(|c| match left_df_schema.index_of_column(c) {
                                     Ok(idx) => Some(idx),
                                     _ => None,
-                                })
+                                }).sorted()
                                 .collect::<Vec<_>>();
                             let right_field_indices = cols.iter()
                                 .filter_map(|c| match right_df_schema.index_of_column(c) {
                                     Ok(idx) => Some(idx),
                                     _ => None,
-                                })
+                                }).sorted()
                                 .collect::<Vec<_>>();
 
                             // Collect DFFields and Fields required for intermediate schemas
@@ -956,7 +960,6 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
-
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
@@ -1158,9 +1161,11 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Dml".to_string(),
                     ))
                 }
-                LogicalPlan::SetVariable(_) => {
-                    Err(DataFusionError::Internal(
-                        "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
+                LogicalPlan::Statement(statement) => {
+                    // DataFusion is a read-only query engine, but also a library, so consumers may implement this
+                    let name = statement.name();
+                    Err(DataFusionError::NotImplemented(
+                        format!("Unsupported logical plan: Statement({name})")
                     ))
                 }
                 LogicalPlan::DescribeTable(_) => {
@@ -1607,20 +1612,23 @@ pub fn create_window_expr(
     )
 }
 
+type AggregateExprWithOptionalFilter =
+    (Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>);
+
 /// Create an aggregate expression with a name from a logical expression
-pub fn create_aggregate_expr_with_name(
+pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: impl Into<String>,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<Arc<dyn AggregateExpr>> {
+) -> Result<AggregateExprWithOptionalFilter> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
-            ..
+            filter,
         }) => {
             let args = args
                 .iter()
@@ -1633,15 +1641,25 @@ pub fn create_aggregate_expr_with_name(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            aggregates::create_aggregate_expr(
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
+            let agg_expr = aggregates::create_aggregate_expr(
                 fun,
                 *distinct,
                 &args,
                 physical_input_schema,
                 name,
-            )
+            );
+            Ok((agg_expr?, filter))
         }
-        Expr::AggregateUDF { fun, args, .. } => {
+        Expr::AggregateUDF { fun, args, filter } => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1654,7 +1672,19 @@ pub fn create_aggregate_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            udaf::create_aggregate_expr(fun, &args, physical_input_schema, name)
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
+
+            let agg_expr =
+                udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
+            Ok((agg_expr?, filter))
         }
         other => Err(DataFusionError::Internal(format!(
             "Invalid aggregate expression '{other:?}'"
@@ -1663,19 +1693,19 @@ pub fn create_aggregate_expr_with_name(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-pub fn create_aggregate_expr(
+pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<Arc<dyn AggregateExpr>> {
+) -> Result<AggregateExprWithOptionalFilter> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
         _ => (physical_name(e)?, e),
     };
 
-    create_aggregate_expr_with_name(
+    create_aggregate_expr_with_name_and_maybe_filter(
         e,
         name,
         logical_input_schema,
@@ -1786,7 +1816,10 @@ impl DefaultPhysicalPlanner {
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent()
         );
-        trace!("Detailed input physical plan:\n{:?}", plan);
+        trace!(
+            "Detailed input physical plan:\n{}",
+            displayable(plan.as_ref()).indent()
+        );
 
         let mut new_plan = plan;
         for optimizer in optimizers {
@@ -2164,9 +2197,7 @@ mod tests {
 
         assert_contains!(
             &e,
-            r#"type_coercion
-caused by
-Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"#
+            r#"Error during planning: Can not find compatible types to compare Boolean with [Struct([Field { name: "foo", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), Utf8]"#
         );
 
         Ok(())
@@ -2176,7 +2207,7 @@ Internal error: Optimizer rule 'type_coercion' failed due to unexpected error: E
     fn struct_literal() -> Expr {
         let struct_literal = ScalarValue::Struct(
             None,
-            Box::new(vec![Field::new("foo", DataType::Boolean, false)]),
+            vec![Field::new("foo", DataType::Boolean, false)].into(),
         );
         lit(struct_literal)
     }

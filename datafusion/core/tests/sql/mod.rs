@@ -70,6 +70,7 @@ macro_rules! assert_metrics {
 
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
+        println!("Input:\n  {}\nExpected:\n  {}\n", $SQL, $EXPECTED);
         let ctx = SessionContext::new();
         let sql = format!("SELECT {}", $SQL);
         let actual = execute(&ctx, sql.as_str()).await;
@@ -90,7 +91,6 @@ pub mod group_by;
 pub mod joins;
 pub mod json;
 pub mod limit;
-pub mod math;
 pub mod order;
 pub mod parquet;
 pub mod predicates;
@@ -158,22 +158,6 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     } else {
         unimplemented!()
     }
-}
-
-fn create_case_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
-    let data = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("b"),
-            Some("c"),
-            None,
-        ]))],
-    )?;
-    ctx.register_batch("t1", data)?;
-    Ok(ctx)
 }
 
 fn create_join_context(
@@ -1144,20 +1128,6 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
     ctx.sql(sql).await?.collect().await
 }
 
-/// Execute query and return results as a Vec of RecordBatches or an error
-async fn try_execute_to_batches(
-    ctx: &SessionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
-    let dataframe = ctx.sql(sql).await?;
-    let logical_schema = dataframe.schema().clone();
-    let (state, plan) = dataframe.into_parts();
-
-    let optimized = state.optimize(&plan)?;
-    assert_eq!(&logical_schema, optimized.schema().as_ref());
-    DataFrame::new(state, optimized).collect().await
-}
-
 /// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
     let df = ctx.sql(sql).await.unwrap();
@@ -1296,7 +1266,7 @@ where
     make_timestamp_tz_table::<A>(None)
 }
 
-fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
+fn make_timestamp_tz_table<A>(tz: Option<Arc<str>>) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {
@@ -1332,8 +1302,8 @@ where
 }
 
 fn make_timestamp_tz_sub_table<A>(
-    tz1: Option<String>,
-    tz2: Option<String>,
+    tz1: Option<Arc<str>>,
+    tz2: Option<Arc<str>>,
 ) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
@@ -1377,10 +1347,6 @@ where
     )?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     Ok(Arc::new(table))
-}
-
-fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
-    make_timestamp_table::<TimestampNanosecondType>()
 }
 
 /// Return a new table provider that has a single Int32 column with

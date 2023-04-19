@@ -23,23 +23,35 @@
 
 - [abs](#abs)
 - [acos](#acos)
+- [acosh](#acosh)
 - [asin](#asin)
+- [asinh](#asinh)
 - [atan](#atan)
+- [atanh](#atanh)
 - [atan2](#atan2)
+- [cbrt](#cbrt)
 - [ceil](#ceil)
 - [cos](#cos)
+- [cosh](#cosh)
+- [degrees](#degrees)
 - [exp](#exp)
 - [floor](#floor)
 - [ln](#ln)
+- [log](#log)
 - [log10](#log10)
 - [log2](#log2)
+- [pi](#pi)
 - [power](#power)
+- [pow](#pow)
+- [radians](#radians)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
 - [sin](#sin)
+- [sinh](#sinh)
 - [sqrt](#sqrt)
 - [tan](#tan)
+- [tanh](#tanh)
 - [trunc](#trunc)
 
 ### `abs`
@@ -68,6 +80,19 @@ acos(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `acosh`
+
+Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
+
+```
+acosh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `asin`
 
 Returns the arc sine or inverse sine of a number.
@@ -81,12 +106,38 @@ asin(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `asinh`
+
+Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
+
+```
+asinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `atan`
 
 Returns the arc tangent or inverse tangent of a number.
 
 ```
 atan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `atanh`
+
+Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
+
+```
+atanh(numeric_expression)
 ```
 
 #### Arguments
@@ -109,6 +160,19 @@ atan2(expression_y, expression_x)
 - **expression_x**: Second numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `cbrt`
+
+Returns the cube root of a number.
+
+```
+cbrt(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `ceil`
 
 Returns the nearest integer greater than or equal to a number.
@@ -129,6 +193,32 @@ Returns the cosine of a number.
 ```
 cos(numeric_expression)
 ```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `cosh`
+
+Returns the hyperbolic cosine of a number.
+
+```
+cosh(numeric_expression)
+```
+
+### `degrees`
+
+Converts radians to degrees.
+
+```
+degrees(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 #### Arguments
 
@@ -174,6 +264,23 @@ ln(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `log`
+
+Returns the base-x logarithm of a number.
+Can either provide a specified base, or if omitted then takes the base-10 of a number.
+
+```
+log(base, numeric_expression)
+log(numeric_expression)
+```
+
+#### Arguments
+
+- **base**: Base numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `log10`
 
 Returns the base-10 logarithm of a number.
@@ -189,7 +296,7 @@ log10(numeric_expression)
 
 ### `log2`
 
-Returns the base-2 logarithm or a number.
+Returns the base-2 logarithm of a number.
 
 ```
 log2(numeric_expression)
@@ -200,9 +307,17 @@ log2(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `pi`
+
+Returns an approximate value of π.
+
+```
+pi()
+```
+
 ### `power`
 
-Returns a base number raised to the power of an exponent.
+Returns a base expression raised to the power of an exponent.
 
 ```
 power(base, exponent)
@@ -210,14 +325,36 @@ power(base, exponent)
 
 #### Arguments
 
-- **power**: Base numeric expression to operate on.
+- **base**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 - **exponent**: Exponent numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+#### Aliases
+
+- pow
+
+### `pow`
+
+_Alias of [power](#power)._
+
+### `radians`
+
+Converts degrees to radians.
+
+```
+radians(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  =======
+
 ### `random`
 
-Returns a random float value between 0 and 1.
+Returns a random float value in the range [0, 1).
 The random seed is unique to each row.
 
 ```
@@ -265,6 +402,19 @@ sin(numeric_expression)
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `sinh`
+
+Returns the hyperbolic sine of a number.
+
+```
+sinh(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `sqrt`
 
 Returns the square root of a number.
@@ -284,6 +434,19 @@ Returns the tangent of a number.
 
 ```
 tan(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `tanh`
+
+Returns the hyperbolic tangent of a number.
+
+```
+tanh(numeric_expression)
 ```
 
 #### Arguments
@@ -373,6 +536,7 @@ nullif(expression1, expression2)
 - [translate](#translate)
 - [trim](#trim)
 - [upper](#upper)
+- [uuid](#uuid)
 
 ### `ascii`
 
@@ -566,7 +730,7 @@ lower(str)
 
 ### `lpad`
 
-Pads the left side a string with another string to a specified string length.
+Pads the left side of a string with another string to a specified string length.
 
 ```
 lpad(str, n[, padding_str])
@@ -687,7 +851,7 @@ right(str, n)
 
 ### `rpad`
 
-right side a string with another string to a specified string length.
+Pads the right side of a string with another string to a specified string length.
 
 ```
 rpad(str, n[, padding_str])
@@ -725,7 +889,7 @@ rtrim(str)
 
 ### `split_part`
 
-Splits a string based on a specified delimiter and returns the substring a the
+Splits a string based on a specified delimiter and returns the substring in the
 specified position.
 
 ```
@@ -850,6 +1014,14 @@ upper(str)
 [initcap](#initcap),
 [lower](#lower)
 
+### `uuid`
+
+Returns UUID v4 string value which is unique per row.
+
+```
+uuid()
+```
+
 ## Regular Expression Functions
 
 Apache DataFusion uses the POSIX regular expression syntax and
@@ -897,9 +1069,13 @@ regexp_replace(str, regexp, replacement, flags)
 ## Time and Date Functions
 
 - [now](#now)
+- [current_date](#current_date)
+- [current_time](#current_time)
 - [date_bin](#date_bin)
 - [date_trunc](#date_trunc)
+- [datetrunc](#datetrunc)
 - [date_part](#date_part)
+- [datepart](#datepart)
 - [extract](#extract)
 - [to_timestamp](#to_timestamp)
 - [to_timestamp_millis](#to_timestamp_millis)
@@ -916,6 +1092,28 @@ no matter when in the query plan the function executes.
 
 ```
 now()
+```
+
+### `current_date`
+
+Returns the current UTC date.
+
+The `current_date()` return value is determined at query time and will return the same date,
+no matter when in the query plan the function executes.
+
+```
+current_date()
+```
+
+### `current_time`
+
+Returns the current UTC time.
+
+The `current_time()` return value is determined at query time and will return the same time,
+no matter when in the query plan the function executes.
+
+```
+current_time()
 ```
 
 ### `date_bin`
@@ -977,6 +1175,14 @@ date_trunc(precision, expression)
 - **expression**: Time expression to operate on.
   Can be a constant, column, or function.
 
+#### Aliases
+
+- datetrunc
+
+### `datetrunc`
+
+_Alias of [date_trunc](#date_trunc)._
+
 ### `date_part`
 
 Returns the specified part of the date as an integer.
@@ -1005,6 +1211,14 @@ date_part(part, expression)
 
 - **expression**: Time expression to operate on.
   Can be a constant, column, or function.
+
+#### Aliases
+
+- datepart
+
+### `datepart`
+
+_Alias of [date_part](#date_part)._
 
 ### `extract`
 
@@ -1117,11 +1331,36 @@ from_unixtime(expression)
 
 ## Hashing Functions
 
+- [digest](#digest)
 - [md5](#md5)
 - [sha224](#sha224)
 - [sha256](#sha256)
 - [sha384](#sha384)
 - [sha512](#sha512)
+
+### `digest`
+
+Computes the binary hash of an expression using the specified algorithm.
+
+```
+digest(expression, algorithm)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on.
+  Can be a constant, column, or function, and any combination of string operators.
+- **algorithm**: String expression specifying algorithm to use.
+  Must be one of:
+
+  - md5
+  - sha224
+  - sha256
+  - sha384
+  - sha512
+  - blake2s
+  - blake2b
+  - blake3
 
 ### `md5`
 
@@ -1190,17 +1429,17 @@ sha512(expression)
 
 ## Other Functions
 
-- [array](#array)
+- [make_array](#make_array)
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
 - [struct](#struct)
 
-### `array`
+### `make_array`
 
 Returns an Arrow array using the specified input expressions.
 
 ```
-array(expression1[, ..., expression_n])
+make_array(expression1[, ..., expression_n])
 ```
 
 #### Arguments

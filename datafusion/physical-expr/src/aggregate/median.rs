@@ -17,6 +17,7 @@
 
 //! # Median
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, ArrayRef, UInt32Array};
@@ -72,7 +73,7 @@ impl AggregateExpr for Median {
     fn state_fields(&self) -> Result<Vec<Field>> {
         //Intermediate state is a list of the elements we have collected so far
         let field = Field::new("item", self.data_type.clone(), true);
-        let data_type = DataType::List(Box::new(field));
+        let data_type = DataType::List(Arc::new(field));
 
         Ok(vec![Field::new(
             format_state_name(&self.name, "median"),
@@ -87,6 +88,19 @@ impl AggregateExpr for Median {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for Median {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 

@@ -187,6 +187,10 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
+        /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        pub dialect: String, default = "generic".to_string()
+
     }
 }
 
@@ -279,6 +283,15 @@ config_namespace! {
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level
         pub repartition_joins: bool, default = true
+
+        /// Should DataFusion allow symmetric hash joins for unbounded data sources even when
+        /// its inputs do not have any ordering or filtering If the flag is not enabled,
+        /// the SymmetricHashJoin operator will be unable to prune its internal buffers,
+        /// resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right,
+        /// RightAnti, and RightSemi - being produced only at the end of the execution.
+        /// This is not typical in stream processing. Additionally, without proper design for
+        /// long runner execution, all types of joins may encounter out-of-memory errors.
+        pub allow_symmetric_joins_without_pruning: bool, default = true
 
         /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
         /// Currently supported only for Parquet format in which case

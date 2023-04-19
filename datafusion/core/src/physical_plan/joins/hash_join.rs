@@ -19,7 +19,15 @@
 //! into a set of partitions.
 
 use ahash::RandomState;
-
+use arrow::array::Array;
+use arrow::array::{
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
+};
+use arrow::datatypes::{ArrowNativeType, DataType};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
         ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
@@ -34,27 +42,30 @@ use arrow::{
     },
     util::bit_util,
 };
-use smallvec::{smallvec, SmallVec};
-use std::sync::Arc;
-use std::{any::Any, usize, vec};
-
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-
-use arrow::array::Array;
-use arrow::datatypes::{ArrowNativeType, DataType};
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
-use arrow::array::{
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
+use hashbrown::raw::RawTable;
+use smallvec::smallvec;
+use std::fmt;
+use std::sync::Arc;
+use std::task::Poll;
+use std::{any::Any, usize, vec};
 
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
 
-use hashbrown::raw::RawTable;
-
+use crate::arrow::array::BooleanBufferBuilder;
+use crate::arrow::datatypes::TimeUnit;
+use crate::error::{DataFusionError, Result};
+use crate::execution::{
+    context::TaskContext,
+    memory_pool::{
+        MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
+    },
+};
+use crate::logical_expr::JoinType;
+use crate::physical_plan::joins::utils::{
+    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+};
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
@@ -72,48 +83,11 @@ use crate::physical_plan::{
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
-
-use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
-use crate::execution::{
-    context::TaskContext,
-    memory_pool::{
-        MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
-    },
-};
-
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-use crate::physical_plan::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
-};
-use std::fmt;
-use std::task::Poll;
-
-// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
-//
-// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
-// to put the indices in a certain bucket.
-// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
-// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
-// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
-// As the key is a hash value, we need to check possible hash collisions in the probe stage
-// During this stage it might be the case that a row is contained the same hashmap value,
-// but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collision check and move away from using a hashbrown HashMap
-// https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
-
-impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
-    }
-}
+use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 
 type JoinLeftData = (JoinHashMap, RecordBatch);
 
@@ -377,6 +351,15 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
+        let left_partitions = self.left.output_partitioning().partition_count();
+        let right_partitions = self.right.output_partitioning().partition_count();
+        if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
+        {
+            return Err(DataFusionError::Internal(format!(
+                "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+                 consider using RepartitionExec",
+            )));
+        }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -1287,7 +1270,14 @@ impl Stream for HashJoinStream {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use smallvec::smallvec;
+
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::Literal;
+
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
     use crate::prelude::SessionContext;
@@ -1306,13 +1296,8 @@ mod tests {
         test::exec::MockExec,
         test::{build_table_i32, columns},
     };
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::Operator;
 
-    use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::Literal;
-    use smallvec::smallvec;
+    use super::*;
 
     fn build_table(
         a: (&str, &Vec<i32>),

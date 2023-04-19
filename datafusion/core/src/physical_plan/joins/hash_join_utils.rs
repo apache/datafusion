@@ -20,19 +20,65 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::usize;
+use std::{fmt, usize};
 
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::DataFusionError;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use hashbrown::raw::RawTable;
+use smallvec::SmallVec;
 
 use crate::common::Result;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
+
+// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
+//
+// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
+// to put the indices in a certain bucket.
+// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
+// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
+// As the key is a hash value, we need to check possible hash collisions in the probe stage
+// During this stage it might be the case that a row is contained the same hashmap value,
+// but the values don't match. Those are checked in the [equal_rows] macro
+// TODO: speed up collision check and move away from using a hashbrown HashMap
+// https://github.com/apache/arrow-datafusion/issues/50
+pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
+
+impl JoinHashMap {
+    /// In this implementation, the scale_factor variable determines how conservative the shrinking strategy is.
+    /// The value of scale_factor is set to 4, which means the capacity will be reduced by 25%
+    /// when necessary. You can adjust the scale_factor value to achieve the desired
+    /// ,balance between memory usage and performance.
+    //
+    // If you increase the scale_factor, the capacity will shrink less aggressively,
+    // leading to potentially higher memory usage but fewer resizes.
+    // Conversely, if you decrease the scale_factor, the capacity will shrink more aggressively,
+    // potentially leading to lower memory usage but more frequent resizing.
+    pub(crate) fn shrink_if_necessary(&mut self, scale_factor: usize) {
+        let capacity = self.0.capacity();
+        let len = self.0.len();
+
+        if capacity > scale_factor * len {
+            let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
+            self.0.shrink_to(new_capacity, |(hash, _)| *hash)
+        }
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        self.0.allocation_info().1.size()
+    }
+}
+
+impl fmt::Debug for JoinHashMap {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
 
 fn check_filter_expr_contains_sort_information(
     expr: &Arc<dyn PhysicalExpr>,
@@ -77,19 +123,21 @@ pub fn map_origin_col_to_filter_col(
     Ok(col_to_col_map)
 }
 
-/// This function analyzes [PhysicalSortExpr] graphs with respect to monotonicity
+/// This function analyzes [`PhysicalSortExpr`] graphs with respect to monotonicity
 /// (sorting) properties. This is necessary since monotonically increasing and/or
 /// decreasing expressions are required when using join filter expressions for
 /// data pruning purposes.
 ///
 /// The method works as follows:
-/// 1. Maps the original columns to the filter columns using the `map_origin_col_to_filter_col` function.
-/// 2. Collects all columns in the sort expression using the `PhysicalExprColumnCollector` visitor.
-/// 3. Checks if all columns are included in the `column_mapping_information` map.
-/// 4. If all columns are included, the sort expression is converted into a filter expression using the `transform_up` and `convert_filter_columns` functions.
-/// 5. Searches the converted filter expression in the filter expression using the `check_filter_expr_contains_sort_information`.
-/// 6. If an exact match is encountered, returns the converted filter expression as `Some(Arc<dyn PhysicalExpr>)`.
-/// 7. If all columns are not included or the exact match is not encountered, returns `None`.
+/// 1. Maps the original columns to the filter columns using the [`map_origin_col_to_filter_col`] function.
+/// 2. Collects all columns in the sort expression using the [`collect_columns`] function.
+/// 3. Checks if all columns are included in the map we obtain in the first step.
+/// 4. If all columns are included, the sort expression is converted into a filter expression using
+///    the [`convert_filter_columns`] function.
+/// 5. Searches for the converted filter expression in the filter expression using the
+///    [`check_filter_expr_contains_sort_information`] function.
+/// 6. If an exact match is found, returns the converted filter expression as [`Some(Arc<dyn PhysicalExpr>)`].
+/// 7. If all columns are not included or an exact match is not found, returns [`None`].
 ///
 /// Examples:
 /// Consider the filter expression "a + b > c + 10 AND a + b < c + 100".
@@ -135,28 +183,21 @@ pub fn convert_sort_expr_with_filter_schema(
 
 /// This function is used to build the filter expression based on the sort order of input columns.
 ///
-/// It first calls the [convert_sort_expr_with_filter_schema] method to determine if the sort
-/// order of columns can be used in the filter expression. If it returns a [Some] value, the
-/// method wraps the result in a [SortedFilterExpr] instance with the original sort expression and
+/// It first calls the [`convert_sort_expr_with_filter_schema`] method to determine if the sort
+/// order of columns can be used in the filter expression. If it returns a [`Some`] value, the
+/// method wraps the result in a [`SortedFilterExpr`] instance with the original sort expression and
 /// the converted filter expression. Otherwise, this function returns an error.
 ///
-/// The [SortedFilterExpr] instance contains information about the sort order of columns that can
+/// The `SortedFilterExpr` instance contains information about the sort order of columns that can
 /// be used in the filter expression, which can be used to optimize the query execution process.
 pub fn build_filter_input_order(
     side: JoinSide,
     filter: &JoinFilter,
     schema: &SchemaRef,
     order: &PhysicalSortExpr,
-) -> Result<SortedFilterExpr> {
-    if let Some(expr) =
-        convert_sort_expr_with_filter_schema(&side, filter, schema, order)?
-    {
-        Ok(SortedFilterExpr::new(order.clone(), expr))
-    } else {
-        Err(DataFusionError::Plan(format!(
-            "The {side} side of the join does not have an expression sorted."
-        )))
-    }
+) -> Result<Option<SortedFilterExpr>> {
+    let opt_expr = convert_sort_expr_with_filter_schema(&side, filter, schema, order)?;
+    Ok(opt_expr.map(|filter_expr| SortedFilterExpr::new(order.clone(), filter_expr)))
 }
 
 /// Convert a physical expression into a filter expression using the given
@@ -249,6 +290,7 @@ pub mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
+    use smallvec::smallvec;
     use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
@@ -364,7 +406,8 @@ pub mod tests {
             &filter,
             &Arc::new(left_child_schema),
             &left_child_sort_expr,
-        )?;
+        )?
+        .unwrap();
         assert!(left_child_sort_expr.eq(left_sort_filter_expr.origin_sorted_expr()));
 
         let right_sort_filter_expr = build_filter_input_order(
@@ -372,7 +415,8 @@ pub mod tests {
             &filter,
             &Arc::new(right_child_schema),
             &right_child_sort_expr,
-        )?;
+        )?
+        .unwrap();
         assert!(right_child_sort_expr.eq(right_sort_filter_expr.origin_sorted_expr()));
 
         // Assert that adjusted (left) filter expression matches with `left_child_sort_expr`:
@@ -495,8 +539,8 @@ pub mod tests {
                 expr: col("la1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_ok());
+        )?
+        .is_some());
         assert!(build_filter_input_order(
             JoinSide::Left,
             &filter,
@@ -505,8 +549,8 @@ pub mod tests {
                 expr: col("lt1", left_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_err());
+        )?
+        .is_none());
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
@@ -515,8 +559,8 @@ pub mod tests {
                 expr: col("ra1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_ok());
+        )?
+        .is_some());
         assert!(build_filter_input_order(
             JoinSide::Right,
             &filter,
@@ -525,8 +569,8 @@ pub mod tests {
                 expr: col("rb1", right_schema.as_ref())?,
                 options: SortOptions::default(),
             }
-        )
-        .is_err());
+        )?
+        .is_none());
 
         Ok(())
     }
@@ -579,5 +623,45 @@ pub mod tests {
         )?;
         assert!(res.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn test_shrink_if_necessary() {
+        let scale_factor = 4;
+        let mut join_hash_map = JoinHashMap(RawTable::with_capacity(100));
+        let data_size = 2000;
+        let deleted_part = 3 * data_size / 4;
+        // Add elements to the JoinHashMap
+        for hash_value in 0..data_size {
+            join_hash_map.0.insert(
+                hash_value,
+                (hash_value, smallvec![hash_value]),
+                |(hash, _)| *hash,
+            );
+        }
+
+        assert_eq!(join_hash_map.0.len(), data_size as usize);
+        assert!(join_hash_map.0.capacity() >= data_size as usize);
+
+        // Remove some elements from the JoinHashMap
+        for hash_value in 0..deleted_part {
+            join_hash_map
+                .0
+                .remove_entry(hash_value, |(hash, _)| hash_value == *hash);
+        }
+
+        assert_eq!(join_hash_map.0.len(), (data_size - deleted_part) as usize);
+
+        // Old capacity
+        let old_capacity = join_hash_map.0.capacity();
+
+        // Test shrink_if_necessary
+        join_hash_map.shrink_if_necessary(scale_factor);
+
+        // The capacity should be reduced by the scale factor
+        let new_expected_capacity =
+            join_hash_map.0.capacity() * (scale_factor - 1) / scale_factor;
+        assert!(join_hash_map.0.capacity() >= new_expected_capacity);
+        assert!(join_hash_map.0.capacity() <= old_capacity);
     }
 }

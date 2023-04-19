@@ -18,14 +18,16 @@
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
     },
-    CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
-    PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    UnionFields, UnionMode,
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
@@ -33,17 +35,17 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::{
-    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
-    date_part, date_trunc, digest, exp,
+    abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
+    cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
+    date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, Sort, WindowFunction},
     floor, from_unixtime, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
-    regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
-    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
-    substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
+    regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
+    sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
+    strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
+    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetIndexedField, GroupingSet,
@@ -184,7 +186,7 @@ impl TryFrom<&protobuf::DfField> for DFField {
     type Error = Error;
 
     fn try_from(df_field: &protobuf::DfField) -> Result<Self, Self::Error> {
-        let field = df_field.field.as_ref().required("field")?;
+        let field: Field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
             Some(q) => DFField::from_qualified(q.relation.clone(), field),
@@ -279,7 +281,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 parse_i32_to_time_unit(time_unit)?,
                 match timezone.len() {
                     0 => None,
-                    _ => Some(timezone.to_owned()),
+                    _ => Some(timezone.as_str().into()),
                 },
             ),
             arrow_type::ArrowTypeEnum::Time32(time_unit) => {
@@ -298,25 +300,25 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
-                DataType::List(Box::new(list_type))
+                DataType::List(Arc::new(list_type))
             }
             arrow_type::ArrowTypeEnum::LargeList(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
-                DataType::LargeList(Box::new(list_type))
+                DataType::LargeList(Arc::new(list_type))
             }
             arrow_type::ArrowTypeEnum::FixedSizeList(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
                 let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type), list_size)
+                DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 strct
                     .sub_field_types
                     .iter()
-                    .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?,
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
                 let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
@@ -325,19 +327,19 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
                 };
-                let union_types = union
+                let union_fields = union
                     .union_types
                     .iter()
                     .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Field>, _>>()?;
 
                 // Default to index based type ids if not provided
-                let type_ids = match union.type_ids.is_empty() {
-                    true => (0..union_types.len() as i8).collect(),
+                let type_ids: Vec<_> = match union.type_ids.is_empty() {
+                    true => (0..union_fields.len() as i8).collect(),
                     false => union.type_ids.iter().map(|i| *i as i8).collect(),
                 };
 
-                DataType::Union(union_types, type_ids, union_mode)
+                DataType::Union(UnionFields::new(type_ids, union_fields), union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;
@@ -348,7 +350,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let field: Field =
                     map.as_ref().field_type.as_deref().required("field_type")?;
                 let keys_sorted = map.keys_sorted;
-                DataType::Map(Box::new(field), keys_sorted)
+                DataType::Map(Arc::new(field), keys_sorted)
             }
         })
     }
@@ -376,6 +378,12 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                     )
                 }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
+                AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
+                    PlanType::AnalyzedLogicalPlan {
+                        analyzer_name:analyzer_name.clone()
+                    }
+                }
+                FinalAnalyzedLogicalPlan(_) => PlanType::FinalAnalyzedLogicalPlan,
                 OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedLogicalPlan {
                         optimizer_name: optimizer_name.clone(),
@@ -400,16 +408,25 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Sqrt => Self::Sqrt,
+            ScalarFunction::Cbrt => Self::Cbrt,
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
             ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Acos => Self::Acos,
             ScalarFunction::Atan => Self::Atan,
+            ScalarFunction::Sinh => Self::Sinh,
+            ScalarFunction::Cosh => Self::Cosh,
+            ScalarFunction::Tanh => Self::Tanh,
+            ScalarFunction::Asinh => Self::Asinh,
+            ScalarFunction::Acosh => Self::Acosh,
+            ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Ln => Self::Ln,
             ScalarFunction::Log10 => Self::Log10,
+            ScalarFunction::Degrees => Self::Degrees,
+            ScalarFunction::Radians => Self::Radians,
             ScalarFunction::Floor => Self::Floor,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
@@ -467,6 +484,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
+            ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
@@ -581,7 +599,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 } = &scalar_list;
 
                 let field: Field = field.as_ref().required("field")?;
-                let field = Box::new(field);
+                let field = Arc::new(field);
 
                 let values: Result<Vec<ScalarValue>, Error> =
                     values.iter().map(|val| val.try_into()).collect();
@@ -636,7 +654,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let timezone = if v.timezone.is_empty() {
                     None
                 } else {
-                    Some(v.timezone.clone())
+                    Some(v.timezone.as_str().into())
                 };
 
                 let ts_value =
@@ -695,10 +713,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let fields = v
                     .fields
                     .iter()
-                    .map(|f| f.try_into())
-                    .collect::<Result<Vec<Field>, _>>()?;
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?;
 
-                Self::Struct(values, Box::new(fields))
+                Self::Struct(values, fields)
             }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))
@@ -1122,6 +1140,8 @@ pub fn parse_expr(
             match scalar_function {
                 ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Acos => Ok(acos(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Asinh => Ok(asinh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Acosh => Ok(acosh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Array => Ok(array(
                     args.to_owned()
                         .iter()
@@ -1129,17 +1149,29 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Tan => Ok(tan(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Tanh => Ok(tanh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Atanh => Ok(atanh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Degrees => Ok(degrees(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Radians => Ok(radians(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Round => Ok(round(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Round => Ok(round(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),
@@ -1298,6 +1330,7 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Power => Ok(power(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,

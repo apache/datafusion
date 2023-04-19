@@ -20,8 +20,9 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
+use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{OptimizerContext, OptimizerRule};
+use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -347,9 +348,11 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let config = OptimizerContext::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
+    let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
-    // optimize the logical plan
-    optimizer.optimize(&plan, &config, &observe)
+    // analyze and optimize the logical plan
+    let plan = analyzer.execute_and_check(&plan, config.options(), |_, _| {})?;
+    optimizer.optimize(&plan, &config, |_, _| {})
 }
 
 #[derive(Default)]
@@ -408,8 +411,6 @@ impl ContextProvider for MySchemaProvider {
         &self.options
     }
 }
-
-fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 struct MyTableSource {
     schema: SchemaRef,

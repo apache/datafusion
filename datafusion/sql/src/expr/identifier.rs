@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
 use datafusion_common::{
     Column, DFField, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
 };
@@ -47,7 +46,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // interpret names with '.' as if they were
             // compound identifiers, but this is not a compound
             // identifier. (e.g. it is "foo.bar" not foo.bar)
-            let normalize_ident = normalize_ident(id);
+            let normalize_ident = self.normalizer.normalize(id);
             match schema.field_with_unqualified_name(normalize_ident.as_str()) {
                 Ok(_) => {
                     // found a match without a qualified name, this is a inner table column
@@ -58,9 +57,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Err(_) => {
                     // check the outer_query_schema and try to find a match
-                    let outer_query_schema_opt =
-                        planner_context.outer_query_schema.as_ref();
-                    if let Some(outer) = outer_query_schema_opt {
+                    if let Some(outer) = planner_context.outer_query_schema() {
                         match outer.field_with_unqualified_name(normalize_ident.as_str())
                         {
                             Ok(field) => {
@@ -99,7 +96,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         if ids[0].value.starts_with('@') {
-            let var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
+            let var_names: Vec<_> = ids
+                .into_iter()
+                .map(|id| self.normalizer.normalize(id))
+                .collect();
             let ty = self
                 .schema_provider
                 .get_variable_type(&var_names)
@@ -112,13 +112,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let ids = ids
                 .into_iter()
-                .map(|id| {
-                    if self.options.enable_ident_normalization {
-                        normalize_ident(id)
-                    } else {
-                        id.value
-                    }
-                })
+                .map(|id| self.normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
             // Currently not supporting more than one nested level
@@ -159,10 +153,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             "Unsupported compound identifier: {ids:?}"
                         )))
                     } else {
-                        let outer_query_schema_opt =
-                            planner_context.outer_query_schema.as_ref();
                         // check the outer_query_schema and try to find a match
-                        if let Some(outer) = outer_query_schema_opt {
+                        if let Some(outer) = planner_context.outer_query_schema() {
                             let search_result = search_dfschema(&ids, outer);
                             match search_result {
                                 // found matching field with spare identifier(s) for nested field(s) in structure
