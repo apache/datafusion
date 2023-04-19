@@ -532,6 +532,8 @@ enum ScalarFunction {
   Cosh = 78;
   Tanh = 79;
   Pi = 80;
+  Degrees = 81;
+  Radians = 82;
 }
 
 message ScalarFunctionNode {

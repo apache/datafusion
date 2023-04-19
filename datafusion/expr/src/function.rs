@@ -288,11 +288,13 @@ pub fn return_type(
         | BuiltinScalarFunction::Ceil
         | BuiltinScalarFunction::Cos
         | BuiltinScalarFunction::Cosh
+        | BuiltinScalarFunction::Degrees
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Ln
         | BuiltinScalarFunction::Log10
         | BuiltinScalarFunction::Log2
+        | BuiltinScalarFunction::Radians
         | BuiltinScalarFunction::Round
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin

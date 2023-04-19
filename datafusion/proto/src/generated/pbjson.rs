@@ -17321,6 +17321,8 @@ impl serde::Serialize for ScalarFunction {
             Self::Cosh => "Cosh",
             Self::Tanh => "Tanh",
             Self::Pi => "Pi",
+            Self::Degrees => "Degrees",
+            Self::Radians => "Radians",
         };
         serializer.serialize_str(variant)
     }
@@ -17413,6 +17415,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cosh",
             "Tanh",
             "Pi",
+            "Degrees",
+            "Radians",
         ];
 
         struct GeneratedVisitor;
@@ -17536,6 +17540,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cosh" => Ok(ScalarFunction::Cosh),
                     "Tanh" => Ok(ScalarFunction::Tanh),
                     "Pi" => Ok(ScalarFunction::Pi),
+                    "Degrees" => Ok(ScalarFunction::Degrees),
+                    "Radians" => Ok(ScalarFunction::Radians),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

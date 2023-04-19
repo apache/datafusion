@@ -33,6 +33,7 @@
 - [ceil](#ceil)
 - [cos](#cos)
 - [cosh](#cosh)
+- [degrees](#degrees)
 - [exp](#exp)
 - [floor](#floor)
 - [ln](#ln)
@@ -42,6 +43,7 @@
 - [pi](#pi)
 - [power](#power)
 - [pow](#pow)
+- [radians](#radians)
 - [random](#random)
 - [round](#round)
 - [signum](#signum)
@@ -205,6 +207,19 @@ Returns the hyperbolic cosine of a number.
 cosh(numeric_expression)
 ```
 
+### `degrees`
+
+Converts radians to degrees.
+
+```
+degrees(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on.
@@ -322,6 +337,20 @@ power(base, exponent)
 ### `pow`
 
 _Alias of [power](#power)._
+
+### `radians`
+
+Converts degrees to radians.
+
+```
+radians(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+  =======
 
 ### `random`
 
