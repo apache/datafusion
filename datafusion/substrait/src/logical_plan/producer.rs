@@ -288,7 +288,16 @@ pub fn to_substrait_rel(
             // join schema from left and right to maintain all nececesary columns from inputs
             // note that we cannot simple use join.schema here since we discard some input columns
             // when performing semi and anti joins
-            let join_schema = join.left.schema().join(join.right.schema());
+            let join_schema = match join.left.schema().join(join.right.schema()) {
+                Ok(schema) => Ok(schema),
+                Err(DataFusionError::SchemaError(
+                    datafusion::common::SchemaError::DuplicateQualifiedField {
+                        qualifier: _,
+                        name: _,
+                    },
+                )) => Ok(join.schema.as_ref().clone()),
+                Err(e) => Err(e),
+            };
             if let Some(e) = join_expression {
                 Ok(Box::new(Rel {
                     rel_type: Some(RelType::Join(Box::new(JoinRel {
@@ -1333,11 +1342,11 @@ mod test {
     }
 
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
-        println!("Checking round trip of {:?}", scalar);
+        println!("Checking round trip of {scalar:?}");
 
         let substrait = to_substrait_literal(&scalar)?;
         let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
-            panic!("Expected Literal expression, got {:?}", substrait);
+            panic!("Expected Literal expression, got {substrait:?}");
         };
 
         let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;
