@@ -129,7 +129,7 @@ impl PhysicalExpr for CastExpr {
     ) -> Result<Vec<Option<Interval>>> {
         let child_interval = children[0];
         // Get child's datatype:
-        let cast_type = child_interval.get_datatype();
+        let cast_type = child_interval.get_datatype()?;
         Ok(vec![Some(
             interval.cast_to(&cast_type, &self.cast_options)?,
         )])

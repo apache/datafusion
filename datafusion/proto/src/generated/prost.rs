@@ -448,8 +448,8 @@ pub struct SelectionExecNode {
 pub struct SubqueryAliasNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(string, tag = "2")]
-    pub alias: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub alias: ::core::option::Option<OwnedTableReference>,
 }
 /// logical expressions
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2152,6 +2152,8 @@ pub enum ScalarFunction {
     Cosh = 78,
     Tanh = 79,
     Pi = 80,
+    Degrees = 81,
+    Radians = 82,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2241,6 +2243,8 @@ impl ScalarFunction {
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Tanh => "Tanh",
             ScalarFunction::Pi => "Pi",
+            ScalarFunction::Degrees => "Degrees",
+            ScalarFunction::Radians => "Radians",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2327,6 +2331,8 @@ impl ScalarFunction {
             "Cosh" => Some(Self::Cosh),
             "Tanh" => Some(Self::Tanh),
             "Pi" => Some(Self::Pi),
+            "Degrees" => Some(Self::Degrees),
+            "Radians" => Some(Self::Radians),
             _ => None,
         }
     }

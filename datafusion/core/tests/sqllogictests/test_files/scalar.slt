@@ -166,6 +166,18 @@ select ceil(null);
 ----
 NULL
 
+# degrees scalar function
+query RRR rowsort
+select degrees(0), degrees(pi() / 2), degrees(pi());
+----
+0 90 180
+
+# degrees scalar nulls
+query R rowsort
+select degrees(null);
+----
+NULL
+
 # cos scalar function
 query RRR rowsort
 select cos(0), cos(pi() / 3), cos(pi() / 2);
@@ -339,6 +351,18 @@ NULL
 # power scalar nulls 2
 query R rowsort
 select power(null, null);
+----
+NULL
+
+# radians scalar function
+query RRR rowsort
+select radians(0), radians(90), radians(180);
+----
+0 1.570796326795 3.14159265359
+
+# radians scalar nulls
+query R rowsort
+select radians(null);
 ----
 NULL
 

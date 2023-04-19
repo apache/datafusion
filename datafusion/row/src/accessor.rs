@@ -17,7 +17,7 @@
 
 //! [`RowAccessor`] provides a Read/Write/Modify access for row with all fixed-sized fields:
 
-use crate::layout::{RowLayout, RowType};
+use crate::layout::RowLayout;
 use crate::validity::NullBitsFormatter;
 use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx};
 use arrow::datatypes::{DataType, Schema};
@@ -116,9 +116,9 @@ macro_rules! fn_get_idx_scalar {
 
 impl<'a> RowAccessor<'a> {
     /// new
-    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+    pub fn new(schema: &Schema) -> Self {
         Self {
-            layout: Arc::new(RowLayout::new(schema, row_type)),
+            layout: Arc::new(RowLayout::new(schema)),
             data: &mut [],
             base_offset: 0,
         }

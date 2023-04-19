@@ -51,13 +51,13 @@ use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
-use datafusion_row::{MutableRecordBatch, RowType};
+use datafusion_row::MutableRecordBatch;
 use hashbrown::raw::RawTable;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
 /// For each aggregation entry, we use:
-/// - [Compact] row represents grouping keys for fast hash computation and comparison directly on raw bytes.
+/// - [Arrow-row] represents grouping keys for fast hash computation and comparison directly on raw bytes.
 /// - [WordAligned] row to store aggregation state, designed to be CPU-friendly when updates over every field are often.
 ///
 /// The architecture is the following:
@@ -68,8 +68,8 @@ use hashbrown::raw::RawTable;
 /// 4. The state's RecordBatch is `merge`d to a new state
 /// 5. The state is mapped to the final value
 ///
-/// [Compact]: datafusion_row::layout::RowType::Compact
-/// [WordAligned]: datafusion_row::layout::RowType::WordAligned
+/// [Arrow-row]: OwnedRow
+/// [WordAligned]: datafusion_row::layout
 pub(crate) struct GroupedHashAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
@@ -203,8 +203,7 @@ impl GroupedHashAggregateStream {
                 .collect(),
         )?;
 
-        let row_aggr_layout =
-            Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
+        let row_aggr_layout = Arc::new(RowLayout::new(&row_aggr_schema));
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let aggr_state = AggregationState {
@@ -632,15 +631,14 @@ impl GroupedHashAggregateStream {
         // Store row accumulator results (either final output or intermediate state):
         let row_columns = match self.mode {
             AggregateMode::Partial => {
-                read_as_batch(&state_buffers, &self.row_aggr_schema, RowType::WordAligned)
+                read_as_batch(&state_buffers, &self.row_aggr_schema)
             }
             AggregateMode::Final
             | AggregateMode::FinalPartitioned
             | AggregateMode::Single => {
                 let mut results = vec![];
                 for (idx, acc) in self.row_accumulators.iter().enumerate() {
-                    let mut state_accessor =
-                        RowAccessor::new(&self.row_aggr_schema, RowType::WordAligned);
+                    let mut state_accessor = RowAccessor::new(&self.row_aggr_schema);
                     let current = state_buffers
                         .iter_mut()
                         .map(|buffer| {
@@ -727,10 +725,10 @@ impl GroupedHashAggregateStream {
     }
 }
 
-fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
+fn read_as_batch(rows: &[Vec<u8>], schema: &Schema) -> Vec<ArrayRef> {
     let row_num = rows.len();
     let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
-    let mut row = RowReader::new(schema, row_type);
+    let mut row = RowReader::new(schema);
 
     for data in rows {
         row.point_to(0, data);

@@ -180,11 +180,7 @@ impl PhysicalExpr for DateTimeIntervalExpr {
         let left_interval = children[0];
         let right_interval = children[1];
         let (left, right) = if self.op.is_comparison_operator() {
-            if let Interval {
-                lower: ScalarValue::Boolean(Some(false)),
-                upper: ScalarValue::Boolean(Some(false)),
-            } = interval
-            {
+            if interval == &Interval::CERTAINLY_FALSE {
                 // TODO: We will handle strictly false clauses by negating
                 //       the comparison operator (e.g. GT to LE, LT to GE)
                 //       once open/closed intervals are supported.
