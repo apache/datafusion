@@ -589,32 +589,37 @@ fn analyze_window_sort_removal(
     let partitionby_exprs = window_expr[0].partition_by();
     let orderby_sort_keys = window_expr[0].order_by();
 
-    let mut searching = true;
-    let mut search_flags = (false, PartitionSearchMode::Sorted);
+    // search_flags stores return value of the can_skip_sort.
+    // `None` case represents `SortExec` cannot be removed.
+    // `PartitionSearch` mode stores at which mode executor should work to remove
+    // `SortExec` before it,
+    // `bool` stores whether or not we need to reverse window expressions to remove `SortExec`.
+    let mut search_flags = None;
     for sort_any in sort_tree.get_leaves() {
         // Variable `sort_any` will either be a `SortExec` or a
         // `SortPreservingMergeExec`, and both have a single child.
         // Therefore, we can use the 0th index without loss of generality.
         let sort_input = &sort_any.children()[0];
-        if let Some(flags) =
-            can_skip_sort(partitionby_exprs, orderby_sort_keys, sort_input)?
-        {
-            if searching || search_flags == flags {
-                (searching, search_flags) = (false, flags);
-                continue;
-            }
+        let flags = can_skip_sort(partitionby_exprs, orderby_sort_keys, sort_input)?;
+        if flags.is_some() && (search_flags.is_none() || search_flags == flags) {
+            search_flags = flags;
+            continue;
         }
         // We can not skip the sort, or window reversal requirements are not
         // uniform; then sort removal is not possible -- we immediately return.
         return Ok(None);
     }
-
-    let (should_reverse, partition_search_mode) = search_flags;
-    let source_unbounded = unbounded_output(window_exec);
-    if searching
-        || (!source_unbounded && partition_search_mode != PartitionSearchMode::Sorted)
+    let (should_reverse, partition_search_mode) = if let Some(search_flags) = search_flags
     {
-        // If we can not skip the sort or removing it is not helpful, return:
+        search_flags
+    } else {
+        // We can not skip the sort return:
+        return Ok(None);
+    };
+    let is_unbounded = unbounded_output(window_exec);
+    if !is_unbounded && partition_search_mode != PartitionSearchMode::Sorted {
+        // Executor has bounded input and `partition_search_mode` is not `PartitionSearchMode::Sorted`
+        // in this case removing the sort is not helpful, return:
         return Ok(None);
     };
 
