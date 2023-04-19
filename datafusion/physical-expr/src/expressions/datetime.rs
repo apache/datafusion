@@ -22,8 +22,7 @@ use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::Result;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::coerce_types;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
@@ -231,7 +230,7 @@ mod tests {
     use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
     use datafusion_common::delta::shift_months;
-    use datafusion_common::{Column, Result, ToDFSchema};
+    use datafusion_common::{Column, Result, ScalarValue, ToDFSchema};
     use datafusion_expr::Expr;
     use std::ops::Add;
 
