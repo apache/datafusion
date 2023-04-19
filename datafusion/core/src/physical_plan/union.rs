@@ -316,7 +316,7 @@ pub struct InterleaveExec {
     inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Schema of Union
+    /// Schema of Interleave
     schema: SchemaRef,
 }
 
@@ -365,7 +365,7 @@ impl ExecutionPlan for InterleaveExec {
         self.inputs.clone()
     }
 
-    /// Output of the union is the combination of all output partitions of the inputs
+    /// Output of the interleave is the combination of all output partitions of the inputs
     fn output_partitioning(&self) -> Partitioning {
         self.inputs[0].output_partitioning()
     }
@@ -375,28 +375,7 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        // If the Union has an output ordering, it maintains at least one
-        // child's ordering (i.e. the meet).
-        // For instance, assume that the first child is SortExpr('a','b','c'),
-        // the second child is SortExpr('a','b') and the third child is
-        // SortExpr('a','b'). The output ordering would be SortExpr('a','b'),
-        // which is the "meet" of all input orderings. In this example, this
-        // function will return vec![false, true, true], indicating that we
-        // preserve the orderings for the 2nd and the 3rd children.
-        if let Some(output_ordering) = self.output_ordering() {
-            self.inputs()
-                .iter()
-                .map(|child| {
-                    if let Some(child_ordering) = child.output_ordering() {
-                        output_ordering.len() == child_ordering.len()
-                    } else {
-                        false
-                    }
-                })
-                .collect()
-        } else {
-            vec![false; self.inputs().len()]
-        }
+        vec![false; self.inputs().len()]
     }
 
     fn with_new_children(
@@ -435,10 +414,10 @@ impl ExecutionPlan for InterleaveExec {
             return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
         }
 
-        warn!("Error in Union: Partition {} not found", partition);
+        warn!("Error in InterleaveExec: Partition {} not found", partition);
 
         Err(crate::error::DataFusionError::Execution(format!(
-            "Partition {partition} not found in Union"
+            "Partition {partition} not found in InterleaveExec"
         )))
     }
 
