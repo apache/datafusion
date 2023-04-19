@@ -279,21 +279,19 @@ pub(crate) fn add_decimal_dyn_scalar(left: &dyn Array, right: i128) -> Result<Ar
 
 pub(crate) fn add_dyn_temporal(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
     match (left.data_type(), right.data_type()) {
-        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
-            ts_array_op(left, right)
-        }
-        (DataType::Interval(_), DataType::Interval(_)) => {
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => ts_array_op(left, right),
+        (DataType::Interval(..), DataType::Interval(..)) => {
             interval_array_op(left, right, 1)
         }
-        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
             ts_interval_array_op(left, 1, right)
         }
-        (DataType::Interval(_), DataType::Timestamp(_, _)) => {
+        (DataType::Interval(..), DataType::Timestamp(..)) => {
             ts_interval_array_op(right, 1, left)
         }
-        (_, _) => {
+        _ => {
             // fall back to kernels in arrow-rs
-            Ok(arrow::compute::add_dyn(left, right)?)
+            Ok(add_dyn(left, right)?)
         }
     }
 }
@@ -303,32 +301,29 @@ pub(crate) fn add_dyn_temporal_scalar(
     right: &ScalarValue,
 ) -> Result<ColumnarValue> {
     match (left.data_type(), right.get_datatype()) {
-        (DataType::Date32, DataType::Interval(_)) => {
+        (DataType::Date32, DataType::Interval(..)) => {
             let left = as_date32_array(&left)?;
             let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
                 Ok(date32_add(days, right, 1)?)
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
-        (DataType::Date64, DataType::Interval(_)) => {
+        (DataType::Date64, DataType::Interval(..)) => {
             let left = as_date64_array(&left)?;
             let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
                 Ok(date64_add(ms, right, 1)?)
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
-        (DataType::Interval(_), DataType::Interval(_)) => {
+        (DataType::Interval(..), DataType::Interval(..)) => {
             interval_scalar_interval_op(left, 1, right)
         }
-        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
             ts_scalar_interval_op(left, 1, right)
         }
-        (_, _) => {
+        _ => {
             // fall back to kernels in arrow-rs
-            Ok(ColumnarValue::Array(arrow::compute::add_dyn(
-                left,
-                &right.to_array(),
-            )?))
+            Ok(ColumnarValue::Array(add_dyn(left, &right.to_array())?))
         }
     }
 }
@@ -348,21 +343,19 @@ pub(crate) fn subtract_dyn_temporal(
     right: &ArrayRef,
 ) -> Result<ArrayRef> {
     match (left.data_type(), right.data_type()) {
-        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
-            ts_array_op(left, right)
-        }
-        (DataType::Interval(_), DataType::Interval(_)) => {
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => ts_array_op(left, right),
+        (DataType::Interval(..), DataType::Interval(..)) => {
             interval_array_op(left, right, -1)
         }
-        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
             ts_interval_array_op(left, -1, right)
         }
-        (DataType::Interval(_), DataType::Timestamp(_, _)) => {
+        (DataType::Interval(..), DataType::Timestamp(..)) => {
             ts_interval_array_op(right, -1, left)
         }
-        (_, _) => {
+        _ => {
             // fall back to kernels in arrow-rs
-            Ok(arrow::compute::subtract_dyn(left, right)?)
+            Ok(subtract_dyn(left, right)?)
         }
     }
 }
@@ -372,35 +365,32 @@ pub(crate) fn subtract_dyn_temporal_scalar(
     right: &ScalarValue,
 ) -> Result<ColumnarValue> {
     match (left.data_type(), right.get_datatype()) {
-        (DataType::Date32, DataType::Interval(_)) => {
+        (DataType::Date32, DataType::Interval(..)) => {
             let left = as_date32_array(&left)?;
             let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
                 Ok(date32_add(days, right, -1)?)
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
-        (DataType::Date64, DataType::Interval(_)) => {
+        (DataType::Date64, DataType::Interval(..)) => {
             let left = as_date64_array(&left)?;
             let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
                 Ok(date64_add(ms, right, -1)?)
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
-        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => {
             ts_scalar_ts_op(left, right)
         }
-        (DataType::Interval(_), DataType::Interval(_)) => {
+        (DataType::Interval(..), DataType::Interval(..)) => {
             interval_scalar_interval_op(left, -1, right)
         }
-        (DataType::Timestamp(_, _), DataType::Interval(_)) => {
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
             ts_scalar_interval_op(left, -1, right)
         }
-        (_, _) => {
+        _ => {
             // fall back to kernels in arrow-rs
-            Ok(ColumnarValue::Array(arrow::compute::subtract_dyn(
-                left,
-                &right.to_array(),
-            )?))
+            Ok(ColumnarValue::Array(subtract_dyn(left, &right.to_array())?))
         }
     }
 }
