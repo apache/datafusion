@@ -164,14 +164,6 @@ impl FirstSelector {
         .into()
     }
 
-    fn update(&mut self, val: f64, time: i64) {
-        // remember the point with the earliest timestamp
-        if time < self.time {
-            self.value = val;
-            self.time = time;
-        }
-    }
-
     // output data type
     fn output_datatype() -> DataType {
         DataType::Struct(Self::fields())
@@ -228,7 +220,10 @@ impl Accumulator for FirstSelector {
         // Update the actual values
         for (value, time) in v.iter().zip(t.iter()) {
             if let (Some(time), Some(value)) = (time, value) {
-                self.update(value, time)
+                if time < self.time {
+                    self.value = value;
+                    self.time = time;
+                }
             }
         }
 
