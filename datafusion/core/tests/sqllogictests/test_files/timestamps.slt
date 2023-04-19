@@ -502,14 +502,34 @@ FROM (
 
 # different input timestamp type
 query P
-SELECT DATE_BIN(INTERVAL '7 days', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
 ----
-2022-07-28T00:00:00
+2022-08-03T14:30:00
 
 query T
-SELECT arrow_typeof(DATE_BIN(INTERVAL '7 days', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Microsecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
 ----
 Timestamp(Millisecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Second, None)
 
 ###
 ## test date_trunc function
