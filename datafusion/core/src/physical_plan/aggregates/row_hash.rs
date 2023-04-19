@@ -25,6 +25,7 @@ use std::vec;
 
 use ahash::RandomState;
 use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow_array::NullArray;
 use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -40,7 +41,10 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray, UInt32Builder};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, PrimitiveArray,
+    UInt32Builder,
+};
 use arrow::compute::{cast, filter};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
 use arrow::{compute, datatypes::SchemaRef, record_batch::RecordBatch};
@@ -772,22 +776,22 @@ fn slice_and_maybe_filter(
     filter_opt: Option<&Arc<dyn Array>>,
     offsets: &[usize],
 ) -> Result<Vec<ArrayRef>> {
-    let sliced_arrays: Vec<ArrayRef> = aggr_array
-        .iter()
-        .map(|array| array.slice(offsets[0], offsets[1] - offsets[0]))
-        .collect();
+    let null_array = Arc::new(NullArray::new(0)) as ArrayRef;
+    let mut sliced_arrays: Vec<ArrayRef> = vec![null_array; aggr_array.len()];
 
-    let filtered_arrays = match filter_opt.as_ref() {
-        Some(f) => {
-            let sliced = f.slice(offsets[0], offsets[1] - offsets[0]);
-            let filter_array = as_boolean_array(&sliced)?;
+    if let Some(f) = filter_opt {
+        let sliced = f.slice(offsets[0], offsets[1] - offsets[0]);
+        let filter_array = as_boolean_array(&sliced)?;
 
-            sliced_arrays
-                .iter()
-                .map(|array| filter(array, filter_array).unwrap())
-                .collect::<Vec<ArrayRef>>()
+        for (i, arr) in aggr_array.iter().enumerate() {
+            let sliced = &arr.slice(offsets[0], offsets[1] - offsets[0]);
+            sliced_arrays[i] = filter(sliced, filter_array).unwrap();
         }
-        None => sliced_arrays,
-    };
-    Ok(filtered_arrays)
+    } else {
+        for (i, arr) in aggr_array.iter().enumerate() {
+            sliced_arrays[i] = arr.slice(offsets[0], offsets[1] - offsets[0]);
+        }
+    }
+
+    Ok(sliced_arrays)
 }
