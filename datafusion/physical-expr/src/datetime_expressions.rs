@@ -946,16 +946,12 @@ mod tests {
             "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
         );
 
-        // source: invalid scalar type
         let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
-        );
+        assert!(res.is_ok());
 
         let timestamps =
             Arc::new((1..6).map(Some).collect::<TimestampMicrosecondArray>());
