@@ -208,7 +208,8 @@ impl From<EquivalenceProperties> for OrderingEquivalenceProperties {
 }
 
 #[derive(Clone, Hash, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-/// Remove below struct once, SortOptions support Hashing
+/// This struct is Hashable version of the `SortOptions`
+/// TODO: Remove below struct once, `SortOptions` support Hashing
 pub struct SortOptions2 {
     /// Whether to sort in descending order
     pub descending: bool,
@@ -253,7 +254,7 @@ pub fn project_equivalence_properties(
             }
         }
         if !find_match {
-            ec_classes.push(EquivalentClassGen::new(column.clone(), columns.clone()));
+            ec_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
         }
     }
 
@@ -288,25 +289,13 @@ pub fn project_equivalence_properties_ordered(
     for (column, columns) in alias_map {
         let mut find_match = false;
         for class in ec_classes.iter_mut() {
-            let mut matching_entry = None;
-            if class.head.col.eq(column) {
-                matching_entry = Some(class.head.clone());
-            }
-            if matching_entry.is_none() {
-                for elem in &class.others {
-                    if elem.col.eq(column) {
-                        matching_entry = Some(elem.clone());
-                        break;
-                    }
-                }
-            }
-            if let Some(elem) = matching_entry {
+            if let Some(OrderedColumn { options, .. }) =
+                get_matching_column(class, column)
+            {
                 // Matching entry found
                 for col in columns {
-                    let ordered_column = OrderedColumn {
-                        col: col.clone(),
-                        options: elem.options,
-                    };
+                    let col = col.clone();
+                    let ordered_column = OrderedColumn { col, options };
                     class.insert(ordered_column);
                 }
                 find_match = true;
@@ -314,13 +303,13 @@ pub fn project_equivalence_properties_ordered(
             }
         }
         if !find_match {
-            let new_columns = columns
+            let new_ordered_cols = columns
                 .iter()
                 .map(|elem| elem.clone().into())
                 .collect::<Vec<_>>();
-            ec_classes.push(EquivalentClassGen::<OrderedColumn>::new(
+            ec_classes.push(OrderingEquivalentClass::new(
                 column.clone().into(),
-                new_columns,
+                new_ordered_cols,
             ));
         }
     }
@@ -341,6 +330,26 @@ pub fn project_equivalence_properties_ordered(
     }
     ec_classes.retain(|props| props.len() > 1);
     output_eq.extend(ec_classes);
+}
+
+/// Finds matching column inside OrderingEquivalentClass.
+fn get_matching_column(
+    class: &OrderingEquivalentClass,
+    column: &Column,
+) -> Option<OrderedColumn> {
+    let mut matching_entry = None;
+    if class.head.col.eq(column) {
+        matching_entry = Some(class.head.clone());
+    }
+    if matching_entry.is_none() {
+        for elem in &class.others {
+            if elem.col.eq(column) {
+                matching_entry = Some(elem.clone());
+                break;
+            }
+        }
+    }
+    matching_entry
 }
 
 #[cfg(test)]
