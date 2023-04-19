@@ -51,7 +51,7 @@ use crate::physical_plan::windows::{
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_physical_expr::equivalence::{
-    OrderedColumn, OrderingEquivalenceProperties, SortOptions2,
+    OrderedColumn, OrderingEquivalenceProperties, OrderingEquivalentClass, SortOptions2,
 };
 use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::window::{
@@ -59,7 +59,7 @@ use datafusion_physical_expr::window::{
     PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, EquivalentClassGen, PhysicalExpr, PhysicalSortRequirement,
+    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
 };
 use indexmap::IndexMap;
 use log::debug;
@@ -201,13 +201,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .classes()
             .iter()
             .map(|elem| (*elem).clone().into())
-            .collect::<Vec<EquivalentClassGen<OrderedColumn>>>();
+            .collect::<Vec<OrderingEquivalentClass>>();
         res.extend(eq_classes);
-        let mut eq_classes = vec![];
         let out_ordering = self.output_ordering().unwrap_or(&[]);
         if let Some(first) = out_ordering.first() {
             if let Some(column) = first.expr.as_any().downcast_ref::<Column>() {
-                let mut columns = vec![column.clone()];
                 for expr in &self.window_expr {
                     if let Some(builtin_window_expr) =
                         expr.as_any().downcast_ref::<BuiltInWindowExpr>()
@@ -222,7 +220,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
                                 .column_with_name(expr.field().unwrap().name());
                             if let Some((idx, elem)) = tmp {
                                 let new_col = Column::new(elem.name(), idx);
-                                columns.push(new_col.clone());
                                 let lhs = OrderedColumn {
                                     col: column.clone(),
                                     options: Some(first.options.into()),
@@ -239,8 +236,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
                         }
                     }
                 }
-
-                eq_classes.push(EquivalentClassGen::new(column.clone(), columns.clone()));
             }
         }
         res
