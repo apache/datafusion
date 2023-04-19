@@ -371,6 +371,8 @@ fn date_bin_impl(
     array: &ColumnarValue,
     origin: &ColumnarValue,
 ) -> Result<ColumnarValue> {
+    println!("{stride:?}--{array:?}--{origin:?}");
+
     let stride = match stride {
         ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(v))) => {
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
@@ -434,6 +436,12 @@ fn date_bin_impl(
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(f(*v), tz_opt.clone()))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                f(v.map(|v| v * 1_000_000)).map(|v| v / 1_000_000),
+                tz_opt.clone(),
+            ))
         }
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
