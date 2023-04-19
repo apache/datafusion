@@ -157,7 +157,7 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  # Run `cargo doc` to ensure
+  # Run `cargo doc` to ensure the rustdoc is clean
   linux-rustdoc:
     name: cargo doc
     needs: [ linux-build-lib ]
@@ -170,7 +170,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run cargo doc
         run: |
           export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
