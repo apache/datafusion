@@ -164,6 +164,8 @@ math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
+math_unary_function!("degrees", to_degrees);
+math_unary_function!("radians", to_radians);
 
 /// Pi SQL function
 pub fn pi(args: &[ColumnarValue]) -> Result<ColumnarValue> {
