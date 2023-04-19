@@ -173,7 +173,7 @@ jobs:
       # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run cargo doc
         run: |
-          export RUSTDOCFLAGS= "-D warnings -A rustdoc::private-intra-doc-links"
+          export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
           cargo doc --document-private-items --no-deps --workspace
 
   # verify that the benchmark queries return the correct results
