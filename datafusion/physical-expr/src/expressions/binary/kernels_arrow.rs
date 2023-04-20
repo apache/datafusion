@@ -29,8 +29,8 @@ use arrow_schema::DataType;
 use datafusion_common::cast::{as_date32_array, as_date64_array, as_decimal128_array};
 use datafusion_common::scalar::{date32_add, date64_add};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
 use datafusion_expr::type_coercion::binary::decimal_op_mathematics_type;
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::Operator;
 use std::sync::Arc;
 
