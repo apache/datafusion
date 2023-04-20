@@ -85,7 +85,7 @@ pub fn channels<T>(
 
 /// Erroring during [send](DistributionSender::send).
 ///
-/// This occurs when the [receiver](DistributedReceiver) is gone.
+/// This occurs when the [receiver](DistributionReceiver) is gone.
 #[derive(PartialEq, Eq)]
 pub struct SendError<T>(pub T);
 

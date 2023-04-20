@@ -31,6 +31,7 @@ use futures::stream::{Stream, StreamExt};
 
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AccumulatorItem,
     AggregateMode, AggregationOrdering, GroupByOrderMode, PhysicalGroupBy,
@@ -40,7 +41,7 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use arrow::array::*;
 use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray, UInt32Builder};
 use arrow::compute::{cast, filter, SortColumn};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
@@ -54,13 +55,14 @@ use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
-use datafusion_row::{MutableRecordBatch, RowType};
+use datafusion_row::MutableRecordBatch;
 use hashbrown::raw::RawTable;
+use itertools::izip;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
 /// For each aggregation entry, we use:
-/// - [Compact] row represents grouping keys for fast hash computation and comparison directly on raw bytes.
+/// - [Arrow-row] represents grouping keys for fast hash computation and comparison directly on raw bytes.
 /// - [WordAligned] row to store aggregation state, designed to be CPU-friendly when updates over every field are often.
 ///
 /// The architecture is the following:
@@ -71,8 +73,8 @@ use hashbrown::raw::RawTable;
 /// 4. The state's RecordBatch is `merge`d to a new state
 /// 5. The state is mapped to the final value
 ///
-/// [Compact]: datafusion_row::layout::RowType::Compact
-/// [WordAligned]: datafusion_row::layout::RowType::WordAligned
+/// [Arrow-row]: OwnedRow
+/// [WordAligned]: datafusion_row::layout
 pub(crate) struct GroupedHashAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
@@ -210,8 +212,7 @@ impl GroupedHashAggregateStream {
                 .collect(),
         )?;
 
-        let row_aggr_layout =
-            Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
+        let row_aggr_layout = Arc::new(RowLayout::new(&row_aggr_schema));
 
         let name = format!("GroupedHashAggregateStream[{partition}]");
         let aggr_state = AggregationState {
@@ -562,7 +563,7 @@ impl GroupedHashAggregateStream {
 
     // Update the accumulator results, according to aggr_state.
     #[allow(clippy::too_many_arguments)]
-    fn update_accumulators(
+    fn update_accumulators_using_batch(
         &mut self,
         groups_with_rows: &[usize],
         offsets: &[usize],
@@ -643,6 +644,55 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
+    // Update the accumulator results, according to row_aggr_state.
+    fn update_accumulators_using_scalar(
+        &mut self,
+        groups_with_rows: &[usize],
+        row_values: &[Vec<ArrayRef>],
+        row_filter_values: &[Option<ArrayRef>],
+    ) -> Result<()> {
+        let filter_bool_array = row_filter_values
+            .iter()
+            .map(|filter_opt| match filter_opt {
+                Some(f) => Ok(Some(as_boolean_array(f)?)),
+                None => Ok(None),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        for group_idx in groups_with_rows {
+            let group_state = &mut self.aggr_state.group_states[*group_idx];
+            let mut state_accessor =
+                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                for (accumulator, values_array, filter_array) in izip!(
+                    self.row_accumulators.iter_mut(),
+                    row_values.iter(),
+                    filter_bool_array.iter()
+                ) {
+                    if values_array.len() == 1 {
+                        let scalar_value =
+                            col_to_scalar(&values_array[0], filter_array, *idx as usize)?;
+                        accumulator.update_scalar(&scalar_value, &mut state_accessor)?;
+                    } else {
+                        let scalar_values = values_array
+                            .iter()
+                            .map(|array| {
+                                col_to_scalar(array, filter_array, *idx as usize)
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        accumulator
+                            .update_scalar_values(&scalar_values, &mut state_accessor)?;
+                    }
+                }
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
+    }
+
     /// Perform group-by aggregation for the given [`RecordBatch`].
     ///
     /// If successful, this returns the additional number of bytes that were allocated during this process.
@@ -708,50 +758,68 @@ impl GroupedHashAggregateStream {
                 self.update_group_state(group_values, &mut allocated)?
             };
 
-            // Collect all indices + offsets based on keys in this vec
-            let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
-            let mut offsets = vec![0];
-            let mut offset_so_far = 0;
-            for &group_idx in groups_with_rows.iter() {
-                let indices = &self.aggr_state.group_states[group_idx].indices;
-                batch_indices.append_slice(indices);
-                offset_so_far += indices.len();
-                offsets.push(offset_so_far);
-            }
-            let batch_indices = batch_indices.finish();
-
-            let row_filter_values =
-                get_optional_filters(&row_filter_values, &batch_indices);
-            let normal_filter_values =
-                get_optional_filters(&normal_filter_values, &batch_indices);
-            if self
-                .state
-                .as_ref()
-                .map_or(false, |s| s.mode == GroupByOrderMode::Ordered)
+            // Decide the accumulators update mode, use scalar value to update the accumulators when all of the conditions are meet:
+            // 1) The aggregation mode is Partial or Single
+            // 2) There is not normal aggregation expressions
+            // 3) The number of affected groups is high (entries in `aggr_state` have rows need to update). Usually the high cardinality case
+            if matches!(self.mode, AggregateMode::Partial | AggregateMode::Single)
+                && normal_aggr_input_values.is_empty()
+                && normal_filter_values.is_empty()
+                && groups_with_rows.len() >= batch.num_rows() / 10
+                && false
             {
-                self.update_accumulators(
+                self.update_accumulators_using_scalar(
                     &groups_with_rows,
-                    &offsets,
                     &row_aggr_input_values,
-                    &normal_aggr_input_values,
                     &row_filter_values,
-                    &normal_filter_values,
-                    &mut allocated,
                 )?;
             } else {
-                let row_values = get_at_indices(&row_aggr_input_values, &batch_indices)?;
-                let normal_values =
-                    get_at_indices(&normal_aggr_input_values, &batch_indices)?;
-                self.update_accumulators(
-                    &groups_with_rows,
-                    &offsets,
-                    &row_values,
-                    &normal_values,
-                    &row_filter_values,
-                    &normal_filter_values,
-                    &mut allocated,
-                )?;
-            };
+                // Collect all indices + offsets based on keys in this vec
+                let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
+                let mut offsets = vec![0];
+                let mut offset_so_far = 0;
+                for &group_idx in groups_with_rows.iter() {
+                    let indices = &self.aggr_state.group_states[group_idx].indices;
+                    batch_indices.append_slice(indices);
+                    offset_so_far += indices.len();
+                    offsets.push(offset_so_far);
+                }
+                let batch_indices = batch_indices.finish();
+
+                let row_filter_values =
+                    get_optional_filters(&row_filter_values, &batch_indices);
+                let normal_filter_values =
+                    get_optional_filters(&normal_filter_values, &batch_indices);
+                if self
+                    .state
+                    .as_ref()
+                    .map_or(false, |s| s.mode == GroupByOrderMode::Ordered)
+                {
+                    self.update_accumulators_using_batch(
+                        &groups_with_rows,
+                        &offsets,
+                        &row_aggr_input_values,
+                        &normal_aggr_input_values,
+                        &row_filter_values,
+                        &normal_filter_values,
+                        &mut allocated,
+                    )?;
+                } else {
+                    let row_values =
+                        get_at_indices(&row_aggr_input_values, &batch_indices)?;
+                    let normal_values =
+                        get_at_indices(&normal_aggr_input_values, &batch_indices)?;
+                    self.update_accumulators_using_batch(
+                        &groups_with_rows,
+                        &offsets,
+                        &row_values,
+                        &normal_values,
+                        &row_filter_values,
+                        &normal_filter_values,
+                        &mut allocated,
+                    )?;
+                };
+            }
         }
         allocated += self
             .row_converter
@@ -902,15 +970,14 @@ impl GroupedHashAggregateStream {
         // Store row accumulator results (either final output or intermediate state):
         let row_columns = match self.mode {
             AggregateMode::Partial => {
-                read_as_batch(&state_buffers, &self.row_aggr_schema, RowType::WordAligned)
+                read_as_batch(&state_buffers, &self.row_aggr_schema)
             }
             AggregateMode::Final
             | AggregateMode::FinalPartitioned
             | AggregateMode::Single => {
                 let mut results = vec![];
                 for (idx, acc) in self.row_accumulators.iter().enumerate() {
-                    let mut state_accessor =
-                        RowAccessor::new(&self.row_aggr_schema, RowType::WordAligned);
+                    let mut state_accessor = RowAccessor::new(&self.row_aggr_schema);
                     let current = state_buffers
                         .iter_mut()
                         .map(|buffer| {
@@ -1005,10 +1072,10 @@ impl GroupedHashAggregateStream {
     }
 }
 
-fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
+fn read_as_batch(rows: &[Vec<u8>], schema: &Schema) -> Vec<ArrayRef> {
     let row_num = rows.len();
     let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
-    let mut row = RowReader::new(schema, row_type);
+    let mut row = RowReader::new(schema);
 
     for data in rows {
         row.point_to(0, data);
@@ -1070,4 +1137,22 @@ fn slice_and_maybe_filter(
         None => sliced_arrays,
     };
     Ok(filtered_arrays)
+}
+
+/// This method is similar to Scalar::try_from_array except for the Null handling.
+/// This method returns [ScalarValue::Null] instead of [ScalarValue::Type(None)]
+fn col_to_scalar(
+    array: &ArrayRef,
+    filter: &Option<&BooleanArray>,
+    row_index: usize,
+) -> Result<ScalarValue> {
+    if array.is_null(row_index) {
+        return Ok(ScalarValue::Null);
+    }
+    if let Some(filter) = filter {
+        if !filter.value(row_index) {
+            return Ok(ScalarValue::Null);
+        }
+    }
+    ScalarValue::try_from_array(array, row_index)
 }

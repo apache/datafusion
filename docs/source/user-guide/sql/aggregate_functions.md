@@ -27,6 +27,7 @@ Aggregate functions operate on a set of values to compute a single result.
 - [count](#count)
 - [max](#max)
 - [mean](#mean)
+- [median](#median)
 - [min](#min)
 - [sum](#sum)
 - [array_agg](#array_agg)
@@ -82,6 +83,19 @@ max(expression)
 
 _Alias of [avg](#avg)._
 
+### `median`
+
+Returns the median value in the specified column.
+
+```
+median(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `min`
 
 Returns the minimum value in the specified column.
@@ -110,7 +124,16 @@ sum(expression)
 
 ### `array_agg`
 
-<!-- TODO: Add array_agg documentation -->
+Returns an array created from the expression elements.
+
+```
+array_agg(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ## Statistical
 

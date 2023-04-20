@@ -544,6 +544,57 @@ async fn count_multi_expr() -> Result<()> {
 }
 
 #[tokio::test]
+async fn count_multi_expr_group_by() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+        Field::new("c3", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                None,
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(10),
+                Some(10),
+                Some(10),
+                Some(10),
+                Some(10),
+            ])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", data)?;
+    let sql = "SELECT c3, count(c1, c2) FROM test group by c3";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----+------------------------+",
+        "| c3 | COUNT(test.c1,test.c2) |",
+        "+----+------------------------+",
+        "| 10 | 2                      |",
+        "+----+------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_avg() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 

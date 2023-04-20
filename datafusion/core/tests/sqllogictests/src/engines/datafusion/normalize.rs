@@ -200,10 +200,9 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Float64 => {
                 Ok(f64_to_str(get_row_value!(array::Float64Array, col, row)))
             }
-            DataType::Decimal128(_, scale) => {
+            DataType::Decimal128(precision, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
-                let decimal_scale = u32::try_from((*scale).max(0)).unwrap();
-                Ok(i128_to_str(value, decimal_scale))
+                Ok(i128_to_str(value, precision, scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,

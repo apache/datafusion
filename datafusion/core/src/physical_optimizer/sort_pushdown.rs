@@ -37,6 +37,8 @@ use std::sync::Arc;
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
 /// computational cost by pushing down `SortExec`s through some executors.
+///
+/// [`EnforceSorting`]: crate::physical_optimizer::sort_enforcement::EnforceSorting
 #[derive(Debug, Clone)]
 pub(crate) struct SortPushDown {
     /// Current plan

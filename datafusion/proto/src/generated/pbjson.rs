@@ -1068,6 +1068,98 @@ impl<'de> serde::Deserialize<'de> for AnalyzeNode {
         deserializer.deserialize_struct("datafusion.AnalyzeNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AnalyzedLogicalPlanType {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.analyzer_name.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.AnalyzedLogicalPlanType", len)?;
+        if !self.analyzer_name.is_empty() {
+            struct_ser.serialize_field("analyzerName", &self.analyzer_name)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AnalyzedLogicalPlanType {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "analyzer_name",
+            "analyzerName",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AnalyzerName,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "analyzerName" | "analyzer_name" => Ok(GeneratedField::AnalyzerName),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AnalyzedLogicalPlanType;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.AnalyzedLogicalPlanType")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<AnalyzedLogicalPlanType, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut analyzer_name__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::AnalyzerName => {
+                            if analyzer_name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("analyzerName"));
+                            }
+                            analyzer_name__ = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(AnalyzedLogicalPlanType {
+                    analyzer_name: analyzer_name__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.AnalyzedLogicalPlanType", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ArrowType {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -15923,6 +16015,12 @@ impl serde::Serialize for PlanType {
                 plan_type::PlanTypeEnum::InitialLogicalPlan(v) => {
                     struct_ser.serialize_field("InitialLogicalPlan", v)?;
                 }
+                plan_type::PlanTypeEnum::AnalyzedLogicalPlan(v) => {
+                    struct_ser.serialize_field("AnalyzedLogicalPlan", v)?;
+                }
+                plan_type::PlanTypeEnum::FinalAnalyzedLogicalPlan(v) => {
+                    struct_ser.serialize_field("FinalAnalyzedLogicalPlan", v)?;
+                }
                 plan_type::PlanTypeEnum::OptimizedLogicalPlan(v) => {
                     struct_ser.serialize_field("OptimizedLogicalPlan", v)?;
                 }
@@ -15951,6 +16049,8 @@ impl<'de> serde::Deserialize<'de> for PlanType {
     {
         const FIELDS: &[&str] = &[
             "InitialLogicalPlan",
+            "AnalyzedLogicalPlan",
+            "FinalAnalyzedLogicalPlan",
             "OptimizedLogicalPlan",
             "FinalLogicalPlan",
             "InitialPhysicalPlan",
@@ -15961,6 +16061,8 @@ impl<'de> serde::Deserialize<'de> for PlanType {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             InitialLogicalPlan,
+            AnalyzedLogicalPlan,
+            FinalAnalyzedLogicalPlan,
             OptimizedLogicalPlan,
             FinalLogicalPlan,
             InitialPhysicalPlan,
@@ -15988,6 +16090,8 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                     {
                         match value {
                             "InitialLogicalPlan" => Ok(GeneratedField::InitialLogicalPlan),
+                            "AnalyzedLogicalPlan" => Ok(GeneratedField::AnalyzedLogicalPlan),
+                            "FinalAnalyzedLogicalPlan" => Ok(GeneratedField::FinalAnalyzedLogicalPlan),
                             "OptimizedLogicalPlan" => Ok(GeneratedField::OptimizedLogicalPlan),
                             "FinalLogicalPlan" => Ok(GeneratedField::FinalLogicalPlan),
                             "InitialPhysicalPlan" => Ok(GeneratedField::InitialPhysicalPlan),
@@ -16020,6 +16124,20 @@ impl<'de> serde::Deserialize<'de> for PlanType {
                                 return Err(serde::de::Error::duplicate_field("InitialLogicalPlan"));
                             }
                             plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::InitialLogicalPlan)
+;
+                        }
+                        GeneratedField::AnalyzedLogicalPlan => {
+                            if plan_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("AnalyzedLogicalPlan"));
+                            }
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::AnalyzedLogicalPlan)
+;
+                        }
+                        GeneratedField::FinalAnalyzedLogicalPlan => {
+                            if plan_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("FinalAnalyzedLogicalPlan"));
+                            }
+                            plan_type_enum__ = map.next_value::<::std::option::Option<_>>()?.map(plan_type::PlanTypeEnum::FinalAnalyzedLogicalPlan)
 ;
                         }
                         GeneratedField::OptimizedLogicalPlan => {
@@ -17203,6 +17321,8 @@ impl serde::Serialize for ScalarFunction {
             Self::Cosh => "Cosh",
             Self::Tanh => "Tanh",
             Self::Pi => "Pi",
+            Self::Degrees => "Degrees",
+            Self::Radians => "Radians",
         };
         serializer.serialize_str(variant)
     }
@@ -17295,6 +17415,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cosh",
             "Tanh",
             "Pi",
+            "Degrees",
+            "Radians",
         ];
 
         struct GeneratedVisitor;
@@ -17418,6 +17540,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cosh" => Ok(ScalarFunction::Cosh),
                     "Tanh" => Ok(ScalarFunction::Tanh),
                     "Pi" => Ok(ScalarFunction::Pi),
+                    "Degrees" => Ok(ScalarFunction::Degrees),
+                    "Radians" => Ok(ScalarFunction::Radians),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
@@ -20113,15 +20237,15 @@ impl serde::Serialize for SubqueryAliasNode {
         if self.input.is_some() {
             len += 1;
         }
-        if !self.alias.is_empty() {
+        if self.alias.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.SubqueryAliasNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
-        if !self.alias.is_empty() {
-            struct_ser.serialize_field("alias", &self.alias)?;
+        if let Some(v) = self.alias.as_ref() {
+            struct_ser.serialize_field("alias", v)?;
         }
         struct_ser.end()
     }
@@ -20197,13 +20321,13 @@ impl<'de> serde::Deserialize<'de> for SubqueryAliasNode {
                             if alias__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("alias"));
                             }
-                            alias__ = Some(map.next_value()?);
+                            alias__ = map.next_value()?;
                         }
                     }
                 }
                 Ok(SubqueryAliasNode {
                     input: input__,
-                    alias: alias__.unwrap_or_default(),
+                    alias: alias__,
                 })
             }
         }

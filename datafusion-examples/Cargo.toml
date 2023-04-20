@@ -39,6 +39,7 @@ arrow = { workspace = true }
 arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = "0.1.41"
+bytes = "1.4"
 dashmap = "5.4"
 datafusion = { path = "../datafusion/core" }
 datafusion-common = { path = "../datafusion/common" }

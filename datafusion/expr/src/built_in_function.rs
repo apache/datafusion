@@ -52,6 +52,8 @@ pub enum BuiltinScalarFunction {
     Cos,
     /// cos
     Cosh,
+    /// degrees
+    Degrees,
     /// Digest
     Digest,
     /// exp
@@ -70,6 +72,8 @@ pub enum BuiltinScalarFunction {
     Pi,
     /// power
     Power,
+    /// radians
+    Radians,
     /// round
     Round,
     /// signum
@@ -222,6 +226,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
             BuiltinScalarFunction::Cosh => Volatility::Immutable,
+            BuiltinScalarFunction::Degrees => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
@@ -258,6 +263,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::MD5 => Volatility::Immutable,
             BuiltinScalarFunction::NullIf => Volatility::Immutable,
             BuiltinScalarFunction::OctetLength => Volatility::Immutable,
+            BuiltinScalarFunction::Radians => Volatility::Immutable,
             BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
             BuiltinScalarFunction::Repeat => Volatility::Immutable,
             BuiltinScalarFunction::Replace => Volatility::Immutable,
@@ -313,15 +319,17 @@ impl FromStr for BuiltinScalarFunction {
             // math functions
             "abs" => BuiltinScalarFunction::Abs,
             "acos" => BuiltinScalarFunction::Acos,
-            "asin" => BuiltinScalarFunction::Asin,
-            "atan" => BuiltinScalarFunction::Atan,
             "acosh" => BuiltinScalarFunction::Acosh,
+            "asin" => BuiltinScalarFunction::Asin,
             "asinh" => BuiltinScalarFunction::Asinh,
+            "atan" => BuiltinScalarFunction::Atan,
             "atanh" => BuiltinScalarFunction::Atanh,
             "atan2" => BuiltinScalarFunction::Atan2,
+            "cbrt" => BuiltinScalarFunction::Cbrt,
             "ceil" => BuiltinScalarFunction::Ceil,
             "cos" => BuiltinScalarFunction::Cos,
             "cosh" => BuiltinScalarFunction::Cosh,
+            "degrees" => BuiltinScalarFunction::Degrees,
             "exp" => BuiltinScalarFunction::Exp,
             "floor" => BuiltinScalarFunction::Floor,
             "ln" => BuiltinScalarFunction::Ln,
@@ -330,21 +338,20 @@ impl FromStr for BuiltinScalarFunction {
             "log2" => BuiltinScalarFunction::Log2,
             "pi" => BuiltinScalarFunction::Pi,
             "power" | "pow" => BuiltinScalarFunction::Power,
+            "radians" => BuiltinScalarFunction::Radians,
+            "random" => BuiltinScalarFunction::Random,
             "round" => BuiltinScalarFunction::Round,
             "signum" => BuiltinScalarFunction::Signum,
             "sin" => BuiltinScalarFunction::Sin,
             "sinh" => BuiltinScalarFunction::Sinh,
             "sqrt" => BuiltinScalarFunction::Sqrt,
-            "cbrt" => BuiltinScalarFunction::Cbrt,
             "tan" => BuiltinScalarFunction::Tan,
             "tanh" => BuiltinScalarFunction::Tanh,
             "trunc" => BuiltinScalarFunction::Trunc,
 
             // conditional functions
             "coalesce" => BuiltinScalarFunction::Coalesce,
-
-            // array functions
-            "make_array" => BuiltinScalarFunction::MakeArray,
+            "nullif" => BuiltinScalarFunction::NullIf,
 
             // string functions
             "ascii" => BuiltinScalarFunction::Ascii,
@@ -355,51 +362,61 @@ impl FromStr for BuiltinScalarFunction {
             "concat" => BuiltinScalarFunction::Concat,
             "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
             "chr" => BuiltinScalarFunction::Chr,
-            "current_date" => BuiltinScalarFunction::CurrentDate,
-            "current_time" => BuiltinScalarFunction::CurrentTime,
-            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
-            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
-            "date_bin" => BuiltinScalarFunction::DateBin,
             "initcap" => BuiltinScalarFunction::InitCap,
             "left" => BuiltinScalarFunction::Left,
             "length" => BuiltinScalarFunction::CharacterLength,
             "lower" => BuiltinScalarFunction::Lower,
             "lpad" => BuiltinScalarFunction::Lpad,
             "ltrim" => BuiltinScalarFunction::Ltrim,
-            "md5" => BuiltinScalarFunction::MD5,
-            "nullif" => BuiltinScalarFunction::NullIf,
             "octet_length" => BuiltinScalarFunction::OctetLength,
-            "random" => BuiltinScalarFunction::Random,
-            "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
             "repeat" => BuiltinScalarFunction::Repeat,
             "replace" => BuiltinScalarFunction::Replace,
             "reverse" => BuiltinScalarFunction::Reverse,
             "right" => BuiltinScalarFunction::Right,
             "rpad" => BuiltinScalarFunction::Rpad,
             "rtrim" => BuiltinScalarFunction::Rtrim,
-            "sha224" => BuiltinScalarFunction::SHA224,
-            "sha256" => BuiltinScalarFunction::SHA256,
-            "sha384" => BuiltinScalarFunction::SHA384,
-            "sha512" => BuiltinScalarFunction::SHA512,
-            "digest" => BuiltinScalarFunction::Digest,
             "split_part" => BuiltinScalarFunction::SplitPart,
             "starts_with" => BuiltinScalarFunction::StartsWith,
             "strpos" => BuiltinScalarFunction::Strpos,
             "substr" => BuiltinScalarFunction::Substr,
             "to_hex" => BuiltinScalarFunction::ToHex,
-            "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
-            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
-            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
-            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
-            "now" => BuiltinScalarFunction::Now,
             "translate" => BuiltinScalarFunction::Translate,
             "trim" => BuiltinScalarFunction::Trim,
             "upper" => BuiltinScalarFunction::Upper,
             "uuid" => BuiltinScalarFunction::Uuid,
+
+            // regex functions
             "regexp_match" => BuiltinScalarFunction::RegexpMatch,
-            "struct" => BuiltinScalarFunction::Struct,
+            "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
+
+            // time/date functions
+            "now" => BuiltinScalarFunction::Now,
+            "current_date" => BuiltinScalarFunction::CurrentDate,
+            "current_time" => BuiltinScalarFunction::CurrentTime,
+            "date_bin" => BuiltinScalarFunction::DateBin,
+            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
+            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
+            "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
+            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
+            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
+            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
             "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
+
+            // hashing functions
+            "digest" => BuiltinScalarFunction::Digest,
+            "md5" => BuiltinScalarFunction::MD5,
+            "sha224" => BuiltinScalarFunction::SHA224,
+            "sha256" => BuiltinScalarFunction::SHA256,
+            "sha384" => BuiltinScalarFunction::SHA384,
+            "sha512" => BuiltinScalarFunction::SHA512,
+
+            // other functions
+            "struct" => BuiltinScalarFunction::Struct,
             "arrow_typeof" => BuiltinScalarFunction::ArrowTypeof,
+
+            // array functions
+            "make_array" => BuiltinScalarFunction::MakeArray,
+
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {name}"

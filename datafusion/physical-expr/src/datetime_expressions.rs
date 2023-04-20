@@ -33,7 +33,7 @@ use arrow::{
     },
 };
 use chrono::prelude::*;
-use chrono::Duration;
+use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::cast::{
     as_date32_array, as_date64_array, as_generic_string_array,
     as_timestamp_microsecond_array, as_timestamp_millisecond_array,
@@ -333,19 +333,67 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     })
 }
 
-fn date_bin_single(stride: i64, source: i64, origin: i64) -> i64 {
+// return time in nanoseconds that the source timestamp falls into based on the stride and origin
+fn date_bin_nanos_interval(stride_nanos: i64, source: i64, origin: i64) -> i64 {
     let time_diff = source - origin;
-    // distance to bin
+
+    // distance from origin to bin
+    let time_delta = compute_distance(time_diff, stride_nanos);
+
+    origin + time_delta
+}
+
+// distance from origin to bin
+fn compute_distance(time_diff: i64, stride: i64) -> i64 {
     let time_delta = time_diff - (time_diff % stride);
 
-    let time_delta = if time_diff < 0 && stride > 1 {
+    if time_diff < 0 && stride > 1 {
         // The origin is later than the source timestamp, round down to the previous bin
         time_delta - stride
     } else {
         time_delta
+    }
+}
+
+// return time in nanoseconds that the source timestamp falls into based on the stride and origin
+fn date_bin_months_interval(stride_months: i64, source: i64, origin: i64) -> i64 {
+    // convert source and origin to DateTime<Utc>
+    let source_date = to_utc_date_time(source);
+    let origin_date = to_utc_date_time(origin);
+
+    // calculate the number of months between the source and origin
+    let month_diff = (source_date.year() - origin_date.year()) * 12
+        + source_date.month() as i32
+        - origin_date.month() as i32;
+
+    // distance from origin to bin
+    let month_delta = compute_distance(month_diff as i64, stride_months);
+
+    let mut bin_time = if month_delta < 0 {
+        origin_date - Months::new(month_delta.unsigned_abs() as u32)
+    } else {
+        origin_date + Months::new(month_delta as u32)
     };
 
-    origin + time_delta
+    // If origin is not midnight of first date of the month, the bin_time may be larger than the source
+    // In this case, we need to move back to previous bin
+    if bin_time > source_date {
+        let month_delta = month_delta - stride_months;
+        bin_time = if month_delta < 0 {
+            origin_date - Months::new(month_delta.unsigned_abs() as u32)
+        } else {
+            origin_date + Months::new(month_delta as u32)
+        };
+    }
+
+    bin_time.timestamp_nanos()
+}
+
+fn to_utc_date_time(nanos: i64) -> DateTime<Utc> {
+    let secs = nanos / 1_000_000_000;
+    let nsec = (nanos % 1_000_000_000) as u32;
+    let date = NaiveDateTime::from_timestamp_opt(secs, nsec).unwrap();
+    DateTime::<Utc>::from_utc(date, Utc)
 }
 
 /// DATE_BIN sql function
@@ -366,6 +414,26 @@ pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
+enum Interval {
+    Nanoseconds(i64),
+    Months(i64),
+}
+
+impl Interval {
+    fn bin_fn(&self) -> (i64, fn(i64, i64, i64) -> i64) {
+        match self {
+            Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
+            Interval::Months(months) => (*months, date_bin_months_interval),
+        }
+    }
+}
+
+// Supported intervals:
+//  1. IntervalDayTime: this means that the stride is in days, hours, minutes, seconds and milliseconds
+//     We will assume month interval won't be converted into this type
+//     TODO (my next PR): without `INTERVAL` keyword, the stride was converted into ScalarValue::IntervalDayTime somwhere
+//             for month interval. I need to find that and make it ScalarValue::IntervalMonthDayNano instead
+// 2. IntervalMonthDayNano
 fn date_bin_impl(
     stride: &ColumnarValue,
     array: &ColumnarValue,
@@ -376,8 +444,9 @@ fn date_bin_impl(
             let (days, ms) = IntervalDayTimeType::to_parts(*v);
             let nanos = (Duration::days(days as i64) + Duration::milliseconds(ms as i64))
                 .num_nanoseconds();
+
             match nanos {
-                Some(v) => v,
+                Some(v) => Interval::Nanoseconds(v),
                 _ => {
                     return Err(DataFusionError::Execution(
                         "DATE_BIN stride argument is too large".to_string(),
@@ -387,19 +456,27 @@ fn date_bin_impl(
         }
         ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(Some(v))) => {
             let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
+
+            // If interval is months, its origin must be midnight of first date of the month
             if months != 0 {
-                return Err(DataFusionError::NotImplemented(
-                    "DATE_BIN stride does not support month intervals".to_string(),
-                ));
-            }
-            let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
-                .num_nanoseconds();
-            match nanos {
-                Some(v) => v,
-                _ => {
-                    return Err(DataFusionError::Execution(
-                        "DATE_BIN stride argument is too large".to_string(),
-                    ))
+                // Return error if days or nanos is not zero
+                if days != 0 || nanos != 0 {
+                    return Err(DataFusionError::NotImplemented(
+                        "DATE_BIN stride does not support combination of month, day and nanosecond intervals".to_string(),
+                    ));
+                } else {
+                    Interval::Months(months as i64)
+                }
+            } else {
+                let nanos = (Duration::days(days as i64) + Duration::nanoseconds(nanos))
+                    .num_nanoseconds();
+                match nanos {
+                    Some(v) => Interval::Nanoseconds(v),
+                    _ => {
+                        return Err(DataFusionError::Execution(
+                            "DATE_BIN stride argument is too large".to_string(),
+                        ))
+                    }
                 }
             }
         }
@@ -429,7 +506,8 @@ fn date_bin_impl(
         )),
     };
 
-    let f = |x: Option<i64>| x.map(|x| date_bin_single(stride, x, origin));
+    let (stride, stride_fn) = stride.bin_fn();
+    let f = |x: Option<i64>| x.map(|x| stride_fn(stride, x, origin));
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
@@ -823,7 +901,7 @@ mod tests {
                 let origin1 = string_to_timestamp_nanos(origin).unwrap();
 
                 let expected1 = string_to_timestamp_nanos(expected).unwrap();
-                let result = date_bin_single(stride1, source1, origin1);
+                let result = date_bin_nanos_interval(stride1, source1, origin1);
                 assert_eq!(result, expected1, "{source} = {expected}");
             })
     }
@@ -912,7 +990,7 @@ mod tests {
         ]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "This feature is not implemented: DATE_BIN stride does not support month intervals"
+            "This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals"
         );
 
         // origin: invalid type
