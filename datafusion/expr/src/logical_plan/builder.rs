@@ -1250,12 +1250,24 @@ pub fn table_scan<'a>(
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
+    table_scan_with_filters(name, table_schema, projection, vec![])
+}
+
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
+/// and inlined filters.
+/// This is mostly used for testing and documentation.
+pub fn table_scan_with_filters<'a>(
+    name: Option<impl Into<TableReference<'a>>>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+) -> Result<LogicalPlanBuilder> {
     let table_source = table_source(table_schema);
     let name = name
         .map(|n| n.into())
         .unwrap_or_else(|| OwnedTableReference::bare(UNNAMED_TABLE))
         .to_owned_reference();
-    LogicalPlanBuilder::scan(name, table_source, projection)
+    LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
 }
 
 fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
