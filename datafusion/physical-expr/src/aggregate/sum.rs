@@ -240,12 +240,26 @@ macro_rules! sum_row {
     }};
 }
 
+macro_rules! avg_row {
+    ($INDEX:ident, $ACC:ident, $DELTA:expr, $TYPE:ident) => {{
+        paste::item! {
+            if let Some(v) = $DELTA {
+                $ACC.add_u64($INDEX, 1);
+                $ACC.[<add_ $TYPE>]($INDEX + 1, *v)
+            }
+        }
+    }};
+}
+
 pub(crate) fn add_to_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
 ) -> Result<()> {
     match s {
+        ScalarValue::Null => {
+            // do nothing
+        }
         ScalarValue::Float64(rhs) => {
             sum_row!(index, accessor, rhs, f64)
         }
@@ -264,6 +278,39 @@ pub(crate) fn add_to_row(
         _ => {
             let msg =
                 format!("Row sum updater is not expected to receive a scalar {s:?}");
+            return Err(DataFusionError::Internal(msg));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn update_avg_to_row(
+    index: usize,
+    accessor: &mut RowAccessor,
+    s: &ScalarValue,
+) -> Result<()> {
+    match s {
+        ScalarValue::Null => {
+            // do nothing
+        }
+        ScalarValue::Float64(rhs) => {
+            avg_row!(index, accessor, rhs, f64)
+        }
+        ScalarValue::Float32(rhs) => {
+            avg_row!(index, accessor, rhs, f32)
+        }
+        ScalarValue::UInt64(rhs) => {
+            avg_row!(index, accessor, rhs, u64)
+        }
+        ScalarValue::Int64(rhs) => {
+            avg_row!(index, accessor, rhs, i64)
+        }
+        ScalarValue::Decimal128(rhs, _, _) => {
+            avg_row!(index, accessor, rhs, i128)
+        }
+        _ => {
+            let msg =
+                format!("Row avg updater is not expected to receive a scalar {s:?}");
             return Err(DataFusionError::Internal(msg));
         }
     }
@@ -331,8 +378,24 @@ impl RowAccumulator for SumRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = sum_batch(values, &self.datatype)?;
-        add_to_row(self.index, accessor, &delta)?;
-        Ok(())
+        add_to_row(self.index, accessor, &delta)
+    }
+
+    fn update_scalar_values(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let value = &values[0];
+        add_to_row(self.index, accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        add_to_row(self.index, accessor, value)
     }
 
     fn merge_batch(
