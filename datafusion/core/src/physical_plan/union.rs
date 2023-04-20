@@ -365,7 +365,9 @@ impl ExecutionPlan for InterleaveExec {
         self.inputs.clone()
     }
 
-    /// Output of the interleave is the combination of all output partitions of the inputs
+    /// All inputs must have the same partitioning. The output partioning of InterleaveExec is the same as the inputs
+    /// (NOT combined). E.g. if there are 10 inputs where each is `Hash(3)`-partitioned, InterleaveExec is also
+    /// `Hash(3)`-partitioned.
     fn output_partitioning(&self) -> Partitioning {
         self.inputs[0].output_partitioning()
     }
