@@ -5,7 +5,7 @@
 |               |   Projection: partsupp.ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value                                                                                  |
 |               |     Filter: CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS Decimal128(38, 15)) > __scalar_sq_1.__value                                                              |
 |               |       CrossJoin:                                                                                                                                                                |
-|               |         Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[SUM(CAST(partsupp.ps_supplycost AS Decimal128(26, 2)) * CAST(partsupp.ps_availqty AS Decimal128(26, 2)))]]           |
+|               |         Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[SUM(partsupp.ps_supplycost * CAST(partsupp.ps_availqty AS Decimal128(10, 0)))]]                                      |
 |               |           Projection: partsupp.ps_partkey, partsupp.ps_availqty, partsupp.ps_supplycost                                                                                         |
 |               |             Inner Join: supplier.s_nationkey = nation.n_nationkey                                                                                                               |
 |               |               Projection: partsupp.ps_partkey, partsupp.ps_availqty, partsupp.ps_supplycost, supplier.s_nationkey                                                               |
@@ -17,7 +17,7 @@
 |               |                   TableScan: nation projection=[n_nationkey, n_name]                                                                                                            |
 |               |         SubqueryAlias: __scalar_sq_1                                                                                                                                            |
 |               |           Projection: CAST(CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS Float64) * Float64(0.0001) AS Decimal128(38, 15)) AS __value                              |
-|               |             Aggregate: groupBy=[[]], aggr=[[SUM(CAST(partsupp.ps_supplycost AS Decimal128(26, 2)) * CAST(partsupp.ps_availqty AS Decimal128(26, 2)))]]                          |
+|               |             Aggregate: groupBy=[[]], aggr=[[SUM(partsupp.ps_supplycost * CAST(partsupp.ps_availqty AS Decimal128(10, 0)))]]                                                     |
 |               |               Projection: partsupp.ps_availqty, partsupp.ps_supplycost                                                                                                          |
 |               |                 Inner Join: supplier.s_nationkey = nation.n_nationkey                                                                                                           |
 |               |                   Projection: partsupp.ps_availqty, partsupp.ps_supplycost, supplier.s_nationkey                                                                                |
