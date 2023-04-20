@@ -299,8 +299,24 @@ impl RowAccumulator for AvgRowAccumulator {
             self.state_index() + 1,
             accessor,
             &sum::sum_batch(values, &self.sum_datatype)?,
-        )?;
-        Ok(())
+        )
+    }
+
+    fn update_scalar_values(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let value = &values[0];
+        sum::update_avg_to_row(self.state_index(), accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        sum::update_avg_to_row(self.state_index(), accessor, value)
     }
 
     fn merge_batch(
@@ -315,8 +331,7 @@ impl RowAccumulator for AvgRowAccumulator {
 
         // sum
         let difference = sum::sum_batch(&states[1], &self.sum_datatype)?;
-        sum::add_to_row(self.state_index() + 1, accessor, &difference)?;
-        Ok(())
+        sum::add_to_row(self.state_index() + 1, accessor, &difference)
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
