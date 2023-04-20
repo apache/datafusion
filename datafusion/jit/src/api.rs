@@ -274,7 +274,7 @@ impl<'a> CodeBlock<'a> {
         unreachable!()
     }
 
-    /// Enter else block. Try [if_block] first which is much easier to use.
+    /// Enter else block. Try [`Self::if_block`] first which is much easier to use.
     fn enter_else(&mut self) {
         self.fields.pop_back();
         self.fields.push_back(HashMap::new());
@@ -367,7 +367,7 @@ impl<'a> CodeBlock<'a> {
         Ok(())
     }
 
-    /// Enter `while` loop block. Try [while_block] first which is much easier to use.
+    /// Enter `while` loop block. Try [`Self::while_block`] first which is much easier to use.
     fn while_loop(&mut self, cond: Expr) -> Result<CodeBlock> {
         if cond.get_type() != BOOL {
             internal_err!("while condition must be bool")
@@ -384,7 +384,7 @@ impl<'a> CodeBlock<'a> {
         }
     }
 
-    /// Enter `if-then-else`'s then block. Try [if_block] first which is much easier to use.
+    /// Enter `if-then-else`'s then block. Try [`Self::if_block`] first which is much easier to use.
     fn if_else(&mut self, cond: Expr) -> Result<CodeBlock> {
         if cond.get_type() != BOOL {
             internal_err!("if condition must be bool")

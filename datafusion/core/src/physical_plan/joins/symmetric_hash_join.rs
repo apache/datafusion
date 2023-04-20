@@ -263,7 +263,7 @@ impl SymmetricHashJoinExec {
     /// # Error
     /// This function errors when:
     /// - It is not possible to join the left and right sides on keys `on`, or
-    /// - It fails to construct [SortedFilterExpr]s, or
+    /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
