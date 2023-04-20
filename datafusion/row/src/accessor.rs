@@ -71,6 +71,7 @@ macro_rules! fn_add_idx {
     ($NATIVE: ident) => {
         paste::item! {
             /// add field at `idx` with `value`
+            #[inline(always)]
             pub fn [<add_ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 if self.is_valid_at(idx) {
                     self.[<set_ $NATIVE>](idx, value + self.[<get_ $NATIVE>](idx));
@@ -87,6 +88,7 @@ macro_rules! fn_max_min_idx {
     ($NATIVE: ident, $OP: ident) => {
         paste::item! {
             /// check max then update
+            #[inline(always)]
             pub fn [<$OP _ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 if self.is_valid_at(idx) {
                     let v = value.$OP(self.[<get_ $NATIVE>](idx));
@@ -103,6 +105,7 @@ macro_rules! fn_max_min_idx {
 macro_rules! fn_get_idx_scalar {
     ($NATIVE: ident, $SCALAR:ident) => {
         paste::item! {
+            #[inline(always)]
             pub fn [<get_ $NATIVE _scalar>](&self, idx: usize) -> ScalarValue {
                 if self.is_valid_at(idx) {
                     ScalarValue::$SCALAR(Some(self.[<get_ $NATIVE>](idx)))
