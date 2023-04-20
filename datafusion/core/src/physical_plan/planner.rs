@@ -1292,7 +1292,7 @@ impl DefaultPhysicalPlanner {
     }
 }
 
-/// Expand and align  a GROUPING SET expression.
+/// Expand and align a GROUPING SET expression.
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 ///
 /// This will take a list of grouping sets and ensure that each group is

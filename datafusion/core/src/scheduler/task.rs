@@ -128,7 +128,8 @@ impl Task {
         }
     }
 
-    /// Call `Pipeline::poll_partition`, attempting to make progress on query execution
+    /// Call [`Pipeline::poll_partition`][super::pipeline::Pipeline::poll_partition],
+    /// attempting to make progress on query execution
     pub fn do_work(self) {
         assert!(is_worker(), "Task::do_work called outside of worker pool");
         if self.context.is_cancelled() {
