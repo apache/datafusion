@@ -41,6 +41,7 @@ use datafusion_common::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
@@ -1157,6 +1158,27 @@ impl Display for JoinType {
             JoinType::RightAnti => "RightAnti",
         };
         write!(f, "{join_type}")
+    }
+}
+
+impl FromStr for JoinType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "INNER" => Ok(JoinType::Inner),
+            "LEFT" => Ok(JoinType::Left),
+            "RIGHT" => Ok(JoinType::Right),
+            "FULL" => Ok(JoinType::Full),
+            "LEFTSEMI" => Ok(JoinType::LeftSemi),
+            "RIGHTSEMI" => Ok(JoinType::RightSemi),
+            "LEFTANTI" => Ok(JoinType::LeftAnti),
+            "RIGHTANTI" => Ok(JoinType::RightAnti),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "The join type {s} does not exist or is not implemented"
+            ))),
+        }
     }
 }
 
