@@ -32,7 +32,8 @@
 //! ```
 //!
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
-//! by another SortExec. Therefore, this rule removes it from the physical plan.
+//! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
+
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
@@ -61,7 +62,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequi
 use itertools::{concat, izip, Itertools};
 use std::sync::Arc;
 
-/// This rule inspects `SortExec`'s in the given physical plan and removes the
+/// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
 #[derive(Default)]
 pub struct EnforceSorting {}
@@ -74,7 +75,7 @@ impl EnforceSorting {
 }
 
 /// This object implements a tree that we use while keeping track of paths
-/// leading to `SortExec`s.
+/// leading to [`SortExec`]s.
 #[derive(Debug, Clone)]
 struct ExecTree {
     /// The `ExecutionPlan` associated with this node
@@ -343,8 +344,8 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
 }
 
 /// The boolean flag `repartition_sorts` defined in the config indicates
-/// whether we elect to transform CoalescePartitionsExec + SortExec cascades
-/// into SortExec + SortPreservingMergeExec cascades, which enables us to
+/// whether we elect to transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
+/// into [`SortExec`] + [`SortPreservingMergeExec`] cascades, which enables us to
 /// perform sorting in parallel.
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
@@ -382,13 +383,17 @@ impl PhysicalOptimizerRule for EnforceSorting {
 }
 
 /// This function turns plans of the form
+/// ```text
 ///      "SortExec: expr=\[a@0 ASC\]",
 ///      "  CoalescePartitionsExec",
 ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+/// ```
 /// to
+/// ```text
 ///      "SortPreservingMergeExec: \[a@0 ASC\]",
 ///      "  SortExec: expr=\[a@0 ASC\]",
 ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+/// ```
 /// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 fn parallelize_sorts(
@@ -678,7 +683,7 @@ fn analyze_window_sort_removal(
     Ok(None)
 }
 
-/// Updates child to remove the unnecessary `CoalescePartitions` below it.
+/// Updates child to remove the unnecessary [`CoalescePartitionsExec`] below it.
 fn update_child_to_remove_coalesce(
     child: &mut Arc<dyn ExecutionPlan>,
     coalesce_onwards: &mut Option<ExecTree>,
@@ -689,7 +694,7 @@ fn update_child_to_remove_coalesce(
     Ok(())
 }
 
-/// Removes the `CoalescePartitions` from the plan in `coalesce_onwards`.
+/// Removes the [`CoalescePartitionsExec`] from the plan in `coalesce_onwards`.
 fn remove_corresponding_coalesce_in_sub_plan(
     coalesce_onwards: &mut ExecTree,
     parent: &Arc<dyn ExecutionPlan>,
@@ -794,14 +799,14 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-/// Compares physical ordering (output ordering of input executor) and with
+/// Compares physical ordering (output ordering of input executor) with
 /// `partitionby_exprs` and `orderby_keys`
 /// to decide whether existing ordering is sufficient to run current window executor.
 /// A `None` return value indicates that we can not remove the sort in question (input ordering is not
 /// sufficient to run current window executor).
 /// A `Some((bool, PartitionSearchMode))` value indicates window executor can be run with existing input ordering
-/// (Hence we can remove `SortExec` before it).
-/// `bool` represents whether we should reverse window executor to remove `SortExec` before it.
+/// (Hence we can remove [`SortExec`] before it).
+/// `bool` represents whether we should reverse window executor to remove [`SortExec`] before it.
 /// `PartitionSearchMode` represents, in which mode Window Executor should work with existing ordering.
 fn can_skip_sort(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],

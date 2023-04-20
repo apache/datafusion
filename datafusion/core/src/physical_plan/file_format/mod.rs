@@ -26,7 +26,7 @@ mod json;
 mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::CsvExec;
+pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
@@ -39,7 +39,7 @@ pub use avro::AvroExec;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
-pub use json::NdJsonExec;
+pub use json::{JsonOpener, NdJsonExec};
 
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
@@ -77,6 +77,8 @@ use super::{ColumnStatistics, Statistics};
 /// different dictionary type.
 ///
 /// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
+///
+/// [`ListingTable`]: crate::datasource::listing::ListingTable
 pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }

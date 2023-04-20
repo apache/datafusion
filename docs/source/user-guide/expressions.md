@@ -89,6 +89,7 @@ expressions such as `col("a") + col("b")` to be used.
 | ceil(x)               | nearest integer greater than or equal to argument |
 | cos(x)                | cosine                                            |
 | cosh(x)               | hyperbolic cosine                                 |
+| degrees(x)            | converts radians to degrees                       |
 | exp(x)                | exponential                                       |
 | floor(x)              | nearest integer less than or equal to argument    |
 | ln(x)                 | natural logarithm                                 |
@@ -97,6 +98,7 @@ expressions such as `col("a") + col("b")` to be used.
 | log2(x)               | base 2 logarithm                                  |
 | pi()                  | approximate value of π                            |
 | power(base, exponent) | base raised to the power of exponent              |
+| radians(x)            | converts degrees to radians                       |
 | round(x)              | round to nearest integer                          |
 | signum(x)             | sign of the argument (-1, 0, +1)                  |
 | sin(x)                | sine                                              |

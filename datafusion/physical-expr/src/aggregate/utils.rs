@@ -83,10 +83,13 @@ pub fn calculate_result_decimal_for_avg(
     }
 }
 
-/// Downcast the [`Box<dyn AggregateExpr>`] or [`Arc<dyn AggregateExpr>`] and return
-/// the inner trait object as [`Any`](std::any::Any) so that it can be downcast to a specific implementation.
-/// This method is used when implementing the [`PartialEq<dyn Any>'] for aggregation expressions and allows
-/// comparing the equality between the trait objects.
+/// Downcast a `Box<dyn AggregateExpr>` or `Arc<dyn AggregateExpr>`
+/// and return the inner trait object as [`Any`](std::any::Any) so
+/// that it can be downcast to a specific implementation.
+///
+/// This method is used when implementing the `PartialEq<dyn Any>`
+/// for [`AggregateExpr`] aggregation expressions and allows comparing the equality
+/// between the trait objects.
 pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     if any.is::<Arc<dyn AggregateExpr>>() {
         any.downcast_ref::<Arc<dyn AggregateExpr>>()

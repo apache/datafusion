@@ -273,7 +273,7 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
-/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+/// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
 pub fn get_arrayref_at_indices(
     arrays: &[ArrayRef],
     indices: &PrimitiveArray<UInt32Type>,

@@ -479,6 +479,8 @@ scalar_expr!(
     num,
     "nearest integer greater than or equal to argument"
 );
+scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
+scalar_expr!(Radians, radians, num, "converts degrees to radians");
 nary_scalar_expr!(Round, round, "round to nearest integer");
 scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
@@ -788,6 +790,8 @@ mod test {
         test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
+        test_unary_scalar_expr!(Degrees, degrees);
+        test_unary_scalar_expr!(Radians, radians);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_unary_scalar_expr!(Trunc, trunc);
