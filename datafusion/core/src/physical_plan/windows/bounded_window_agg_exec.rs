@@ -357,7 +357,7 @@ trait PartitionSearcher: Send {
     /// `partition_buffers` contains corresponding section of the `RecordBatch` for each partition.
     /// `window_agg_states` stores per partition state for each window expression.
     /// None case means that no result is generated
-    /// Some(Vec<ArrayRef>) is the result of each window expression.
+    /// `Some(Vec<ArrayRef>)` is the result of each window expression.
     fn calculate_out_columns(
         &mut self,
         input_buffer: &RecordBatch,
