@@ -42,11 +42,12 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
-use crate::protobuf::{PhysicalSortExprNode, ScalarValue};
+use crate::protobuf::{physical_aggregate_expr_node, PhysicalSortExprNode, ScalarValue};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_plan::joins::utils::JoinSide;
+use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_common::{DataFusionError, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
@@ -55,6 +56,12 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
         use datafusion::physical_plan::expressions;
         use protobuf::AggregateFunction;
+
+        let expressions: Vec<protobuf::PhysicalExprNode> = a
+            .expressions()
+            .iter()
+            .map(|e| e.clone().try_into())
+            .collect::<Result<Vec<_>>>()?;
 
         let mut distinct = false;
         let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
@@ -131,19 +138,31 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         {
             Ok(AggregateFunction::ApproxMedian.into())
         } else {
+            if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
+                return Ok(protobuf::PhysicalExprNode {
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+                        protobuf::PhysicalAggregateExprNode {
+                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
+                            expr: expressions,
+                            distinct,
+                        },
+                    )),
+                });
+            }
+
             Err(DataFusionError::NotImplemented(format!(
                 "Aggregate function not supported: {a:?}"
             )))
         }?;
-        let expressions: Vec<protobuf::PhysicalExprNode> = a
-            .expressions()
-            .iter()
-            .map(|e| e.clone().try_into())
-            .collect::<Result<Vec<_>>>()?;
+
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
-                    aggr_function,
+                    aggregate_function: Some(
+                        physical_aggregate_expr_node::AggregateFunction::AggrFunction(
+                            aggr_function,
+                        ),
+                    ),
                     expr: expressions,
                     distinct,
                 },
