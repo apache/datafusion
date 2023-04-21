@@ -751,7 +751,11 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
 }
 
 fn create_union_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_target_partitions(4)
+            .with_batch_size(4096),
+    );
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, true),
         Field::new("name", DataType::UInt8, true),
