@@ -17,7 +17,7 @@
 
 //! [`RowAccessor`] provides a Read/Write/Modify access for row with all fixed-sized fields:
 
-use crate::layout::{RowLayout, RowType};
+use crate::layout::RowLayout;
 use crate::validity::NullBitsFormatter;
 use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx};
 use arrow::datatypes::{DataType, Schema};
@@ -71,6 +71,7 @@ macro_rules! fn_add_idx {
     ($NATIVE: ident) => {
         paste::item! {
             /// add field at `idx` with `value`
+            #[inline(always)]
             pub fn [<add_ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 if self.is_valid_at(idx) {
                     self.[<set_ $NATIVE>](idx, value + self.[<get_ $NATIVE>](idx));
@@ -87,6 +88,7 @@ macro_rules! fn_max_min_idx {
     ($NATIVE: ident, $OP: ident) => {
         paste::item! {
             /// check max then update
+            #[inline(always)]
             pub fn [<$OP _ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 if self.is_valid_at(idx) {
                     let v = value.$OP(self.[<get_ $NATIVE>](idx));
@@ -103,6 +105,7 @@ macro_rules! fn_max_min_idx {
 macro_rules! fn_get_idx_scalar {
     ($NATIVE: ident, $SCALAR:ident) => {
         paste::item! {
+            #[inline(always)]
             pub fn [<get_ $NATIVE _scalar>](&self, idx: usize) -> ScalarValue {
                 if self.is_valid_at(idx) {
                     ScalarValue::$SCALAR(Some(self.[<get_ $NATIVE>](idx)))
@@ -116,9 +119,9 @@ macro_rules! fn_get_idx_scalar {
 
 impl<'a> RowAccessor<'a> {
     /// new
-    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+    pub fn new(schema: &Schema) -> Self {
         Self {
-            layout: Arc::new(RowLayout::new(schema, row_type)),
+            layout: Arc::new(RowLayout::new(schema)),
             data: &mut [],
             base_offset: 0,
         }

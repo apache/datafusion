@@ -23,11 +23,12 @@ use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
     },
-    CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
+    OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
@@ -317,6 +318,16 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
             plan_type: match stringified_plan.clone().plan_type {
                 PlanType::InitialLogicalPlan => Some(protobuf::PlanType {
                     plan_type_enum: Some(InitialLogicalPlan(EmptyMessage {})),
+                }),
+                PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                    Some(protobuf::PlanType {
+                        plan_type_enum: Some(AnalyzedLogicalPlan(
+                            AnalyzedLogicalPlanType { analyzer_name },
+                        )),
+                    })
+                }
+                PlanType::FinalAnalyzedLogicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalAnalyzedLogicalPlan(EmptyMessage {})),
                 }),
                 PlanType::OptimizedLogicalPlan { optimizer_name } => {
                     Some(protobuf::PlanType {
@@ -1268,6 +1279,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Ln => Self::Ln,
             BuiltinScalarFunction::Log10 => Self::Log10,
+            BuiltinScalarFunction::Degrees => Self::Degrees,
+            BuiltinScalarFunction::Radians => Self::Radians,
             BuiltinScalarFunction::Floor => Self::Floor,
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,

@@ -28,7 +28,7 @@ use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunctio
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    coerce_types, comparison_coercion, like_coercion,
+    any_decimal, coerce_types, comparison_coercion, like_coercion, math_decimal_coercion,
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
@@ -265,6 +265,33 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                                 "Unsupported operation {op:?} between {left_type:?} and {right_type:?}"
                             )))
                         }
+                    }
+                    // For numerical operations between decimals, we don't coerce the types.
+                    // But if only one of the operands is decimal, we cast the other operand to decimal
+                    // if the other operand is integer. If the other operand is float, we cast the
+                    // decimal operand to float.
+                    (lhs_type, rhs_type)
+                        if op.is_numerical_operators()
+                            && any_decimal(lhs_type, rhs_type) =>
+                    {
+                        let (coerced_lhs_type, coerced_rhs_type) =
+                            math_decimal_coercion(lhs_type, rhs_type);
+                        let new_left = if let Some(lhs_type) = coerced_lhs_type {
+                            left.clone().cast_to(&lhs_type, &self.schema)?
+                        } else {
+                            left.as_ref().clone()
+                        };
+                        let new_right = if let Some(rhs_type) = coerced_rhs_type {
+                            right.clone().cast_to(&rhs_type, &self.schema)?
+                        } else {
+                            right.as_ref().clone()
+                        };
+                        let expr = Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(new_left),
+                            op,
+                            Box::new(new_right),
+                        ));
+                        Ok(expr)
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
@@ -835,7 +862,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed."))"#,
             &format!("{err:?}")
         );
         Ok(())
@@ -914,7 +941,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.\")",
+            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed."))"#,
             &format!("{err:?}")
         );
         Ok(())
