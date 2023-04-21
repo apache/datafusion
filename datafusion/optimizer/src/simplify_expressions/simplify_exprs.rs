@@ -22,7 +22,7 @@ use std::sync::Arc;
 use super::{ExprSimplifier, SimplifyContext};
 use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::{DFSchemaRef, Result, DFSchema};
 use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -63,12 +63,14 @@ impl SimplifyExpressions {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        let schema = if plan.inputs().is_empty() {
+        let schema = if !plan.inputs().is_empty() {
+            DFSchemaRef::new(merge_schema(plan.inputs()))
+        } else if let LogicalPlan::TableScan(_) = plan {
             // When predicates are pushed into a table scan, there needs to be
             // a schema to resolve the fields against.
             Arc::clone(plan.schema())
         } else {
-            DFSchemaRef::new(merge_schema(plan.inputs()))
+            Arc::new(DFSchema::empty())
         };
         let info = SimplifyContext::new(execution_props).with_schema(schema);
 
