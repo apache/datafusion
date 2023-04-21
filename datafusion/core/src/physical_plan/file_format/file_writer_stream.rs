@@ -138,8 +138,14 @@ impl<S: BatchSerializer> FileSinkStream<S> {
                             return Poll::Ready(Some(Err(e)));
                         }
                     };
-                    self.writer =
-                        Some(self.file_compression.convert_async_writer(writer));
+
+                    self.writer = match self.file_compression.convert_async_writer(writer)
+                    {
+                        Ok(writer) => Some(writer),
+                        Err(e) => {
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    };
                     self.state = FileSinkState::Pull;
                 }
                 FileSinkState::Pull => {

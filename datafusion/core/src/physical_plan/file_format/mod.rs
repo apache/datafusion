@@ -235,8 +235,7 @@ impl FileScanConfig {
 /// any given file format.
 #[derive(Debug, Clone)]
 pub struct FileSinkConfig {
-    /// Object store URL, used to get an [`ObjectStore`] instance from
-    /// [`RuntimeEnv::object_store`]
+    /// Object store URL, used to get an ObjectStore instance
     pub object_store_url: ObjectStoreUrl,
     /// A vector of [`PartitionedFile`] structs, each representing a file partition
     pub file_groups: Vec<PartitionedFile>,

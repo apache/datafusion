@@ -31,14 +31,14 @@ use async_compression::tokio::bufread::{
     ZstdDecoder as AsyncZstdDecoer, ZstdEncoder as AsyncZstdEncoder,
 };
 
+#[cfg(feature = "compression")]
+use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::MultiBzDecoder;
 use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
-#[cfg(feature = "compression")]
-use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
@@ -154,8 +154,8 @@ impl FileCompressionType {
     pub fn convert_async_writer(
         &self,
         w: Box<dyn AsyncWrite + Send + Unpin>,
-    ) -> Box<dyn AsyncWrite + Send + Unpin> {
-        match self.variant {
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+        Ok(match self.variant {
             #[cfg(feature = "compression")]
             GZIP => Box::new(GzipEncoder::new(w)),
             #[cfg(feature = "compression")]
@@ -171,7 +171,7 @@ impl FileCompressionType {
                 ))
             }
             UNCOMPRESSED => w,
-        }
+        })
     }
 
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.

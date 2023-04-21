@@ -162,13 +162,13 @@ impl TableProvider for MemTable {
         )?))
     }
 
-    /// Inserts the execution results of a given [LogicalPlan] into this [MemTable].
+    /// Inserts the execution results of a given LogicalPlan into this [`MemTable`].
     /// The `LogicalPlan` must have the same schema as this `MemTable`.
     ///
     /// # Arguments
     ///
-    /// * `state` - The [SessionState] containing the context for executing the plan.
-    /// * `input` - The [LogicalPlan] to execute and insert.
+    /// * `state` - The [`SessionState`] containing the context for executing the plan.
+    /// * `input` - The LogicalPlan to execute and insert.
     ///
     /// # Returns
     ///
