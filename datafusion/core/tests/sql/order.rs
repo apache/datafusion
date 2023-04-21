@@ -175,3 +175,80 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
 
     Ok(())
 }
+
+/// Minimal test case for https://github.com/apache/arrow-datafusion/issues/5970
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_issue5970_mini() -> Result<()> {
+    let config = SessionConfig::new()
+        .with_target_partitions(2)
+        .with_repartition_sorts(true);
+    let ctx = SessionContext::with_config(config);
+    let sql = "
+WITH
+    m0(t) AS (
+        VALUES (0), (1), (2)),
+    m1(t) AS (
+        VALUES (0), (1)),
+    u AS (
+        SELECT 0 as m, t FROM m0 GROUP BY 1, 2), 
+    v AS (
+        SELECT 1 as m, t FROM m1 GROUP BY 1, 2)
+SELECT * FROM u
+UNION ALL
+SELECT * FROM v
+ORDER BY 1, 2;
+    ";
+
+    // check phys. plan
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+    let expected = vec![
+        "SortPreservingMergeExec: [m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]",
+        "  SortExec: expr=[m@0 ASC NULLS LAST,t@1 ASC NULLS LAST]",
+        "    InterleaveExec",
+        "      ProjectionExec: expr=[Int64(0)@0 as m, t@1 as t]",
+        "        AggregateExec: mode=FinalPartitioned, gby=[Int64(0)@0 as Int64(0), t@1 as t], aggr=[]",
+        "          CoalesceBatchesExec: target_batch_size=8192",
+        "            RepartitionExec: partitioning=Hash([Column { name: \"Int64(0)\", index: 0 }, Column { name: \"t\", index: 1 }], 2), input_partitions=2",
+        "              AggregateExec: mode=Partial, gby=[0 as Int64(0), t@0 as t], aggr=[]",
+        "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "                  ProjectionExec: expr=[column1@0 as t]",
+        "                    ValuesExec",
+        "      ProjectionExec: expr=[Int64(1)@0 as m, t@1 as t]",
+        "        AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1), t@1 as t], aggr=[]",
+        "          CoalesceBatchesExec: target_batch_size=8192",
+        "            RepartitionExec: partitioning=Hash([Column { name: \"Int64(1)\", index: 0 }, Column { name: \"t\", index: 1 }], 2), input_partitions=2",
+        "              AggregateExec: mode=Partial, gby=[1 as Int64(1), t@0 as t], aggr=[]",
+        "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+        "                  ProjectionExec: expr=[column1@0 as t]",
+        "                    ValuesExec",
+    ];
+    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // sometimes it "just works"
+    for i in 0..10 {
+        println!("run: {i}");
+        let actual = execute_to_batches(&ctx, sql).await;
+
+        // in https://github.com/apache/arrow-datafusion/issues/5970 the order of the output was sometimes not right
+        let expected = vec![
+            "+---+---+",
+            "| m | t |",
+            "+---+---+",
+            "| 0 | 0 |",
+            "| 0 | 1 |",
+            "| 0 | 2 |",
+            "| 1 | 0 |",
+            "| 1 | 1 |",
+            "+---+---+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+    Ok(())
+}
