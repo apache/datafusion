@@ -375,6 +375,7 @@ mod tests {
         );
     }
 
+    #[derive(Debug)]
     struct MockExprSchema {
         nullable: bool,
         data_type: DataType,
