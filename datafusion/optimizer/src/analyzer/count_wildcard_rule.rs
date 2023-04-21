@@ -264,12 +264,13 @@ fn rewrite_schema(schema: &DFSchema) -> DFSchemaRef {
 mod tests {
     use super::*;
     use crate::test::*;
+    use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::expr::Sort;
     use datafusion_expr::{
         col, count, exists, expr, in_subquery, lit, logical_plan::LogicalPlanBuilder,
-        max, scalar_subquery, AggregateFunction, Expr, WindowFrame, WindowFrameBound,
-        WindowFrameUnits, WindowFunction,
+        max, out_ref_col, scalar_subquery, AggregateFunction, Expr, WindowFrame,
+        WindowFrameBound, WindowFrameUnits, WindowFunction,
     };
 
     fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
@@ -353,7 +354,7 @@ mod tests {
             .filter(
                 scalar_subquery(Arc::new(
                     LogicalPlanBuilder::from(table_scan_t2)
-                        .filter(col("t1.a").eq(col("t2.a")))?
+                        .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
                         .aggregate(
                             Vec::<Expr>::new(),
                             vec![count(lit(COUNT_STAR_EXPANSION))],
@@ -371,7 +372,7 @@ mod tests {
               \n    Subquery: [COUNT(UInt8(1)):Int64;N]\
               \n      Projection: COUNT(UInt8(1)) [COUNT(UInt8(1)):Int64;N]\
               \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]] [COUNT(UInt8(1)):Int64;N]\
-              \n          Filter: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32]\
+              \n          Filter: outer_ref(t1.a) = t2.a [a:UInt32, b:UInt32, c:UInt32]\
               \n            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
               \n    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
