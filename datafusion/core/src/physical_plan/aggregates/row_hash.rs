@@ -766,7 +766,6 @@ impl GroupedHashAggregateStream {
                 && normal_aggr_input_values.is_empty()
                 && normal_filter_values.is_empty()
                 && groups_with_rows.len() >= batch.num_rows() / 10
-                && false
             {
                 self.update_accumulators_using_scalar(
                     &groups_with_rows,

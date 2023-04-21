@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, Int64Array};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
@@ -164,8 +164,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
 }
 
 /// Return randomly sized record batches with:
-/// three sorted int32 columns 'a', 'b', 'c' ranged from 0..'n_distinct' as columns
-/// one random int32 column 'd' as other columns
+/// three sorted int64 columns 'a', 'b', 'c' ranged from 0..'n_distinct' as columns
+/// one random int64 column 'd' as other columns
 pub(crate) fn make_staggered_batches<const STREAM: bool>(
     len: usize,
     n_distinct: usize,
@@ -173,21 +173,23 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
 ) -> Vec<RecordBatch> {
     // use a random number generator to pick a random sized output
     let mut rng = StdRng::seed_from_u64(random_seed);
-    let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
-    let mut input4: Vec<i32> = vec![0; len];
+    let mut input123: Vec<(i64, i64, i64)> = vec![(0, 0, 0); len];
+    let mut input4: Vec<i64> = vec![0; len];
     input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..n_distinct) as i32,
-            rng.gen_range(0..n_distinct) as i32,
-            rng.gen_range(0..n_distinct) as i32,
+            rng.gen_range(0..n_distinct) as i64,
+            rng.gen_range(0..n_distinct) as i64,
+            rng.gen_range(0..n_distinct) as i64,
         )
     });
-    rng.fill(&mut input4[..]);
+    input4.iter_mut().for_each(|v| {
+        *v = rng.gen_range(0..n_distinct) as i64;
+    });
     input123.sort();
-    let input1 = Int32Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
-    let input2 = Int32Array::from_iter_values(input123.clone().into_iter().map(|k| k.1));
-    let input3 = Int32Array::from_iter_values(input123.clone().into_iter().map(|k| k.2));
-    let input4 = Int32Array::from_iter_values(input4.into_iter());
+    let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
+    let input2 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.1));
+    let input3 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.2));
+    let input4 = Int64Array::from_iter_values(input4.into_iter());
 
     // split into several record batches
     let mut remainder = RecordBatch::try_from_iter(vec![
