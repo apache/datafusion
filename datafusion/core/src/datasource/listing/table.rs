@@ -810,7 +810,7 @@ impl TableProvider for ListingTable {
 }
 
 impl ListingTable {
-    /// Get the list of files for a scan as well ascd the file level statistics.
+    /// Get the list of files for a scan as well as the file level statistics.
     /// The list is grouped to let the execution plan know how the files should
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(

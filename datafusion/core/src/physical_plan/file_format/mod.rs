@@ -301,7 +301,7 @@ impl<'a> Display for FileGroupsDisplay<'a> {
 ///
 /// Prints in the format:
 /// ```text
-/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
+/// [file1, file2,...]
 /// ```
 #[derive(Debug)]
 struct FileGroupDisplay<'a>(&'a [PartitionedFile]);

@@ -450,7 +450,6 @@ impl ExecutionPlan for CsvWriterExec {
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        // this is a leaf node and has no children
         vec![self.input.clone()]
     }
 
