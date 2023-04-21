@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EmptyTable`] usefull for testing.
+//! [`EmptyTable`] useful for testing.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use crate::logical_expr::Expr;
 use crate::physical_plan::project_schema;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
 
-/// An empty plan that is usefull for testing and generating plans
+/// An empty plan that is useful for testing and generating plans
 /// without mapping them to actual data.
 pub struct EmptyTable {
     schema: SchemaRef,

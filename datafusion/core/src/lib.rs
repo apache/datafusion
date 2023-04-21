@@ -234,7 +234,7 @@
 //! 3. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a
 //! [`PhysicalPlanner`]
 //!
-//! 4. The [`ExecutionPlan`] is rewrittten by
+//! 4. The [`ExecutionPlan`] is rewritten by
 //! [`PhysicalOptimizerRule`]s, such as sort and join selection, to
 //! improve its efficiency.
 //!
@@ -263,7 +263,7 @@
 //!
 //! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
 //! files.  Supports single files or multiple files with HIVE style
-//! partitoning, optional compression, directly reading from remote
+//! partitioning, optional compression, directly reading from remote
 //! object store and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
