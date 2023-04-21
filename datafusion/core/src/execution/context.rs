@@ -1235,8 +1235,6 @@ pub struct SessionState {
     table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     /// Runtime environment
     runtime_env: Arc<RuntimeEnv>,
-    /// Version of the cargo package that produced this query
-    version: String,
 }
 
 impl Debug for SessionState {
@@ -1363,7 +1361,6 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
             table_factories,
-            version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 
@@ -1809,7 +1806,7 @@ impl SessionState {
 
     /// Return version
     pub fn version(&self) -> &str {
-        &self.version
+        env!("CARGO_PKG_VERSION")
     }
 }
 
