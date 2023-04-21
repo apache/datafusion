@@ -17,6 +17,7 @@
 
 use super::*;
 
+/*
 #[tokio::test]
 async fn csv_query_group_by_int_min_max() -> Result<()> {
     let ctx = SessionContext::new();
@@ -62,6 +63,7 @@ async fn csv_query_group_by_float32() -> Result<()> {
 
     Ok(())
 }
+*/
 
 #[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {

@@ -1,0 +1,108 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+statement ok
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
+
+
+# csv_query_group_by_int_min_max
+query IRR rowsort
+SELECT c2, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c2
+----
+1 0.05636955102 0.996540038759
+2 0.163011105157 0.991517828651
+3 0.047343434291 0.929388350248
+4 0.021825780392 0.923787797819
+5 0.014793053078 0.97235803965
+
+# csv_query_group_by_float32
+query IR
+SELECT COUNT(*) as cnt, c1 FROM aggregate_simple GROUP BY c1 ORDER BY cnt DESC
+----
+5 0.00005
+4 0.00004
+3 0.00003
+2 0.00002
+1 0.00001
+
+# TODO: csv_query_group_by_float64
+
+# TODO: csv_query_group_by_boolean
+
+# TODO: csv_query_group_by_two_columns
+
+# TODO: csv_query_group_by_and_having
+
+# TODO: csv_query_group_by_and_having_and_where
+
+# TODO: csv_query_group_by_substr
+
+# TODO: csv_query_group_by_avg
+
+# TODO: csv_query_group_by_with_aliases
+
+# TODO: csv_query_group_by_int_count
+
+# TODO: csv_query_group_with_aliased_aggregate
+
+# TODO: csv_query_group_by_string_min_max
+
+# TODO: query_group_on_null
+
+# TODO: query_group_on_null_multi_col
+
+# TODO: csv_group_by_date
+
+# TODO: csv_group_by_time32second
+
+# TODO: csv_group_by_time32millisecond
+
+# TODO: csv_group_by_time64microsecond
+
+# TODO: csv_group_by_time64nanosecond
+
+# TODO: group_by_date_trunc
+
+# TODO: group_by_largeutf8
+
+# TODO: group_by_dictionary
+
+# TODO: csv_query_group_by_order_by_substr
+
+# TODO: csv_query_group_by_order_by_substr_aliased_projection
+
+# TODO: csv_query_group_by_order_by_avg_group_by_substr

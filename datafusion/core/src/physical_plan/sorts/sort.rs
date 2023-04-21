@@ -60,7 +60,8 @@ use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
 
-/// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
+/// Sort arbitrary size of data to get a total order (may spill several times
+/// during sorting based on free memory available).
 ///
 /// The basic architecture of the algorithm:
 /// 1. get a non-empty new batch from input
