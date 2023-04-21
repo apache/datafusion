@@ -37,7 +37,7 @@ use bzip2::read::MultiBzDecoder;
 use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
-
+#[cfg(feature = "compression")]
 use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use futures::stream::BoxStream;
 use futures::StreamExt;
