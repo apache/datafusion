@@ -50,7 +50,7 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
-use arrow::compute::{try_unary, unary};
+use arrow::compute::{try_unary, unary, CastOptions};
 use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -61,7 +61,7 @@ use datafusion_common::scalar::{
     op_ym_dt, op_ym_mdn, parse_timezones, seconds_add, seconds_sub, MILLISECOND_MODE,
     NANOSECOND_MODE,
 };
-use datafusion_expr::type_coercion::{is_timestamp, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
 use kernels::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -82,6 +82,7 @@ use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
 use super::column::Column;
+use crate::expressions::cast_column;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
@@ -95,7 +96,9 @@ use datafusion_common::cast::{
 use datafusion_common::scalar::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::binary_operator_data_type;
+use datafusion_expr::type_coercion::binary::{
+    binary_operator_data_type, coercion_decimal_mathematics_type,
+};
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
@@ -383,12 +386,14 @@ macro_rules! compute_primitive_op_dyn_scalar {
 /// LEFT is Decimal or Dictionary array of decimal values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 macro_rules! compute_primitive_decimal_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr, $RET_TYPE:expr) => {{
         // generate the scalar function name, such as add_decimal_dyn_scalar,
         // from the $OP parameter (which could have a value of add) and the
         // suffix _decimal_dyn_scalar
         if let Some(value) = $RIGHT {
-            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}($LEFT, value)?)
+            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}(
+                $LEFT, value, $RET_TYPE,
+            )?)
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -437,15 +442,15 @@ macro_rules! binary_string_array_op {
 /// The binary_primitive_array_op macro only evaluates for primitive types
 /// like integers and floats.
 macro_rules! binary_primitive_array_op_dyn {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         match $LEFT.data_type() {
             DataType::Decimal128(_, _) => {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             DataType::Dictionary(_, value_type)
                 if matches!(value_type.as_ref(), &DataType::Decimal128(_, _)) =>
             {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             _ => Ok(Arc::new(
                 $OP(&$LEFT, &$RIGHT).map_err(|err| DataFusionError::ArrowError(err))?,
@@ -458,13 +463,13 @@ macro_rules! binary_primitive_array_op_dyn {
 /// The binary_primitive_array_op_dyn_scalar macro only evaluates for primitive
 /// types like integers and floats.
 macro_rules! binary_primitive_array_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         // unwrap underlying (non dictionary) value
         let right = unwrap_dict_value($RIGHT);
         let op_type = $LEFT.data_type();
 
         let result: Result<Arc<dyn Array>> = match right {
-            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type),
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type, $RET_TYPE),
             ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
             ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
             ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
@@ -662,9 +667,13 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
+        let schema = batch.schema();
+        let input_schema = schema.as_ref();
+
         match (&left_value, &left_data_type, &right_value, &right_data_type) {
             // Types are equal => valid
-            (_, l, _, r) if l == r => {}
+            // Decimal types can be different but still valid as we coerce them to the same type later
+            (_, l, _, r) if l == r || (is_decimal(l) && is_decimal(r)) => {}
             // Allow comparing a dictionary value with its corresponding scalar value
             (
                 ColumnarValue::Array(_),
@@ -677,7 +686,8 @@ impl PhysicalExpr for BinaryExpr {
                 scalar_t,
                 ColumnarValue::Array(_),
                 DataType::Dictionary(_, dict_t),
-            ) if dict_t.as_ref() == scalar_t => {}
+            ) if dict_t.as_ref() == scalar_t
+                || (is_decimal(dict_t.as_ref()) && is_decimal(scalar_t)) => {}
             _ => {
                 return Err(DataFusionError::Internal(format!(
                     "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -686,11 +696,29 @@ impl PhysicalExpr for BinaryExpr {
             }
         }
 
+        // Coerce decimal types to the same scale and precision
+        let coerced_type = coercion_decimal_mathematics_type(
+            &self.op,
+            &left_data_type,
+            &right_data_type,
+        );
+        let (left_value, right_value) = if let Some(coerced_type) = coerced_type {
+            let options = CastOptions { safe: true };
+            let left_value = cast_column(&left_value, &coerced_type, &options)?;
+            let right_value = cast_column(&right_value, &coerced_type, &options)?;
+            (left_value, right_value)
+        } else {
+            // No need to coerce if it is not decimal or not math operation
+            (left_value, right_value)
+        };
+
+        let result_type = self.data_type(input_schema)?;
+
         // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?
+                self.evaluate_array_scalar(array, scalar.clone(), &result_type)?
             }
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
@@ -708,8 +736,14 @@ impl PhysicalExpr for BinaryExpr {
             left_value.into_array(batch.num_rows()),
             right_value.into_array(batch.num_rows()),
         );
-        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+        self.evaluate_with_resolved_args(
+            left,
+            &left_data_type,
+            right,
+            &right_data_type,
+            &result_type,
+        )
+        .map(|a| ColumnarValue::Array(a))
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -1025,6 +1059,7 @@ impl BinaryExpr {
         &self,
         array: &dyn Array,
         scalar: ScalarValue,
+        result_type: &DataType,
     ) -> Result<Option<Result<ArrayRef>>> {
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
@@ -1047,19 +1082,29 @@ impl BinaryExpr {
                 binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
             }
             Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, add)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, add, result_type)
             }
             Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, subtract)
+                binary_primitive_array_op_dyn_scalar!(
+                    array,
+                    scalar,
+                    subtract,
+                    result_type
+                )
             }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, multiply)
+                binary_primitive_array_op_dyn_scalar!(
+                    array,
+                    scalar,
+                    multiply,
+                    result_type
+                )
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, divide, result_type)
             }
             Operator::Modulo => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus)
+                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus, result_type)
             }
             Operator::RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
@@ -1140,6 +1185,7 @@ impl BinaryExpr {
         left_data_type: &DataType,
         right: Arc<dyn Array>,
         right_data_type: &DataType,
+        result_type: &DataType,
     ) -> Result<ArrayRef> {
         match &self.op {
             Operator::Lt => lt_dyn(&left, &right),
@@ -1161,16 +1207,20 @@ impl BinaryExpr {
             Operator::IsNotDistinctFrom => {
                 binary_array_op!(left, right, is_not_distinct_from)
             }
-            Operator::Plus => binary_primitive_array_op_dyn!(left, right, add_dyn),
-            Operator::Minus => binary_primitive_array_op_dyn!(left, right, subtract_dyn),
+            Operator::Plus => {
+                binary_primitive_array_op_dyn!(left, right, add_dyn, result_type)
+            }
+            Operator::Minus => {
+                binary_primitive_array_op_dyn!(left, right, subtract_dyn, result_type)
+            }
             Operator::Multiply => {
-                binary_primitive_array_op_dyn!(left, right, multiply_dyn)
+                binary_primitive_array_op_dyn!(left, right, multiply_dyn, result_type)
             }
             Operator::Divide => {
-                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt)
+                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt, result_type)
             }
             Operator::Modulo => {
-                binary_primitive_array_op_dyn!(left, right, modulus_dyn)
+                binary_primitive_array_op_dyn!(left, right, modulus_dyn, result_type)
             }
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
@@ -1236,7 +1286,7 @@ pub fn binary(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
     }
-    if !lhs_type.eq(rhs_type) {
+    if !lhs_type.eq(rhs_type) && (!is_decimal(lhs_type) && !is_decimal(rhs_type)) {
         return Err(DataFusionError::Internal(format!(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
@@ -2050,7 +2100,7 @@ mod tests {
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
     use datafusion_common::{ColumnStatistics, Result, Statistics};
-    use datafusion_expr::type_coercion::binary::coerce_types;
+    use datafusion_expr::type_coercion::binary::{coerce_types, math_decimal_coercion};
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -2606,7 +2656,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Plus,
-            create_decimal_array(&[Some(247), None, None, Some(247), Some(246)], 10, 0),
+            create_decimal_array(&[Some(247), None, None, Some(247), Some(246)], 11, 0),
         )?;
 
         Ok(())
@@ -2691,7 +2741,7 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = create_decimal_array(
             &[Some(value + 1), None, Some(value), Some(value + 2)],
-            10,
+            11,
             0,
         );
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
@@ -2825,7 +2875,7 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Minus,
-            create_decimal_array(&[Some(-1), None, None, Some(1), Some(0)], 10, 0),
+            create_decimal_array(&[Some(-1), None, None, Some(1), Some(0)], 11, 0),
         )?;
 
         Ok(())
@@ -2910,7 +2960,7 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = create_decimal_array(
             &[Some(value - 1), None, Some(value - 2), Some(value)],
-            10,
+            11,
             0,
         );
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
@@ -3038,7 +3088,7 @@ mod tests {
             Operator::Multiply,
             create_decimal_array(
                 &[Some(15252), None, None, Some(15252), Some(15129)],
-                10,
+                21,
                 0,
             ),
         )?;
@@ -3124,7 +3174,7 @@ mod tests {
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array =
-            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 10, 0);
+            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 21, 0);
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
 
         apply_arithmetic_scalar(
@@ -3254,7 +3304,17 @@ mod tests {
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Divide,
-            create_decimal_array(&[Some(0), None, None, Some(1), Some(1)], 10, 0),
+            create_decimal_array(
+                &[
+                    Some(99193548387), // 0.99193548387
+                    None,
+                    None,
+                    Some(100813008130), // 1.0081300813
+                    Some(100000000000), // 1.0
+                ],
+                21,
+                11,
+            ),
         )?;
 
         Ok(())
@@ -3337,8 +3397,16 @@ mod tests {
         let a = DictionaryArray::try_new(&keys, &decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array =
-            create_decimal_array(&[Some(61), None, Some(61), Some(62)], 10, 0);
+        let decimal_array = create_decimal_array(
+            &[
+                Some(6150000000000),
+                None,
+                Some(6100000000000),
+                Some(6200000000000),
+            ],
+            21,
+            11,
+        );
         let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
 
         apply_arithmetic_scalar(
@@ -4715,38 +4783,47 @@ mod tests {
         Ok(())
     }
 
-    fn apply_arithmetic_op(
+    fn apply_decimal_arithmetic_op(
         schema: &SchemaRef,
         left: &ArrayRef,
         right: &ArrayRef,
         op: Operator,
         expected: ArrayRef,
     ) -> Result<()> {
-        let op_type = coerce_types(left.data_type(), &op, right.data_type())?;
-        let left_expr = if left.data_type().eq(&op_type) {
-            col("a", schema)?
+        let (lhs_op_type, rhs_op_type) =
+            math_decimal_coercion(left.data_type(), right.data_type());
+
+        let (left_expr, lhs_type) = if let Some(lhs_op_type) = lhs_op_type {
+            (
+                try_cast(col("a", schema)?, schema, lhs_op_type.clone())?,
+                lhs_op_type,
+            )
         } else {
-            try_cast(col("a", schema)?, schema, op_type.clone())?
+            (col("a", schema)?, left.data_type().clone())
         };
 
-        let right_expr = if right.data_type().eq(&op_type) {
-            col("b", schema)?
+        let (right_expr, rhs_type) = if let Some(rhs_op_type) = rhs_op_type {
+            (
+                try_cast(col("b", schema)?, schema, rhs_op_type.clone())?,
+                rhs_op_type,
+            )
         } else {
-            try_cast(col("b", schema)?, schema, op_type.clone())?
+            (col("b", schema)?, right.data_type().clone())
         };
 
         let coerced_schema = Schema::new(vec![
             Field::new(
                 schema.field(0).name(),
-                op_type.clone(),
+                lhs_type,
                 schema.field(0).is_nullable(),
             ),
             Field::new(
                 schema.field(1).name(),
-                op_type,
+                rhs_type,
                 schema.field(1).is_nullable(),
             ),
         ]);
+
         let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
@@ -4786,7 +4863,7 @@ mod tests {
             13,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -4797,18 +4874,18 @@ mod tests {
 
         // subtract: decimal array subtract int32 array
         let schema = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Int32, true),
             Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Int32, true),
         ]));
         let expect = Arc::new(create_decimal_array(
             &[Some(-12177), None, Some(-12178), Some(-12276)],
             13,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
-            &int32_array,
             &decimal_array,
+            &int32_array,
             Operator::Minus,
             expect,
         )
@@ -4820,10 +4897,10 @@ mod tests {
             21,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
-            &int32_array,
             &decimal_array,
+            &int32_array,
             Operator::Multiply,
             expect,
         )
@@ -4844,7 +4921,7 @@ mod tests {
             23,
             11,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -4863,7 +4940,7 @@ mod tests {
             10,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -4906,7 +4983,7 @@ mod tests {
             Some(124.22),
             Some(125.24),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -4926,7 +5003,7 @@ mod tests {
             Some(121.78),
             Some(122.76),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -4942,7 +5019,7 @@ mod tests {
             Some(150.06),
             Some(153.76),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -4962,7 +5039,7 @@ mod tests {
             Some(100.81967213114754),
             Some(100.0),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -4982,7 +5059,7 @@ mod tests {
             Some(1.0000000000000027),
             Some(8.881784197001252e-16),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -5025,7 +5102,11 @@ mod tests {
             schema,
             vec![left_decimal_array, right_decimal_array],
             Operator::Divide,
-            create_decimal_array(&[Some(123456700), None], 25, 3),
+            create_decimal_array(
+                &[Some(12345670000000000000000000000000000), None],
+                38,
+                29,
+            ),
         )?;
 
         Ok(())

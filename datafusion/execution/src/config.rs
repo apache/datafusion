@@ -94,7 +94,7 @@ impl SessionConfig {
 
     /// Customize [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
@@ -104,7 +104,7 @@ impl SessionConfig {
 
     /// Get [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }

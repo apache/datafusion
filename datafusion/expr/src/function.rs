@@ -286,11 +286,13 @@ pub fn return_type(
         | BuiltinScalarFunction::Ceil
         | BuiltinScalarFunction::Cos
         | BuiltinScalarFunction::Cosh
+        | BuiltinScalarFunction::Degrees
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Ln
         | BuiltinScalarFunction::Log10
         | BuiltinScalarFunction::Log2
+        | BuiltinScalarFunction::Radians
         | BuiltinScalarFunction::Round
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
@@ -473,11 +475,6 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             let base_sig = |array_type: TimeUnit| {
                 vec![
                     TypeSignature::Exact(vec![
-                        DataType::Interval(IntervalUnit::DayTime),
-                        DataType::Timestamp(array_type.clone(), None),
-                        DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    ]),
-                    TypeSignature::Exact(vec![
                         DataType::Interval(IntervalUnit::MonthDayNano),
                         DataType::Timestamp(array_type.clone(), None),
                         DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -485,13 +482,19 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     TypeSignature::Exact(vec![
                         DataType::Interval(IntervalUnit::DayTime),
                         DataType::Timestamp(array_type.clone(), None),
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
                     ]),
                     TypeSignature::Exact(vec![
                         DataType::Interval(IntervalUnit::MonthDayNano),
-                        DataType::Timestamp(array_type, None),
+                        DataType::Timestamp(array_type.clone(), None),
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Interval(IntervalUnit::DayTime),
+                        DataType::Timestamp(array_type.clone(), None),
                     ]),
                 ]
             };
+
             let full_sig = [
                 TimeUnit::Nanosecond,
                 TimeUnit::Microsecond,

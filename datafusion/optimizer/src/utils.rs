@@ -487,7 +487,6 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
 /// from both the subquery and outer table or only from the outer table.
 ///
 /// Returns join predicates and subquery(extracted).
-/// ```
 pub(crate) fn extract_join_filters(
     maybe_filter: &LogicalPlan,
 ) -> Result<(Vec<Expr>, LogicalPlan)> {

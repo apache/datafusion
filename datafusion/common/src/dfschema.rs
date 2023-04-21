@@ -601,7 +601,7 @@ impl Display for DFSchema {
 ///
 /// Note that this trait is implemented for &[DFSchema] which is
 /// widely used in the DataFusion codebase.
-pub trait ExprSchema {
+pub trait ExprSchema: std::fmt::Debug {
     /// Is this column reference nullable?
     fn nullable(&self, col: &Column) -> Result<bool>;
 
@@ -610,7 +610,7 @@ pub trait ExprSchema {
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
-impl<P: AsRef<DFSchema>> ExprSchema for P {
+impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn nullable(&self, col: &Column) -> Result<bool> {
         self.as_ref().nullable(col)
     }

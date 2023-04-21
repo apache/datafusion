@@ -1487,12 +1487,25 @@ pub struct PhysicalScalarUdfNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
-    #[prost(enumeration = "AggregateFunction", tag = "1")]
-    pub aggr_function: i32,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
+    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
+    pub aggregate_function: ::core::option::Option<
+        physical_aggregate_expr_node::AggregateFunction,
+    >,
+}
+/// Nested message and enum types in `PhysicalAggregateExprNode`.
+pub mod physical_aggregate_expr_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum AggregateFunction {
+        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
+        AggrFunction(i32),
+        #[prost(string, tag = "4")]
+        UserDefinedAggrFunction(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2152,6 +2165,8 @@ pub enum ScalarFunction {
     Cosh = 78,
     Tanh = 79,
     Pi = 80,
+    Degrees = 81,
+    Radians = 82,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2241,6 +2256,8 @@ impl ScalarFunction {
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Tanh => "Tanh",
             ScalarFunction::Pi => "Pi",
+            ScalarFunction::Degrees => "Degrees",
+            ScalarFunction::Radians => "Radians",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2327,6 +2344,8 @@ impl ScalarFunction {
             "Cosh" => Some(Self::Cosh),
             "Tanh" => Some(Self::Tanh),
             "Pi" => Some(Self::Pi),
+            "Degrees" => Some(Self::Degrees),
+            "Radians" => Some(Self::Radians),
             _ => None,
         }
     }

@@ -532,6 +532,8 @@ enum ScalarFunction {
   Cosh = 78;
   Tanh = 79;
   Pi = 80;
+  Degrees = 81;
+  Radians = 82;
 }
 
 message ScalarFunctionNode {
@@ -1060,7 +1062,10 @@ message PhysicalScalarUdfNode {
 }
 
 message PhysicalAggregateExprNode {
-  AggregateFunction aggr_function = 1;
+  oneof AggregateFunction {
+    AggregateFunction aggr_function = 1;
+    string user_defined_aggr_function = 4;
+  }
   repeated PhysicalExprNode expr = 2;
   bool distinct = 3;
 }

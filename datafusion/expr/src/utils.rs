@@ -69,7 +69,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
-/// The power set (or powerset) of a set S is the set of all subsets of S, \
+/// The [power set] (or powerset) of a set S is the set of all subsets of S, \
 /// including the empty set and S itself.
 ///
 /// Example:
@@ -85,7 +85,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 ///  {x, y, z} \
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
-/// Reference: https://en.wikipedia.org/wiki/Power_set
+/// [power set]: https://en.wikipedia.org/wiki/Power_set
 fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
     if slice.len() >= 64 {
         return Err("The size of the set must be less than 64.".into());

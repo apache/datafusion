@@ -462,7 +462,7 @@ fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
     w
 }
 
-/// Implements [`FormatReader`] for a parquet file
+/// Implements [`FileOpener`] for a parquet file
 struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,

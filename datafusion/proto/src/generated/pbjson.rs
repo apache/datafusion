@@ -12661,26 +12661,33 @@ impl serde::Serialize for PhysicalAggregateExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.aggr_function != 0 {
-            len += 1;
-        }
         if !self.expr.is_empty() {
             len += 1;
         }
         if self.distinct {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalAggregateExprNode", len)?;
-        if self.aggr_function != 0 {
-            let v = AggregateFunction::from_i32(self.aggr_function)
-                .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", self.aggr_function)))?;
-            struct_ser.serialize_field("aggrFunction", &v)?;
+        if self.aggregate_function.is_some() {
+            len += 1;
         }
+        let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalAggregateExprNode", len)?;
         if !self.expr.is_empty() {
             struct_ser.serialize_field("expr", &self.expr)?;
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
+        }
+        if let Some(v) = self.aggregate_function.as_ref() {
+            match v {
+                physical_aggregate_expr_node::AggregateFunction::AggrFunction(v) => {
+                    let v = AggregateFunction::from_i32(*v)
+                        .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
+                    struct_ser.serialize_field("aggrFunction", &v)?;
+                }
+                physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(v) => {
+                    struct_ser.serialize_field("userDefinedAggrFunction", v)?;
+                }
+            }
         }
         struct_ser.end()
     }
@@ -12692,17 +12699,20 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "aggr_function",
-            "aggrFunction",
             "expr",
             "distinct",
+            "aggr_function",
+            "aggrFunction",
+            "user_defined_aggr_function",
+            "userDefinedAggrFunction",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            AggrFunction,
             Expr,
             Distinct,
+            AggrFunction,
+            UserDefinedAggrFunction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12724,9 +12734,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "expr" => Ok(GeneratedField::Expr),
                             "distinct" => Ok(GeneratedField::Distinct),
+                            "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
+                            "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12746,17 +12757,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut aggr_function__ = None;
                 let mut expr__ = None;
                 let mut distinct__ = None;
+                let mut aggregate_function__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
-                        GeneratedField::AggrFunction => {
-                            if aggr_function__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("aggrFunction"));
-                            }
-                            aggr_function__ = Some(map.next_value::<AggregateFunction>()? as i32);
-                        }
                         GeneratedField::Expr => {
                             if expr__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("expr"));
@@ -12769,12 +12774,24 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             }
                             distinct__ = Some(map.next_value()?);
                         }
+                        GeneratedField::AggrFunction => {
+                            if aggregate_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("aggrFunction"));
+                            }
+                            aggregate_function__ = map.next_value::<::std::option::Option<AggregateFunction>>()?.map(|x| physical_aggregate_expr_node::AggregateFunction::AggrFunction(x as i32));
+                        }
+                        GeneratedField::UserDefinedAggrFunction => {
+                            if aggregate_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
+                            }
+                            aggregate_function__ = map.next_value::<::std::option::Option<_>>()?.map(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction);
+                        }
                     }
                 }
                 Ok(PhysicalAggregateExprNode {
-                    aggr_function: aggr_function__.unwrap_or_default(),
                     expr: expr__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
+                    aggregate_function: aggregate_function__,
                 })
             }
         }
@@ -17321,6 +17338,8 @@ impl serde::Serialize for ScalarFunction {
             Self::Cosh => "Cosh",
             Self::Tanh => "Tanh",
             Self::Pi => "Pi",
+            Self::Degrees => "Degrees",
+            Self::Radians => "Radians",
         };
         serializer.serialize_str(variant)
     }
@@ -17413,6 +17432,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Cosh",
             "Tanh",
             "Pi",
+            "Degrees",
+            "Radians",
         ];
 
         struct GeneratedVisitor;
@@ -17536,6 +17557,8 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Cosh" => Ok(ScalarFunction::Cosh),
                     "Tanh" => Ok(ScalarFunction::Tanh),
                     "Pi" => Ok(ScalarFunction::Pi),
+                    "Degrees" => Ok(ScalarFunction::Degrees),
+                    "Radians" => Ok(ScalarFunction::Radians),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
