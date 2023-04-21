@@ -345,22 +345,6 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
     Schema::new(fields)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// Takes a function and spawns it to a tokio blocking pool if available
-pub async fn maybe_spawn_blocking<F, T>(f: F) -> Result<T>
-where
-    F: FnOnce() -> Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(runtime) => runtime
-            .spawn_blocking(f)
-            .await
-            .map_err(|e| DataFusionError::Execution(e.to_string()))?,
-        Err(_) => f(),
-    }
-}
-
 impl Default for CsvSerializer {
     fn default() -> Self {
         Self::new()
