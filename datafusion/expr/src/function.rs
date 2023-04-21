@@ -490,7 +490,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     ]),
                     TypeSignature::Exact(vec![
                         DataType::Interval(IntervalUnit::DayTime),
-                        DataType::Timestamp(array_type.clone(), None),
+                        DataType::Timestamp(array_type, None),
                     ]),
                 ]
             };
