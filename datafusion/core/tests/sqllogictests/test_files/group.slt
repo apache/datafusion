@@ -189,13 +189,37 @@ e 0.014793053078 0.996540038759
 
 # TODO: csv_group_by_date
 
-# TODO: csv_group_by_time32second
+# csv_group_by_time32second
+query I rowsort
+SELECT SUM(cnt) FROM time32_s GROUP BY time
+----
+2
+3
+4
 
-# TODO: csv_group_by_time32millisecond
+# csv_group_by_time32millisecond
+query I rowsort
+SELECT SUM(cnt) FROM time32_ms GROUP BY time
+----
+2
+3
+4
 
-# TODO: csv_group_by_time64microsecond
+# csv_group_by_time64microsecond
+query I rowsort
+SELECT SUM(cnt) FROM time64_us GROUP BY time
+----
+2
+3
+4
 
-# TODO: csv_group_by_time64nanosecond
+# csv_group_by_time64nanosecond
+query I rowsort
+SELECT SUM(cnt) FROM time64_ns GROUP BY time
+----
+2
+3
+4
 
 # TODO: group_by_date_trunc
 
