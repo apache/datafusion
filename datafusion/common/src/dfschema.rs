@@ -68,14 +68,7 @@ impl DFSchema {
 
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
-                if !qualified_names.insert((qualifier, field.name())) {
-                    return Err(DataFusionError::SchemaError(
-                        SchemaError::DuplicateQualifiedField {
-                            qualifier: Box::new(qualifier.clone()),
-                            name: field.name().to_string(),
-                        },
-                    ));
-                }
+                qualified_names.insert((qualifier, field.name()));
             } else if !unqualified_names.insert(field.name()) {
                 return Err(DataFusionError::SchemaError(
                     SchemaError::DuplicateUnqualifiedField {
@@ -859,10 +852,7 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
-        assert_eq!(
-            join.unwrap_err().to_string(),
-            "Schema error: Schema contains duplicate qualified field name t1.c0",
-        );
+        assert!(join.err().is_none());
         Ok(())
     }
 

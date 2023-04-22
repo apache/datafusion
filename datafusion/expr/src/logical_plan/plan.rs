@@ -16,7 +16,6 @@
 // under the License.
 
 ///! Logical plan types
-use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::statement::{DmlStatement, Statement};
@@ -1669,7 +1668,6 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone())?;
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
