@@ -58,6 +58,7 @@ pub fn simplify_regex_expr(
     Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
 }
 
+#[derive(Debug)]
 struct OperatorMode {
     not: bool,
     i: bool,
@@ -102,8 +103,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
     for sub in parts {
         if let HirKind::Literal(l) = sub.kind() {
-            let c = char_from_literal(l)?;
-            s.push(c);
+            s.extend(str_from_literal(l)?.chars());
         } else {
             return None;
         }
@@ -113,21 +113,14 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
     Some(s)
 }
 
-/// returns a character from the Literal if it contains a valid utf8
-/// sequence and is safe for like
-fn char_from_literal(l: &Literal) -> Option<char> {
+/// returns a str represented by `Literal` if it contains a valid utf8
+/// sequence and is safe for like (has no '%' and '_')
+fn str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
     let s = std::str::from_utf8(&l.0).ok()?;
-    let mut chars = s.chars();
-    let c = chars.next()?;
 
-    // if more than one character, return None
-    if chars.next().is_some() {
-        return None;
-    }
-
-    if is_safe_for_like(c) {
-        Some(c)
+    if s.chars().all(is_safe_for_like) {
+        Some(s)
     } else {
         None
     }
@@ -138,13 +131,14 @@ fn is_safe_for_like(c: char) -> bool {
 }
 
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
+    println!("Considering hir kind: mode {mode:?} hir: {hir:?}");
     match hir.kind() {
         HirKind::Empty => {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
         }
         HirKind::Literal(l) => {
-            let c = char_from_literal(l)?;
-            return Some(mode.expr(Box::new(left.clone()), format!("%{c}%")));
+            let s = str_from_literal(l)?;
+            return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = collect_concat_to_like_string(inner) {
