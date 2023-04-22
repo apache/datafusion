@@ -103,7 +103,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
     for sub in parts {
         if let HirKind::Literal(l) = sub.kind() {
-            s.extend(str_from_literal(l)?.chars());
+            s.push_str(str_from_literal(l)?);
         } else {
             return None;
         }
