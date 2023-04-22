@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Reusable JIT version of row writer backed by Vec<u8> to stitch attributes together
+//! Reusable JIT version of row writer backed by `Vec<u8>` to stitch attributes together
 
 use crate::jit::fn_name;
 use crate::reg_fn;

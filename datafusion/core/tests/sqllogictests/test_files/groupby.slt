@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-#
+
 #   http://www.apache.org/licenses/LICENSE-2.0
-#
+
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -15,31 +15,46 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "datafusion-expr"
-description = "Logical plan and expression representation for DataFusion query engine"
-keywords = ["datafusion", "logical", "plan", "expressions"]
-version = { workspace = true }
-edition = { workspace = true }
-readme = { workspace = true }
-homepage = { workspace = true }
-repository = { workspace = true }
-license = { workspace = true }
-authors = { workspace = true }
-rust-version = { workspace = true }
 
-[lib]
-name = "datafusion_expr"
-path = "src/lib.rs"
+statement ok
+CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER)
 
-[features]
+statement ok
+CREATE TABLE tab1(col0 INTEGER, col1 INTEGER, col2 INTEGER)
 
-[dependencies]
-ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { workspace = true }
-datafusion-common = { path = "../common", version = "23.0.0" }
-sqlparser = "0.33"
+statement ok
+CREATE TABLE tab2(col0 INTEGER, col1 INTEGER, col2 INTEGER)
 
-[dev-dependencies]
-ctor = "0.2.0"
-env_logger = "0.10"
+statement ok
+INSERT INTO tab0 VALUES(83,0,38)
+
+statement ok
+INSERT INTO tab0 VALUES(26,0,79)
+
+statement ok
+INSERT INTO tab0 VALUES(43,81,24)
+
+statement ok
+INSERT INTO tab1 VALUES(22,6,8)
+
+statement ok
+INSERT INTO tab1 VALUES(28,57,45)
+
+statement ok
+INSERT INTO tab1 VALUES(82,44,71)
+
+statement ok
+INSERT INTO tab2 VALUES(15,61,87)
+
+statement ok
+INSERT INTO tab2 VALUES(91,59,79)
+
+statement ok
+INSERT INTO tab2 VALUES(92,41,58)
+
+# group by same column
+query I
+SELECT 38 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col1;
+----
+38
+38
