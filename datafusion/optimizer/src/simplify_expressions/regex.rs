@@ -101,11 +101,9 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
     s.push('%');
 
     for sub in parts {
-        if let HirKind::Literal(Literal::Unicode(c)) = sub.kind() {
-            if !is_safe_for_like(*c) {
-                return None;
-            }
-            s.push(*c);
+        if let HirKind::Literal(l) = sub.kind() {
+            let c = char_from_literal(l)?;
+            s.push(c);
         } else {
             return None;
         }
@@ -113,6 +111,26 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 
     s.push('%');
     Some(s)
+}
+
+/// returns a character from the Literal if it contains a valid utf8
+/// sequence and is safe for like
+fn char_from_literal(l: &Literal) -> Option<char> {
+    // if not utf8, no good
+    let s = std::str::from_utf8(&l.0).ok()?;
+    let mut chars = s.chars();
+    let c = chars.next()?;
+
+    // if more than one character, return None
+    if chars.next().is_some() {
+        return None;
+    }
+
+    if is_safe_for_like(c) {
+        Some(c)
+    } else {
+        None
+    }
 }
 
 fn is_safe_for_like(c: char) -> bool {
@@ -124,7 +142,8 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
         HirKind::Empty => {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
         }
-        HirKind::Literal(Literal::Unicode(c)) if is_safe_for_like(*c) => {
+        HirKind::Literal(l) => {
+            let c = char_from_literal(l)?;
             return Some(mode.expr(Box::new(left.clone()), format!("%{c}%")));
         }
         HirKind::Concat(inner) => {
