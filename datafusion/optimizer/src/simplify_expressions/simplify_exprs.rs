@@ -22,7 +22,7 @@ use std::sync::Arc;
 use super::{ExprSimplifier, SimplifyContext};
 use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchemaRef, Result, DFSchema};
+use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
