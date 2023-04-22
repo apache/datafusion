@@ -18,27 +18,6 @@
 use super::*;
 
 #[tokio::test]
-async fn csv_query_group_by_string_min_max() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT c1, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----+-----------------------------+-----------------------------+",
-        "| c1 | MIN(aggregate_test_100.c12) | MAX(aggregate_test_100.c12) |",
-        "+----+-----------------------------+-----------------------------+",
-        "| a  | 0.02182578039211991         | 0.9800193410444061          |",
-        "| b  | 0.04893135681998029         | 0.9185813970744787          |",
-        "| c  | 0.0494924465469434          | 0.991517828651004           |",
-        "| d  | 0.061029375346466685        | 0.9748360509016578          |",
-        "| e  | 0.01479305307777301         | 0.9965400387585364          |",
-        "+----+-----------------------------+-----------------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn query_group_on_null() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
