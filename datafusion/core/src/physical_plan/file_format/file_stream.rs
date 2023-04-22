@@ -97,13 +97,13 @@ enum FileStreamState {
     /// Currently performing asynchronous IO to obtain a stream of RecordBatch
     /// for a given parquet file
     Open {
-        /// A [`FileOpenFuture`] returned by [`FormatReader::open`]
+        /// A [`FileOpenFuture`] returned by [`FileOpener::open`]
         future: FileOpenFuture,
         /// The partition values for this file
         partition_values: Vec<ScalarValue>,
     },
     /// Scanning the [`BoxStream`] returned by the completion of a [`FileOpenFuture`]
-    /// returned by [`FormatReader::open`]
+    /// returned by [`FileOpener::open`]
     Scan {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
@@ -149,7 +149,7 @@ impl StartableTime {
 struct FileStreamMetrics {
     /// Wall clock time elapsed for file opening.
     ///
-    /// Time between when [`FileReader::open`] is called and when the
+    /// Time between when [`FileOpener::open`] is called and when the
     /// [`FileStream`] receives a stream for reading.
     ///
     /// If there are multiple files being scanned, the stream

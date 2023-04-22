@@ -476,11 +476,6 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::DateBin => Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![
-                    DataType::Interval(IntervalUnit::DayTime),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-                TypeSignature::Exact(vec![
                     DataType::Interval(IntervalUnit::MonthDayNano),
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -488,9 +483,14 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 TypeSignature::Exact(vec![
                     DataType::Interval(IntervalUnit::DayTime),
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
                 ]),
                 TypeSignature::Exact(vec![
                     DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Interval(IntervalUnit::DayTime),
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                 ]),
             ],

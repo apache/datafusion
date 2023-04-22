@@ -736,7 +736,7 @@ fn build_is_null_column_expr(
 /// expression that will evaluate to FALSE if it can be determined no
 /// rows between the min/max values could pass the predicates.
 ///
-/// Returns the pruning predicate as an [`Expr`]
+/// Returns the pruning predicate as an [`PhysicalExpr`]
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,

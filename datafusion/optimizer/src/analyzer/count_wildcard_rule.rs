@@ -33,7 +33,8 @@ use crate::analyzer::AnalyzerRule;
 pub const COUNT_STAR: &str = "COUNT(*)";
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
-/// Resolve issue: https://github.com/apache/arrow-datafusion/issues/5473.
+///
+/// Resolves issue: <https://github.com/apache/arrow-datafusion/issues/5473>
 #[derive(Default)]
 pub struct CountWildcardRule {}
 

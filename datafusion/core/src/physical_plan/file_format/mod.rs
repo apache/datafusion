@@ -77,6 +77,8 @@ use super::{ColumnStatistics, Statistics};
 /// different dictionary type.
 ///
 /// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
+///
+/// [`ListingTable`]: crate::datasource::listing::ListingTable
 pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
