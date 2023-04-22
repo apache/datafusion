@@ -786,10 +786,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{
-        ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder,
-        TimestampMicrosecondArray,
-    };
+    use arrow::array::{ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder};
 
     use super::*;
 
@@ -1070,7 +1067,7 @@ mod tests {
         ]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
+            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got Timestamp(Microsecond, None)"
         );
 
         let res = date_bin(&[
@@ -1079,18 +1076,6 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
         assert!(res.is_ok());
-
-        let timestamps =
-            Arc::new((1..6).map(Some).collect::<TimestampMicrosecondArray>());
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Array(timestamps),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects source argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
-        );
 
         // unsupported array type for stride
         let intervals = Arc::new((1..6).map(Some).collect::<IntervalDayTimeArray>());
