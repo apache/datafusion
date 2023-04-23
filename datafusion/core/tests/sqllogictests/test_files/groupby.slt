@@ -253,8 +253,6 @@ query I rowsort
 SELECT DISTINCT 30 * - 9 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col2
 ----
 -270
--270
--270
 
 query I rowsort
 SELECT DISTINCT - col2 FROM tab1 AS cor0 GROUP BY col2
@@ -1483,6 +1481,7 @@ SELECT + cor0.col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 query I rowsort
 SELECT DISTINCT + 45 col0 FROM tab1 AS cor0 GROUP BY col0
 ----
+45
 45
 45
 
