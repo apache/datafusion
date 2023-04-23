@@ -1478,6 +1478,7 @@ SELECT + cor0.col0 AS col2 FROM tab1 AS cor0 GROUP BY cor0.col0
 82
 
 # TODO: WRONG
+# https://github.com/apache/arrow-datafusion/issues/6099
 query I rowsort
 SELECT DISTINCT + 45 col0 FROM tab1 AS cor0 GROUP BY col0
 ----
@@ -1914,6 +1915,7 @@ SELECT ALL - ( 30 ) * + cor0.col1 AS col2 FROM tab2 AS cor0 GROUP BY cor0.col1
 -1830
 
 # TODO: WRONG
+# https://github.com/apache/arrow-datafusion/issues/6099
 query I rowsort
 SELECT DISTINCT 94 AS col1 FROM tab0 AS cor0 GROUP BY cor0.col1
 ----
