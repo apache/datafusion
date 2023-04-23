@@ -69,52 +69,6 @@ async fn group_by_date_trunc() -> Result<()> {
 }
 
 #[tokio::test]
-async fn group_by_largeutf8() {
-    let ctx = SessionContext::new();
-
-    // input data looks like:
-    // A, 1
-    // B, 2
-    // A, 2
-    // A, 4
-    // C, 1
-    // A, 1
-
-    let str_array: LargeStringArray = vec!["A", "B", "A", "A", "C", "A"]
-        .into_iter()
-        .map(Some)
-        .collect();
-    let str_array = Arc::new(str_array);
-
-    let val_array: Int64Array = vec![1, 2, 2, 4, 1, 1].into();
-    let val_array = Arc::new(val_array);
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("str", str_array.data_type().clone(), false),
-        Field::new("val", val_array.data_type().clone(), false),
-    ]));
-
-    let batch = RecordBatch::try_new(schema.clone(), vec![str_array, val_array]).unwrap();
-
-    ctx.register_batch("t", batch).unwrap();
-
-    let results = plan_and_collect(&ctx, "SELECT str, count(val) FROM t GROUP BY str")
-        .await
-        .expect("ran plan correctly");
-
-    let expected = vec![
-        "+-----+--------------+",
-        "| str | COUNT(t.val) |",
-        "+-----+--------------+",
-        "| A   | 4            |",
-        "| B   | 1            |",
-        "| C   | 1            |",
-        "+-----+--------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-}
-
-#[tokio::test]
 async fn group_by_dictionary() {
     async fn run_test_case<K: ArrowDictionaryKeyType>() {
         let ctx = SessionContext::new();

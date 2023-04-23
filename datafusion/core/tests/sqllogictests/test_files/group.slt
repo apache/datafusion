@@ -321,7 +321,31 @@ SELECT SUM(cnt) FROM time64_nanos GROUP BY time
 
 # TODO: group_by_date_trunc
 
-# TODO: group_by_largeutf8
+
+# Create table with LargeUtf8 data
+
+statement ok
+create table utf8_data(str string, val bigint) as values
+  ('A', 1),
+  ('B', 2),
+  ('A', 2),
+  ('A', 4),
+  ('C', 1),
+  ('A', 1);
+
+statement ok
+create table largeutf8_data as
+select arrow_cast(str, 'LargeUtf8') as str, val
+from utf8_data;
+
+# group_by_largeutf8
+query TI rowsort
+SELECT str, count(val) FROM largeutf8_data GROUP BY str
+----
+A 4
+B 1
+C 1
+
 
 # TODO: group_by_dictionary
 
