@@ -183,12 +183,77 @@ c 0.049492446547 0.991517828651
 d 0.061029375346 0.974836050902
 e 0.014793053078 0.996540038759
 
-# TODO: query_group_on_null
 
-# TODO: query_group_on_null_multi_col
+# Create a table containing null values
 
-# TODO: csv_group_by_date
+statement ok
+create table null_data(c1 int) as values
+  (0),
+  (3),
+  (NULL),
+  (1),
+  (3);
 
+# query_group_on_null
+query II rowsort
+SELECT COUNT(*), c1 FROM null_data GROUP BY c1
+----
+1 0
+1 1
+1 NULL
+2 3
+
+
+# Create a table containing multiple column with null values
+
+statement ok
+create table multi_null_data(c1 int, c2 string) as values
+  (0, NULL),
+  (0, NULL),
+  (3, 'foo'),
+  (NULL, NULL),
+  (NULL, 'bar'),
+  (3, 'foo'),
+  (0, NULL),
+  (NULL, 'bar'),
+  (3, 'foo');
+
+# query_group_on_null_multi_col
+
+query IIT rowsort
+SELECT COUNT(*), c1, c2 FROM multi_null_data GROUP BY c1, c2
+----
+1 NULL NULL
+2 NULL bar
+3 0 NULL
+3 3 foo
+
+query IIT rowsort
+SELECT COUNT(*), c1, c2 FROM multi_null_data GROUP BY c2, c1
+----
+1 NULL NULL
+2 NULL bar
+3 0 NULL
+3 3 foo
+
+
+# Create a date table
+
+statement ok
+create table date_data(date date, cnt int) as values
+  (100, 1),
+  (100, 2),
+  (100, 3),
+  (101, 3),
+  (101, 3),
+  (101, 3);
+
+# csv_group_by_date
+query I rowsort
+SELECT SUM(cnt) FROM date_data GROUP BY date
+----
+6
+9
 
 # Create time tables with different precisions but the same logical values
 
