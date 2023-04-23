@@ -24,7 +24,6 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
-use crate::utils::quote_identifier;
 use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
 use arrow::compute::can_cast_types;
@@ -217,20 +216,7 @@ impl DFSchema {
                 (None, Some(_)) | (None, None) => field.name() == name,
             })
             .map(|(idx, _)| idx);
-        match matches.next() {
-            None => Ok(None),
-            Some(idx) => match matches.next() {
-                None => Ok(Some(idx)),
-                // found more than one matches
-                Some(_) => Err(DataFusionError::Internal(format!(
-                    "Ambiguous reference to qualified field named {}.{}",
-                    qualifier
-                        .map(|q| q.to_quoted_string())
-                        .unwrap_or("<unqualified>".to_string()),
-                    quote_identifier(name)
-                ))),
-            },
-        }
+        Ok(matches.next())
     }
 
     /// Find the index of the column with the given qualifier and name
