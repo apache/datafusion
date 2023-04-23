@@ -189,6 +189,38 @@ e 0.014793053078 0.996540038759
 
 # TODO: csv_group_by_date
 
+
+# Create time tables with different precisions but the same logical values
+
+statement ok
+create table time_data(ts bigint, cnt int) as values
+  (5000000000000, 1),
+  (5000000000000, 1),
+  (5500000000000, 1),
+  (5500000000000, 2),
+  (5900000000000, 1),
+  (5900000000000, 3);
+
+statement ok
+create table time64_nanos as
+select arrow_cast(ts, 'Time64(Nanosecond)') as time, arrow_cast(cnt, 'Int64') as cnt
+from time_data;
+
+statement ok
+create table time64_micros as
+select arrow_cast(ts / 1000, 'Time64(Microsecond)') as time, arrow_cast(cnt, 'Int64') as cnt
+from time_data;
+
+statement ok
+create table time32_millis as
+select arrow_cast(arrow_cast(ts / 1000 / 1000, 'Int32'), 'Time32(Millisecond)') as time, cnt
+from time_data;
+
+statement ok
+create table time32_s as
+select arrow_cast(arrow_cast(ts / 1000 / 1000 / 1000, 'Int32'), 'Time32(Second)') as time, cnt
+from time_data;
+
 # csv_group_by_time32second
 query I rowsort
 SELECT SUM(cnt) FROM time32_s GROUP BY time
@@ -199,7 +231,7 @@ SELECT SUM(cnt) FROM time32_s GROUP BY time
 
 # csv_group_by_time32millisecond
 query I rowsort
-SELECT SUM(cnt) FROM time32_ms GROUP BY time
+SELECT SUM(cnt) FROM time32_millis GROUP BY time
 ----
 2
 3
@@ -207,7 +239,7 @@ SELECT SUM(cnt) FROM time32_ms GROUP BY time
 
 # csv_group_by_time64microsecond
 query I rowsort
-SELECT SUM(cnt) FROM time64_us GROUP BY time
+SELECT SUM(cnt) FROM time64_micros GROUP BY time
 ----
 2
 3
@@ -215,11 +247,12 @@ SELECT SUM(cnt) FROM time64_us GROUP BY time
 
 # csv_group_by_time64nanosecond
 query I rowsort
-SELECT SUM(cnt) FROM time64_ns GROUP BY time
+SELECT SUM(cnt) FROM time64_nanos GROUP BY time
 ----
 2
 3
 4
+
 
 # TODO: group_by_date_trunc
 

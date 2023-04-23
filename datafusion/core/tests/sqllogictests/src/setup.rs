@@ -20,10 +20,9 @@ use datafusion::{
         array::{
             ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array,
             Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array,
-            UInt8Array, Time32MillisecondArray, Time32SecondArray,
-            Time64MicrosecondArray, Time64NanosecondArray,
+            UInt8Array
         },
-        datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
+        datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
     datasource::MemTable,
@@ -39,95 +38,6 @@ pub async fn register_aggregate_tables(ctx: &SessionContext) {
     register_decimal_table(ctx);
     register_median_test_tables(ctx);
     register_test_data(ctx);
-}
-
-pub async fn register_group_tables(ctx: &SessionContext) {
-    register_time_test_tables(ctx);
-}
-
-/// Create and populate time32_s, time32_ms, time64_us, time64_ns tables
-fn register_time_test_tables(ctx: &SessionContext) {
-    let count_i32_values: Vec<Option<i32>> = vec![
-        Some(1),
-        Some(1),
-        Some(1),
-        Some(2),
-        Some(1),
-        Some(3),
-    ];
-    let count_i64_values: Vec<Option<i64>> = count_i32_values
-        .iter()
-        .map(|x| x.clone().map(|y| y.into()))
-        .collect();
-    // In seconds
-    let time_values: Vec<i64> = vec![
-        5_000,
-        5_000,
-        5_500,
-        5_500,
-        5_900,
-        5_900,
-    ];
-    let items: Vec<(&str, SchemaRef, Vec<ArrayRef>)> = vec![
-        (
-            "32_s",
-            Arc::new(Schema::new(vec![
-                Field::new("time", DataType::Time32(TimeUnit::Second), false),
-                Field::new("cnt", DataType::Int32, false),
-            ])),
-            vec![
-                Arc::new(Time32SecondArray::from(
-                    time_values.iter().map(|x| *x as i32).collect::<Vec<i32>>()
-                )),
-                Arc::new(Int32Array::from(count_i32_values.clone())),
-            ],
-        ),
-        (
-            "32_ms",
-            Arc::new(Schema::new(vec![
-                Field::new("time", DataType::Time32(TimeUnit::Millisecond), false),
-                Field::new("cnt", DataType::Int32, false),
-            ])),
-            vec![
-                Arc::new(Time32MillisecondArray::from(
-                    time_values.iter().map(|x| (x * 1_000) as i32).collect::<Vec<i32>>()
-                )),
-                Arc::new(Int32Array::from(count_i32_values)),
-            ],
-        ),
-        (
-            "64_us",
-            Arc::new(Schema::new(vec![
-                Field::new("time", DataType::Time64(TimeUnit::Microsecond), false),
-                Field::new("cnt", DataType::Int64, false),
-            ])),
-            vec![
-                Arc::new(Time64MicrosecondArray::from(
-                    time_values.iter().map(|x| x * 1_000_000).collect::<Vec<i64>>()
-                )),
-                Arc::new(Int64Array::from(count_i64_values.clone())),
-            ],
-        ),
-        (
-            "64_ns",
-            Arc::new(Schema::new(vec![
-                Field::new("time", DataType::Time64(TimeUnit::Nanosecond), false),
-                Field::new("cnt", DataType::Int64, false),
-            ])),
-            vec![
-                Arc::new(Time64NanosecondArray::from(
-                    time_values.iter().map(|x| x * 1_000_000_000).collect::<Vec<i64>>()
-                )),
-                Arc::new(Int64Array::from(count_i64_values)),
-            ],
-        )
-    ];
-
-    for (suffix, schema_ref, values) in items {
-        let batch = RecordBatch::try_new(schema_ref, values).unwrap();
-        let table_name = &format!("time{suffix}");
-        ctx.register_batch(table_name, batch).unwrap();
-    }
 }
 
 fn register_median_test_tables(ctx: &SessionContext) {
