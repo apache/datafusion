@@ -61,8 +61,8 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let window_expr = window
                 .window_expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter).unwrap())
-                .collect::<Vec<Expr>>();
+                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(LogicalPlan::Window(Window {
                 input: window.input.clone(),
@@ -74,8 +74,8 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let aggr_expr = agg
                 .aggr_expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter).unwrap())
-                .collect();
+                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(LogicalPlan::Aggregate(
                 Aggregate::try_new_with_schema(
@@ -89,8 +89,8 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             let sort_expr = expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter).unwrap())
-                .collect();
+                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .collect::<Result<Vec<_>>>()?;
             Ok(Transformed::Yes(LogicalPlan::Sort(Sort {
                 expr: sort_expr,
                 input,
@@ -101,8 +101,8 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let projection_expr = projection
                 .expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter).unwrap())
-                .collect();
+                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .collect::<Result<Vec<_>>>()?;
             Ok(Transformed::Yes(LogicalPlan::Projection(
                 Projection::try_new_with_schema(
                     projection_expr,
@@ -115,10 +115,10 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         LogicalPlan::Filter(Filter {
             predicate, input, ..
         }) => {
-            let predicate = predicate.rewrite(&mut rewriter).unwrap();
-            Ok(Transformed::Yes(LogicalPlan::Filter(
-                Filter::try_new(predicate, input).unwrap(),
-            )))
+            let predicate = predicate.rewrite(&mut rewriter)?;
+            Ok(Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
+                predicate, input,
+            )?)))
         }
 
         _ => Ok(Transformed::No(plan)),
@@ -151,17 +151,15 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 order_by,
                 window_frame,
             }) if args.len() == 1 => match args[0] {
-                Expr::Wildcard => {
-                    Expr::WindowFunction(datafusion_expr::expr::WindowFunction {
-                        fun: window_function::WindowFunction::AggregateFunction(
-                            aggregate_function::AggregateFunction::Count,
-                        ),
-                        args: vec![lit(COUNT_STAR_EXPANSION)],
-                        partition_by,
-                        order_by,
-                        window_frame,
-                    })
-                }
+                Expr::Wildcard => Expr::WindowFunction(expr::WindowFunction {
+                    fun: window_function::WindowFunction::AggregateFunction(
+                        aggregate_function::AggregateFunction::Count,
+                    ),
+                    args: vec![lit(COUNT_STAR_EXPANSION)],
+                    partition_by,
+                    order_by,
+                    window_frame,
+                }),
 
                 _ => old_expr,
             },
@@ -187,8 +185,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 let new_plan = subquery
                     .as_ref()
                     .clone()
-                    .transform_down(&analyze_internal)
-                    .unwrap();
+                    .transform_down(&analyze_internal)?;
                 ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
@@ -203,8 +200,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                     .subquery
                     .as_ref()
                     .clone()
-                    .transform_down(&analyze_internal)
-                    .unwrap();
+                    .transform_down(&analyze_internal)?;
 
                 InSubquery {
                     expr,
@@ -220,8 +216,7 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                     .subquery
                     .as_ref()
                     .clone()
-                    .transform_down(&analyze_internal)
-                    .unwrap();
+                    .transform_down(&analyze_internal)?;
 
                 Exists {
                     subquery: Subquery {

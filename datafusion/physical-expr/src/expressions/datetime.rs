@@ -719,8 +719,7 @@ mod tests {
             let res2 = timestamp_scalar.add(&interval_scalar)?.to_array();
             assert_eq!(
                 &res1, &res2,
-                "Timestamp Scalar={} + Interval Scalar={}",
-                timestamp_scalar, interval_scalar
+                "Timestamp Scalar={timestamp_scalar} + Interval Scalar={interval_scalar}"
             );
         }
 
@@ -731,8 +730,7 @@ mod tests {
             let res2 = timestamp_scalar.sub(&interval_scalar)?.to_array();
             assert_eq!(
                 &res1, &res2,
-                "Timestamp Scalar={} - Interval Scalar={}",
-                timestamp_scalar, interval_scalar
+                "Timestamp Scalar={timestamp_scalar} - Interval Scalar={interval_scalar}"
             );
         }
 
@@ -743,8 +741,7 @@ mod tests {
             let res2 = timestamp_scalar.sub(&timestamp_scalar)?.to_array();
             assert_eq!(
                 &res1, &res2,
-                "Timestamp Scalar={} - Timestamp Scalar={}",
-                timestamp_scalar, timestamp_scalar
+                "Timestamp Scalar={timestamp_scalar} - Timestamp Scalar={timestamp_scalar}"
             );
         }
 
@@ -755,8 +752,7 @@ mod tests {
             let res2 = interval_scalar.sub(&interval_scalar)?.to_array();
             assert_eq!(
                 &res1, &res2,
-                "Interval Scalar={} - Interval Scalar={}",
-                interval_scalar, interval_scalar
+                "Interval Scalar={interval_scalar} - Interval Scalar={interval_scalar}"
             );
         }
 
@@ -767,8 +763,7 @@ mod tests {
             let res2 = interval_scalar.add(&interval_scalar)?.to_array();
             assert_eq!(
                 &res1, &res2,
-                "Interval Scalar={} + Interval Scalar={}",
-                interval_scalar, interval_scalar
+                "Interval Scalar={interval_scalar} + Interval Scalar={interval_scalar}"
             );
         }
 
