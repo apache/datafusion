@@ -17,6 +17,7 @@
 
 //! Optimizer rule for type validation and coercion
 
+use arrow::compute::can_cast_types;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, IntervalUnit};
@@ -32,7 +33,7 @@ use datafusion_expr::type_coercion::binary::{
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
-    get_coerce_type_for_case_expression, get_coerce_type_for_list,
+    get_coerce_type_for_case_expression, get_common_type_of_all_type,
 };
 use datafusion_expr::type_coercion::{
     is_date, is_numeric, is_timestamp, is_utf8_or_large_utf8,
@@ -312,49 +313,39 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             }) => {
                 let expr_type = expr.get_type(&self.schema)?;
                 let low_type = low.get_type(&self.schema)?;
-                let low_coerced_type = comparison_coercion(&expr_type, &low_type)
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
-                        ))
-                    })?;
                 let high_type = high.get_type(&self.schema)?;
-                let high_coerced_type = comparison_coercion(&expr_type, &low_type)
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                        ))
-                    })?;
-                let coercion_type =
-                    comparison_coercion(&low_coerced_type, &high_coerced_type)
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
-                                "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
-                            ))
-                        })?;
-                let expr = Expr::Between(Between::new(
-                    Box::new(expr.cast_to(&coercion_type, &self.schema)?),
-                    negated,
-                    Box::new(low.cast_to(&coercion_type, &self.schema)?),
-                    Box::new(high.cast_to(&coercion_type, &self.schema)?),
-                ));
-                Ok(expr)
+                let between_common_type = comparison_coercion(&low_type, &high_type).ok_or(DataFusionError::Internal(format!("Failed to coerce types {low_type} and {high_type} in BETWEEN expression")))?;
+                // Because low/high is Literal, cast them as much as possible to avoid cast expr.
+                Ok(if can_cast_types(&between_common_type, &expr_type) {
+                    Expr::Between(Between::new(
+                        expr,
+                        negated,
+                        Box::new(low.cast_to(&expr_type, &self.schema)?),
+                        Box::new(high.cast_to(&expr_type, &self.schema)?),
+                    ))
+                } else {
+                    let common_type = comparison_coercion(&expr_type, &between_common_type).ok_or(DataFusionError::Internal(format!("Failed to coerce types {expr_type} and {low_type} in BETWEEN expression")))?;
+                    Expr::Between(Between::new(
+                        Box::new(expr.cast_to(&common_type, &self.schema)?),
+                        negated,
+                        Box::new(low.cast_to(&common_type, &self.schema)?),
+                        Box::new(high.cast_to(&common_type, &self.schema)?),
+                    ))
+                })
             }
             Expr::InList {
                 expr,
                 list,
                 negated,
             } => {
-                let expr_data_type = expr.get_type(&self.schema)?;
-                let list_data_types = list
-                    .iter()
+                let all_types = std::iter::once(expr.as_ref())
+                    .chain(list.iter())
                     .map(|list_expr| list_expr.get_type(&self.schema))
                     .collect::<Result<Vec<_>>>()?;
-                let result_type =
-                    get_coerce_type_for_list(&expr_data_type, &list_data_types);
-                match result_type {
+                let common_type = get_common_type_of_all_type(&all_types);
+                match common_type {
                     None => Err(DataFusionError::Plan(format!(
-                        "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
+                        "Failed to common type of {all_types:?} in InList expression"
                     ))),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -1065,7 +1056,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         // TODO: we should cast col(a).
         let expected =
-            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
+            "Filter: a BETWEEN CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8) AND Utf8(\"2002-12-08\")\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }

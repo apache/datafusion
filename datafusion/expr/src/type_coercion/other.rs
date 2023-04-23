@@ -19,19 +19,12 @@ use arrow::datatypes::DataType;
 
 use super::binary::comparison_coercion;
 
-/// Attempts to coerce the types of `list_types` to be comparable with the
-/// `expr_type`.
-/// Returns the common data type for `expr_type` and `list_types`
-pub fn get_coerce_type_for_list(
-    expr_type: &DataType,
-    list_types: &[DataType],
-) -> Option<DataType> {
-    list_types
-        .iter()
-        .fold(Some(expr_type.clone()), |left, right_type| match left {
-            None => None,
-            Some(left_type) => comparison_coercion(&left_type, right_type),
-        })
+/// Find a common common type for all `types`.
+pub fn get_common_type_of_all_type(types: &[DataType]) -> Option<DataType> {
+    types.iter().fold(None, |left, right_type| match left {
+        None => Some(right_type.clone()),
+        Some(left_type) => comparison_coercion(&left_type, right_type),
+    })
 }
 
 /// Find a common coerceable type for all `when_or_then_types` as well
