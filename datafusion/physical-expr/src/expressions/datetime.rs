@@ -144,7 +144,7 @@ impl PhysicalExpr for DateTimeIntervalExpr {
                 }))
             }
             // This function evaluates temporal array vs scalar operations, such as timestamp - timestamp,
-            // interval + interval, timestamp + interval, and interval + timestamp. It takes two arrays as input
+            // interval + interval, timestamp + interval, and interval + timestamp. It takes one array and one scalar as input
             // and an integer sign representing the operation (+1 for addition and -1 for subtraction).
             (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(array_rhs)) => {
                 resolve_temporal_op_scalar(&array_lhs, sign, &array_rhs)
