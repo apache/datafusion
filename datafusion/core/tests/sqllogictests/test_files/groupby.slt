@@ -58,3 +58,9 @@ SELECT 38 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col1;
 ----
 38
 38
+
+query I rowsort
+SELECT cor0.col1 AS col2 FROM tab0 AS cor0 GROUP BY cor0.col1, cor0.col1;
+----
+0
+81
