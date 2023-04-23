@@ -49,7 +49,7 @@ datafusion-physical-expr = { path = "../physical-expr", version = "23.0.0", defa
 hashbrown = { version = "0.13", features = ["raw"] }
 itertools = "0.10"
 log = "^0.4"
-regex-syntax = "0.6.28"
+regex-syntax = "0.7.1"
 
 [dev-dependencies]
 ctor = "0.2.0"
