@@ -20,7 +20,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::expr::Sort as ExprSort;
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{Expr, Sort};
+use datafusion_expr::{Aggregate, Expr, Sort};
 use hashbrown::HashSet;
 
 /// Optimization rule that eliminate duplicated expr.
@@ -72,6 +72,26 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                         input: sort.input.clone(),
                         fetch: sort.fetch,
                     })))
+                }
+            }
+            LogicalPlan::Aggregate(agg) => {
+                // dedup agg.groupby and keep order
+                let mut dedup_expr = Vec::new();
+                let mut dedup_set = HashSet::new();
+                agg.group_expr.iter().for_each(|expr| {
+                    if !dedup_set.contains(expr) {
+                        dedup_expr.push(expr.clone());
+                        dedup_set.insert(expr);
+                    }
+                });
+                if dedup_expr.len() == agg.group_expr.len() {
+                    Ok(None)
+                } else {
+                    Ok(Some(LogicalPlan::Aggregate(Aggregate::try_new(
+                        agg.input.clone(),
+                        dedup_expr,
+                        agg.aggr_expr.clone(),
+                    )?)))
                 }
             }
             _ => Ok(None),

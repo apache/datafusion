@@ -48,7 +48,9 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use crate::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -600,6 +602,7 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
+                            PartitionSearchMode::Sorted,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -1292,8 +1295,8 @@ impl DefaultPhysicalPlanner {
     }
 }
 
-/// Expand and align  a GROUPING SET expression.
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// Expand and align a GROUPING SET expression.
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 ///
 /// This will take a list of grouping sets and ensure that each group is
 /// properly aligned for the physical execution plan. We do this by
@@ -1301,7 +1304,7 @@ impl DefaultPhysicalPlanner {
 /// group to the same set of expression types and ordering.
 /// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
 /// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn merge_grouping_set_physical_expr(
     grouping_sets: &[Vec<Expr>],
     input_dfschema: &DFSchema,
@@ -1352,7 +1355,7 @@ fn merge_grouping_set_physical_expr(
 }
 
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn create_cube_physical_expr(
     exprs: &[Expr],
     input_dfschema: &DFSchema,
@@ -1399,7 +1402,7 @@ fn create_cube_physical_expr(
 }
 
 /// Expand and align a ROLLUP expression. This is a special case of GROUPING SETS
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn create_rollup_physical_expr(
     exprs: &[Expr],
     input_dfschema: &DFSchema,

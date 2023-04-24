@@ -518,7 +518,8 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
     Ok(())
 }
 
-/// Find all [`Expr::PlaceHolder`] tokens in a logical plan, and try to infer their type from context
+/// Find all [`Expr::Placeholder`] tokens in a logical plan, and try
+/// to infer their [`DataType`] from the context of their use.
 fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     expr.transform(&|mut expr| {
         // Default to assuming the arguments are the same type

@@ -1803,6 +1803,11 @@ impl SessionState {
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
     }
+
+    /// Return version of the cargo package that produced this query
+    pub fn version(&self) -> &str {
+        env!("CARGO_PKG_VERSION")
+    }
 }
 
 struct SessionContextProvider<'a> {
@@ -1924,8 +1929,7 @@ fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
         "ansi" => Ok(Box::new(AnsiDialect {})),
         _ => {
             Err(DataFusionError::Internal(format!(
-                "Unsupported SQL dialect: {}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi.",
-                dialect_name
+                "Unsupported SQL dialect: {dialect_name}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi."
             )))
         }
     }

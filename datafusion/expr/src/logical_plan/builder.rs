@@ -1041,11 +1041,18 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
+    fn nullify_fields(fields: &[DFField]) -> Vec<DFField> {
+        fields
+            .iter()
+            .map(|f| f.clone().with_nullable(true))
+            .collect()
+    }
+
     let right_fields = right.fields();
     let left_fields = left.fields();
 
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner | JoinType::Full | JoinType::Right => {
+        JoinType::Inner => {
             // left then right
             left_fields
                 .iter()
@@ -1055,14 +1062,25 @@ pub fn build_join_schema(
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
-            let right_fields_nullable: Vec<DFField> = right_fields
-                .iter()
-                .map(|f| f.clone().with_nullable(true))
-                .collect();
-
             left_fields
                 .iter()
-                .chain(&right_fields_nullable)
+                .chain(&nullify_fields(right_fields))
+                .cloned()
+                .collect()
+        }
+        JoinType::Right => {
+            // left then right, left set to nullable in case of not matched scenario
+            nullify_fields(left_fields)
+                .iter()
+                .chain(right_fields.iter())
+                .cloned()
+                .collect()
+        }
+        JoinType::Full => {
+            // left then right, all set to nullable in case of not matched scenario
+            nullify_fields(left_fields)
+                .iter()
+                .chain(&nullify_fields(right_fields))
                 .cloned()
                 .collect()
         }
@@ -1250,12 +1268,24 @@ pub fn table_scan<'a>(
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
+    table_scan_with_filters(name, table_schema, projection, vec![])
+}
+
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
+/// and inlined filters.
+/// This is mostly used for testing and documentation.
+pub fn table_scan_with_filters<'a>(
+    name: Option<impl Into<TableReference<'a>>>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+) -> Result<LogicalPlanBuilder> {
     let table_source = table_source(table_schema);
     let name = name
         .map(|n| n.into())
         .unwrap_or_else(|| OwnedTableReference::bare(UNNAMED_TABLE))
         .to_owned_reference();
-    LogicalPlanBuilder::scan(name, table_source, projection)
+    LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
 }
 
 fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {

@@ -16,7 +16,6 @@
 // under the License.
 
 ///! Logical plan types
-use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::statement::{DmlStatement, Statement};
@@ -41,6 +40,7 @@ use datafusion_common::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
@@ -1160,6 +1160,27 @@ impl Display for JoinType {
     }
 }
 
+impl FromStr for JoinType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "INNER" => Ok(JoinType::Inner),
+            "LEFT" => Ok(JoinType::Left),
+            "RIGHT" => Ok(JoinType::Right),
+            "FULL" => Ok(JoinType::Full),
+            "LEFTSEMI" => Ok(JoinType::LeftSemi),
+            "RIGHTSEMI" => Ok(JoinType::RightSemi),
+            "LEFTANTI" => Ok(JoinType::LeftAnti),
+            "RIGHTANTI" => Ok(JoinType::RightAnti),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "The join type {s} does not exist or is not implemented"
+            ))),
+        }
+    }
+}
+
 /// Join constraint
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinConstraint {
@@ -1647,7 +1668,6 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone())?;
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),

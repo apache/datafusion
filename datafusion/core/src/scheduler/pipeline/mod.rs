@@ -70,6 +70,7 @@ pub mod repartition;
 /// from the physical plan as a single [`Pipeline`]. Parallelized implementations
 /// are also possible
 ///
+/// [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
 pub trait Pipeline: Send + Sync + std::fmt::Debug {
     /// Push a [`RecordBatch`] to the given input partition
     fn push(&self, input: RecordBatch, child: usize, partition: usize) -> Result<()>;
