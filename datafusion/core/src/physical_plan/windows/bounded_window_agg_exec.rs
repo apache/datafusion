@@ -50,16 +50,14 @@ use crate::physical_plan::windows::{
     calc_requirements, get_ordered_partition_by_indices,
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
-use datafusion_physical_expr::equivalence::{
-    OrderedColumn, OrderingEquivalenceProperties, OrderingEquivalentClass, SortOptions2,
-};
 use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PartitionBatchState, PartitionBatches, PartitionKey,
     PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortRequirement,
+    EquivalenceProperties, OrderedColumn, OrderingEquivalenceProperties,
+    OrderingEquivalentClass, PhysicalExpr, PhysicalSortRequirement, SortOptions2,
 };
 use indexmap::IndexMap;
 use log::debug;

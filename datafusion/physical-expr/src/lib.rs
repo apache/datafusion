@@ -48,8 +48,10 @@ pub mod window;
 // reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
-pub use equivalence::EquivalenceProperties;
-pub use equivalence::EquivalentClassGen;
+pub use equivalence::{
+    EquivalenceProperties, OrderedColumn, OrderingEquivalenceProperties,
+    OrderingEquivalentClass, SortOptions2,
+};
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;

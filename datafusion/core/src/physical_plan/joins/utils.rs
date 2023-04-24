@@ -39,7 +39,8 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::{EquivalentClassGen, PhysicalExpr};
+use datafusion_physical_expr::equivalence::EquivalentClass;
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
@@ -175,7 +176,7 @@ pub fn combine_join_equivalence_properties(
                             Column::new(col.name(), left_columns_len + col.index())
                         })
                         .collect::<Vec<_>>();
-                    EquivalentClassGen::new(new_head, new_others)
+                    EquivalentClass::new(new_head, new_others)
                 })
                 .collect::<Vec<_>>();
 
@@ -219,7 +220,7 @@ pub fn cross_join_equivalence_properties(
                 .iter()
                 .map(|col| Column::new(col.name(), left_columns_len + col.index()))
                 .collect::<Vec<_>>();
-            EquivalentClassGen::new(new_head, new_others)
+            EquivalentClass::new(new_head, new_others)
         })
         .collect::<Vec<_>>();
     new_properties.extend(new_right_properties);
