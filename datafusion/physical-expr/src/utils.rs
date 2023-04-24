@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::equivalence::{
-    EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
+    EqualColumns, EquivalenceMode, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
@@ -182,16 +182,18 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
-            let normalized_form: Option<OrderedColumn> =
+            let normalized_form: Option<EqualColumns> =
                 expr.as_any().downcast_ref::<Column>().and_then(|column| {
                     for class in eq_properties {
-                        let ordered_column = OrderedColumn {
+                        let ordered_column = EqualColumns {
                             col: column.clone(),
-                            options: sort_options.map(|elem| elem.into()),
+                            mode: sort_options
+                                .map(|elem| EquivalenceMode::Ordering(elem.into()))
+                                .unwrap_or(EquivalenceMode::Exact),
                         };
-                        let ordered_column2 = OrderedColumn {
+                        let ordered_column2 = EqualColumns {
                             col: column.clone(),
-                            options: None,
+                            mode: EquivalenceMode::Exact,
                         };
                         if class.contains(&ordered_column)
                             || class.contains(&ordered_column2)
@@ -226,11 +228,8 @@ pub fn normalize_sort_expr_with_equivalence_properties(
             for eq_class in eq_properties.iter() {
                 let head = eq_class.head();
                 if head.col.eq(col) {
-                    if let Some(new_options) = head.options {
-                        options = SortOptions {
-                            descending: new_options.descending,
-                            nulls_first: new_options.nulls_first,
-                        };
+                    if let EquivalenceMode::Ordering(new_options) = head.mode {
+                        options = new_options.into()
                     }
                     break;
                 }

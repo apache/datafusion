@@ -438,7 +438,7 @@ mod tests {
     async fn test_source_rn_ordered2() -> Result<()> {
         let tmpdir = TempDir::new().unwrap();
         let session_config = SessionConfig::new().with_target_partitions(1);
-        // Use an unbounded source
+        // Use a bounded source, since final plan contains SortExec
         let ctx = get_test_context(&tmpdir, false, session_config).await?;
 
         let sql = "SELECT ts, rn1 FROM (SELECT ts, inc_col,

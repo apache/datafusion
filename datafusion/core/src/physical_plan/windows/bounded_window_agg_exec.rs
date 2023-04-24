@@ -50,13 +50,14 @@ use crate::physical_plan::windows::{
     calc_requirements, get_ordered_partition_by_indices,
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
+use datafusion_physical_expr::equivalence::EquivalenceMode;
 use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PartitionBatchState, PartitionBatches, PartitionKey,
     PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, OrderedColumn, OrderingEquivalenceProperties,
+    EqualColumns, EquivalenceProperties, OrderingEquivalenceProperties,
     OrderingEquivalentClass, PhysicalExpr, PhysicalSortRequirement, SortOptions2,
 };
 use indexmap::IndexMap;
@@ -218,13 +219,13 @@ impl ExecutionPlan for BoundedWindowAggExec {
                                 .column_with_name(expr.field().unwrap().name());
                             if let Some((idx, elem)) = tmp {
                                 let new_col = Column::new(elem.name(), idx);
-                                let lhs = OrderedColumn {
+                                let lhs = EqualColumns {
                                     col: column.clone(),
-                                    options: Some(first.options.into()),
+                                    mode: EquivalenceMode::Ordering(first.options.into()),
                                 };
-                                let rhs = OrderedColumn {
+                                let rhs = EqualColumns {
                                     col: new_col,
-                                    options: Some(SortOptions2 {
+                                    mode: EquivalenceMode::Ordering(SortOptions2 {
                                         descending: false,
                                         nulls_first: false,
                                     }), // ASC, NULLS LAST

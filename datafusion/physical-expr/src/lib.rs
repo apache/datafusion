@@ -49,7 +49,7 @@ pub mod window;
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
 pub use equivalence::{
-    EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
+    EqualColumns, EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass, SortOptions2,
 };
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
