@@ -629,7 +629,7 @@ fn multiply_fixed_point_dyn(
                             let mut mul = a.wrapping_mul(b);
                             mul = divide_and_round::<Decimal256Type>(mul, divisor);
                             mul.as_i128()
-                        }).and_then(|a| Ok(a.with_precision_and_scale(precision, required_scale).unwrap()))?;
+                        }).map(|a| a.with_precision_and_scale(precision, required_scale).unwrap())?;
 
                         Ok(Arc::new(array))
                     }
