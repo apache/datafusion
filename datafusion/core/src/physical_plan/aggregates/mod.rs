@@ -382,7 +382,7 @@ impl AggregateExec {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let state = self.calc_aggregate_state();
+        let aggregation_ordering = self.calc_aggregation_ordering();
 
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
@@ -408,13 +408,13 @@ impl AggregateExec {
                     batch_size,
                     context,
                     partition,
-                    state,
+                    aggregation_ordering,
                 )?,
             ))
         }
     }
 
-    fn calc_aggregate_state(&self) -> Option<AggregationOrdering> {
+    fn calc_aggregation_ordering(&self) -> Option<AggregationOrdering> {
         get_working_mode(&self.input, &self.group_by).map(|(mode, order_indices)| {
             let existing_ordering = self.input.output_ordering().unwrap_or(vec![]);
             let out_group_expr = self.output_group_expr();
@@ -479,7 +479,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.calc_aggregate_state().is_none() {
+            if self.calc_aggregation_ordering().is_none() {
                 // Cannot run without breaking pipeline.
                 Err(DataFusionError::Plan(
                     "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.".to_string(),
@@ -493,7 +493,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
-        self.calc_aggregate_state().map(|state| state.ordering)
+        self.calc_aggregation_ordering().map(|state| state.ordering)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -904,8 +904,6 @@ fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::file_format::file_type::FileCompressionType;
-    use crate::datasource::listing::PartitionedFile;
     use crate::execution::context::{SessionConfig, TaskContext};
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::from_slice::FromSlice;
@@ -913,15 +911,14 @@ mod tests {
         get_working_mode, AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::{col, Avg};
-    use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::{assert_is_pending, csv_exec_sorted};
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
@@ -932,7 +929,6 @@ mod tests {
     use super::StreamType;
     use crate::physical_plan::aggregates::GroupByOrderMode::{Ordered, PartiallyOrdered};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{
         ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
         Statistics,
@@ -949,32 +945,6 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
 
         Ok(schema)
-    }
-
-    // Created a sorted parquet exec
-    fn csv_exec_sorted(
-        schema: &SchemaRef,
-        sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-        infinite_source: bool,
-    ) -> Arc<dyn ExecutionPlan> {
-        let sort_exprs = sort_exprs.into_iter().collect();
-
-        Arc::new(CsvExec::new(
-            FileScanConfig {
-                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-                file_schema: schema.clone(),
-                file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-                output_ordering: Some(sort_exprs),
-                infinite_source,
-            },
-            false,
-            0,
-            FileCompressionType::UNCOMPRESSED,
-        ))
     }
 
     /// make PhysicalSortExpr with default options

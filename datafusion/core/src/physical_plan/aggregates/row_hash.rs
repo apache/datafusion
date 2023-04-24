@@ -110,7 +110,7 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
-    state: Option<AggregationOrdering>,
+    aggregation_ordering: Option<AggregationOrdering>,
     is_end: bool,
 }
 
@@ -145,7 +145,7 @@ impl GroupedHashAggregateStream {
         context: Arc<TaskContext>,
         partition: usize,
         // Stores algorithm mode and output ordering
-        state: Option<AggregationOrdering>,
+        aggregation_ordering: Option<AggregationOrdering>,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -247,7 +247,7 @@ impl GroupedHashAggregateStream {
             row_group_skip_position: 0,
             indices: [normal_agg_indices, row_agg_indices],
             is_end: false,
-            state,
+            aggregation_ordering,
         })
     }
 }
@@ -287,7 +287,7 @@ impl Stream for GroupedHashAggregateStream {
                         // inner is done, producing output
                         None => {
                             for element in self.aggr_state.group_states.iter_mut() {
-                                element.emit_status = GroupStatus::CanEmit;
+                                element.status = GroupStatus::CanEmit;
                             }
                             self.exec_state = ExecutionState::ProducingOutput;
                         }
@@ -305,7 +305,7 @@ impl Stream for GroupedHashAggregateStream {
                         Ok(Some(result)) => {
                             let batch = result.record_output(&self.baseline_metrics);
                             self.row_group_skip_position += batch.num_rows();
-                            if self.state.is_some() {
+                            if self.aggregation_ordering.is_some() {
                                 self.exec_state = ExecutionState::ReadingInput;
                                 self.prune();
                             }
@@ -394,7 +394,7 @@ impl GroupedHashAggregateStream {
                 None => {
                     let accumulator_set =
                         aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                    let ordered_columns = match &self.state {
+                    let ordered_columns = match &self.aggregation_ordering {
                         Some(state) => {
                             let row = get_row_at_idx(group_values, range.start)?;
                             state
@@ -409,7 +409,7 @@ impl GroupedHashAggregateStream {
                     let group_state = GroupState {
                         group_by_values: owned_row,
                         ordered_columns,
-                        emit_status: GroupStatus::CannotEmit,
+                        status: GroupStatus::GroupProgress,
                         hash,
                         aggregation_buffer: vec![
                             0;
@@ -502,7 +502,7 @@ impl GroupedHashAggregateStream {
                 None => {
                     let accumulator_set =
                         aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                    let ordered_columns = match &self.state {
+                    let ordered_columns = match &self.aggregation_ordering {
                         Some(state) => {
                             let row = get_row_at_idx(group_values, row)?;
                             state
@@ -517,7 +517,7 @@ impl GroupedHashAggregateStream {
                     let group_state = GroupState {
                         group_by_values: group_rows.row(row).owned(),
                         ordered_columns,
-                        emit_status: GroupStatus::CannotEmit,
+                        status: GroupStatus::GroupProgress,
                         hash,
                         aggregation_buffer: vec![
                             0;
@@ -720,7 +720,7 @@ impl GroupedHashAggregateStream {
                 mode: GroupByOrderMode::Ordered,
                 order_indices,
                 ordering,
-            }) = &self.state
+            }) = &self.aggregation_ordering
             {
                 let group_rows = self.row_converter.convert_columns(group_values)?;
                 let n_rows = group_rows.num_rows();
@@ -790,7 +790,7 @@ impl GroupedHashAggregateStream {
                 let normal_filter_values =
                     get_optional_filters(&normal_filter_values, &batch_indices);
                 if self
-                    .state
+                    .aggregation_ordering
                     .as_ref()
                     .map_or(false, |s| s.mode == GroupByOrderMode::Ordered)
                 {
@@ -825,7 +825,7 @@ impl GroupedHashAggregateStream {
             .size()
             .saturating_sub(row_converter_size_pre);
 
-        if self.state.is_some() {
+        if self.aggregation_ordering.is_some() {
             let mut new_result = false;
             let last_ordered_columns = self
                 .aggr_state
@@ -838,7 +838,7 @@ impl GroupedHashAggregateStream {
                     if cur_group.ordered_columns != last_ordered_columns {
                         // We will no longer receive value. Set status to GroupStatus::CanEmit
                         // meaning we can generate result for this group.
-                        cur_group.emit_status = GroupStatus::CanEmit;
+                        cur_group.status = GroupStatus::CanEmit;
                         new_result = true;
                     }
                 }
@@ -854,8 +854,8 @@ impl GroupedHashAggregateStream {
 
 #[derive(Debug, PartialEq)]
 enum GroupStatus {
-    // `CannotEmit` means data for current group is not complete. New data may arrive.
-    CannotEmit,
+    // `GroupProgress` means data for current group is not complete. New data may arrive.
+    GroupProgress,
     // `CanEmit` means data for current group is completed. And its result can emitted.
     CanEmit,
     // Emitted means that result for the groups is outputted. Group can be pruned from state.
@@ -869,7 +869,7 @@ pub struct GroupState {
     group_by_values: OwnedRow,
 
     ordered_columns: Vec<ScalarValue>,
-    emit_status: GroupStatus,
+    status: GroupStatus,
     hash: u64,
 
     // Accumulator state, stored sequentially
@@ -919,7 +919,7 @@ impl GroupedHashAggregateStream {
         let n_partition = self.aggr_state.group_states.len();
         self.aggr_state
             .group_states
-            .retain(|elem| elem.emit_status != GroupStatus::Emitted);
+            .retain(|elem| elem.status != GroupStatus::Emitted);
         let n_partition_new = self.aggr_state.group_states.len();
         let n_pruned = n_partition - n_partition_new;
         self.aggr_state.map.clear();
@@ -951,7 +951,7 @@ impl GroupedHashAggregateStream {
         // Consider only the groups that can be emitted. (The ones we are sure that will not receive new entry.)
         let group_state_chunk = group_state_chunk
             .iter()
-            .filter(|item| item.emit_status == GroupStatus::CanEmit)
+            .filter(|item| item.status == GroupStatus::CanEmit)
             .collect::<Vec<_>>();
 
         if group_state_chunk.is_empty() {
@@ -1062,8 +1062,8 @@ impl GroupedHashAggregateStream {
 
         // Set status of the emitted groups to GroupStatus::Emitted mode.
         for gs in self.aggr_state.group_states[skip_items..end_idx].iter_mut() {
-            if gs.emit_status == GroupStatus::CanEmit {
-                gs.emit_status = GroupStatus::Emitted;
+            if gs.status == GroupStatus::CanEmit {
+                gs.status = GroupStatus::Emitted;
             }
         }
 
