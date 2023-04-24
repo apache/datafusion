@@ -438,8 +438,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 .ok_or_else(
                                                     || {
                                                         proto_error(format!(
-                                                            "Received an unknown aggregate function: {}",
-                                                            i
+                                                            "Received an unknown aggregate function: {i}"
                                                         ))
                                                     },
                                                 )?;
