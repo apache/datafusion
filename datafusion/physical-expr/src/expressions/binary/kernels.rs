@@ -268,7 +268,7 @@ pub(crate) fn bitwise_shift_left_dyn(
     }
 }
 
-/// Downcasts $LEFT as $ARRAY_TYPE and $RIGHT as TYPE and calls $KERNEL($LEFT, RIGHT)
+/// Downcasts $LEFT as $ARRAY_TYPE and $RIGHT as TYPE and calls $KERNEL($LEFT, $RIGHT)
 macro_rules! call_bitwise_scalar_kernel {
     ($LEFT:expr, $RIGHT:expr, $KERNEL:ident, $ARRAY_TYPE:ident, $TYPE:ty) => {{
         let len = $LEFT.len();
@@ -284,7 +284,7 @@ macro_rules! call_bitwise_scalar_kernel {
     }};
 }
 
-/// Creates a $FUNC(left: ArrayRef, right: ArrayRef) that
+/// Creates a $FUNC(left: ArrayRef, right: ScalarValue) that
 /// downcasts left / right to the appropriate integral type and calls the kernel
 macro_rules! create_dyn_scalar_kernel {
     ($FUNC:ident, $KERNEL:ident) => {
