@@ -20,10 +20,13 @@
 
 use arrow::compute::{
     add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus_dyn,
-    modulus_scalar_dyn, multiply_dyn, multiply_fixed_point, multiply_scalar_dyn, subtract_dyn,
-    subtract_scalar_dyn, try_unary,
+    modulus_scalar_dyn, multiply_dyn, multiply_fixed_point, multiply_scalar_dyn,
+    subtract_dyn, subtract_scalar_dyn, try_unary,
 };
-use arrow::datatypes::{i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type, DECIMAL128_MAX_PRECISION};
+use arrow::datatypes::{
+    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    DECIMAL128_MAX_PRECISION,
+};
 use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
 use arrow_array::types::{ArrowDictionaryKeyType, DecimalType};
 use arrow_array::ArrowNativeTypeOp;
