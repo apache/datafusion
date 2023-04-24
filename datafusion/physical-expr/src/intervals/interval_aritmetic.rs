@@ -257,8 +257,7 @@ impl Interval {
             Ok(lower_type)
         } else {
             Err(DataFusionError::Internal(format!(
-                "Interval bounds have different types: {} != {}",
-                lower_type, upper_type,
+                "Interval bounds have different types: {lower_type} != {upper_type}",
             )))
         }
     }

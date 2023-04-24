@@ -18,6 +18,7 @@
 //! This module contains computation kernels that are specific to
 //! datafusion and not (yet) targeted to  port upstream to arrow
 use arrow::array::*;
+use arrow::compute::binary;
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Operator;
@@ -29,19 +30,9 @@ use std::sync::Arc;
 /// It is used to do bitwise operation.
 macro_rules! binary_bitwise_array_op {
     ($LEFT:expr, $RIGHT:expr, $METHOD:expr, $ARRAY_TYPE:ident) => {{
-        let len = $LEFT.len();
         let left = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let right = $RIGHT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        let result = (0..len)
-            .into_iter()
-            .map(|i| {
-                if left.is_null(i) || right.is_null(i) {
-                    None
-                } else {
-                    Some($METHOD(left.value(i), right.value(i)))
-                }
-            })
-            .collect::<$ARRAY_TYPE>();
+        let result: $ARRAY_TYPE = binary(left, right, $METHOD)?;
         Ok(Arc::new(result))
     }};
 }
@@ -58,16 +49,8 @@ macro_rules! binary_bitwise_array_scalar {
             Ok(new_null_array(array.data_type(), len))
         } else {
             let right: $TYPE = scalar.try_into().unwrap();
-            let result = (0..len)
-                .into_iter()
-                .map(|i| {
-                    if array.is_null(i) {
-                        None
-                    } else {
-                        Some($METHOD(array.value(i), right))
-                    }
-                })
-                .collect::<$ARRAY_TYPE>();
+            let method = $METHOD(right);
+            let result: $ARRAY_TYPE = array.unary(method);
             Ok(Arc::new(result) as ArrayRef)
         }
     }};
@@ -332,7 +315,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i8, b: i8| a & b,
+                |a: i8| move |b: i8| a & b,
                 Int8Array,
                 i8
             )
@@ -341,7 +324,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i16, b: i16| a & b,
+                |a: i16| move |b: i16| a & b,
                 Int16Array,
                 i16
             )
@@ -350,7 +333,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i32, b: i32| a & b,
+                |a: i32| move |b: i32| a & b,
                 Int32Array,
                 i32
             )
@@ -359,7 +342,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i64, b: i64| a & b,
+                |a: i64| move |b: i64| a & b,
                 Int64Array,
                 i64
             )
@@ -368,7 +351,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u8, b: u8| a & b,
+                |a: u8| move |b: u8| a & b,
                 UInt8Array,
                 u8
             )
@@ -377,7 +360,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u16, b: u16| a & b,
+                |a: u16| move |b: u16| a & b,
                 UInt16Array,
                 u16
             )
@@ -386,7 +369,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u32, b: u32| a & b,
+                |a: u32| move |b: u32| a & b,
                 UInt32Array,
                 u32
             )
@@ -395,7 +378,7 @@ pub(crate) fn bitwise_and_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u64| a & b,
+                |a: u64| move |b: u64| a & b,
                 UInt64Array,
                 u64
             )
@@ -418,7 +401,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i8, b: i8| a | b,
+                |a: i8| move |b: i8| a | b,
                 Int8Array,
                 i8
             )
@@ -427,7 +410,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i16, b: i16| a | b,
+                |a: i16| move |b: i16| a | b,
                 Int16Array,
                 i16
             )
@@ -436,7 +419,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i32, b: i32| a | b,
+                |a: i32| move |b: i32| a | b,
                 Int32Array,
                 i32
             )
@@ -445,7 +428,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i64, b: i64| a | b,
+                |a: i64| move |b: i64| a | b,
                 Int64Array,
                 i64
             )
@@ -454,7 +437,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u8, b: u8| a | b,
+                |a: u8| move |b: u8| a | b,
                 UInt8Array,
                 u8
             )
@@ -463,7 +446,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u16, b: u16| a | b,
+                |a: u16| move |b: u16| a | b,
                 UInt16Array,
                 u16
             )
@@ -472,7 +455,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u32, b: u32| a | b,
+                |a: u32| move |b: u32| a | b,
                 UInt32Array,
                 u32
             )
@@ -481,7 +464,7 @@ pub(crate) fn bitwise_or_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u64| a | b,
+                |a: u64| move |b: u64| a | b,
                 UInt64Array,
                 u64
             )
@@ -504,7 +487,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i8, b: i8| a ^ b,
+                |a: i8| move |b: i8| a ^ b,
                 Int8Array,
                 i8
             )
@@ -513,7 +496,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i16, b: i16| a ^ b,
+                |a: i16| move |b: i16| a ^ b,
                 Int16Array,
                 i16
             )
@@ -522,7 +505,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i32, b: i32| a ^ b,
+                |a: i32| move |b: i32| a ^ b,
                 Int32Array,
                 i32
             )
@@ -531,7 +514,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i64, b: i64| a ^ b,
+                |a: i64| move |b: i64| a ^ b,
                 Int64Array,
                 i64
             )
@@ -540,7 +523,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u8, b: u8| a ^ b,
+                |a: u8| move |b: u8| a ^ b,
                 UInt8Array,
                 u8
             )
@@ -549,7 +532,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u16, b: u16| a ^ b,
+                |a: u16| move |b: u16| a ^ b,
                 UInt16Array,
                 u16
             )
@@ -558,7 +541,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u32, b: u32| a ^ b,
+                |a: u32| move |b: u32| a ^ b,
                 UInt32Array,
                 u32
             )
@@ -567,7 +550,7 @@ pub(crate) fn bitwise_xor_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u64| a ^ b,
+                |a: u64| move |b: u64| a ^ b,
                 UInt64Array,
                 u64
             )
@@ -590,7 +573,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i8, b: i8| a.wrapping_shr(b as u32),
+                |a: i8| move |b: i8| b.wrapping_shr(a as u32),
                 Int8Array,
                 i8
             )
@@ -599,7 +582,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i16, b: i16| a.wrapping_shr(b as u32),
+                |a: i16| move |b: i16| b.wrapping_shr(a as u32),
                 Int16Array,
                 i16
             )
@@ -608,7 +591,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i32, b: i32| a.wrapping_shr(b as u32),
+                |a: i32| move |b: i32| b.wrapping_shr(a as u32),
                 Int32Array,
                 i32
             )
@@ -617,7 +600,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i64, b: i64| a.wrapping_shr(b as u32),
+                |a: i64| move |b: i64| b.wrapping_shr(a as u32),
                 Int64Array,
                 i64
             )
@@ -626,7 +609,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u8, b: u8| a.wrapping_shr(b as u32),
+                |a: u8| move |b: u8| b.wrapping_shr(a as u32),
                 UInt8Array,
                 u8
             )
@@ -635,7 +618,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u16, b: u16| a.wrapping_shr(b as u32),
+                |a: u16| move |b: u16| b.wrapping_shr(a as u32),
                 UInt16Array,
                 u16
             )
@@ -644,7 +627,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u32, b: u32| a.wrapping_shr(b),
+                |a: u32| move |b: u32| b.wrapping_shr(a),
                 UInt32Array,
                 u32
             )
@@ -653,7 +636,7 @@ pub(crate) fn bitwise_shift_right_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u32| a.wrapping_shr(b),
+                |a: u32| move |b: u64| b.wrapping_shr(a),
                 UInt64Array,
                 u32
             )
@@ -676,7 +659,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i8, b: i8| a.wrapping_shl(b as u32),
+                |a: i8| move |b: i8| b.wrapping_shl(a as u32),
                 Int8Array,
                 i8
             )
@@ -685,7 +668,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i16, b: i16| a.wrapping_shl(b as u32),
+                |a: i16| move |b: i16| b.wrapping_shl(a as u32),
                 Int16Array,
                 i16
             )
@@ -694,7 +677,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i32, b: i32| a.wrapping_shl(b as u32),
+                |a: i32| move |b: i32| b.wrapping_shl(a as u32),
                 Int32Array,
                 i32
             )
@@ -703,7 +686,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: i64, b: i64| a.wrapping_shl(b as u32),
+                |a: i64| move |b: i64| b.wrapping_shl(a as u32),
                 Int64Array,
                 i64
             )
@@ -712,7 +695,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u8, b: u8| a.wrapping_shl(b as u32),
+                |a: u8| move |b: u8| b.wrapping_shl(a as u32),
                 UInt8Array,
                 u8
             )
@@ -721,7 +704,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u16, b: u16| a.wrapping_shl(b as u32),
+                |a: u16| move |b: u16| b.wrapping_shl(a as u32),
                 UInt16Array,
                 u16
             )
@@ -730,7 +713,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u32, b: u32| a.wrapping_shl(b),
+                |a: u32| move |b: u32| b.wrapping_shl(a),
                 UInt32Array,
                 u32
             )
@@ -739,7 +722,7 @@ pub(crate) fn bitwise_shift_left_scalar(
             binary_bitwise_array_scalar!(
                 array,
                 scalar,
-                |a: u64, b: u32| a.wrapping_shr(b),
+                |a: u32| move |b: u64| b.wrapping_shr(a),
                 UInt64Array,
                 u32
             )

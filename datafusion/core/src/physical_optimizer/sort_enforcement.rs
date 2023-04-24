@@ -1218,8 +1218,7 @@ mod tests {
             let res = res.map(|(_, mode)| mode);
             assert_eq!(
                 res, *expected,
-                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
-                case_idx, test_case
+                "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
         }
 
