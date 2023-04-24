@@ -114,6 +114,7 @@ create_dyn_kernel!(bitwise_or_dyn, bitwise_or);
 create_dyn_kernel!(bitwise_xor_dyn, bitwise_xor);
 create_dyn_kernel!(bitwise_and_dyn, bitwise_and);
 
+// TODO: use create_dyn_kernel! when  https://github.com/apache/arrow-rs/issues/2741 is implemented
 pub(crate) fn bitwise_shift_right_dyn(
     left: ArrayRef,
     right: ArrayRef,
@@ -191,6 +192,7 @@ pub(crate) fn bitwise_shift_right_dyn(
     }
 }
 
+// TODO: use create_dyn_kernel! when  https://github.com/apache/arrow-rs/issues/2741 is implemented
 pub(crate) fn bitwise_shift_left_dyn(
     left: ArrayRef,
     right: ArrayRef,
@@ -313,6 +315,7 @@ create_dyn_scalar_kernel!(bitwise_and_dyn_scalar, bitwise_and_scalar);
 create_dyn_scalar_kernel!(bitwise_or_dyn_scalar, bitwise_or_scalar);
 create_dyn_scalar_kernel!(bitwise_xor_dyn_scalar, bitwise_xor_scalar);
 
+// TODO: use create_dyn_scalar_kernel! when  https://github.com/apache/arrow-rs/issues/2741 is implemented
 pub(crate) fn bitwise_shift_right_dyn_scalar(
     array: &dyn Array,
     scalar: ScalarValue,
@@ -399,6 +402,7 @@ pub(crate) fn bitwise_shift_right_dyn_scalar(
     Some(result)
 }
 
+// TODO: use create_dyn_scalar_kernel! when  https://github.com/apache/arrow-rs/issues/2741 is implemented
 pub(crate) fn bitwise_shift_left_dyn_scalar(
     array: &dyn Array,
     scalar: ScalarValue,
