@@ -1924,8 +1924,7 @@ fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
         "ansi" => Ok(Box::new(AnsiDialect {})),
         _ => {
             Err(DataFusionError::Internal(format!(
-                "Unsupported SQL dialect: {}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi.",
-                dialect_name
+                "Unsupported SQL dialect: {dialect_name}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi."
             )))
         }
     }

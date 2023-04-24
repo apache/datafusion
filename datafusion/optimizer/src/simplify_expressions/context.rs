@@ -76,7 +76,7 @@ pub trait SimplifyInfo {
 /// assert_eq!(simplified, col("b").lt(lit(2)));
 /// ```
 pub struct SimplifyContext<'a> {
-    schemas: Vec<DFSchemaRef>,
+    schema: Option<DFSchemaRef>,
     props: &'a ExecutionProps,
 }
 
@@ -84,14 +84,14 @@ impl<'a> SimplifyContext<'a> {
     /// Create a new SimplifyContext
     pub fn new(props: &'a ExecutionProps) -> Self {
         Self {
-            schemas: vec![],
+            schema: None,
             props,
         }
     }
 
     /// Register a [`DFSchemaRef`] with this context
     pub fn with_schema(mut self, schema: DFSchemaRef) -> Self {
-        self.schemas.push(schema);
+        self.schema = Some(schema);
         self
     }
 }
@@ -99,7 +99,7 @@ impl<'a> SimplifyContext<'a> {
 impl<'a> SimplifyInfo for SimplifyContext<'a> {
     /// returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        for schema in &self.schemas {
+        for schema in &self.schema {
             if let Ok(DataType::Boolean) = expr.get_type(schema) {
                 return Ok(true);
             }
@@ -110,32 +110,22 @@ impl<'a> SimplifyInfo for SimplifyContext<'a> {
 
     /// Returns true if expr is nullable
     fn nullable(&self, expr: &Expr) -> Result<bool> {
-        self.schemas
-            .iter()
-            .find_map(|schema| {
-                // expr may be from another input, so ignore errors
-                // by converting to None to keep trying
-                expr.nullable(schema.as_ref()).ok()
-            })
-            .ok_or_else(|| {
-                // This means we weren't able to compute `Expr::nullable` with
-                // *any* input schemas, signalling a problem
-                DataFusionError::Internal(format!(
-                    "Could not find columns in '{expr}' during simplify"
-                ))
-            })
+        let schema = self.schema.as_ref().ok_or_else(|| {
+            DataFusionError::Internal(
+                "attempt to get nullability without schema".to_string(),
+            )
+        })?;
+        expr.nullable(schema.as_ref())
     }
 
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        if self.schemas.len() == 1 {
-            expr.get_type(&self.schemas[0])
-        } else {
-            Err(DataFusionError::Internal(
-                "The expr has more than one schema, could not determine data type"
-                    .to_string(),
-            ))
-        }
+        let schema = self.schema.as_ref().ok_or_else(|| {
+            DataFusionError::Internal(
+                "attempt to get data type without schema".to_string(),
+            )
+        })?;
+        expr.get_type(schema)
     }
 
     fn execution_props(&self) -> &ExecutionProps {

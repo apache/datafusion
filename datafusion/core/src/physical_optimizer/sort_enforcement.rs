@@ -32,7 +32,8 @@
 //! ```
 //!
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
-//! by another SortExec. Therefore, this rule removes it from the physical plan.
+//! by another [`SortExec`]. Therefore, this rule removes it from the physical plan.
+
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
@@ -59,7 +60,7 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequi
 use itertools::{concat, izip};
 use std::sync::Arc;
 
-/// This rule inspects `SortExec`'s in the given physical plan and removes the
+/// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
 #[derive(Default)]
 pub struct EnforceSorting {}
@@ -72,7 +73,7 @@ impl EnforceSorting {
 }
 
 /// This object implements a tree that we use while keeping track of paths
-/// leading to `SortExec`s.
+/// leading to [`SortExec`]s.
 #[derive(Debug, Clone)]
 struct ExecTree {
     /// The `ExecutionPlan` associated with this node
@@ -341,8 +342,8 @@ impl TreeNode for PlanWithCorrespondingCoalescePartitions {
 }
 
 /// The boolean flag `repartition_sorts` defined in the config indicates
-/// whether we elect to transform CoalescePartitionsExec + SortExec cascades
-/// into SortExec + SortPreservingMergeExec cascades, which enables us to
+/// whether we elect to transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
+/// into [`SortExec`] + [`SortPreservingMergeExec`] cascades, which enables us to
 /// perform sorting in parallel.
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
@@ -380,13 +381,17 @@ impl PhysicalOptimizerRule for EnforceSorting {
 }
 
 /// This function turns plans of the form
+/// ```text
 ///      "SortExec: expr=\[a@0 ASC\]",
 ///      "  CoalescePartitionsExec",
 ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+/// ```
 /// to
+/// ```text
 ///      "SortPreservingMergeExec: \[a@0 ASC\]",
 ///      "  SortExec: expr=\[a@0 ASC\]",
 ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+/// ```
 /// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 fn parallelize_sorts(
@@ -646,7 +651,7 @@ fn analyze_window_sort_removal(
     Ok(None)
 }
 
-/// Updates child to remove the unnecessary `CoalescePartitions` below it.
+/// Updates child to remove the unnecessary [`CoalescePartitionsExec`] below it.
 fn update_child_to_remove_coalesce(
     child: &mut Arc<dyn ExecutionPlan>,
     coalesce_onwards: &mut Option<ExecTree>,
@@ -657,7 +662,7 @@ fn update_child_to_remove_coalesce(
     Ok(())
 }
 
-/// Removes the `CoalescePartitions` from the plan in `coalesce_onwards`.
+/// Removes the [`CoalescePartitionsExec`] from the plan in `coalesce_onwards`.
 fn remove_corresponding_coalesce_in_sub_plan(
     coalesce_onwards: &mut ExecTree,
     parent: &Arc<dyn ExecutionPlan>,
@@ -762,8 +767,8 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-/// Compares physical ordering and required ordering of all `PhysicalSortExpr`s
-/// to decide whether a `SortExec` before a `WindowAggExec` can be removed.
+/// Compares physical ordering and required ordering of all [`PhysicalSortExpr`]s
+/// to decide whether a [`SortExec`] before a [`WindowAggExec`] can be removed.
 /// A `None` return value indicates that we can remove the sort in question.
 /// A `Some(bool)` value indicates otherwise, and signals whether we need to
 /// reverse the ordering in order to remove the sort in question.
@@ -1127,8 +1132,7 @@ mod tests {
                 can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?;
             assert_eq!(
                 res, *expected,
-                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
-                case_idx, test_case
+                "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
         }
 

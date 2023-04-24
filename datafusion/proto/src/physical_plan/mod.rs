@@ -45,7 +45,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
+    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{DataFusionError, Result};
 use prost::bytes::BufMut;
@@ -56,6 +56,7 @@ use crate::common::{csv_delimiter_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_protobuf_file_scan_config,
 };
+use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
@@ -427,29 +428,37 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
                         match expr_type {
                             ExprType::AggregateExpr(agg_node) => {
-                                let aggr_function =
-                                    protobuf::AggregateFunction::from_i32(
-                                        agg_node.aggr_function,
-                                    )
-                                        .ok_or_else(
-                                            || {
-                                                proto_error(format!(
-                                                    "Received an unknown aggregate function: {}",
-                                                    agg_node.aggr_function
-                                                ))
-                                            },
-                                        )?;
-
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
 
-                                Ok(create_aggregate_expr(
-                                    &aggr_function.into(),
-                                    agg_node.distinct,
-                                    input_phy_expr.as_slice(),
-                                    &physical_schema,
-                                    name.to_string(),
-                                )?)
+                                agg_node.aggregate_function.as_ref().map(|func| {
+                                    match func {
+                                        AggregateFunction::AggrFunction(i) => {
+                                            let aggr_function = protobuf::AggregateFunction::from_i32(*i)
+                                                .ok_or_else(
+                                                    || {
+                                                        proto_error(format!(
+                                                            "Received an unknown aggregate function: {i}"
+                                                        ))
+                                                    },
+                                                )?;
+
+                                            create_aggregate_expr(
+                                                &aggr_function.into(),
+                                                agg_node.distinct,
+                                                input_phy_expr.as_slice(),
+                                                &physical_schema,
+                                                name.to_string(),
+                                            )
+                                        }
+                                        AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
+                                            let agg_udf = registry.udaf(udaf_name)?;
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, &physical_schema, name)
+                                        }
+                                    }
+                                }).transpose()?.ok_or_else(|| {
+                                    proto_error("Invalid AggregateExpr, missing aggregate_function")
+                                })
                             }
                             _ => Err(DataFusionError::Internal(
                                 "Invalid aggregate expression for AggregateExec"
@@ -1238,9 +1247,9 @@ mod roundtrip_tests {
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
-    use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::physical_plan::{functions, udaf};
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
@@ -1264,6 +1273,10 @@ mod roundtrip_tests {
         scalar::ScalarValue,
     };
     use datafusion_common::Result;
+    use datafusion_expr::{
+        Accumulator, AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction,
+        Signature, StateTypeFunction,
+    };
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = SessionContext::new();
@@ -1417,6 +1430,77 @@ mod roundtrip_tests {
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
+    }
+
+    #[test]
+    fn roundtrip_aggregate_udaf() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        #[derive(Debug)]
+        struct Example;
+        impl Accumulator for Example {
+            fn state(&self) -> Result<Vec<ScalarValue>> {
+                Ok(vec![ScalarValue::Int64(Some(0))])
+            }
+
+            fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+                Ok(())
+            }
+
+            fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+                Ok(())
+            }
+
+            fn evaluate(&self) -> Result<ScalarValue> {
+                Ok(ScalarValue::Int64(Some(0)))
+            }
+
+            fn size(&self) -> usize {
+                0
+            }
+        }
+
+        let rt_func: ReturnTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(|_| Ok(Box::new(Example)));
+        let st_func: StateTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
+
+        let udaf = AggregateUDF::new(
+            "example",
+            &Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            &rt_func,
+            &accumulator,
+            &st_func,
+        );
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(udaf.clone());
+
+        let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            vec![(col("a", &schema)?, "unused".to_string())];
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![udaf::create_aggregate_expr(
+            &udaf,
+            &[col("b", &schema)?],
+            &schema,
+            "example_agg",
+        )?];
+
+        roundtrip_test_with_context(
+            Arc::new(AggregateExec::try_new(
+                AggregateMode::Final,
+                PhysicalGroupBy::new_single(groups.clone()),
+                aggregates.clone(),
+                vec![None],
+                Arc::new(EmptyExec::new(false, schema.clone())),
+                schema,
+            )?),
+            ctx,
+        )
     }
 
     #[test]

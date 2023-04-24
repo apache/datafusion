@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! InList expression
+//! Implementation of `InList` expressions: [`InListExpr`]
 
 use ahash::RandomState;
 use std::any::Any;
@@ -134,8 +134,9 @@ where
     }
 }
 
-/// Computes an [`ArrayHashSet`] for the provided [`Array`] if there are nulls present
-/// or there are more than [`OPTIMIZER_INSET_THRESHOLD`] values
+/// Computes an [`ArrayHashSet`] for the provided [`Array`] if there
+/// are nulls present or there are more than the configured number of
+/// elements.
 ///
 /// Note: This is split into a separate function as higher-rank trait bounds currently
 /// cause type inference to misbehave

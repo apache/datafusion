@@ -485,6 +485,20 @@ CREATE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
 statement ok
 CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
 
+statement ok
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+
+# Should not recreate the same EXTERNAL table
+statement error Execution error: Table 'aggregate_simple' already exists
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+
+# create bad custom table
+statement error DataFusion error: Execution error: Unable to find factory for DELTATABLE
+CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';
+
 
 # Should not recreate the same table
 statement error Table 'table_without_values' already exists
@@ -605,6 +619,17 @@ NULL
 
 statement ok
 drop table foo;
+
+# craete csv table with empty csv file
+statement ok
+CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/empty.csv';
+
+query TTI
+select column_name, data_type, ordinal_position from information_schema.columns where table_name='empty';;
+----
+c1 Utf8 0
+c2 Utf8 1
+c3 Utf8 2
 
 
 ## should allow any type of exprs as values

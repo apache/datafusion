@@ -47,7 +47,9 @@ pub(crate) struct AggregateStream {
 ///
 /// This is wrapped into yet another struct because we need to interact with the async memory management subsystem
 /// during poll. To have as little code "weirdness" as possible, we chose to just use [`BoxStream`] together with
-/// [`futures::stream::unfold`]. The latter requires a state object, which is [`GroupedHashAggregateStreamV2Inner`].
+/// [`futures::stream::unfold`].
+///
+/// The latter requires a state object, which is [`AggregateStreamInner`].
 struct AggregateStreamInner {
     schema: SchemaRef,
     mode: AggregateMode,

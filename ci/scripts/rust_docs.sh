@@ -1,5 +1,5 @@
-#!/bin/bash
-
+#!/usr/bin/env bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,16 +17,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This script runs all the Rust lints locally the same way the
-# DataFusion CI does
-
-set -e
-if ! command -v cargo-tomlfmt &> /dev/null; then
-    echo "Installing cargo-tomlfmt using cargo"
-    cargo install cargo-tomlfmt
-fi
-
-ci/scripts/rust_fmt.sh
-ci/scripts/rust_clippy.sh
-ci/scripts/rust_toml_fmt.sh
-ci/scripts/rust_docs.sh
+set -ex
+export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
+cargo doc --document-private-items --no-deps --workspace
