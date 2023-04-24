@@ -68,14 +68,15 @@ use kernels::{
     bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
 use kernels_arrow::{
-    add_decimal_dyn_scalar, add_dyn_decimal, divide_decimal_dyn_scalar,
-    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
-    is_distinct_from_decimal, is_distinct_from_f32, is_distinct_from_f64,
-    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
-    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
-    is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
-    modulus_decimal_dyn_scalar, modulus_dyn_decimal, multiply_decimal_dyn_scalar,
-    multiply_dyn_decimal, subtract_decimal_dyn_scalar, subtract_dyn_decimal,
+    add_decimal_dyn_scalar, add_dyn_decimal, add_dyn_temporal, add_dyn_temporal_scalar,
+    divide_decimal_dyn_scalar, divide_dyn_opt_decimal, is_distinct_from,
+    is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_f32,
+    is_distinct_from_f64, is_distinct_from_null, is_distinct_from_utf8,
+    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
+    is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
+    is_not_distinct_from_utf8, modulus_decimal_dyn_scalar, modulus_dyn_decimal,
+    multiply_decimal_dyn_scalar, multiply_dyn_decimal, subtract_decimal_dyn_scalar,
+    subtract_dyn_decimal, subtract_dyn_temporal, subtract_dyn_temporal_scalar,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -1312,10 +1313,39 @@ macro_rules! sub_timestamp_macro {
         Arc::new(ret) as ArrayRef
     }};
 }
+
+pub fn resolve_temporal_op(
+    lhs: &ArrayRef,
+    sign: i32,
+    rhs: &ArrayRef,
+) -> Result<ArrayRef> {
+    match sign {
+        1 => add_dyn_temporal(lhs, rhs),
+        -1 => subtract_dyn_temporal(lhs, rhs),
+        other => Err(DataFusionError::Internal(format!(
+            "Undefined operation for temporal types {other}"
+        ))),
+    }
+}
+
+pub fn resolve_temporal_op_scalar(
+    lhs: &ArrayRef,
+    sign: i32,
+    rhs: &ScalarValue,
+) -> Result<ColumnarValue> {
+    match sign {
+        1 => add_dyn_temporal_scalar(lhs, rhs),
+        -1 => subtract_dyn_temporal_scalar(lhs, rhs),
+        other => Err(DataFusionError::Internal(format!(
+            "Undefined operation for temporal types {other}"
+        ))),
+    }
+}
+
 /// This function handles the Timestamp - Timestamp operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
-pub fn ts_scalar_ts_op(array: ArrayRef, scalar: &ScalarValue) -> Result<ColumnarValue> {
+pub fn ts_scalar_ts_op(array: &ArrayRef, scalar: &ScalarValue) -> Result<ColumnarValue> {
     let ret = match (array.data_type(), scalar) {
         (
             DataType::Timestamp(TimeUnit::Second, opt_tz_lhs),
@@ -1410,7 +1440,7 @@ macro_rules! sub_timestamp_interval_macro {
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
 pub fn ts_scalar_interval_op(
-    array: ArrayRef,
+    array: &ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
@@ -1494,7 +1524,7 @@ macro_rules! sub_interval_cross_macro {
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an interval array.
 pub fn interval_scalar_interval_op(
-    array: ArrayRef,
+    array: &ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {

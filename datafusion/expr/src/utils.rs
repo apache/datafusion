@@ -956,13 +956,12 @@ pub fn from_plan(
 }
 
 /// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
-    Ok(agg
-        .aggr_expr
+fn agg_cols(agg: &Aggregate) -> Vec<Column> {
+    agg.aggr_expr
         .iter()
         .chain(&agg.group_expr)
         .flat_map(find_columns_referenced_by_expr)
-        .collect())
+        .collect()
 }
 
 fn exprlist_to_fields_aggregate(
@@ -970,7 +969,7 @@ fn exprlist_to_fields_aggregate(
     plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
-    let agg_cols = agg_cols(agg)?;
+    let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
         match expr {

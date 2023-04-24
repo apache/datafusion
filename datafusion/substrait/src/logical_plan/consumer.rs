@@ -305,11 +305,25 @@ pub async fn from_substrait_rel(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
             );
             let join_type = from_substrait_jointype(join.r#type)?;
-            let schema =
-                build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
+            // The join condition expression needs full input schema and not the output schema from join since we lose columns from
+            // certain join types such as semi and anti joins
+            // - if left and right schemas are different, we combine (join) the schema to include all fields
+            // - if left and right schemas are the same, we handle the duplicate fields by using `build_join_schema()`, which discard the unused schema
+            // TODO: Handle duplicate fields error for other join types (non-semi/anti). The current approach does not work due to Substrait's inability
+            //       to encode aliases
+            let join_schema = match left.schema().join(right.schema()) {
+                Ok(schema) => Ok(schema),
+                Err(DataFusionError::SchemaError(
+                    datafusion::common::SchemaError::DuplicateQualifiedField {
+                        qualifier: _,
+                        name: _,
+                    },
+                )) => build_join_schema(left.schema(), right.schema(), &join_type),
+                Err(e) => Err(e),
+            };
             let on = from_substrait_rex(
                 join.expression.as_ref().unwrap(),
-                &schema,
+                &join_schema?,
                 extensions,
             )
             .await?;
