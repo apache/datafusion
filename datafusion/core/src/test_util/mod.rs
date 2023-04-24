@@ -337,6 +337,57 @@ fn get_test_data() -> Result<(RecordBatch, Vec<Expr>)> {
     Ok((batch, file_sort_order))
 }
 
+// Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by a, b, c
+fn get_test_data2() -> Result<(RecordBatch, Vec<Expr>)> {
+    let a = Field::new("a", DataType::Int32, false);
+    let b = Field::new("b", DataType::Int32, false);
+    let c = Field::new("c", DataType::Int32, false);
+    let d = Field::new("d", DataType::Int32, false);
+
+    let schema = Arc::new(Schema::new(vec![a, b, c, d]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from_slice([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+                3, 3, 3, 3,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+                57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+                75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
+                93, 94, 95, 96, 97, 98, 99,
+            ])),
+            Arc::new(Int32Array::from_slice([
+                0, 2, 0, 0, 1, 1, 0, 2, 1, 4, 4, 2, 2, 1, 2, 3, 3, 2, 1, 4, 0, 3, 0, 0,
+                4, 0, 2, 0, 1, 1, 3, 4, 2, 2, 4, 0, 1, 4, 0, 1, 1, 3, 3, 2, 3, 0, 0, 1,
+                1, 3, 0, 3, 1, 1, 4, 2, 1, 1, 1, 2, 4, 3, 1, 4, 4, 0, 2, 4, 1, 1, 0, 2,
+                1, 1, 4, 2, 0, 2, 1, 4, 2, 0, 4, 2, 1, 1, 1, 4, 3, 4, 1, 2, 0, 0, 2, 0,
+                4, 2, 4, 3,
+            ])),
+        ],
+    )?;
+    let file_sort_order = vec![
+        col("a").sort(true, false),
+        col("b").sort(true, false),
+        col("c").sort(true, false),
+    ];
+    Ok((batch, file_sort_order))
+}
+
 /// Creates a test_context with table name `annotated_data` which has 100 rows.
 // Columns in the table are ts, inc_col, desc_col. Source is CsvExec which is ordered by
 // ts column.
@@ -346,6 +397,18 @@ pub async fn get_test_context(
     session_config: SessionConfig,
 ) -> Result<SessionContext> {
     get_test_context_helper(tmpdir, infinite_source, session_config, get_test_data).await
+}
+
+/// Creates a test_context with table name `annotated_data`, which has 100 rows.
+// Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
+// a,b,c column. Column a has cardinality 2, column b has cardinality 4.
+// Column c has cardinality 100 (unique entries). Column d has cardinality 5.
+pub async fn get_test_context2(
+    tmpdir: &TempDir,
+    infinite_source: bool,
+    session_config: SessionConfig,
+) -> Result<SessionContext> {
+    get_test_context_helper(tmpdir, infinite_source, session_config, get_test_data2).await
 }
 
 async fn get_test_context_helper(
