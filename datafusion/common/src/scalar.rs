@@ -5646,8 +5646,7 @@ mod tests {
             ];
             assert_eq!(
                 formatted, expected,
-                "Actual:\n{:#?}\n\nExpected:\n{:#?}",
-                formatted, expected
+                "Actual:\n{formatted:#?}\n\nExpected:\n{expected:#?}"
             );
         };
 
