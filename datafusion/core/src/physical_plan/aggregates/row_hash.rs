@@ -341,7 +341,7 @@ struct GroupOrderInfo {
 }
 
 impl GroupedHashAggregateStream {
-    // Update the aggr_state according to groub_by values (result of group_by_expressions) when group by
+    // Update the aggr_state according to group_by values (result of group_by_expressions) when group by
     // expressions are fully ordered.
     fn update_ordered_group_state(
         &mut self,
@@ -397,13 +397,14 @@ impl GroupedHashAggregateStream {
                     let ordered_columns = match &self.aggregation_ordering {
                         Some(state) => {
                             let row = get_row_at_idx(group_values, range.start)?;
-                            state
+                            let res = state
                                 .order_indices
                                 .iter()
                                 .map(|idx| row[*idx].clone())
-                                .collect::<Vec<_>>()
+                                .collect::<Vec<_>>();
+                            Some(res)
                         }
-                        _ => vec![],
+                        _ => None,
                     };
                     // Add new entry to group_states and save newly created index
                     let group_state = GroupState {
@@ -454,7 +455,7 @@ impl GroupedHashAggregateStream {
         Ok(groups_with_rows)
     }
 
-    // Update the aggr_state according to groub_by values (result of group_by_expressions)
+    // Update the aggr_state according to group_by values (result of group_by_expressions)
     fn update_group_state(
         &mut self,
         group_values: &[ArrayRef],
@@ -505,13 +506,14 @@ impl GroupedHashAggregateStream {
                     let ordered_columns = match &self.aggregation_ordering {
                         Some(state) => {
                             let row = get_row_at_idx(group_values, row)?;
-                            state
+                            let res = state
                                 .order_indices
                                 .iter()
                                 .map(|idx| row[*idx].clone())
-                                .collect::<Vec<_>>()
+                                .collect::<Vec<_>>();
+                            Some(res)
                         }
-                        _ => vec![],
+                        _ => None,
                     };
                     // Add new entry to group_states and save newly created index
                     let group_state = GroupState {
@@ -644,7 +646,7 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    // Update the accumulator results, according to row_aggr_state.
+    // Update the accumulator results, according to aggr_state.
     fn update_accumulators_using_scalar(
         &mut self,
         groups_with_rows: &[usize],
@@ -868,7 +870,7 @@ pub struct GroupState {
     /// The actual group by values, stored sequentially
     group_by_values: OwnedRow,
 
-    ordered_columns: Vec<ScalarValue>,
+    ordered_columns: Option<Vec<ScalarValue>>,
     status: GroupStatus,
     hash: u64,
 
