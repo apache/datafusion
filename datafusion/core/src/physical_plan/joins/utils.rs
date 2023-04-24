@@ -39,8 +39,7 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::equivalence::EquivalentClass;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
