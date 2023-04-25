@@ -39,6 +39,7 @@ use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
+    normalize_out_expr_with_columns_map,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
@@ -51,7 +52,6 @@ mod row_hash;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::normalize_out_expr_with_columns_map;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -318,9 +318,7 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .expr()
         .iter()
         .enumerate()
-        .map(|(index, (_col, name))| {
-            Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>
-        })
+        .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _)
         .collect()
 }
 
@@ -501,10 +499,9 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        match &self.aggregation_ordering {
-            Some(state) => Some(&state.ordering),
-            _ => None,
-        }
+        self.aggregation_ordering
+            .as_ref()
+            .map(|item: &AggregationOrdering| item.ordering.as_slice())
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

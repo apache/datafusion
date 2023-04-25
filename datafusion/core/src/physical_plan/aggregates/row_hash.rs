@@ -24,10 +24,10 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use arrow::row::{OwnedRow, RowConverter, SortField};
-use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
+use hashbrown::raw::RawTable;
+use itertools::izip;
 
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
@@ -41,10 +41,12 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
-use arrow::array::*;
-use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray, UInt32Builder};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, BooleanArray, PrimitiveArray, UInt32Builder,
+};
 use arrow::compute::{cast, filter, SortColumn};
 use arrow::datatypes::{DataType, Schema, UInt32Type};
+use arrow::row::{OwnedRow, RowConverter, SortField};
 use arrow::{compute, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{
@@ -52,12 +54,11 @@ use datafusion_common::utils::{
 };
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::MutableRecordBatch;
-use hashbrown::raw::RawTable;
-use itertools::izip;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -394,17 +395,17 @@ impl GroupedHashAggregateStream {
                 None => {
                     let accumulator_set =
                         aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                    let ordered_columns = match &self.aggregation_ordering {
-                        Some(state) => {
-                            let row = get_row_at_idx(group_values, range.start)?;
-                            let res = state
-                                .order_indices
-                                .iter()
-                                .map(|idx| row[*idx].clone())
-                                .collect::<Vec<_>>();
-                            Some(res)
-                        }
-                        _ => None,
+                    let ordered_columns = if let Some(state) = &self.aggregation_ordering
+                    {
+                        let row = get_row_at_idx(group_values, range.start)?;
+                        let result = state
+                            .order_indices
+                            .iter()
+                            .map(|idx| row[*idx].clone())
+                            .collect::<Vec<_>>();
+                        Some(result)
+                    } else {
+                        None
                     };
                     // Add new entry to group_states and save newly created index
                     let group_state = GroupState {
@@ -503,17 +504,17 @@ impl GroupedHashAggregateStream {
                 None => {
                     let accumulator_set =
                         aggregates::create_accumulators(&self.normal_aggr_expr)?;
-                    let ordered_columns = match &self.aggregation_ordering {
-                        Some(state) => {
-                            let row = get_row_at_idx(group_values, row)?;
-                            let res = state
-                                .order_indices
-                                .iter()
-                                .map(|idx| row[*idx].clone())
-                                .collect::<Vec<_>>();
-                            Some(res)
-                        }
-                        _ => None,
+                    let ordered_columns = if let Some(state) = &self.aggregation_ordering
+                    {
+                        let row = get_row_at_idx(group_values, row)?;
+                        let result = state
+                            .order_indices
+                            .iter()
+                            .map(|idx| row[*idx].clone())
+                            .collect::<Vec<_>>();
+                        Some(result)
+                    } else {
+                        None
                     };
                     // Add new entry to group_states and save newly created index
                     let group_state = GroupState {
@@ -776,7 +777,7 @@ impl GroupedHashAggregateStream {
                 )?;
             } else {
                 // Collect all indices + offsets based on keys in this vec
-                let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
+                let mut batch_indices = UInt32Builder::with_capacity(0);
                 let mut offsets = vec![0];
                 let mut offset_so_far = 0;
                 for &group_idx in groups_with_rows.iter() {
