@@ -769,8 +769,8 @@ impl ExecutionPlan for SortExec {
         false
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
-        Some(self.expr.clone())
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        Some(&self.expr)
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

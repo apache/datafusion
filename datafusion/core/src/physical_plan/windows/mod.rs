@@ -224,7 +224,7 @@ pub(crate) fn get_ordered_partition_by_indices(
     partition_by_exprs: &[Arc<dyn PhysicalExpr>],
     input: &Arc<dyn ExecutionPlan>,
 ) -> Vec<usize> {
-    let input_ordering = input.output_ordering().unwrap_or(vec![]);
+    let input_ordering = input.output_ordering().unwrap_or(&[]);
     let input_ordering_exprs = convert_to_expr(input_ordering);
     let equal_properties = || input.equivalence_properties();
     let input_places = get_indices_of_matching_exprs(

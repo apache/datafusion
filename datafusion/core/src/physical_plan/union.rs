@@ -179,7 +179,7 @@ impl ExecutionPlan for UnionExec {
         Partitioning::UnknownPartitioning(num_partitions)
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         // The output ordering is the "meet" of its input orderings.
         // The meet is the finest ordering that satisfied by all the input
         // orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
@@ -355,7 +355,7 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
@@ -372,7 +372,7 @@ impl ExecutionPlan for InterleaveExec {
         self.inputs[0].output_partitioning()
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 

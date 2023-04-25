@@ -124,7 +124,7 @@ impl ExecutionPlan for StatisticsValidation {
         Partitioning::UnknownPartitioning(2)
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 

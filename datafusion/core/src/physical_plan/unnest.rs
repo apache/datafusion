@@ -102,7 +102,7 @@ impl ExecutionPlan for UnnestExec {
         self.input.output_partitioning()
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 

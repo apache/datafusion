@@ -112,7 +112,7 @@ impl ExecutionPlan for GlobalLimitExec {
         false
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
     }
 
@@ -288,7 +288,7 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     // Local limit will not change the input plan's ordering
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
     }
 

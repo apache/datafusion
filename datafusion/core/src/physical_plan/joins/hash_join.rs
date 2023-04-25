@@ -309,7 +309,7 @@ impl ExecutionPlan for HashJoinExec {
 
     // TODO Output ordering might be kept for some cases.
     // For example if it is inner join then the stream side order can be kept
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 

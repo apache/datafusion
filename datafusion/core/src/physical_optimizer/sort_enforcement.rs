@@ -470,7 +470,7 @@ fn ensure_sorting(
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(physical_ordering)) => {
                 if !ordering_satisfy_requirement_concrete(
-                    &physical_ordering,
+                    physical_ordering,
                     &required_ordering,
                     || child.equivalence_properties(),
                 ) {
@@ -536,8 +536,8 @@ fn analyze_immediate_sort_removal(
         let sort_input = sort_exec.input().clone();
         // If this sort is unnecessary, we should remove it:
         if ordering_satisfy(
-            sort_input.output_ordering().as_deref(),
-            sort_exec.output_ordering().as_deref(),
+            sort_input.output_ordering(),
+            sort_exec.output_ordering(),
             || sort_input.equivalence_properties(),
         ) {
             // Since we know that a `SortExec` has exactly one child,
@@ -821,7 +821,7 @@ fn can_skip_sort(
         return Ok(None);
     };
     let orderby_exprs = convert_to_expr(orderby_keys);
-    let physical_ordering_exprs = convert_to_expr(&physical_ordering);
+    let physical_ordering_exprs = convert_to_expr(physical_ordering);
     let equal_properties = || input.equivalence_properties();
     // indices of the order by expressions among input ordering expressions
     let ob_indices = get_indices_of_matching_exprs(
@@ -861,7 +861,7 @@ fn can_skip_sort(
     if first_n <= furthest_ob_index {
         return Ok(None);
     }
-    let input_orderby_columns = get_at_indices(&physical_ordering, &unique_ob_indices)?;
+    let input_orderby_columns = get_at_indices(physical_ordering, &unique_ob_indices)?;
     let expected_orderby_columns =
         get_at_indices(orderby_keys, find_indices(&ob_indices, &unique_ob_indices)?)?;
     let should_reverse = if let Some(should_reverse) = check_alignments(

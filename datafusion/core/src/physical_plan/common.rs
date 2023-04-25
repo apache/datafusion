@@ -285,7 +285,7 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
 /// orderings, see <https://en.wikipedia.org/wiki/Join_and_meet>.
 pub fn get_meet_of_orderings(
     given: &[Arc<dyn ExecutionPlan>],
-) -> Option<Vec<PhysicalSortExpr>> {
+) -> Option<&[PhysicalSortExpr]> {
     given
         .iter()
         .map(|item| item.output_ordering())
@@ -294,27 +294,23 @@ pub fn get_meet_of_orderings(
 }
 
 fn get_meet_of_orderings_helper(
-    orderings: Vec<Vec<PhysicalSortExpr>>,
-) -> Option<Vec<PhysicalSortExpr>> {
-    match orderings.as_slice() {
-        [first, ..] => {
-            let mut idx = 0;
-            loop {
-                for ordering in orderings.iter() {
-                    if idx >= ordering.len() {
-                        return Some(ordering.to_vec());
-                    } else if ordering[idx] != first[idx] {
-                        return if idx > 0 {
-                            Some(ordering[..idx].to_vec())
-                        } else {
-                            None
-                        };
-                    }
-                }
-                idx += 1;
+    orderings: Vec<&[PhysicalSortExpr]>,
+) -> Option<&[PhysicalSortExpr]> {
+    let mut idx = 0;
+    let first = orderings[0];
+    loop {
+        for ordering in orderings.iter() {
+            if idx >= ordering.len() {
+                return Some(ordering);
+            } else if ordering[idx] != first[idx] {
+                return if idx > 0 {
+                    Some(&ordering[..idx])
+                } else {
+                    None
+                };
             }
         }
-        [] => None,
+        idx += 1;
     }
 }
 
@@ -385,8 +381,8 @@ mod tests {
             options: SortOptions::default(),
         }];
 
-        let result = get_meet_of_orderings_helper(vec![input1, input2, input3]);
-        assert_eq!(result, Some(expected));
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2, &input3]);
+        assert_eq!(result.unwrap(), expected);
         Ok(())
     }
 
@@ -433,8 +429,8 @@ mod tests {
             },
         ];
 
-        let result = get_meet_of_orderings_helper(vec![input1.clone(), input2, input3]);
-        assert_eq!(result, Some(input1));
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2, &input3]);
+        assert_eq!(result.unwrap(), input1);
         Ok(())
     }
 
@@ -473,7 +469,7 @@ mod tests {
             },
         ];
 
-        let result = get_meet_of_orderings_helper(vec![input1, input2, input3]);
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2, &input3]);
         assert!(result.is_none());
         Ok(())
     }
@@ -499,7 +495,7 @@ mod tests {
 
         let union_exec = UnionExec::new(vec![sort_exec.clone(), sort_exec]);
         let res = get_meet_of_orderings(union_exec.inputs());
-        assert_eq!(res, Some(sort_expr));
+        assert_eq!(res, Some(&sort_expr[..]));
         Ok(())
     }
 

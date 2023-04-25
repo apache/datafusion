@@ -38,7 +38,6 @@ use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
-    expressions,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_alias_schema,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
@@ -228,6 +227,8 @@ pub struct AggregateExec {
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Stores mode, and output ordering information for the `AggregateExec`.
+    aggregation_ordering: Option<AggregationOrdering>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -244,10 +245,10 @@ fn get_working_mode(
         return None;
     };
 
-    let output_ordering = input.output_ordering().unwrap_or(vec![]);
+    let output_ordering = input.output_ordering().unwrap_or(&[]);
     // Since direction of the ordering is not important for GROUP BY columns,
     // we convert PhysicalSortExpr to PhysicalExpr in the existing ordering.
-    let ordering_exprs = convert_to_expr(&output_ordering);
+    let ordering_exprs = convert_to_expr(output_ordering);
     let groupby_exprs = group_by
         .expr
         .iter()
@@ -285,6 +286,44 @@ fn get_working_mode(
     })
 }
 
+fn calc_aggregation_ordering(
+    input: &Arc<dyn ExecutionPlan>,
+    group_by: &PhysicalGroupBy,
+) -> Option<AggregationOrdering> {
+    get_working_mode(input, group_by).map(|(mode, order_indices)| {
+        let existing_ordering = input.output_ordering().unwrap_or(&[]);
+        let out_group_expr = output_group_expr_helper(group_by);
+        // Calculate output ordering information for the operator:
+        let out_ordering = order_indices
+            .iter()
+            .zip(existing_ordering)
+            .map(|(idx, input_col)| PhysicalSortExpr {
+                expr: out_group_expr[*idx].clone(),
+                options: input_col.options,
+            })
+            .collect::<Vec<_>>();
+        AggregationOrdering {
+            mode,
+            order_indices,
+            ordering: out_ordering,
+        }
+    })
+}
+
+/// Grouping expressions as they occur in the output schema
+fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalExpr>> {
+    // Update column indices. Since the group by columns come first in the output schema, their
+    // indices are simply 0..self.group_expr(len).
+    group_by
+        .expr()
+        .iter()
+        .enumerate()
+        .map(|(index, (_col, name))| {
+            Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>
+        })
+        .collect()
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -317,6 +356,8 @@ impl AggregateExec {
             };
         }
 
+        let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
+
         Ok(AggregateExec {
             mode,
             group_by,
@@ -327,6 +368,7 @@ impl AggregateExec {
             input_schema,
             alias_map,
             metrics: ExecutionPlanMetricsSet::new(),
+            aggregation_ordering,
         })
     }
 
@@ -342,16 +384,7 @@ impl AggregateExec {
 
     /// Grouping expressions as they occur in the output schema
     pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        // Update column indices. Since the group by columns come first in the output schema, their
-        // indices are simply 0..self.group_expr(len).
-        self.group_by
-            .expr()
-            .iter()
-            .enumerate()
-            .map(|(index, (_col, name))| {
-                Arc::new(expressions::Column::new(name, index)) as Arc<dyn PhysicalExpr>
-            })
-            .collect()
+        output_group_expr_helper(&self.group_by)
     }
 
     /// Aggregate expressions
@@ -382,7 +415,6 @@ impl AggregateExec {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let aggregation_ordering = self.calc_aggregation_ordering();
 
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
@@ -408,31 +440,10 @@ impl AggregateExec {
                     batch_size,
                     context,
                     partition,
-                    aggregation_ordering,
+                    self.aggregation_ordering.clone(),
                 )?,
             ))
         }
-    }
-
-    fn calc_aggregation_ordering(&self) -> Option<AggregationOrdering> {
-        get_working_mode(&self.input, &self.group_by).map(|(mode, order_indices)| {
-            let existing_ordering = self.input.output_ordering().unwrap_or(vec![]);
-            let out_group_expr = self.output_group_expr();
-            // Calculate output ordering information for the operator:
-            let out_ordering = order_indices
-                .iter()
-                .zip(existing_ordering)
-                .map(|(idx, input_col)| PhysicalSortExpr {
-                    expr: out_group_expr[*idx].clone(),
-                    options: input_col.options,
-                })
-                .collect::<Vec<_>>();
-            AggregationOrdering {
-                mode,
-                order_indices,
-                ordering: out_ordering,
-            }
-        })
     }
 }
 
@@ -479,7 +490,7 @@ impl ExecutionPlan for AggregateExec {
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
-            if self.calc_aggregation_ordering().is_none() {
+            if self.aggregation_ordering.is_none() {
                 // Cannot run without breaking pipeline.
                 Err(DataFusionError::Plan(
                     "Aggregate Error: `GROUP BY` clauses with columns without ordering and GROUPING SETS are not supported for unbounded inputs.".to_string(),
@@ -492,8 +503,11 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
-        self.calc_aggregation_ordering().map(|state| state.ordering)
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        match &self.aggregation_ordering {
+            Some(state) => Some(&state.ordering),
+            _ => None,
+        }
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -1273,7 +1287,7 @@ mod tests {
             Partitioning::UnknownPartitioning(1)
         }
 
-        fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
             None
         }
 

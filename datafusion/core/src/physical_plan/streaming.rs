@@ -92,7 +92,7 @@ impl ExecutionPlan for StreamingTableExec {
         Ok(self.infinite)
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 

@@ -113,7 +113,7 @@ impl ExecutionPlan for FilterExec {
         Ok(children[0])
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
     }
 

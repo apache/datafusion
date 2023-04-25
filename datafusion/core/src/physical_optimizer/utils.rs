@@ -41,7 +41,7 @@ pub fn add_sort_above(
     sort_expr: Vec<PhysicalSortExpr>,
 ) -> Result<()> {
     // If the ordering requirement is already satisfied, do not add a sort.
-    if !ordering_satisfy(node.output_ordering().as_deref(), Some(&sort_expr), || {
+    if !ordering_satisfy(node.output_ordering(), Some(&sort_expr), || {
         node.equivalence_properties()
     }) {
         let new_sort = SortExec::new(sort_expr, node.clone());

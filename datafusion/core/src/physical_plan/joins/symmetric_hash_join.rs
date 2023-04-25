@@ -419,7 +419,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     // TODO: Output ordering might be kept for some cases.
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 

@@ -1147,7 +1147,7 @@ mod tests {
             self.input.output_partitioning()
         }
 
-        fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
             self.input.output_ordering()
         }
 
@@ -1159,7 +1159,6 @@ mod tests {
         fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
             vec![self
                 .output_ordering()
-                .as_deref()
                 .map(PhysicalSortRequirement::from_sort_exprs)]
         }
 

@@ -116,8 +116,8 @@ impl WindowAggExec {
     // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         // Partition by sort keys indices are stored in self.ordered_partition_by_indices.
-        let sort_keys = self.input.output_ordering().unwrap_or(vec![]);
-        get_at_indices(&sort_keys, &self.ordered_partition_by_indices)
+        let sort_keys = self.input.output_ordering().unwrap_or(&[]);
+        get_at_indices(sort_keys, &self.ordered_partition_by_indices)
     }
 }
 
@@ -157,7 +157,7 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input().output_ordering()
     }
 

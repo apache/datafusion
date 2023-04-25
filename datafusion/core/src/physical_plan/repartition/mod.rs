@@ -328,7 +328,7 @@ impl ExecutionPlan for RepartitionExec {
         self.partitioning.clone()
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         if self.maintains_input_order()[0] {
             self.input().output_ordering()
         } else {

@@ -342,7 +342,7 @@ impl ExecutionPlan for ParquetExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn output_ordering(&self) -> Option<Vec<PhysicalSortExpr>> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         get_output_ordering(&self.base_config)
     }
 
@@ -422,7 +422,6 @@ impl ExecutionPlan for ParquetExec {
 
                 let output_ordering_string = self
                     .output_ordering()
-                    .as_deref()
                     .map(make_output_ordering_string)
                     .unwrap_or_default();
 
