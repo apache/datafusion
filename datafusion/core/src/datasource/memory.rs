@@ -17,7 +17,7 @@
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -26,17 +26,16 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_expr::LogicalPlan;
 use tokio::sync::RwLock;
-use tokio::task;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::common;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{collect_partitioned, common};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
 /// In-memory data source for presenting a `Vec<RecordBatch>` as a
@@ -199,25 +198,7 @@ impl TableProvider for MemTable {
             )?)
         };
 
-        // Get the task context from the session state.
-        let task_ctx = state.task_ctx();
-
-        // Execute the plan and collect the results into batches.
-        let mut tasks = vec![];
-        for idx in 0..plan.output_partitioning().partition_count() {
-            let stream = plan.execute(idx, task_ctx.clone())?;
-            let handle = task::spawn(async move {
-                stream.try_collect().await.map_err(DataFusionError::from)
-            });
-            tasks.push(AbortOnDropSingle::new(handle));
-        }
-        let results = futures::future::join_all(tasks)
-            .await
-            .into_iter()
-            .map(|result| {
-                result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-            })
-            .collect::<Result<Vec<Vec<RecordBatch>>>>()?;
+        let results = collect_partitioned(plan, state.task_ctx()).await?;
 
         // Write the results into the table.
         let mut all_batches = self.batches.write().await;
