@@ -63,19 +63,20 @@ use datafusion_common::scalar::{
 };
 use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
 use kernels::{
-    bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
-    bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
-    bitwise_xor, bitwise_xor_scalar,
+    bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
+    bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
+    bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
 use kernels_arrow::{
-    add_decimal_dyn_scalar, add_dyn_decimal, divide_decimal_dyn_scalar,
-    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
-    is_distinct_from_decimal, is_distinct_from_f32, is_distinct_from_f64,
-    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
-    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
-    is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
-    modulus_decimal_dyn_scalar, modulus_dyn_decimal, multiply_decimal_dyn_scalar,
-    multiply_dyn_decimal, subtract_decimal_dyn_scalar, subtract_dyn_decimal,
+    add_decimal_dyn_scalar, add_dyn_decimal, add_dyn_temporal, add_dyn_temporal_scalar,
+    divide_decimal_dyn_scalar, divide_dyn_opt_decimal, is_distinct_from,
+    is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_f32,
+    is_distinct_from_f64, is_distinct_from_null, is_distinct_from_utf8,
+    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
+    is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
+    is_not_distinct_from_utf8, modulus_decimal_dyn_scalar, modulus_dyn_decimal,
+    multiply_decimal_dyn_scalar, multiply_dyn_decimal, subtract_decimal_dyn_scalar,
+    subtract_dyn_decimal, subtract_dyn_temporal, subtract_dyn_temporal_scalar,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -1134,11 +1135,11 @@ impl BinaryExpr {
                 true,
                 true
             ),
-            Operator::BitwiseAnd => bitwise_and_scalar(array, scalar),
-            Operator::BitwiseOr => bitwise_or_scalar(array, scalar),
-            Operator::BitwiseXor => bitwise_xor_scalar(array, scalar),
-            Operator::BitwiseShiftRight => bitwise_shift_right_scalar(array, scalar),
-            Operator::BitwiseShiftLeft => bitwise_shift_left_scalar(array, scalar),
+            Operator::BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
+            Operator::BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
+            Operator::BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
+            Operator::BitwiseShiftRight => bitwise_shift_right_dyn_scalar(array, scalar),
+            Operator::BitwiseShiftLeft => bitwise_shift_left_dyn_scalar(array, scalar),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1256,11 +1257,11 @@ impl BinaryExpr {
             Operator::RegexNotIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
             }
-            Operator::BitwiseAnd => bitwise_and(left, right),
-            Operator::BitwiseOr => bitwise_or(left, right),
-            Operator::BitwiseXor => bitwise_xor(left, right),
-            Operator::BitwiseShiftRight => bitwise_shift_right(left, right),
-            Operator::BitwiseShiftLeft => bitwise_shift_left(left, right),
+            Operator::BitwiseAnd => bitwise_and_dyn(left, right),
+            Operator::BitwiseOr => bitwise_or_dyn(left, right),
+            Operator::BitwiseXor => bitwise_xor_dyn(left, right),
+            Operator::BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
+            Operator::BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
             Operator::StringConcat => {
                 binary_string_array_op!(left, right, concat_elements)
             }
@@ -1312,10 +1313,39 @@ macro_rules! sub_timestamp_macro {
         Arc::new(ret) as ArrayRef
     }};
 }
+
+pub fn resolve_temporal_op(
+    lhs: &ArrayRef,
+    sign: i32,
+    rhs: &ArrayRef,
+) -> Result<ArrayRef> {
+    match sign {
+        1 => add_dyn_temporal(lhs, rhs),
+        -1 => subtract_dyn_temporal(lhs, rhs),
+        other => Err(DataFusionError::Internal(format!(
+            "Undefined operation for temporal types {other}"
+        ))),
+    }
+}
+
+pub fn resolve_temporal_op_scalar(
+    lhs: &ArrayRef,
+    sign: i32,
+    rhs: &ScalarValue,
+) -> Result<ColumnarValue> {
+    match sign {
+        1 => add_dyn_temporal_scalar(lhs, rhs),
+        -1 => subtract_dyn_temporal_scalar(lhs, rhs),
+        other => Err(DataFusionError::Internal(format!(
+            "Undefined operation for temporal types {other}"
+        ))),
+    }
+}
+
 /// This function handles the Timestamp - Timestamp operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
-pub fn ts_scalar_ts_op(array: ArrayRef, scalar: &ScalarValue) -> Result<ColumnarValue> {
+pub fn ts_scalar_ts_op(array: &ArrayRef, scalar: &ScalarValue) -> Result<ColumnarValue> {
     let ret = match (array.data_type(), scalar) {
         (
             DataType::Timestamp(TimeUnit::Second, opt_tz_lhs),
@@ -1410,7 +1440,7 @@ macro_rules! sub_timestamp_interval_macro {
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
 pub fn ts_scalar_interval_op(
-    array: ArrayRef,
+    array: &ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
@@ -1494,7 +1524,7 @@ macro_rules! sub_interval_cross_macro {
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an interval array.
 pub fn interval_scalar_interval_op(
-    array: ArrayRef,
+    array: &ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
@@ -5117,15 +5147,15 @@ mod tests {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
             Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
-        let mut result = bitwise_and(left.clone(), right.clone())?;
+        let mut result = bitwise_and_dyn(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or(left.clone(), right.clone())?;
+        result = bitwise_or_dyn(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(13), None, Some(15)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor(left.clone(), right.clone())?;
+        result = bitwise_xor_dyn(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(13), None, Some(12)]);
         assert_eq!(result.as_ref(), &expected);
 
@@ -5133,15 +5163,15 @@ mod tests {
             Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
             Arc::new(UInt32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
-        let mut result = bitwise_and(left.clone(), right.clone())?;
+        let mut result = bitwise_and_dyn(left.clone(), right.clone())?;
         let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or(left.clone(), right.clone())?;
+        result = bitwise_or_dyn(left.clone(), right.clone())?;
         let expected = UInt32Array::from(vec![Some(13), None, Some(15)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor(left.clone(), right.clone())?;
+        result = bitwise_xor_dyn(left.clone(), right.clone())?;
         let expected = UInt32Array::from(vec![Some(13), None, Some(12)]);
         assert_eq!(result.as_ref(), &expected);
 
@@ -5153,24 +5183,24 @@ mod tests {
         let input = Arc::new(Int32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
         let modules =
             Arc::new(Int32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
-        let mut result = bitwise_shift_left(input.clone(), modules.clone())?;
+        let mut result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
 
         let expected = Int32Array::from(vec![Some(8), None, Some(2560)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_shift_right(result.clone(), modules.clone())?;
+        result = bitwise_shift_right_dyn(result.clone(), modules.clone())?;
         assert_eq!(result.as_ref(), &input);
 
         let input =
             Arc::new(UInt32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
         let modules =
             Arc::new(UInt32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
-        let mut result = bitwise_shift_left(input.clone(), modules.clone())?;
+        let mut result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
 
         let expected = UInt32Array::from(vec![Some(8), None, Some(2560)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_shift_right(result.clone(), modules.clone())?;
+        result = bitwise_shift_right_dyn(result.clone(), modules.clone())?;
         assert_eq!(result.as_ref(), &input);
         Ok(())
     }
@@ -5179,14 +5209,14 @@ mod tests {
     fn bitwise_shift_array_overflow_test() -> Result<()> {
         let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
         let modules = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
-        let result = bitwise_shift_left(input.clone(), modules.clone())?;
+        let result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
 
         let expected = Int32Array::from(vec![Some(32)]);
         assert_eq!(result.as_ref(), &expected);
 
         let input = Arc::new(UInt32Array::from(vec![Some(2)])) as ArrayRef;
         let modules = Arc::new(UInt32Array::from(vec![Some(100)])) as ArrayRef;
-        let result = bitwise_shift_left(input.clone(), modules.clone())?;
+        let result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
 
         let expected = UInt32Array::from(vec![Some(32)]);
         assert_eq!(result.as_ref(), &expected);
@@ -5197,30 +5227,30 @@ mod tests {
     fn bitwise_scalar_test() -> Result<()> {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3i32);
-        let mut result = bitwise_and_scalar(&left, right.clone()).unwrap()?;
+        let mut result = bitwise_and_dyn_scalar(&left, right.clone()).unwrap()?;
         let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or_scalar(&left, right.clone()).unwrap()?;
+        result = bitwise_or_dyn_scalar(&left, right.clone()).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_scalar(&left, right).unwrap()?;
+        result = bitwise_xor_dyn_scalar(&left, right).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
 
         let left =
             Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3u32);
-        let mut result = bitwise_and_scalar(&left, right.clone()).unwrap()?;
+        let mut result = bitwise_and_dyn_scalar(&left, right.clone()).unwrap()?;
         let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or_scalar(&left, right.clone()).unwrap()?;
+        result = bitwise_or_dyn_scalar(&left, right.clone()).unwrap()?;
         let expected = UInt32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_scalar(&left, right).unwrap()?;
+        result = bitwise_xor_dyn_scalar(&left, right).unwrap()?;
         let expected = UInt32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
         Ok(())
@@ -5230,22 +5260,24 @@ mod tests {
     fn bitwise_shift_scalar_test() -> Result<()> {
         let input = Arc::new(Int32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
         let module = ScalarValue::from(10i32);
-        let mut result = bitwise_shift_left_scalar(&input, module.clone()).unwrap()?;
+        let mut result =
+            bitwise_shift_left_dyn_scalar(&input, module.clone()).unwrap()?;
 
         let expected = Int32Array::from(vec![Some(2048), None, Some(4096)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_shift_right_scalar(&result, module).unwrap()?;
+        result = bitwise_shift_right_dyn_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
 
         let input = Arc::new(UInt32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
         let module = ScalarValue::from(10u32);
-        let mut result = bitwise_shift_left_scalar(&input, module.clone()).unwrap()?;
+        let mut result =
+            bitwise_shift_left_dyn_scalar(&input, module.clone()).unwrap()?;
 
         let expected = UInt32Array::from(vec![Some(2048), None, Some(4096)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_shift_right_scalar(&result, module).unwrap()?;
+        result = bitwise_shift_right_dyn_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
         Ok(())
     }

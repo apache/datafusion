@@ -123,9 +123,8 @@ impl OptimizerRule for CommonSubexprEliminate {
                 )?))
             }
             LogicalPlan::Filter(filter) => {
-                let input = &filter.input;
                 let predicate = &filter.predicate;
-                let input_schema = Arc::clone(input.schema());
+                let input_schema = Arc::clone(filter.input.schema());
                 let mut id_array = vec![];
                 expr_to_identifier(
                     predicate,

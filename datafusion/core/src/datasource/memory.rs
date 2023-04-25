@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! In-memory data source for presenting a `Vec<RecordBatch>` as a data source that can be
-//! queried by DataFusion. This allows data to be pre-loaded into memory and then
-//! repeatedly queried without incurring additional file I/O overhead.
+//! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
 use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
@@ -41,7 +39,10 @@ use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
-/// In-memory table
+/// In-memory data source for presenting a `Vec<RecordBatch>` as a
+/// data source that can be queried by DataFusion. This allows data to
+/// be pre-loaded into memory and then repeatedly queried without
+/// incurring additional file I/O overhead.
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
