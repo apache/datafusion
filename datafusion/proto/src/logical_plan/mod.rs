@@ -542,7 +542,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::CreateView(CreateView {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_owned_table_reference(
                         create_view.name.as_ref(),
                         "CreateView",
@@ -550,7 +550,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
-                }))
+                })))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
@@ -559,11 +559,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                    schema_name: create_catalog_schema.schema_name.clone(),
-                    if_not_exists: create_catalog_schema.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                    CreateCatalogSchema {
+                        schema_name: create_catalog_schema.schema_name.clone(),
+                        if_not_exists: create_catalog_schema.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
@@ -572,11 +574,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                    catalog_name: create_catalog.catalog_name.clone(),
-                    if_not_exists: create_catalog.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                    CreateCatalog {
+                        catalog_name: create_catalog.catalog_name.clone(),
+                        if_not_exists: create_catalog.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
@@ -1203,12 +1207,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateView(CreateView {
+            LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 input,
                 or_replace,
                 definition,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
                         name: Some(name.clone().into()),
@@ -1221,11 +1225,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists,
-                schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name,
+                    if_not_exists,
+                    schema: df_schema,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
@@ -1234,11 +1240,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateCatalog(CreateCatalog {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalog(CreateCatalog {
                 catalog_name,
                 if_not_exists,
                 schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalog(
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
@@ -1357,7 +1363,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Unnest(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Unnest",
             )),
-            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
             LogicalPlan::DropTable(_) => Err(proto_error(
