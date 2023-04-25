@@ -2763,18 +2763,18 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[Some(value + 1), None, Some(value), Some(value + 2)],
             11,
             0,
-        );
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2982,18 +2982,18 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[Some(value - 1), None, Some(value - 2), Some(value)],
             11,
             0,
-        );
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3197,15 +3197,18 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array =
-            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 21, 0);
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(246), None, Some(244), Some(248)],
+            21,
+            0,
+        ));
+        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3421,13 +3424,13 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(6150000000000),
                 None,
@@ -3436,8 +3439,8 @@ mod tests {
             ],
             21,
             11,
-        );
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3643,15 +3646,18 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array =
-            create_decimal_array(&[Some(1), None, Some(0), Some(0)], 10, 0);
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(1), None, Some(0), Some(0)],
+            10,
+            0,
+        ));
+        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -4393,11 +4399,11 @@ mod tests {
             ],
             25,
             3,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
         let dictionary =
-            Arc::new(DictionaryArray::try_new(&keys, &decimal_array)?) as ArrayRef;
+            Arc::new(DictionaryArray::try_new(keys, decimal_array)?) as ArrayRef;
 
         // array = scalar
         apply_logic_op_arr_scalar(

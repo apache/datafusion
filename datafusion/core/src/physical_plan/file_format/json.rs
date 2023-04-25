@@ -33,7 +33,7 @@ use arrow::{datatypes::SchemaRef, json};
 use bytes::{Buf, Bytes};
 
 use crate::physical_plan::common::AbortOnDropSingle;
-use arrow::json::RawReaderBuilder;
+use arrow::json::ReaderBuilder;
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -198,13 +198,13 @@ impl FileOpener for JsonOpener {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let bytes = file_compression_type.convert_read(file)?;
-                    let reader = RawReaderBuilder::new(schema)
+                    let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let mut decoder = RawReaderBuilder::new(schema)
+                    let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
 
