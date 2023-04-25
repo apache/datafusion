@@ -60,7 +60,7 @@ impl Statement {
     /// description of this LogicalPlan node per node, not including
     /// children.
     ///
-    /// See [LogicalPlan::display] for an example
+    /// See [crate::LogicalPlan::display] for an example
     pub fn display(&self) -> impl fmt::Display + '_ {
         struct Wrapper<'a>(&'a Statement);
         impl<'a> Display for Wrapper<'a> {
