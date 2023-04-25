@@ -1023,4 +1023,80 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_dyn() {
+        // [123456789]
+        let a = Decimal128Array::from(vec![123456789000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // [10]
+        let b = Decimal128Array::from(vec![10000000000000000000])
+            .with_precision_and_scale(38, 18)
+            .unwrap();
+
+        // Avoid overflow by reducing the scale.
+        let result = multiply_fixed_point_dyn(&a, &b, 28).unwrap();
+        // [1234567890]
+        let expected = Arc::new(
+            Decimal128Array::from(vec![12345678900000000000000000000000000000])
+                .with_precision_and_scale(38, 28)
+                .unwrap(),
+        ) as ArrayRef;
+
+        assert_eq!(&expected, &result);
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().value_as_string(0),
+            "1234567890.0000000000000000000000000000"
+        );
+
+        // [123456789, 10]
+        let a = Decimal128Array::from(vec![
+            123456789000000000000000000,
+            10000000000000000000,
+        ])
+        .with_precision_and_scale(38, 18)
+        .unwrap();
+
+        // [10, 123456789, 12]
+        let b = Decimal128Array::from(vec![
+            10000000000000000000,
+            123456789000000000000000000,
+            12000000000000000000,
+        ])
+        .with_precision_and_scale(38, 18)
+        .unwrap();
+
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), None]);
+        let array1 = DictionaryArray::try_new(&keys, &a).unwrap();
+        let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(2), None]);
+        let array2 = DictionaryArray::try_new(&keys, &b).unwrap();
+
+        let result = multiply_fixed_point_dyn(&array1, &array2, 28).unwrap();
+        let expected = Arc::new(
+            Decimal128Array::from(vec![
+                Some(12345678900000000000000000000000000000),
+                Some(12345678900000000000000000000000000000),
+                Some(1200000000000000000000000000000),
+                None,
+            ])
+            .with_precision_and_scale(38, 28)
+            .unwrap(),
+        ) as ArrayRef;
+
+        assert_eq!(&expected, &result);
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().value_as_string(0),
+            "1234567890.0000000000000000000000000000"
+        );
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().value_as_string(1),
+            "1234567890.0000000000000000000000000000"
+        );
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().value_as_string(2),
+            "120.0000000000000000000000000000"
+        );
+    }
 }
