@@ -18,7 +18,7 @@
 ///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::statement::{DmlStatement, Statement};
+use crate::logical_plan::{DmlStatement, Statement};
 
 use crate::logical_plan::plan;
 use crate::utils::{
