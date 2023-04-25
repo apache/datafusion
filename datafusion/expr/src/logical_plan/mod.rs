@@ -16,17 +16,24 @@
 // under the License.
 
 pub mod builder;
+mod ddl;
 pub mod display;
 mod extension;
 mod plan;
 mod statement;
 
-pub use builder::{table_scan, LogicalPlanBuilder};
+pub use builder::{
+    build_join_schema, table_scan, union, wrap_projection_for_join_if_necessary,
+    LogicalPlanBuilder, UNNAMED_TABLE,
+};
+pub use ddl::{
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    CreateView, DdlStatement,
+};
 pub use plan::{
-    Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DropTable,
-    DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType,
-    Limit, LogicalPlan, Partitioning, PlanType, Prepare, Projection, Repartition, Sort,
+    Aggregate, Analyze, CrossJoin, DescribeTable, Distinct, DropTable, DropView,
+    EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
+    LogicalPlan, Partitioning, PlanType, Prepare, Projection, Repartition, Sort,
     StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
     Unnest, Values, Window,
 };

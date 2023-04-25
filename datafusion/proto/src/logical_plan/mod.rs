@@ -42,6 +42,7 @@ use datafusion_common::{
     context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
     Result,
 };
+use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -510,7 +511,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
 
-                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
@@ -527,7 +528,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
-                }))
+                })))
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
@@ -1166,20 +1167,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable(CreateExternalTable {
-                name,
-                location,
-                file_type,
-                has_header,
-                delimiter,
-                schema: df_schema,
-                table_partition_cols,
-                if_not_exists,
-                definition,
-                file_compression_type,
-                order_exprs,
-                options,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                CreateExternalTable {
+                    name,
+                    location,
+                    file_type,
+                    has_header,
+                    delimiter,
+                    schema: df_schema,
+                    table_partition_cols,
+                    if_not_exists,
+                    definition,
+                    file_compression_type,
+                    order_exprs,
+                    options,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
                         name: Some(name.clone().into()),
