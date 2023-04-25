@@ -39,7 +39,6 @@ use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
-    normalize_out_expr_with_alias_schema,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
@@ -52,6 +51,7 @@ mod row_hash;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::normalize_out_expr_with_columns_map;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -222,9 +222,9 @@ pub struct AggregateExec {
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
     pub(crate) input_schema: SchemaRef,
-    /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
-    alias_map: HashMap<Column, Vec<Column>>,
+    columns_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
     /// Stores mode, and output ordering information for the `AggregateExec`.
@@ -344,15 +344,13 @@ impl AggregateExec {
 
         let schema = Arc::new(schema);
 
-        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        // construct a map from the input columns to the output columns of the Aggregation
+        let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         for (expression, name) in group_by.expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
                 let new_col_idx = schema.index_of(name)?;
-                // When the column name is the same, but index does not equal, treat it as Alias
-                if (column.name() != name) || (column.index() != new_col_idx) {
-                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
-                    entry.push(Column::new(name, new_col_idx));
-                }
+                let entry = columns_map.entry(column.clone()).or_insert_with(Vec::new);
+                entry.push(Column::new(name, new_col_idx));
             };
         }
 
@@ -366,7 +364,7 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
-            alias_map,
+            columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
         })
@@ -468,10 +466,9 @@ impl ExecutionPlan for AggregateExec {
                         let normalized_exprs = exprs
                             .into_iter()
                             .map(|expr| {
-                                normalize_out_expr_with_alias_schema(
+                                normalize_out_expr_with_columns_map(
                                     expr,
-                                    &self.alias_map,
-                                    &self.schema,
+                                    &self.columns_map,
                                 )
                             })
                             .collect::<Vec<_>>();
@@ -526,7 +523,7 @@ impl ExecutionPlan for AggregateExec {
         let mut new_properties = EquivalenceProperties::new(self.schema());
         project_equivalence_properties(
             self.input.equivalence_properties(),
-            &self.alias_map,
+            &self.columns_map,
             &mut new_properties,
         );
         new_properties

@@ -110,15 +110,14 @@ fn split_conjunction_impl<'a>(
     }
 }
 
-/// Normalize the output expressions based on Alias Map and SchemaRef.
+/// Normalize the output expressions based on Columns Map.
 ///
-/// 1) If there is mapping in Alias Map, replace the Column in the output expressions with the 1st Column in Alias Map
-/// 2) If the Column is invalid for the current Schema, replace the Column with a place holder UnKnownColumn
+/// If there is a mapping in Columns Map, replace the Column in the output expressions with the 1st Column in the Columns Map.
+/// Otherwise, replace the Column with a place holder of [UnKnownColumn]
 ///
-pub fn normalize_out_expr_with_alias_schema(
+pub fn normalize_out_expr_with_columns_map(
     expr: Arc<dyn PhysicalExpr>,
-    alias_map: &HashMap<Column, Vec<Column>>,
-    schema: &SchemaRef,
+    columns_map: &HashMap<Column, Vec<Column>>,
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -126,16 +125,10 @@ pub fn normalize_out_expr_with_alias_schema(
                 .as_any()
                 .downcast_ref::<Column>()
             {
-                Some(column) => {
-                    alias_map
-                        .get(column)
-                        .map(|c| Arc::new(c[0].clone()) as _)
-                        .or_else(|| match schema.index_of(column.name()) {
-                            // Exactly matching, return None, no need to do the transform
-                            Ok(idx) if column.index() == idx => None,
-                            _ => Some(Arc::new(UnKnownColumn::new(column.name())) as _),
-                        })
-                }
+                Some(column) => columns_map
+                    .get(column)
+                    .map(|c| Arc::new(c[0].clone()) as _)
+                    .or_else(|| Some(Arc::new(UnKnownColumn::new(column.name())) as _)),
                 None => None,
             };
             Ok(if let Some(normalized_form) = normalized_form {
