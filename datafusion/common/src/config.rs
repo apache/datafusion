@@ -19,7 +19,7 @@
 
 use crate::{DataFusionError, Result};
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 
 /// A macro that wraps a configuration struct and automatically derives
@@ -474,6 +474,36 @@ impl ConfigOptions {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
                 ret.set(&key, var.to_string_lossy().as_ref())?;
+            }
+        }
+
+        Ok(ret)
+    }
+
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    ///
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        let mut keys = Visitor(vec![]);
+        let mut ret = Self::default();
+        ret.visit(&mut keys, "datafusion", "");
+
+        for key in keys.0 {
+            if let Some(var) = settings.get(&key) {
+                ret.set(&key, var)?;
             }
         }
 
