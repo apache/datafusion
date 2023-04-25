@@ -1094,7 +1094,7 @@ impl DefaultPhysicalPlanner {
                     // the context)
                     let name = ddl.name();
                     Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: Ddl({name})")
+                        format!("Unsupported logical plan: {name}")
                     ))
                 }
                 LogicalPlan::Prepare(_) => {
