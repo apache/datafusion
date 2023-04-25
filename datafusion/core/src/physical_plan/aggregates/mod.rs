@@ -1355,14 +1355,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_aa() -> Result<()> {
-        let aa = vec!["aa".to_string(), "bb".to_string()];
-        let aa_ref: &[String] = &aa;
-        let bb = aa_ref.iter().map(|s| s.to_uppercase()).collect::<Vec<_>>();
-        println!("bb {:?}", bb);
-
-        Ok(())
-    }
 }
