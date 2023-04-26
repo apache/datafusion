@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::equivalence::EquivalentClass;
-use crate::expressions::{BinaryExpr, Column, InListExpr, UnKnownColumn};
+use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{
     EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -586,28 +586,7 @@ pub fn reassign_predicate_columns(
                 column.name(),
                 index,
             ))));
-        } else if let Some(in_list) = expr_any.downcast_ref::<InListExpr>() {
-            // transform child first
-            let expr = reassign_predicate_columns(
-                in_list.expr().clone(),
-                schema,
-                ignore_not_found,
-            )?;
-            let list = in_list
-                .list()
-                .iter()
-                .map(|expr| {
-                    reassign_predicate_columns(expr.clone(), schema, ignore_not_found)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            return Ok(Transformed::Yes(Arc::new(InListExpr::new(
-                expr,
-                list,
-                in_list.negated(),
-                schema.as_ref(),
-            ))));
         }
-
         Ok(Transformed::No(expr))
     })
 }
