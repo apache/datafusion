@@ -259,13 +259,29 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Creates a new `SessionContext` using the provided session configuration.
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a new [`RuntimeEnv`].
+    ///
+    /// See [`Self::with_config_rt`] for more details on resource
+    /// limits.
     pub fn with_config(config: SessionConfig) -> Self {
         let runtime = Arc::new(RuntimeEnv::default());
         Self::with_config_rt(config, runtime)
     }
 
-    /// Creates a new `SessionContext` using the provided [`SessionConfig`] and [`RuntimeEnv`].
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a [`RuntimeEnv`].
+    ///
+    /// # Resource Limits
+    ///
+    /// By default, each new `SessionContext` creates a new
+    /// `RuntimeEnv`, and therefore will not enforce memory or disk
+    /// limits for queries run on different `SessionContext`s.
+    ///
+    /// To enforce resource limits (e.g. to limit the total amount of
+    /// memory used) across all DataFusion queries in a process,
+    /// all `SessionContext`'s should be configured with the
+    /// same `RuntimeEnv`.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
         Self::with_state(state)
@@ -1270,7 +1286,8 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 }
 
 impl SessionState {
-    /// Returns new SessionState using the provided configuration and runtime
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
         Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)

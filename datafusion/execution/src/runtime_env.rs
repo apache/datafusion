@@ -32,12 +32,11 @@ use std::sync::Arc;
 use url::Url;
 
 #[derive(Clone)]
-/// Execution runtime environment.
+/// Execution runtime environment that manages system resources such
+/// as memory, disk and storage.
 ///
-/// A [`RuntimeEnv`] can be created from a [`RuntimeConfig`] and
-/// stores state to be shared across multiple sessions. In most
-/// applications there will be a single [`RuntimeEnv`]
-/// with the following capaibilties:
+/// A [`RuntimeEnv`] is created from a [`RuntimeConfig`] and has the
+/// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
 /// * [`DiskManager`]: Manage temporary files on local disk
