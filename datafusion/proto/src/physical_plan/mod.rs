@@ -1246,7 +1246,9 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::in_list;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr, date_time_interval_expr};
+    use datafusion::physical_plan::expressions::{
+        date_time_interval_expr, like, BinaryExpr, GetIndexedFieldExpr,
+    };
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::{functions, udaf};
@@ -1326,12 +1328,8 @@ mod roundtrip_tests {
         let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
         let date_expr = col("some_date", &schema)?;
         let literal_expr = col("some_interval", &schema)?;
-        let date_time_interval_expr = date_time_interval_expr(
-            date_expr,
-            Operator::Plus,
-            literal_expr,
-            &schema,
-        )?;
+        let date_time_interval_expr =
+            date_time_interval_expr(date_expr, Operator::Plus, literal_expr, &schema)?;
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(date_time_interval_expr, "result".to_string())],
             input,
