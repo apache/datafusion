@@ -1065,9 +1065,9 @@ mod tests {
         .unwrap();
 
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(1), None]);
-        let array1 = DictionaryArray::try_new(&keys, &a).unwrap();
+        let array1 = DictionaryArray::new(keys, Arc::new(a));
         let keys = Int8Array::from(vec![Some(0_i8), Some(1), Some(2), None]);
-        let array2 = DictionaryArray::try_new(&keys, &b).unwrap();
+        let array2 = DictionaryArray::new(keys, Arc::new(b));
 
         let result = multiply_fixed_point_dyn(&array1, &array2, 28).unwrap();
         let expected = Arc::new(
