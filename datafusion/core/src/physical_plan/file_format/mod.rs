@@ -714,7 +714,7 @@ fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
 ) -> Option<Vec<PhysicalSortExpr>> {
-    let mut new_ordering: Option<Vec<PhysicalSortExpr>> = None;
+    let mut new_ordering = vec![];
     if let Some(output_ordering) = &base_config.output_ordering {
         if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
@@ -723,29 +723,22 @@ fn get_projected_output_ordering(
         }
         for PhysicalSortExpr { expr, options } in output_ordering {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let col_with_name = projected_schema.column_with_name(col.name());
-                if let Some((idx, _)) = col_with_name {
-                    // Construct new expression with correct index after projection.
-                    let new_expr = Arc::new(Column::new(col.name(), idx));
-                    // Construct new sort expression with correct index after projection.
-                    let new_sort_expr = PhysicalSortExpr {
-                        expr: new_expr,
+                let name = col.name();
+                if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                    // Compute the new sort expression (with correct index) after projection:
+                    new_ordering.push(PhysicalSortExpr {
+                        expr: Arc::new(Column::new(name, idx)),
                         options: *options,
-                    };
-                    if let Some(ordering) = &mut new_ordering {
-                        ordering.push(new_sort_expr);
-                    } else {
-                        new_ordering = Some(vec![new_sort_expr]);
-                    }
+                    });
                     continue;
                 }
             }
-            // Cannot find expression in the projected_schema, stop iteration since
-            // Rest of the orderings are violated
+            // Cannot find expression in the projected_schema, stop iterating
+            // since rest of the orderings are violated
             break;
         }
     }
-    new_ordering
+    (!new_ordering.is_empty()).then_some(new_ordering)
 }
 
 #[cfg(test)]
@@ -876,7 +869,7 @@ mod tests {
             Statistics::default(),
             partition_cols.clone(),
         );
-        let (proj_schema, _, _) = conf.project();
+        let (proj_schema, ..) = conf.project();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,
