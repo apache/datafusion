@@ -485,7 +485,10 @@ impl LogicalPlan {
         }
     }
 
-    /// Returns the maximum number of rows that this plan can output.
+    /// Returns the maximum number of rows that this plan can output, if known.
+    ///
+    /// If `None`, the plan can return any number of rows.
+    /// If `Some(n)` then the plan can return at most `n` rows but may return fewer.
     pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
@@ -494,7 +497,11 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 input, group_expr, ..
             }) => {
-                if group_expr.is_empty() {
+                // Empty group_expr will return Some(1)
+                if group_expr
+                    .iter()
+                    .all(|expr| matches!(expr, Expr::Literal(_)))
+                {
                     Some(1)
                 } else {
                     input.max_rows()
@@ -557,6 +564,7 @@ impl LogicalPlan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
             LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
             LogicalPlan::Distinct(Distinct { input }) => input.max_rows(),
+            LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
             LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateExternalTable(_)
@@ -571,7 +579,6 @@ impl LogicalPlan {
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Values(_)
             | LogicalPlan::Extension(_) => None,
         }
     }

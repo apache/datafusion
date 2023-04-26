@@ -42,9 +42,11 @@ pub fn check_subquery_expr(
     if let Expr::ScalarSubquery(subquery) = expr {
         // Scalar subquery should only return one column
         if subquery.subquery.schema().fields().len() > 1 {
-            return Err(datafusion_common::DataFusionError::Plan(
-                "Scalar subquery should only return one column".to_string(),
-            ));
+            return Err(datafusion_common::DataFusionError::Plan(format!(
+                "Scalar subquery should only return one column, but found {}: {}",
+                subquery.subquery.schema().fields().len(),
+                subquery.subquery.schema().field_names().join(", "),
+            )));
         }
         // Correlated scalar subquery must be aggregated to return at most one row
         if !subquery.outer_ref_columns.is_empty() {

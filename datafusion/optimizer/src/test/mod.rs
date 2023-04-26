@@ -129,7 +129,7 @@ pub fn assert_analyzed_plan_eq_display_indent(
     let options = ConfigOptions::default();
     let analyzed_plan =
         Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
-    let formatted_plan = format!("{}", analyzed_plan.display_indent_schema());
+    let formatted_plan = analyzed_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 
     Ok(())
@@ -186,7 +186,7 @@ pub fn assert_optimized_plan_eq_display_indent(
         )
         .expect("failed to optimize plan")
         .unwrap_or_else(|| plan.clone());
-    let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+    let formatted_plan = optimized_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 }
 
@@ -203,7 +203,7 @@ pub fn assert_multi_rules_optimized_plan_eq_display_indent(
             .expect("failed to optimize plan")
             .unwrap_or_else(|| optimized_plan.clone());
     }
-    let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+    let formatted_plan = optimized_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 }
 
