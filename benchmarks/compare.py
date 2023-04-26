@@ -25,8 +25,6 @@ from typing import Dict, List, Any
 from pathlib import Path
 from argparse import ArgumentParser
 
-import os
-
 try:
     from rich.console import Console
     from rich.table import Table
