@@ -18,6 +18,7 @@
 pub mod builder;
 mod ddl;
 pub mod display;
+mod dml;
 mod extension;
 mod plan;
 mod statement;
@@ -30,6 +31,7 @@ pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CreateView, DdlStatement,
 };
+pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
     Aggregate, Analyze, CrossJoin, DescribeTable, Distinct, DropTable, DropView,
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
@@ -38,8 +40,8 @@ pub use plan::{
     Unnest, Values, Window,
 };
 pub use statement::{
-    DmlStatement, SetVariable, Statement, TransactionAccessMode, TransactionConclusion,
-    TransactionEnd, TransactionIsolationLevel, TransactionStart, WriteOp,
+    SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart,
 };
 
 pub use display::display_schema;

@@ -1243,10 +1243,12 @@ mod roundtrip_tests {
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-    use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
+    use datafusion::physical_expr::expressions::in_list;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
+    use datafusion::physical_plan::expressions::{
+        date_time_interval_expr, like, BinaryExpr, GetIndexedFieldExpr,
+    };
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::{functions, udaf};
@@ -1260,7 +1262,7 @@ mod roundtrip_tests {
         physical_plan::{
             aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
-            expressions::{binary, col, lit, InListExpr, NotExpr},
+            expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
             file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
@@ -1326,12 +1328,8 @@ mod roundtrip_tests {
         let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
         let date_expr = col("some_date", &schema)?;
         let literal_expr = col("some_interval", &schema)?;
-        let date_time_interval_expr = Arc::new(DateTimeIntervalExpr::try_new(
-            date_expr,
-            Operator::Plus,
-            literal_expr,
-            &schema,
-        )?);
+        let date_time_interval_expr =
+            date_time_interval_expr(date_expr, Operator::Plus, literal_expr, &schema)?;
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(date_time_interval_expr, "result".to_string())],
             input,
@@ -1510,15 +1508,15 @@ mod roundtrip_tests {
         let field_c = Field::new("c", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
         let not = Arc::new(NotExpr::new(col("a", &schema)?));
-        let in_list = Arc::new(InListExpr::new(
+        let in_list = in_list(
             col("b", &schema)?,
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            false,
+            &false,
             schema.as_ref(),
-        ));
+        )?;
         let and = binary(not, Operator::And, in_list, &schema)?;
         roundtrip_test(Arc::new(FilterExec::try_new(
             and,
