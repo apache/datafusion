@@ -19,7 +19,8 @@
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::{
-    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
+    bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
+    row_hash::GroupedHashAggregateStream,
 };
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -47,8 +48,10 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod bounded_aggregate_stream;
 mod no_grouping;
 mod row_hash;
+mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
@@ -183,6 +186,7 @@ impl PartialEq for PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStream(GroupedHashAggregateStream),
+    BoundedAggregate(BoundedAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -190,6 +194,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
+            StreamType::BoundedAggregate(stream) => Box::pin(stream),
         }
     }
 }
@@ -423,6 +428,20 @@ impl AggregateExec {
                 context,
                 partition,
             )?))
+        } else if let Some(aggregation_ordering) = &self.aggregation_ordering {
+            Ok(StreamType::BoundedAggregate(BoundedAggregateStream::new(
+                self.mode,
+                self.schema.clone(),
+                self.group_by.clone(),
+                self.aggr_expr.clone(),
+                self.filter_expr.clone(),
+                input,
+                baseline_metrics,
+                batch_size,
+                context,
+                partition,
+                aggregation_ordering.clone(),
+            )?))
         } else {
             Ok(StreamType::GroupedHashAggregateStream(
                 GroupedHashAggregateStream::new(
@@ -436,7 +455,6 @@ impl AggregateExec {
                     batch_size,
                     context,
                     partition,
-                    self.aggregation_ordering.clone(),
                 )?,
             ))
         }
