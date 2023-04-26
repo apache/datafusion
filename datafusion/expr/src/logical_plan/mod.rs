@@ -17,11 +17,13 @@
 
 pub mod builder;
 pub mod display;
+mod dml;
 mod extension;
 mod plan;
 mod statement;
 
 pub use builder::{table_scan, LogicalPlanBuilder};
+pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
     Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DropTable,
@@ -31,8 +33,8 @@ pub use plan::{
     Unnest, Values, Window,
 };
 pub use statement::{
-    DmlStatement, SetVariable, Statement, TransactionAccessMode, TransactionConclusion,
-    TransactionEnd, TransactionIsolationLevel, TransactionStart, WriteOp,
+    SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    TransactionIsolationLevel, TransactionStart,
 };
 
 pub use display::display_schema;

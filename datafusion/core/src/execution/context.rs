@@ -1821,6 +1821,11 @@ impl SessionState {
     pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         &self.aggregate_functions
     }
+
+    /// Return version of the cargo package that produced this query
+    pub fn version(&self) -> &str {
+        env!("CARGO_PKG_VERSION")
+    }
 }
 
 struct SessionContextProvider<'a> {
