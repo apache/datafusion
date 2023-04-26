@@ -20,11 +20,12 @@
 from __future__ import annotations
 
 import json
-import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Any
 from pathlib import Path
 from argparse import ArgumentParser
+
+import os
 
 try:
     from rich.console import Console
@@ -32,8 +33,6 @@ try:
 except ImportError:
     print("Try `pip install rich` for using this script.")
     raise
-
-MEAN_THRESHOLD = 5
 
 
 @dataclass
@@ -64,14 +63,9 @@ class QueryRun:
     def execution_time(self) -> float:
         assert len(self.iterations) >= 1
 
-        # If we don't have enough samples, median() is probably
-        # going to be a worse measure than just an average.
-        if len(self.iterations) < MEAN_THRESHOLD:
-            method = statistics.mean
-        else:
-            method = statistics.median
-
-        return method(iteration.elapsed for iteration in self.iterations)
+        # Use minimum execution time to account for variations / other
+        # things the system was doing
+        return min(iteration.elapsed for iteration in self.iterations)
 
 
 @dataclass
@@ -81,7 +75,6 @@ class Context:
     num_cpus: int
     start_time: int
     arguments: List[str]
-    branch: str
 
     @classmethod
     def load_from(cls, data: Dict[str, Any]) -> Context:
@@ -91,7 +84,6 @@ class Context:
             num_cpus=data["num_cpus"],
             start_time=data["start_time"],
             arguments=data["arguments"],
-            branch=data["arguments"][9]
         )
 
 
@@ -119,17 +111,19 @@ def compare(
     noise_threshold: float,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline_path)
-    baselineBranch = baseline.context.branch
 
     comparison = BenchmarkRun.load_from_file(comparison_path)
-    comparisonBranch = comparison.context.branch
 
     console = Console()
 
+    # use basename as the column names
+    baseline_header = baseline_path.stem
+    comparison_header = comparison_path.stem
+
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Query", style="dim", width=12)
-    table.add_column(baselineBranch, justify="right", style="dim", width=12)
-    table.add_column(comparisonBranch, justify="right", style="dim", width=12)
+    table.add_column(baseline_header, justify="right", style="dim")
+    table.add_column(comparison_header, justify="right", style="dim")
     table.add_column("Change", justify="right", style="dim")
 
     for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
