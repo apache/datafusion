@@ -1074,6 +1074,7 @@ impl SessionContext {
     ///
     /// [`table`]: SessionContext::table
     #[deprecated(
+        since = "23.0.0",
         note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
     )]
     pub fn tables(&self) -> Result<HashSet<String>> {
@@ -1090,6 +1091,7 @@ impl SessionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     #[deprecated(
+        since = "23.0.0",
         note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
     )]
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
@@ -1098,6 +1100,7 @@ impl SessionContext {
 
     /// Creates a physical plan from a logical plan.
     #[deprecated(
+        since = "23.0.0",
         note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
     )]
     pub async fn create_physical_plan(
@@ -1247,6 +1250,10 @@ impl Debug for SessionState {
 }
 
 /// Default session builder using the provided configuration
+#[deprecated(
+    since = "23.0.0",
+    note = "See SessionContext::with_config() or SessionState::with_config_rt"
+)]
 pub fn default_session_builder(config: SessionConfig) -> SessionState {
     SessionState::with_config_rt(config, Arc::new(RuntimeEnv::default()))
 }
