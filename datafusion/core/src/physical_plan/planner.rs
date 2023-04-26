@@ -48,7 +48,9 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use crate::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -617,6 +619,7 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
+                            PartitionSearchMode::Sorted,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(

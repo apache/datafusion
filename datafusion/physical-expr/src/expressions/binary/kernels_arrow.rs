@@ -21,16 +21,23 @@
 use arrow::compute::{
     add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus_dyn,
     modulus_scalar_dyn, multiply_dyn, multiply_scalar_dyn, subtract_dyn,
-    subtract_scalar_dyn,
+    subtract_scalar_dyn, try_unary,
 };
-use arrow::datatypes::Decimal128Type;
+use arrow::datatypes::{Date32Type, Date64Type, Decimal128Type};
 use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
 use arrow_schema::DataType;
-use datafusion_common::cast::as_decimal128_array;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::cast::{as_date32_array, as_date64_array, as_decimal128_array};
+use datafusion_common::scalar::{date32_add, date64_add};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::decimal_op_mathematics_type;
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::Operator;
 use std::sync::Arc;
+
+use super::{
+    interval_array_op, interval_scalar_interval_op, ts_array_op, ts_interval_array_op,
+    ts_scalar_interval_op, ts_scalar_ts_op,
+};
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
@@ -280,6 +287,57 @@ pub(crate) fn add_decimal_dyn_scalar(
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
+pub(crate) fn add_dyn_temporal(left: &ArrayRef, right: &ArrayRef) -> Result<ArrayRef> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => ts_array_op(left, right),
+        (DataType::Interval(..), DataType::Interval(..)) => {
+            interval_array_op(left, right, 1)
+        }
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
+            ts_interval_array_op(left, 1, right)
+        }
+        (DataType::Interval(..), DataType::Timestamp(..)) => {
+            ts_interval_array_op(right, 1, left)
+        }
+        _ => {
+            // fall back to kernels in arrow-rs
+            Ok(add_dyn(left, right)?)
+        }
+    }
+}
+
+pub(crate) fn add_dyn_temporal_scalar(
+    left: &ArrayRef,
+    right: &ScalarValue,
+) -> Result<ColumnarValue> {
+    match (left.data_type(), right.get_datatype()) {
+        (DataType::Date32, DataType::Interval(..)) => {
+            let left = as_date32_array(&left)?;
+            let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
+                Ok(date32_add(days, right, 1)?)
+            })?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        (DataType::Date64, DataType::Interval(..)) => {
+            let left = as_date64_array(&left)?;
+            let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
+                Ok(date64_add(ms, right, 1)?)
+            })?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        (DataType::Interval(..), DataType::Interval(..)) => {
+            interval_scalar_interval_op(left, 1, right)
+        }
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
+            ts_scalar_interval_op(left, 1, right)
+        }
+        _ => {
+            // fall back to kernels in arrow-rs
+            Ok(ColumnarValue::Array(add_dyn(left, &right.to_array())?))
+        }
+    }
+}
+
 pub(crate) fn subtract_decimal_dyn_scalar(
     left: &dyn Array,
     right: i128,
@@ -289,6 +347,63 @@ pub(crate) fn subtract_decimal_dyn_scalar(
 
     let array = subtract_scalar_dyn::<Decimal128Type>(left, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
+}
+
+pub(crate) fn subtract_dyn_temporal(
+    left: &ArrayRef,
+    right: &ArrayRef,
+) -> Result<ArrayRef> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => ts_array_op(left, right),
+        (DataType::Interval(..), DataType::Interval(..)) => {
+            interval_array_op(left, right, -1)
+        }
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
+            ts_interval_array_op(left, -1, right)
+        }
+        (DataType::Interval(..), DataType::Timestamp(..)) => {
+            ts_interval_array_op(right, -1, left)
+        }
+        _ => {
+            // fall back to kernels in arrow-rs
+            Ok(subtract_dyn(left, right)?)
+        }
+    }
+}
+
+pub(crate) fn subtract_dyn_temporal_scalar(
+    left: &ArrayRef,
+    right: &ScalarValue,
+) -> Result<ColumnarValue> {
+    match (left.data_type(), right.get_datatype()) {
+        (DataType::Date32, DataType::Interval(..)) => {
+            let left = as_date32_array(&left)?;
+            let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
+                Ok(date32_add(days, right, -1)?)
+            })?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        (DataType::Date64, DataType::Interval(..)) => {
+            let left = as_date64_array(&left)?;
+            let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
+                Ok(date64_add(ms, right, -1)?)
+            })?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => {
+            ts_scalar_ts_op(left, right)
+        }
+        (DataType::Interval(..), DataType::Interval(..)) => {
+            interval_scalar_interval_op(left, -1, right)
+        }
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
+            ts_scalar_interval_op(left, -1, right)
+        }
+        _ => {
+            // fall back to kernels in arrow-rs
+            Ok(ColumnarValue::Array(subtract_dyn(left, &right.to_array())?))
+        }
+    }
 }
 
 fn get_precision_scale(data_type: &DataType) -> Result<(u8, i8)> {

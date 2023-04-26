@@ -33,7 +33,7 @@ pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use display::DisplayFormatType;
-use futures::stream::Stream;
+use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
 use std::fmt::Debug;
 
@@ -443,11 +443,21 @@ pub async fn collect_partitioned(
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
     let streams = execute_stream_partitioned(plan, context)?;
-    let mut batches = Vec::with_capacity(streams.len());
-    for stream in streams {
-        batches.push(common::collect(stream).await?);
-    }
-    Ok(batches)
+
+    // Execute the plan and collect the results into batches.
+    let handles = streams
+        .into_iter()
+        .enumerate()
+        .map(|(idx, stream)| async move {
+            let handle = tokio::task::spawn(stream.try_collect());
+            AbortOnDropSingle::new(handle).await.map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "collect_partitioned partition {idx} panicked: {e}"
+                ))
+            })?
+        });
+
+    futures::future::try_join_all(handles).await
 }
 
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
@@ -666,6 +676,7 @@ pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{

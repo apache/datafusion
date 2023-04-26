@@ -1487,12 +1487,25 @@ pub struct PhysicalScalarUdfNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
-    #[prost(enumeration = "AggregateFunction", tag = "1")]
-    pub aggr_function: i32,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
+    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
+    pub aggregate_function: ::core::option::Option<
+        physical_aggregate_expr_node::AggregateFunction,
+    >,
+}
+/// Nested message and enum types in `PhysicalAggregateExprNode`.
+pub mod physical_aggregate_expr_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum AggregateFunction {
+        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
+        AggrFunction(i32),
+        #[prost(string, tag = "4")]
+        UserDefinedAggrFunction(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
