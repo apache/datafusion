@@ -20,7 +20,7 @@ use crate::optimizer::Optimizer;
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
+use datafusion_common::{assert_contains, Result};
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 
@@ -145,11 +145,8 @@ pub fn assert_analyzer_check_err(
         Analyzer::with_rules(rules).execute_and_check(plan, &options, |_, _| {});
     match analyzed_plan {
         Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
-        Err(ref e) => {
-            let actual = format!("{e}");
-            if expected.is_empty() || !actual.contains(expected) {
-                assert_eq!(actual, expected)
-            }
+        Err(e) => {
+            assert_contains!(e.to_string(), expected);
         }
     }
 }
