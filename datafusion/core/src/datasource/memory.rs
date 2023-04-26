@@ -24,19 +24,21 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use futures::StreamExt;
 use tokio::sync::RwLock;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
+use crate::physical_plan::common;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::memory_insert::MemoryWriteExec;
+use crate::physical_plan::memory::MemoryWriteExec;
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::{collect_partitioned, common};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+
+/// Type alias for partition data
+pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 
 /// In-memory data source for presenting a `Vec<RecordBatch>` as a
 /// data source that can be queried by DataFusion. This allows data to
@@ -45,7 +47,7 @@ use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    pub(crate) batches: Arc<Vec<Arc<RwLock<Vec<RecordBatch>>>>>,
+    pub(crate) batches: Vec<PartitionData>,
 }
 
 impl MemTable {
@@ -58,12 +60,10 @@ impl MemTable {
         {
             Ok(Self {
                 schema,
-                batches: Arc::new(
-                    partitions
-                        .into_iter()
-                        .map(|e| Arc::new(RwLock::new(e)))
-                        .collect::<Vec<_>>(),
-                ),
+                batches: partitions
+                    .into_iter()
+                    .map(|e| Arc::new(RwLock::new(e)))
+                    .collect::<Vec<_>>(),
             })
         } else {
             Err(DataFusionError::Plan(
