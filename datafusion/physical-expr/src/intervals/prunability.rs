@@ -118,14 +118,7 @@ impl ExprPrunabilityGraph {
                 self.graph[node].order = None;
 
                 // If a column is a leaf, compare it with the elements of [PhysicalSortExpr]
-                if let Some(column) = self.graph[node]
-                    .expr
-                    .clone()
-                    .as_any()
-                    .downcast_ref::<Column>()
-                {
-                    self.set_leaf_column(column, sort_exprs, node, left_schema);
-                }
+                self.update_node_with_sort_information(sort_exprs, node, left_schema);
             }
             // intermediate nodes
             else {
@@ -188,25 +181,27 @@ impl ExprPrunabilityGraph {
     /// This function takes a node index and the corresponging column at that node,
     /// then it scans the PhysicalSortExpr's if there is a match with that column.
     /// If a match is found, which table the column resides in is stored in the node.
-    fn set_leaf_column(
+    fn update_node_with_sort_information(
         &mut self,
-        column: &Column,
         sort_exprs: &[&PhysicalSortExpr],
         node: NodeIndex,
         left_schema: &Schema,
     ) {
-        for sort_expr in sort_exprs {
-            if let Some(sorted) = sort_expr.expr.as_any().downcast_ref::<Column>() {
-                if column == sorted {
-                    let order = sort_expr.options;
-                    let from =
-                        if left_schema.fields[column.index()].name() == column.name() {
+        if let Some(column) = self.graph[node].expr.as_any().downcast_ref::<Column>() {
+            for sort_expr in sort_exprs {
+                if let Some(sorted) = sort_expr.expr.as_any().downcast_ref::<Column>() {
+                    if column == sorted {
+                        let order = sort_expr.options;
+                        let from = if left_schema.fields[column.index()].name()
+                            == column.name()
+                        {
                             TableSide::Left
                         } else {
                             TableSide::Right
                         };
-                    self.graph[node].order = Some((from, order));
-                    break;
+                        self.graph[node].order = Some((from, order));
+                        break;
+                    }
                 }
             }
         }
