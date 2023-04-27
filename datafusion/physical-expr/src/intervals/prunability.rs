@@ -104,7 +104,7 @@ impl ExprPrunabilityGraph {
         sort_exprs: &[&PhysicalSortExpr],
         left_schema: &Schema,
     ) -> Result<(bool, bool)> {
-        // Dfs Post Order traversal is used since the children nodes determine the parent's order.
+        // Dfs Post Order traversal is used, since the children nodes determine the parent's order.
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             let children = self.graph.neighbors_directed(node, Outgoing);
@@ -117,7 +117,7 @@ impl ExprPrunabilityGraph {
                 // Set initially as unordered
                 self.graph[node].order = None;
 
-                // If a column leaf, compare it with the elements of [PhysicalSortExpr]
+                // If a column is a leaf, compare it with the elements of [PhysicalSortExpr]
                 if let Some(column) = self.graph[node]
                     .expr
                     .clone()
@@ -132,7 +132,7 @@ impl ExprPrunabilityGraph {
                 children_order.reverse();
                 let physical_expr = self.graph[node].expr.clone();
                 let binary_expr = physical_expr.as_any().downcast_ref::<BinaryExpr>().ok_or_else(|| {
-                        DataFusionError::Internal("PhysicalExpr under investigation for prunability has some non BinaryExpr.".to_string())
+                        DataFusionError::Internal("PhysicalExpr under investigation for prunability should be BinaryExpr.".to_string())
                     })?;
                 match (
                     binary_expr.left().as_any().downcast_ref::<Literal>(),
@@ -146,7 +146,7 @@ impl ExprPrunabilityGraph {
                             self.reduce_literals(node, left_child, right_child, op)?;
                         } else {
                             return Err(DataFusionError::Internal(
-                                "BinaryExpr has an unknown arithmetic operator for prunability."
+                                "BinaryExpr has an unsupported arithmetic operator for prunability."
                                     .to_string(),
                             ));
                         }
@@ -283,31 +283,32 @@ fn numeric_node_order(
         // Literal - some column
         (Some(_), _, Operator::Minus) => {
             // if ordered column, reverse the order, otherwise unordered column
-            children_order[1].as_ref().map(|opt| {
+            children_order[1].as_ref().map(|(side, sort_options)| {
                 (
-                    opt.0,
+                    *side,
                     SortOptions {
-                        descending: !opt.1.descending,
-                        nulls_first: opt.1.nulls_first,
+                        descending: !sort_options.descending,
+                        nulls_first: sort_options.nulls_first,
                     },
                 )
             })
         }
         // Some column + - literal
-        (_, Some(_), _) => *children_order[0],
+        (_, Some(_), Operator::Minus | Operator::Plus) => *children_order[0],
         // Column + - column
-        (_, _, _) => match (children_order[0], children_order[1], binary_expr.op()) {
+        (_, _, op) => match (children_order[0], children_order[1], op) {
             // Ordered + ordered column
-            (Some(left), Some(right), Operator::Plus)
-                if left.1.descending == right.1.descending =>
+            (Some((_, left_ordering)), Some((_, right_ordering)), Operator::Plus)
+                if left_ordering == right_ordering =>
             {
-                Some((TableSide::Both, left.1))
+                Some((TableSide::Both, *left_ordering))
             }
             // Ordered - ordered column
-            (Some(left), Some(right), Operator::Minus)
-                if left.1.descending != right.1.descending =>
+            (Some((_, left_ordering)), Some((_, right_ordering)), Operator::Minus)
+                if (left_ordering.descending != right_ordering.descending)
+                    && (left_ordering.nulls_first == right_ordering.nulls_first) =>
             {
-                Some((TableSide::Both, left.1))
+                Some((TableSide::Both, *left_ordering))
             }
             // Unordered + - ordered column
             // Ordered + - unordered column
