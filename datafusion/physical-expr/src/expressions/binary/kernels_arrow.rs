@@ -583,6 +583,7 @@ where
 }
 
 /// Remove this once arrow-rs provides `multiply_fixed_point_dyn`.
+/// <https://github.com/apache/arrow-rs/issues/4135>
 fn multiply_fixed_point_dyn(
     left: &dyn Array,
     right: &dyn Array,
