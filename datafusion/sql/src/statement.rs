@@ -30,6 +30,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
+use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
@@ -159,13 +160,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         plan
                     };
 
-                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name: self.object_name_to_table_reference(name)?,
-                        primary_key,
-                        input: Arc::new(plan),
-                        if_not_exists,
-                        or_replace,
-                    }))
+                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        CreateMemoryTable {
+                            name: self.object_name_to_table_reference(name)?,
+                            primary_key,
+                            input: Arc::new(plan),
+                            if_not_exists,
+                            or_replace,
+                        },
+                    )))
                 }
 
                 None => {
@@ -178,13 +181,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     };
                     let plan = LogicalPlan::EmptyRelation(plan);
 
-                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name: self.object_name_to_table_reference(name)?,
-                        primary_key,
-                        input: Arc::new(plan),
-                        if_not_exists,
-                        or_replace,
-                    }))
+                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        CreateMemoryTable {
+                            name: self.object_name_to_table_reference(name)?,
+                            primary_key,
+                            input: Arc::new(plan),
+                            if_not_exists,
+                            or_replace,
+                        },
+                    )))
                 }
             },
 
@@ -199,12 +204,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
-                Ok(LogicalPlan::CreateView(CreateView {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: self.object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
-                }))
+                })))
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
                 ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
@@ -215,20 +220,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::CreateSchema {
                 schema_name,
                 if_not_exists,
-            } => Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name: get_schema_name(&schema_name),
-                if_not_exists,
-                schema: Arc::new(DFSchema::empty()),
-            })),
+            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name: get_schema_name(&schema_name),
+                    if_not_exists,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            ))),
             Statement::CreateDatabase {
                 db_name,
                 if_not_exists,
                 ..
-            } => Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name: object_name_to_string(&db_name),
-                if_not_exists,
-                schema: Arc::new(DFSchema::empty()),
-            })),
+            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                CreateCatalog {
+                    catalog_name: object_name_to_string(&db_name),
+                    if_not_exists,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            ))),
             Statement::Drop {
                 object_type,
                 if_exists,
@@ -588,20 +597,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
 
-        Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
-            schema: df_schema,
-            name,
-            location,
-            file_type,
-            has_header,
-            delimiter,
-            table_partition_cols,
-            if_not_exists,
-            definition,
-            file_compression_type,
-            order_exprs: ordered_exprs,
-            options,
-        }))
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+            PlanCreateExternalTable {
+                schema: df_schema,
+                name,
+                location,
+                file_type,
+                has_header,
+                delimiter,
+                table_partition_cols,
+                if_not_exists,
+                definition,
+                file_compression_type,
+                order_exprs: ordered_exprs,
+                options,
+            },
+        )))
     }
 
     /// Generate a plan for EXPLAIN ... that will print out a plan

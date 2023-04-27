@@ -20,13 +20,14 @@
 use crate::expr::{Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Unnest, Values, Window,
+    Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
+    Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest,
+    Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, GroupingSet, LogicalPlan,
-    LogicalPlanBuilder, Operator, TableScan, TryCast,
+    BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
+    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
+    TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{
@@ -836,29 +837,31 @@ pub fn from_plan(
             fetch: *fetch,
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
             name,
             if_not_exists,
             or_replace,
             ..
-        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-            input: Arc::new(inputs[0].clone()),
-            primary_key: vec![],
-            name: name.clone(),
-            if_not_exists: *if_not_exists,
-            or_replace: *or_replace,
-        })),
-        LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+            CreateMemoryTable {
+                input: Arc::new(inputs[0].clone()),
+                primary_key: vec![],
+                name: name.clone(),
+                if_not_exists: *if_not_exists,
+                or_replace: *or_replace,
+            },
+        ))),
+        LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             name,
             or_replace,
             definition,
             ..
-        }) => Ok(LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
             definition: definition.clone(),
-        })),
+        }))),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
@@ -911,12 +914,10 @@ pub fn from_plan(
             }))
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::CreateExternalTable(_)
+        | LogicalPlan::Ddl(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
-        | LogicalPlan::Statement(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_) => {
+        | LogicalPlan::Statement(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{plan:?} should have no exprs");
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
