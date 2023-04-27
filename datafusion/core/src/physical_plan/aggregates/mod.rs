@@ -80,8 +80,14 @@ pub enum AggregateMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
     /// Some of the expressions in the GROUP BY clause have an ordering.
+    // For example, if the input is ordered by a, b, c, d and we group by b, a, d;
+    // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
+    // defines a preset for the existing ordering, e.g a, b defines a preset.
     PartiallyOrdered,
     /// All the expressions in the GROUP BY clause have orderings.
+    // For example, if the input is ordered by a, b, c, d and we group by b, a;
+    // the mode will be `Ordered` meaning a all of the of group b, d
+    // defines a preset for the existing ordering, e.g a, b defines a preset.
     Ordered,
 }
 

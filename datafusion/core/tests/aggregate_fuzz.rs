@@ -71,8 +71,9 @@ mod tests {
     }
 }
 
-/// Perform batch and running window same input
-/// and verify outputs of `WindowAggExec` and `BoundedWindowAggExec` are equal
+/// Perform batch and streaming aggregation with same input
+/// and verify outputs of `AggregateExec` with pipeline breaking stream `GroupedHashAggregateStream`
+/// and non-pipeline breaking stream `BoundedAggregateStream` produces same result.
 async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str>) {
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);

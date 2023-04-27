@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hash aggregation through row format
+//! Hash aggregation on ordered group by expressions
+//! Output generated will itself have an ordering
+//! and executor can run with bounded memory (can generate result in streaming cases)
 
 use std::cmp::min;
 use std::ops::Range;
