@@ -825,7 +825,7 @@ impl DataFrame {
     /// Note: This method should not be used outside testing, as it loses the snapshot
     /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
     /// operations may take place against a different state
-    #[deprecated(note = "Use DataFrame::into_optimized_plan")]
+    #[deprecated(since = "23.0.0", note = "Use DataFrame::into_optimized_plan")]
     pub fn to_logical_plan(self) -> Result<LogicalPlan> {
         self.into_optimized_plan()
     }
