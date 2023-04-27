@@ -42,6 +42,7 @@ use datafusion_common::{
     context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
     Result,
 };
+use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -510,7 +511,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
 
-                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
@@ -527,7 +528,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
-                }))
+                })))
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
@@ -541,7 +542,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::CreateView(CreateView {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_owned_table_reference(
                         create_view.name.as_ref(),
                         "CreateView",
@@ -549,7 +550,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
-                }))
+                })))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
@@ -558,11 +559,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                    schema_name: create_catalog_schema.schema_name.clone(),
-                    if_not_exists: create_catalog_schema.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                    CreateCatalogSchema {
+                        schema_name: create_catalog_schema.schema_name.clone(),
+                        if_not_exists: create_catalog_schema.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
@@ -571,11 +574,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                    catalog_name: create_catalog.catalog_name.clone(),
-                    if_not_exists: create_catalog.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                    CreateCatalog {
+                        catalog_name: create_catalog.catalog_name.clone(),
+                        if_not_exists: create_catalog.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
@@ -1166,20 +1171,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable(CreateExternalTable {
-                name,
-                location,
-                file_type,
-                has_header,
-                delimiter,
-                schema: df_schema,
-                table_partition_cols,
-                if_not_exists,
-                definition,
-                file_compression_type,
-                order_exprs,
-                options,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                CreateExternalTable {
+                    name,
+                    location,
+                    file_type,
+                    has_header,
+                    delimiter,
+                    schema: df_schema,
+                    table_partition_cols,
+                    if_not_exists,
+                    definition,
+                    file_compression_type,
+                    order_exprs,
+                    options,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
                         name: Some(name.clone().into()),
@@ -1200,12 +1207,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateView(CreateView {
+            LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 input,
                 or_replace,
                 definition,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
                         name: Some(name.clone().into()),
@@ -1218,11 +1225,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists,
-                schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name,
+                    if_not_exists,
+                    schema: df_schema,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
@@ -1231,11 +1240,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateCatalog(CreateCatalog {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalog(CreateCatalog {
                 catalog_name,
                 if_not_exists,
                 schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalog(
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
@@ -1354,7 +1363,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Unnest(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Unnest",
             )),
-            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
             LogicalPlan::DropTable(_) => Err(proto_error(
