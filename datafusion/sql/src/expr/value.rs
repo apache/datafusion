@@ -56,6 +56,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))
         } else if let Ok(n) = n.parse::<i64>() {
             Ok(lit(n))
+        } else if let Ok(n) = n.parse::<u64>() {
+            Ok(lit(n))
         } else if self.options.parse_float_as_decimal {
             // remove leading zeroes
             let str = n.trim_start_matches('0');
