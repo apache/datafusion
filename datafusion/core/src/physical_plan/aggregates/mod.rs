@@ -205,12 +205,15 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
+/// This object encapsulates ordering-related information on GROUP BY columns.
 #[derive(Debug, Clone)]
 pub(crate) struct AggregationOrdering {
+    /// Specifies whether the GROUP BY columns are partially or fully ordered.
     mode: GroupByOrderMode,
     /// Stores indices such that when we iterate with these indices, GROUP BY
     /// expressions match input ordering.
     order_indices: Vec<usize>,
+    /// Actual ordering information of the GROUP BY columns.
     ordering: Vec<PhysicalSortExpr>,
 }
 
@@ -238,7 +241,7 @@ pub struct AggregateExec {
     columns_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Stores mode, and output ordering information for the `AggregateExec`.
+    /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
 }
 
@@ -297,6 +300,7 @@ fn get_working_mode(
     })
 }
 
+/// This function gathers the ordering information for the GROUP BY columns.
 fn calc_aggregation_ordering(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
@@ -321,7 +325,7 @@ fn calc_aggregation_ordering(
     })
 }
 
-/// Grouping expressions as they occur in the output schema
+/// This function returns grouping expressions as they occur in the output schema.
 fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalExpr>> {
     // Update column indices. Since the group by columns come first in the output schema, their
     // indices are simply 0..self.group_expr(len).

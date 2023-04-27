@@ -176,7 +176,7 @@ impl GroupedHashAggregateStream {
 
         let row_accumulators = aggregates::create_row_accumulators(&row_aggr_expr)?;
 
-        let row_aggr_schema = aggr_state_schema(&row_aggr_expr)?;
+        let row_aggr_schema = aggr_state_schema(&row_aggr_expr);
 
         let group_schema = group_schema(&schema, group_by.expr.len());
         let row_converter = RowConverter::new(
