@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Hash aggregation on ordered group by expressions
-//! Output generated will itself have an ordering
-//! and executor can run with bounded memory (can generate result in streaming cases)
+//! This file implements streaming aggregation on ordered GROUP BY expressions.
+//! Generated output will itself have an ordering and the executor can run with
+//! bounded memory, ensuring composability in streaming cases.
 
 use std::cmp::min;
 use std::ops::Range;
@@ -185,7 +185,7 @@ impl BoundedAggregateStream {
 
         let row_accumulators = aggregates::create_row_accumulators(&row_aggr_expr)?;
 
-        let row_aggr_schema = aggr_state_schema(&row_aggr_expr)?;
+        let row_aggr_schema = aggr_state_schema(&row_aggr_expr);
 
         let group_schema = group_schema(&schema, group_by.expr.len());
         let row_converter = RowConverter::new(
@@ -703,7 +703,7 @@ impl BoundedAggregateStream {
         let row_converter_size_pre = self.row_converter.size();
         for group_values in &group_by_values {
             let groups_with_rows = if let AggregationOrdering {
-                mode: GroupByOrderMode::Ordered,
+                mode: GroupByOrderMode::FullyOrdered,
                 order_indices,
                 ordering,
             } = &self.aggregation_ordering
@@ -725,14 +725,10 @@ impl BoundedAggregateStream {
                 let ranges = evaluate_partition_ranges(n_rows, &sort_column)?;
                 let per_group_indices = ranges
                     .into_iter()
-                    .map(|range| {
-                        let row = group_rows.row(range.start).owned();
-                        // (row, batch_hashes[range.start], range)
-                        GroupOrderInfo {
-                            owned_row: row,
-                            hash: batch_hashes[range.start],
-                            range,
-                        }
+                    .map(|range| GroupOrderInfo {
+                        owned_row: group_rows.row(range.start).owned(),
+                        hash: batch_hashes[range.start],
+                        range,
                     })
                     .collect::<Vec<_>>();
                 self.update_ordered_group_state(
@@ -777,7 +773,7 @@ impl BoundedAggregateStream {
                     get_optional_filters(&row_filter_values, &batch_indices);
                 let normal_filter_values =
                     get_optional_filters(&normal_filter_values, &batch_indices);
-                if self.aggregation_ordering.mode == GroupByOrderMode::Ordered {
+                if self.aggregation_ordering.mode == GroupByOrderMode::FullyOrdered {
                     self.update_accumulators_using_batch(
                         &groups_with_rows,
                         &offsets,
