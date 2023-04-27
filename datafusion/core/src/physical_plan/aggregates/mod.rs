@@ -88,7 +88,7 @@ pub enum GroupByOrderMode {
     // For example, if the input is ordered by a, b, c, d and we group by b, a;
     // the mode will be `Ordered` meaning a all of the of group b, d
     // defines a preset for the existing ordering, e.g a, b defines a preset.
-    Ordered,
+    FullyOrdered,
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -291,7 +291,7 @@ fn get_working_mode(
             input.equivalence_properties()
         });
     Some(if first_n == group_by.expr.len() {
-        (GroupByOrderMode::Ordered, ordered_group_by_indices)
+        (GroupByOrderMode::FullyOrdered, ordered_group_by_indices)
     } else {
         (GroupByOrderMode::PartiallyOrdered, ordered_group_by_indices)
     })
@@ -644,6 +644,10 @@ impl ExecutionPlan for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
+
+                if let Some(aggregation_ordering) = &self.aggregation_ordering {
+                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                }
             }
         }
         Ok(())
@@ -959,7 +963,9 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::StreamType;
-    use crate::physical_plan::aggregates::GroupByOrderMode::{Ordered, PartiallyOrdered};
+    use crate::physical_plan::aggregates::GroupByOrderMode::{
+        FullyOrdered, PartiallyOrdered,
+    };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
         ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
@@ -1017,13 +1023,13 @@ mod tests {
         // Some(GroupByOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
         // GroupByOrderMode.
         let test_cases = vec![
-            (vec!["a"], Some((Ordered, vec![0]))),
+            (vec!["a"], Some((FullyOrdered, vec![0]))),
             (vec!["b"], None),
             (vec!["c"], None),
-            (vec!["b", "a"], Some((Ordered, vec![1, 0]))),
+            (vec!["b", "a"], Some((FullyOrdered, vec![1, 0]))),
             (vec!["c", "b"], None),
             (vec!["c", "a"], Some((PartiallyOrdered, vec![1]))),
-            (vec!["c", "b", "a"], Some((Ordered, vec![2, 1, 0]))),
+            (vec!["c", "b", "a"], Some((FullyOrdered, vec![2, 1, 0]))),
             (vec!["d", "a"], Some((PartiallyOrdered, vec![1]))),
             (vec!["d", "b"], None),
             (vec!["d", "c"], None),

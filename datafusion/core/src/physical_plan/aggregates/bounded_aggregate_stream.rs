@@ -703,7 +703,7 @@ impl BoundedAggregateStream {
         let row_converter_size_pre = self.row_converter.size();
         for group_values in &group_by_values {
             let groups_with_rows = if let AggregationOrdering {
-                mode: GroupByOrderMode::Ordered,
+                mode: GroupByOrderMode::FullyOrdered,
                 order_indices,
                 ordering,
             } = &self.aggregation_ordering
@@ -777,7 +777,7 @@ impl BoundedAggregateStream {
                     get_optional_filters(&row_filter_values, &batch_indices);
                 let normal_filter_values =
                     get_optional_filters(&normal_filter_values, &batch_indices);
-                if self.aggregation_ordering.mode == GroupByOrderMode::Ordered {
+                if self.aggregation_ordering.mode == GroupByOrderMode::FullyOrdered {
                     self.update_accumulators_using_batch(
                         &groups_with_rows,
                         &offsets,
