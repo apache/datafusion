@@ -535,11 +535,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct(Distinct { input }) => input.max_rows(),
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
-            LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
+            LogicalPlan::Ddl(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::Explain(_)
