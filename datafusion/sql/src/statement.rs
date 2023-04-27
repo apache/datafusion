@@ -258,16 +258,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }?;
 
                 match object_type {
-                    ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
-                        name,
-                        if_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
-                    ObjectType::View => Ok(LogicalPlan::DropView(DropView {
-                        name,
-                        if_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
+                    ObjectType::Table => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
+                            name,
+                            if_exists,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))
+                    }
+                    ObjectType::View => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                            name,
+                            if_exists,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))
+                    }
                     _ => Err(DataFusionError::NotImplemented(
                         "Only `DROP TABLE/VIEW  ...` statement is supported currently"
                             .to_string(),

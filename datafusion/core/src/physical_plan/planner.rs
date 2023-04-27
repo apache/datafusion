@@ -1105,24 +1105,6 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
-                LogicalPlan::DropTable(_) => {
-                    // There is no default plan for "DROP TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropView(_) => {
-                    // There is no default plan for "DROP VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropView".to_string(),
-                    ))
-                }
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     Err(DataFusionError::NotImplemented(

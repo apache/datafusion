@@ -398,46 +398,13 @@ impl SessionContext {
                     self.create_catalog_schema(cmd).await
                 }
                 DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
+                DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
+                DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
             },
-
-            LogicalPlan::DropTable(DropTable {
-                name, if_exists, ..
-            }) => {
-                let result = self.find_and_deregister(&name, TableType::Base).await;
-                match (result, if_exists) {
-                    (Ok(true), _) => self.return_empty_dataframe(),
-                    (_, true) => self.return_empty_dataframe(),
-                    (_, _) => Err(DataFusionError::Execution(format!(
-                        "Table '{name}' doesn't exist."
-                    ))),
-                }
+            // TODO what about the other statements (like TransactionStart and TransactionEnd)
+            LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
+                self.set_variable(stmt).await
             }
-
-            LogicalPlan::DropView(DropView {
-                name, if_exists, ..
-            }) => {
-                let result = self.find_and_deregister(&name, TableType::View).await;
-                match (result, if_exists) {
-                    (Ok(true), _) => self.return_empty_dataframe(),
-                    (_, true) => self.return_empty_dataframe(),
-                    (_, _) => Err(DataFusionError::Execution(format!(
-                        "View '{name}' doesn't exist."
-                    ))),
-                }
-            }
-
-            LogicalPlan::Statement(Statement::SetVariable(SetVariable {
-                variable,
-                value,
-                ..
-            })) => {
-                let mut state = self.state.write();
-                state.config.options_mut().set(&variable, &value)?;
-                drop(state);
-
-                self.return_empty_dataframe()
-            }
-
             LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
                 self.return_describe_table_dataframe(schema).await
             }
@@ -673,6 +640,46 @@ impl SessionContext {
                 "Catalog '{catalog_name}' already exists"
             ))),
         }
+    }
+
+    async fn drop_table(&self, cmd: DropTable) -> Result<DataFrame> {
+        let DropTable {
+            name, if_exists, ..
+        } = cmd;
+        let result = self.find_and_deregister(&name, TableType::Base).await;
+        match (result, if_exists) {
+            (Ok(true), _) => self.return_empty_dataframe(),
+            (_, true) => self.return_empty_dataframe(),
+            (_, _) => Err(DataFusionError::Execution(format!(
+                "Table '{name}' doesn't exist."
+            ))),
+        }
+    }
+
+    async fn drop_view(&self, cmd: DropView) -> Result<DataFrame> {
+        let DropView {
+            name, if_exists, ..
+        } = cmd;
+        let result = self.find_and_deregister(&name, TableType::View).await;
+        match (result, if_exists) {
+            (Ok(true), _) => self.return_empty_dataframe(),
+            (_, true) => self.return_empty_dataframe(),
+            (_, _) => Err(DataFusionError::Execution(format!(
+                "View '{name}' doesn't exist."
+            ))),
+        }
+    }
+
+    async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
+        let SetVariable {
+            variable, value, ..
+        } = stmt;
+
+        let mut state = self.state.write();
+        state.config.options_mut().set(&variable, &value)?;
+        drop(state);
+
+        self.return_empty_dataframe()
     }
 
     async fn create_custom_table(
