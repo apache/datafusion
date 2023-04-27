@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This file contains various utility functions that are common to both
+//! batch and streaming aggregation code.
+
 use crate::physical_plan::aggregates::AccumulatorItem;
 use arrow::compute;
 use arrow::compute::filter;
@@ -24,13 +27,13 @@ use arrow_array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::get_arrayref_at_indices;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::AggregateExpr;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::MutableRecordBatch;
 use std::sync::Arc;
 
-/// The state that is built for each output group.
+/// This object encapsulates the state that is built for each output group.
 #[derive(Debug)]
 pub(crate) struct GroupState {
     /// The actual group by values, stored sequentially
@@ -42,32 +45,29 @@ pub(crate) struct GroupState {
     // Accumulator state, one for each aggregate that doesn't support row accumulation
     pub accumulator_set: Vec<AccumulatorItem>,
 
-    /// scratch space used to collect indices for input rows in a
-    /// bach that have values to aggregate. Reset on each batch
+    /// Scratch space used to collect indices for input rows in a
+    /// batch that have values to aggregate, reset on each batch.
     pub indices: Vec<u32>,
 }
 
 #[derive(Debug)]
-/// tracks what phase the aggregation is in
+/// This object tracks the aggregation phase.
 pub(crate) enum ExecutionState {
     ReadingInput,
     ProducingOutput,
     Done,
 }
 
-pub(crate) fn aggr_state_schema(
-    aggr_expr: &[Arc<dyn AggregateExpr>],
-) -> Result<SchemaRef> {
+pub(crate) fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> SchemaRef {
     let fields = aggr_expr
         .iter()
         .flat_map(|expr| expr.state_fields().unwrap().into_iter())
         .collect::<Vec<_>>();
-    Ok(Arc::new(Schema::new(fields)))
+    Arc::new(Schema::new(fields))
 }
 
 pub(crate) fn read_as_batch(rows: &[Vec<u8>], schema: &Schema) -> Vec<ArrayRef> {
-    let row_num = rows.len();
-    let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
+    let mut output = MutableRecordBatch::new(rows.len(), Arc::new(schema.clone()));
     let mut row = RowReader::new(schema);
 
     for data in rows {
@@ -112,28 +112,27 @@ pub(crate) fn slice_and_maybe_filter(
     filter_opt: Option<&Arc<dyn Array>>,
     offsets: &[usize],
 ) -> Result<Vec<ArrayRef>> {
+    let (offset, length) = (offsets[0], offsets[1] - offsets[0]);
     let sliced_arrays: Vec<ArrayRef> = aggr_array
         .iter()
-        .map(|array| array.slice(offsets[0], offsets[1] - offsets[0]))
+        .map(|array| array.slice(offset, length))
         .collect();
 
-    let filtered_arrays = match filter_opt.as_ref() {
-        Some(f) => {
-            let sliced = f.slice(offsets[0], offsets[1] - offsets[0]);
-            let filter_array = as_boolean_array(&sliced)?;
+    if let Some(f) = filter_opt {
+        let sliced = f.slice(offset, length);
+        let filter_array = as_boolean_array(&sliced)?;
 
-            sliced_arrays
-                .iter()
-                .map(|array| filter(array, filter_array).unwrap())
-                .collect::<Vec<ArrayRef>>()
-        }
-        None => sliced_arrays,
-    };
-    Ok(filtered_arrays)
+        sliced_arrays
+            .iter()
+            .map(|array| filter(array, filter_array).map_err(DataFusionError::ArrowError))
+            .collect()
+    } else {
+        Ok(sliced_arrays)
+    }
 }
 
 /// This method is similar to Scalar::try_from_array except for the Null handling.
-/// This method returns [ScalarValue::Null] instead of [ScalarValue::Type(None)]
+/// This method returns [ScalarValue::Null] instead of [ScalarValue::Type(None)].
 pub(crate) fn col_to_scalar(
     array: &ArrayRef,
     filter: &Option<&BooleanArray>,

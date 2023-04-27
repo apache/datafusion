@@ -88,7 +88,7 @@ pub enum GroupByOrderMode {
     // For example, if the input is ordered by a, b, c, d and we group by b, a;
     // the mode will be `Ordered` meaning a all of the of group b, d
     // defines a preset for the existing ordering, e.g a, b defines a preset.
-    Ordered,
+    FullyOrdered,
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -205,12 +205,15 @@ impl From<StreamType> for SendableRecordBatchStream {
     }
 }
 
+/// This object encapsulates ordering-related information on GROUP BY columns.
 #[derive(Debug, Clone)]
 pub(crate) struct AggregationOrdering {
+    /// Specifies whether the GROUP BY columns are partially or fully ordered.
     mode: GroupByOrderMode,
     /// Stores indices such that when we iterate with these indices, GROUP BY
     /// expressions match input ordering.
     order_indices: Vec<usize>,
+    /// Actual ordering information of the GROUP BY columns.
     ordering: Vec<PhysicalSortExpr>,
 }
 
@@ -238,7 +241,7 @@ pub struct AggregateExec {
     columns_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Stores mode, and output ordering information for the `AggregateExec`.
+    /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
 }
 
@@ -291,12 +294,13 @@ fn get_working_mode(
             input.equivalence_properties()
         });
     Some(if first_n == group_by.expr.len() {
-        (GroupByOrderMode::Ordered, ordered_group_by_indices)
+        (GroupByOrderMode::FullyOrdered, ordered_group_by_indices)
     } else {
         (GroupByOrderMode::PartiallyOrdered, ordered_group_by_indices)
     })
 }
 
+/// This function gathers the ordering information for the GROUP BY columns.
 fn calc_aggregation_ordering(
     input: &Arc<dyn ExecutionPlan>,
     group_by: &PhysicalGroupBy,
@@ -321,7 +325,7 @@ fn calc_aggregation_ordering(
     })
 }
 
-/// Grouping expressions as they occur in the output schema
+/// This function returns grouping expressions as they occur in the output schema.
 fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalExpr>> {
     // Update column indices. Since the group by columns come first in the output schema, their
     // indices are simply 0..self.group_expr(len).
@@ -644,6 +648,10 @@ impl ExecutionPlan for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
+
+                if let Some(aggregation_ordering) = &self.aggregation_ordering {
+                    write!(f, ", ordering_mode={:?}", aggregation_ordering.mode)?;
+                }
             }
         }
         Ok(())
@@ -959,7 +967,9 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::StreamType;
-    use crate::physical_plan::aggregates::GroupByOrderMode::{Ordered, PartiallyOrdered};
+    use crate::physical_plan::aggregates::GroupByOrderMode::{
+        FullyOrdered, PartiallyOrdered,
+    };
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
         ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
@@ -1017,13 +1027,13 @@ mod tests {
         // Some(GroupByOrderMode) represents, we can run algorithm with existing ordering; and algorithm should work in
         // GroupByOrderMode.
         let test_cases = vec![
-            (vec!["a"], Some((Ordered, vec![0]))),
+            (vec!["a"], Some((FullyOrdered, vec![0]))),
             (vec!["b"], None),
             (vec!["c"], None),
-            (vec!["b", "a"], Some((Ordered, vec![1, 0]))),
+            (vec!["b", "a"], Some((FullyOrdered, vec![1, 0]))),
             (vec!["c", "b"], None),
             (vec!["c", "a"], Some((PartiallyOrdered, vec![1]))),
-            (vec!["c", "b", "a"], Some((Ordered, vec![2, 1, 0]))),
+            (vec!["c", "b", "a"], Some((FullyOrdered, vec![2, 1, 0]))),
             (vec!["d", "a"], Some((PartiallyOrdered, vec![1]))),
             (vec!["d", "b"], None),
             (vec!["d", "c"], None),

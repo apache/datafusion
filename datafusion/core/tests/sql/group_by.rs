@@ -180,7 +180,7 @@ async fn test_source_sorted_groupby() -> Result<()> {
     let expected = {
         vec![
             "ProjectionExec: expr=[a@1 as a, b@0 as b, SUM(annotated_data.c)@2 as summation1]",
-            "  AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data.c)]",
+            "  AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data.c)], ordering_mode=FullyOrdered",
         ]
     };
 
@@ -225,7 +225,7 @@ async fn test_source_sorted_groupby2() -> Result<()> {
     let expected = {
         vec![
             "ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data.c)@2 as summation1]",
-            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data.c)]",
+            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data.c)], ordering_mode=PartiallyOrdered",
         ]
     };
 
