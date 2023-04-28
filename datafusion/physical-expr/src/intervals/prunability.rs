@@ -96,12 +96,13 @@ impl ExprPrunabilityGraph {
     }
 
     /// This function determines the prunability of the given
-    /// ExprPrunabilityGraph, with PhysicalSortExpr's of some columns.
+    /// ExprPrunabilityGraph, with global PhysicalSortExpr's of two tables, if there are.
     /// The result is returned with a tuple, the first one is the prunability
     /// of the first table, and the second one is of the second table.
     pub fn is_prunable(
         &mut self,
-        sort_exprs: &[&PhysicalSortExpr],
+        left_sort_expr: &Option<PhysicalSortExpr>,
+        right_sort_expr: &Option<PhysicalSortExpr>,
         left_schema: &Schema,
     ) -> Result<(bool, bool)> {
         // Dfs Post Order traversal is used, since the children nodes determine the parent's order.
@@ -117,11 +118,18 @@ impl ExprPrunabilityGraph {
                 // Set initially as unordered
                 self.graph[node].order = None;
 
-                // If a column is a leaf, compare it with the elements of [PhysicalSortExpr]
-                self.update_node_with_sort_information(sort_exprs, node, left_schema);
+                // If a column is a leaf, compare it with PhysicalSortExpr's
+                self.update_node_with_sort_information(
+                    left_sort_expr,
+                    right_sort_expr,
+                    node,
+                    left_schema,
+                );
             }
             // intermediate nodes
             else {
+                // Children are indexed as 1.->right child, 2.->left child,
+                // to have more natural placement, they are reversed
                 children_order.reverse();
                 let physical_expr = self.graph[node].expr.clone();
                 let binary_expr = physical_expr.as_any().downcast_ref::<BinaryExpr>().ok_or_else(|| {
@@ -152,7 +160,8 @@ impl ExprPrunabilityGraph {
                             self.graph[node].order = comparison_node_order(
                                 children_order,
                                 binary_expr,
-                                sort_exprs,
+                                left_sort_expr,
+                                right_sort_expr,
                                 left_schema,
                             );
                         } else if *op == Operator::And {
@@ -183,12 +192,13 @@ impl ExprPrunabilityGraph {
     /// If a match is found, which table the column resides in is stored in the node.
     fn update_node_with_sort_information(
         &mut self,
-        sort_exprs: &[&PhysicalSortExpr],
+        left_sort_expr: &Option<PhysicalSortExpr>,
+        right_sort_expr: &Option<PhysicalSortExpr>,
         node: NodeIndex,
         left_schema: &Schema,
     ) {
         if let Some(column) = self.graph[node].expr.as_any().downcast_ref::<Column>() {
-            for sort_expr in sort_exprs {
+            for sort_expr in [left_sort_expr, right_sort_expr].into_iter().flatten() {
                 if let Some(sorted) = sort_expr.expr.as_any().downcast_ref::<Column>() {
                     if column == sorted {
                         let order = sort_expr.options;
@@ -315,17 +325,17 @@ fn numeric_node_order(
 fn comparison_node_order(
     children_order: Vec<&Option<(TableSide, SortOptions)>>,
     binary_expr: &BinaryExpr,
-    sort_exprs: &[&PhysicalSortExpr],
+    left_sort_expr: &Option<PhysicalSortExpr>,
+    right_sort_expr: &Option<PhysicalSortExpr>,
     left_schema: &Schema,
 ) -> Option<(TableSide, SortOptions)> {
     // There may be SortOptions like (a + b) sorted.
     // This part handles such expressions.
-    for sort_expr in sort_exprs {
+    for sort_expr in [left_sort_expr, right_sort_expr].into_iter().flatten() {
         if let Some(binary_expr_sorted) =
             sort_expr.expr.as_any().downcast_ref::<BinaryExpr>()
         {
             if binary_expr.eq(binary_expr_sorted) {
-                let order = sort_expr.options;
                 if let Some(column_left) =
                     binary_expr.left().as_any().downcast_ref::<Column>()
                 {
@@ -343,7 +353,7 @@ fn comparison_node_order(
                                 return None;
                             } else {
                                 // a and b are coming from the same table.
-                                return Some((TableSide::Left, order));
+                                return Some((TableSide::Left, sort_expr.options));
                             }
                         }
                     } else if let Some(column_right) =
@@ -354,7 +364,7 @@ fn comparison_node_order(
                                 == column_right.name()
                             {
                                 // a and b are coming from the same table.
-                                return Some((TableSide::Left, order));
+                                return Some((TableSide::Left, sort_expr.options));
                             } else {
                                 // In this case, it means that a and b are from
                                 // different tables, prunability is not possible.
@@ -527,21 +537,36 @@ mod tests {
 
         assert_eq!(
             (true, true),
-            graph.is_prunable(&[&left_sorted_asc, &right_sorted_asc], schema_left)?
+            graph.is_prunable(
+                &Some(left_sorted_asc.clone()),
+                &Some(right_sorted_asc),
+                schema_left
+            )?
         );
         assert_eq!(
             (true, true),
-            graph.is_prunable(&[&left_sorted_desc, &right_sorted_desc], schema_left)?
+            graph.is_prunable(
+                &Some(left_sorted_desc),
+                &Some(right_sorted_desc.clone()),
+                schema_left
+            )?
         );
         assert_eq!(
             (false, false),
-            graph.is_prunable(&[&left_sorted_asc], schema_left)?
+            graph.is_prunable(&Some(left_sorted_asc.clone()), &None, schema_left)?
         );
         assert_eq!(
             (false, false),
-            graph.is_prunable(&[&left_sorted_asc, &right_sorted_desc], schema_left)?
+            graph.is_prunable(
+                &Some(left_sorted_asc),
+                &Some(right_sorted_desc),
+                schema_left
+            )?
         );
-        assert_eq!((false, false), graph.is_prunable(&[], schema_left)?);
+        assert_eq!(
+            (false, false),
+            graph.is_prunable(&None, &None, schema_left)?
+        );
 
         Ok(())
     }
@@ -587,83 +612,70 @@ mod tests {
         let mut graph = ExprPrunabilityGraph::try_new(expr)?;
 
         assert_eq!(
-            (true, true),
+            (true, false),
             graph.is_prunable(
-                &[
-                    &left_sorted1_asc,
-                    &right_sorted1_desc,
-                    &left_sorted2_asc,
-                    &right_sorted2_asc
-                ],
+                &Some(left_sorted1_asc),
+                &Some(right_sorted1_desc.clone()),
                 schema_left
             )?
         );
         assert_eq!(
-            (true, false),
-            graph.is_prunable(&[&left_sorted1_asc, &right_sorted1_desc,], schema_left)?
-        );
-        assert_eq!(
-            (false, true),
-            graph.is_prunable(&[&left_sorted2_asc, &right_sorted2_asc,], schema_left)?
-        );
-        assert_eq!(
-            (true, false),
-            graph
-                .is_prunable(&[&left_sorted2_desc, &right_sorted2_desc,], schema_left)?
-        );
-        assert_eq!(
-            (false, true),
-            graph.is_prunable(&[&left_sorted1_desc, &right_sorted1_asc,], schema_left)?
-        );
-        assert_eq!(
             (false, true),
             graph.is_prunable(
-                &[
-                    &left_sorted1_asc,
-                    &right_sorted1_asc,
-                    &left_sorted2_asc,
-                    &right_sorted2_asc
-                ],
+                &Some(left_sorted2_asc),
+                &Some(right_sorted2_asc),
                 schema_left
             )?
         );
         assert_eq!(
             (true, false),
             graph.is_prunable(
-                &[
-                    &left_sorted1_desc,
-                    &right_sorted1_desc,
-                    &left_sorted2_desc,
-                    &right_sorted2_desc
-                ],
+                &Some(left_sorted2_desc.clone()),
+                &Some(right_sorted2_desc.clone()),
                 schema_left
             )?
         );
+        assert_eq!(
+            (false, true),
+            graph.is_prunable(
+                &Some(left_sorted1_desc.clone()),
+                &Some(right_sorted1_asc.clone()),
+                schema_left
+            )?
+        );
+
         assert_eq!(
             (false, false),
             graph.is_prunable(
-                &[
-                    &left_sorted1_desc,
-                    &right_sorted1_desc,
-                    &left_sorted2_asc,
-                    &right_sorted2_desc
-                ],
+                &Some(left_sorted1_desc.clone()),
+                &Some(right_sorted2_desc),
                 schema_left
             )?
         );
+
         assert_eq!(
             (false, false),
             graph.is_prunable(
-                &[
-                    &left_sorted1_asc,
-                    &right_sorted1_asc,
-                    &left_sorted2_asc,
-                    &right_sorted2_desc
-                ],
+                &Some(left_sorted2_desc),
+                &Some(right_sorted1_desc),
                 schema_left
             )?
         );
-        assert_eq!((false, false), graph.is_prunable(&[], schema_left)?);
+
+        assert_eq!(
+            (false, false),
+            graph.is_prunable(&Some(left_sorted1_desc), &None, schema_left)?
+        );
+
+        assert_eq!(
+            (false, false),
+            graph.is_prunable(&None, &Some(right_sorted1_asc), schema_left)?
+        );
+
+        assert_eq!(
+            (false, false),
+            graph.is_prunable(&None, &None, schema_left)?
+        );
 
         Ok(())
     }
