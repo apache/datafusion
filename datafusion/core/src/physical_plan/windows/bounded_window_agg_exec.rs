@@ -275,35 +275,38 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .collect::<Vec<OrderingEquivalentClass>>();
         res.extend(eq_classes);
         let out_ordering = self.output_ordering().unwrap_or(&[]);
-        if let Some(first) = out_ordering.first() {
-            if let Some(column) = first.expr.as_any().downcast_ref::<Column>() {
-                for expr in &self.window_expr {
-                    if let Some(builtin_window_expr) =
-                        expr.as_any().downcast_ref::<BuiltInWindowExpr>()
-                    {
-                        if builtin_window_expr
-                            .get_built_in_func_expr()
-                            .as_any()
-                            .is::<RowNumber>()
-                        {
-                            let tmp = self
-                                .schema
-                                .column_with_name(expr.field().unwrap().name());
-                            if let Some((idx, elem)) = tmp {
-                                let new_col = Column::new(elem.name(), idx);
-                                let lhs = EqualColumns {
-                                    col: column.clone(),
-                                    mode: EquivalenceMode::Ordering(first.options),
-                                };
-                                let rhs = EqualColumns {
-                                    col: new_col,
-                                    mode: EquivalenceMode::Ordering(SortOptions {
-                                        descending: false,
-                                        nulls_first: false,
-                                    }), // ASC, NULLS LAST
-                                };
-                                res.add_equal_conditions((&lhs, &rhs));
-                            }
+        for expr in &self.window_expr {
+            if let Some(builtin_window_expr) =
+                expr.as_any().downcast_ref::<BuiltInWindowExpr>()
+            {
+                if !builtin_window_expr
+                    .get_built_in_func_expr()
+                    .as_any()
+                    .is::<RowNumber>()
+                {
+                    // If window function is not `RowNumber` skip it.
+                    continue;
+                }
+                // `RowNumber` builtin window function introduces a new ordering,
+                // If there is an existing ordering add new ordering as ordering equivalence
+                if let Some(first) = out_ordering.first() {
+                    if let Some(column) = first.expr.as_any().downcast_ref::<Column>() {
+                        let tmp =
+                            self.schema.column_with_name(expr.field().unwrap().name());
+                        if let Some((idx, elem)) = tmp {
+                            let new_col = Column::new(elem.name(), idx);
+                            let lhs = EqualColumns {
+                                col: column.clone(),
+                                mode: EquivalenceMode::Ordering(first.options),
+                            };
+                            let rhs = EqualColumns {
+                                col: new_col,
+                                mode: EquivalenceMode::Ordering(SortOptions {
+                                    descending: false,
+                                    nulls_first: false,
+                                }), // ASC, NULLS LAST
+                            };
+                            res.add_equal_conditions((&lhs, &rhs));
                         }
                     }
                 }

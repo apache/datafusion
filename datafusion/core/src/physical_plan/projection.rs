@@ -99,8 +99,8 @@ impl ProjectionExec {
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
                 // For some executors logical plan schema fields and physical plan schema fields are not same
-                // Information in the column gets from the logical plan schema. Hence to produce correct results
-                // use the field in the input schema with same index.
+                // Information in the column is get from the logical plan schema. Hence to produce correct results
+                // use the field in the input schema with same index. This corresponds to physical plan `Column`.
                 let matching_input_field = input_schema.field(column.index());
                 let matching_input_column =
                     Column::new(matching_input_field.name(), column.index());
