@@ -47,6 +47,7 @@ use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
 
+use arrow_schema::SortOptions;
 use std::any::Any;
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, VecDeque};
@@ -69,7 +70,7 @@ use datafusion_physical_expr::window::{
 };
 use datafusion_physical_expr::{
     EqualColumns, EquivalenceProperties, OrderingEquivalenceProperties,
-    OrderingEquivalentClass, PhysicalExpr, PhysicalSortRequirement, SortOptions2,
+    OrderingEquivalentClass, PhysicalExpr, PhysicalSortRequirement,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,11 +293,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
                                 let new_col = Column::new(elem.name(), idx);
                                 let lhs = EqualColumns {
                                     col: column.clone(),
-                                    mode: EquivalenceMode::Ordering(first.options.into()),
+                                    mode: EquivalenceMode::Ordering(first.options),
                                 };
                                 let rhs = EqualColumns {
                                     col: new_col,
-                                    mode: EquivalenceMode::Ordering(SortOptions2 {
+                                    mode: EquivalenceMode::Ordering(SortOptions {
                                         descending: false,
                                         nulls_first: false,
                                     }), // ASC, NULLS LAST

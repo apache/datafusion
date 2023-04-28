@@ -207,38 +207,10 @@ impl From<EquivalenceProperties> for OrderingEquivalenceProperties {
     }
 }
 
-#[derive(Clone, Hash, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-/// This struct is Hashable version of the `SortOptions`
-/// TODO: Remove below struct once, `SortOptions` support Hashing
-pub struct SortOptions2 {
-    /// Whether to sort in descending order
-    pub descending: bool,
-    /// Whether to sort nulls first
-    pub nulls_first: bool,
-}
-
-impl From<SortOptions> for SortOptions2 {
-    fn from(value: SortOptions) -> Self {
-        SortOptions2 {
-            descending: value.descending,
-            nulls_first: value.nulls_first,
-        }
-    }
-}
-
-impl From<SortOptions2> for SortOptions {
-    fn from(value: SortOptions2) -> Self {
-        SortOptions {
-            descending: value.descending,
-            nulls_first: value.nulls_first,
-        }
-    }
-}
-
 #[derive(Debug, Hash, Copy, PartialEq, Eq, Clone)]
 pub enum EquivalenceMode {
     Exact,
-    Ordering(SortOptions2),
+    Ordering(SortOptions),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]

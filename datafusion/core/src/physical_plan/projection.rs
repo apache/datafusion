@@ -101,10 +101,12 @@ impl ProjectionExec {
                 // For some executors logical plan schema fields and physical plan schema fields are not same
                 // Information in the column gets from the logical plan schema. Hence to produce correct results
                 // use the field in the input schema with same index.
-                let matching_input_column = input_schema.field(column.index());
+                let matching_input_field = input_schema.field(column.index());
+                let matching_input_column =
+                    Column::new(matching_input_field.name(), column.index());
                 let new_col_idx = schema.index_of(name)?;
                 let entry = columns_map
-                    .entry(Column::new(matching_input_column.name(), new_col_idx))
+                    .entry(matching_input_column)
                     .or_insert_with(Vec::new);
                 entry.push(Column::new(name, new_col_idx));
             };

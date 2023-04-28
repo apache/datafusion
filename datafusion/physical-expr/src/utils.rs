@@ -181,7 +181,7 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
                         let ordered_column = EqualColumns {
                             col: column.clone(),
                             mode: sort_options
-                                .map(|elem| EquivalenceMode::Ordering(elem.into()))
+                                .map(EquivalenceMode::Ordering)
                                 .unwrap_or(EquivalenceMode::Exact),
                         };
                         let ordered_column2 = EqualColumns {
@@ -222,7 +222,7 @@ pub fn normalize_sort_expr_with_equivalence_properties(
                 let head = eq_class.head();
                 if head.col.eq(col) {
                     if let EquivalenceMode::Ordering(new_options) = head.mode {
-                        options = new_options.into()
+                        options = new_options
                     }
                     break;
                 }
