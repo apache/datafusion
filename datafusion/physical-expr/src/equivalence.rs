@@ -222,9 +222,10 @@ pub fn project_equivalence_properties(
     output_eq.extend(ec_classes);
 }
 
-/// Project Equivalence Properties.
-/// 1) Add Alias, Alias can introduce additional equivalence properties,
-///    For example:  Projection(a, a as a1, a as a2)
+/// Project OrderingEquivalence Properties.
+/// 1) Add Alias, Alias can introduce additional ordering equivalence properties,
+///    For example:  If a is globally ordered, after Projection(a, a as a1, a as a2)
+///    a1, a2 is also globally ordered.
 /// 2) Truncate the EquivalentClasses that are not in the output schema
 pub fn project_ordering_equivalence_properties(
     input_eq: OrderingEquivalenceProperties,

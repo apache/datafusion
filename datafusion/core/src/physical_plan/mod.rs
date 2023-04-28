@@ -182,12 +182,12 @@ pub trait ExecutionPlan: Debug + Send + Sync {
             .any(|dist| matches!(dist, Distribution::SinglePartition))
     }
 
-    /// Get the OrderingEquivalenceProperties within the plan
+    /// Get the EquivalenceProperties within the plan
     fn equivalence_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new(self.schema())
     }
 
-    /// Get the EquivalenceProperties within the plan
+    /// Get the OrderingEquivalenceProperties within the plan
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         OrderingEquivalenceProperties::new(self.schema())
     }

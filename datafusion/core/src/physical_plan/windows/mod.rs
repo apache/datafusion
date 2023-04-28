@@ -53,8 +53,8 @@ pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr::{
-    OrderedColumns, OrderingEquivalenceProperties, OrderingEquivalentClass,
-    PhysicalSortRequirement,
+    normalize_expr_with_equivalence_properties, OrderedColumns,
+    OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalSortRequirement,
 };
 pub use window_agg_exec::WindowAggExec;
 
@@ -277,7 +277,13 @@ pub(crate) fn window_ordering_equivalence(
             // `RowNumber` builtin window function introduces a new ordering,
             // If there is an existing ordering add new ordering as ordering equivalence
             if let Some(first) = out_ordering.first() {
-                if let Some(column) = first.expr.as_any().downcast_ref::<Column>() {
+                // Normalize expression because ordering equivalence is searched on
+                // normalized version
+                let normalized = normalize_expr_with_equivalence_properties(
+                    first.expr.clone(),
+                    input.equivalence_properties().classes(),
+                );
+                if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
                     let tmp = schema.column_with_name(expr.field().unwrap().name());
                     if let Some((idx, elem)) = tmp {
                         let new_col = Column::new(elem.name(), idx);

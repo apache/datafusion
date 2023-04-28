@@ -168,6 +168,38 @@ pub fn normalize_expr_with_equivalence_properties(
         .unwrap_or(expr)
 }
 
+fn normalize_sort_expr_with_equivalence_properties(
+    sort_expr: PhysicalSortExpr,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortExpr {
+    let normalized_expr =
+        normalize_expr_with_equivalence_properties(sort_expr.expr.clone(), eq_properties);
+
+    if sort_expr.expr.ne(&normalized_expr) {
+        PhysicalSortExpr {
+            expr: normalized_expr,
+            options: sort_expr.options,
+        }
+    } else {
+        sort_expr
+    }
+}
+
+fn normalize_sort_requirement_with_equivalence_properties(
+    sort_requirement: PhysicalSortRequirement,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortRequirement {
+    let normalized_expr = normalize_expr_with_equivalence_properties(
+        sort_requirement.expr().clone(),
+        eq_properties,
+    );
+    if sort_requirement.expr().ne(&normalized_expr) {
+        sort_requirement.with_expr(normalized_expr)
+    } else {
+        sort_requirement
+    }
+}
+
 pub fn normalize_expr_with_ordering_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     sort_options: Option<SortOptions>,
@@ -229,20 +261,33 @@ fn normalize_sort_expr_with_ordering_equivalence_properties(
     }
 }
 
-fn normalize_sort_expr_with_equivalence_properties(
-    sort_expr: PhysicalSortExpr,
-    eq_properties: &[EquivalentClass],
-) -> PhysicalSortExpr {
-    let normalized_expr =
-        normalize_expr_with_equivalence_properties(sort_expr.expr.clone(), eq_properties);
-
-    if sort_expr.expr.ne(&normalized_expr) {
-        PhysicalSortExpr {
-            expr: normalized_expr,
-            options: sort_expr.options,
+fn normalize_sort_requirement_with_ordering_equivalence_properties(
+    sort_requirement: PhysicalSortRequirement,
+    eq_properties: &[OrderingEquivalentClass],
+) -> PhysicalSortRequirement {
+    let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
+        sort_requirement.expr().clone(),
+        sort_requirement.options(),
+        eq_properties,
+    );
+    if sort_requirement.expr().ne(&normalized_expr) {
+        // sort_requirement.with_expr(normalized_expr)
+        let mut options = sort_requirement.options();
+        if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
+            for eq_class in eq_properties.iter() {
+                let head = eq_class.head();
+                if head.col.eq(col) {
+                    // If there is a requirement, update it with the requirement of its normalized version.
+                    if let Some(options) = &mut options {
+                        *options = head.options;
+                    }
+                    break;
+                }
+            }
         }
+        PhysicalSortRequirement::new(normalized_expr, options)
     } else {
-        sort_expr
+        sort_requirement
     }
 }
 
@@ -257,37 +302,6 @@ pub fn normalize_sort_expr(
         normalized,
         ordering_eq_properties,
     )
-}
-
-fn normalize_sort_requirement_with_ordering_equivalence_properties(
-    sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[OrderingEquivalentClass],
-) -> PhysicalSortRequirement {
-    let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
-        sort_requirement.expr().clone(),
-        sort_requirement.options(),
-        eq_properties,
-    );
-    if sort_requirement.expr().ne(&normalized_expr) {
-        sort_requirement.with_expr(normalized_expr)
-    } else {
-        sort_requirement
-    }
-}
-
-fn normalize_sort_requirement_with_equivalence_properties(
-    sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[EquivalentClass],
-) -> PhysicalSortRequirement {
-    let normalized_expr = normalize_expr_with_equivalence_properties(
-        sort_requirement.expr().clone(),
-        eq_properties,
-    );
-    if sort_requirement.expr().ne(&normalized_expr) {
-        sort_requirement.with_expr(normalized_expr)
-    } else {
-        sort_requirement
-    }
 }
 
 pub fn normalize_sort_requirement(
