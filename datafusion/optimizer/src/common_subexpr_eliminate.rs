@@ -230,8 +230,6 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Distinct(_)
