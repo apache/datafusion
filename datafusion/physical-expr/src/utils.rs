@@ -114,15 +114,14 @@ fn split_conjunction_impl<'a>(
     }
 }
 
-/// Normalize the output expressions based on Alias Map and SchemaRef.
+/// Normalize the output expressions based on Columns Map.
 ///
-/// 1) If there is mapping in Alias Map, replace the Column in the output expressions with the 1st Column in Alias Map
-/// 2) If the Column is invalid for the current Schema, replace the Column with a place holder UnKnownColumn
+/// If there is a mapping in Columns Map, replace the Column in the output expressions with the 1st Column in the Columns Map.
+/// Otherwise, replace the Column with a place holder of [UnKnownColumn]
 ///
-pub fn normalize_out_expr_with_alias_schema(
+pub fn normalize_out_expr_with_columns_map(
     expr: Arc<dyn PhysicalExpr>,
-    alias_map: &HashMap<Column, Vec<Column>>,
-    schema: &SchemaRef,
+    columns_map: &HashMap<Column, Vec<Column>>,
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -130,16 +129,10 @@ pub fn normalize_out_expr_with_alias_schema(
                 .as_any()
                 .downcast_ref::<Column>()
             {
-                Some(column) => {
-                    alias_map
-                        .get(column)
-                        .map(|c| Arc::new(c[0].clone()) as _)
-                        .or_else(|| match schema.index_of(column.name()) {
-                            // Exactly matching, return None, no need to do the transform
-                            Ok(idx) if column.index() == idx => None,
-                            _ => Some(Arc::new(UnKnownColumn::new(column.name())) as _),
-                        })
-                }
+                Some(column) => columns_map
+                    .get(column)
+                    .map(|c| Arc::new(c[0].clone()) as _)
+                    .or_else(|| Some(Arc::new(UnKnownColumn::new(column.name())) as _)),
                 None => None,
             };
             Ok(if let Some(normalized_form) = normalized_form {
@@ -639,8 +632,10 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform(&|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+    pred.transform_down(&|expr| {
+        let expr_any = expr.as_any();
+
+        if let Some(column) = expr_any.downcast_ref::<Column>() {
             let index = match schema.index_of(column.name()) {
                 Ok(idx) => idx,
                 Err(_) if ignore_not_found => usize::MAX,
@@ -651,7 +646,6 @@ pub fn reassign_predicate_columns(
                 index,
             ))));
         }
-
         Ok(Transformed::No(expr))
     })
 }
@@ -659,7 +653,7 @@ pub fn reassign_predicate_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{binary, cast, col, lit, Column, Literal};
+    use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
     use crate::PhysicalSortExpr;
     use arrow::compute::SortOptions;
     use datafusion_common::{Result, ScalarValue};
@@ -983,5 +977,42 @@ mod tests {
             OrderingEquivalenceProperties::new(empty_schema.clone())
         }));
         Ok(())
+    }
+
+    #[test]
+    fn test_reassign_predicate_columns_in_list() {
+        let int_field = Field::new("should_not_matter", DataType::Int64, true);
+        let dict_field = Field::new(
+            "id",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        );
+        let schema_small = Arc::new(Schema::new(vec![dict_field.clone()]));
+        let schema_big = Arc::new(Schema::new(vec![int_field, dict_field]));
+        let pred = in_list(
+            Arc::new(Column::new_with_schema("id", &schema_big).unwrap()),
+            vec![lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("2")),
+            ))],
+            &false,
+            &schema_big,
+        )
+        .unwrap();
+
+        let actual = reassign_predicate_columns(pred, &schema_small, false).unwrap();
+
+        let expected = in_list(
+            Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),
+            vec![lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("2")),
+            ))],
+            &false,
+            &schema_small,
+        )
+        .unwrap();
+
+        assert_eq!(actual.as_ref(), expected.as_any());
     }
 }

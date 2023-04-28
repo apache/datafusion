@@ -39,7 +39,7 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::context::TaskContext;
-use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
+use datafusion_physical_expr::normalize_out_expr_with_columns_map;
 use datafusion_physical_expr::{
     project_equivalence_properties, project_ordering_equivalence_properties,
     OrderingEquivalenceProperties,
@@ -58,9 +58,9 @@ pub struct ProjectionExec {
     input: Arc<dyn ExecutionPlan>,
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
-    alias_map: HashMap<Column, Vec<Column>>,
+    columns_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -94,18 +94,19 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
-        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        // construct a map from the input columns to the output columns of the Projection
+        let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-                let new_col_idx = schema.index_of(name)?;
+                // For some executors logical plan schema fields and physical plan schema fields are not same
+                // Information in the column gets from the logical plan schema. Hence to produce correct results
+                // use the field in the input schema with same index.
                 let matching_input_column = input_schema.field(column.index());
-                let new_column =
-                    Column::new(matching_input_column.name(), column.index());
-                // When the column name is the same, but index does not equal, treat it as Alias
-                if (column.name() != name) || (column.index() != new_col_idx) {
-                    let entry = alias_map.entry(new_column).or_insert_with(Vec::new);
-                    entry.push(Column::new(name, new_col_idx));
-                }
+                let new_col_idx = schema.index_of(name)?;
+                let entry = columns_map
+                    .entry(Column::new(matching_input_column.name(), new_col_idx))
+                    .or_insert_with(Vec::new);
+                entry.push(Column::new(name, new_col_idx));
             };
         }
 
@@ -116,10 +117,9 @@ impl ProjectionExec {
                 let normalized_exprs = sort_exprs
                     .iter()
                     .map(|sort_expr| {
-                        let expr = normalize_out_expr_with_alias_schema(
+                        let expr = normalize_out_expr_with_columns_map(
                             sort_expr.expr.clone(),
-                            &alias_map,
-                            &schema,
+                            &columns_map,
                         );
                         PhysicalSortExpr {
                             expr,
@@ -137,7 +137,7 @@ impl ProjectionExec {
             schema,
             input: input.clone(),
             output_ordering,
-            alias_map,
+            columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -165,7 +165,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
@@ -184,13 +184,10 @@ impl ExecutionPlan for ProjectionExec {
                 let normalized_exprs = exprs
                     .into_iter()
                     .map(|expr| {
-                        normalize_out_expr_with_alias_schema(
-                            expr,
-                            &self.alias_map,
-                            &self.schema,
-                        )
+                        normalize_out_expr_with_columns_map(expr, &self.columns_map)
                     })
                     .collect::<Vec<_>>();
+
                 Partitioning::Hash(normalized_exprs, part)
             }
             _ => input_partition,
@@ -210,7 +207,7 @@ impl ExecutionPlan for ProjectionExec {
         let mut new_properties = EquivalenceProperties::new(self.schema());
         project_equivalence_properties(
             self.input.equivalence_properties(),
-            &self.alias_map,
+            &self.columns_map,
             &mut new_properties,
         );
         new_properties
@@ -220,7 +217,7 @@ impl ExecutionPlan for ProjectionExec {
         let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
         project_ordering_equivalence_properties(
             self.input.ordering_equivalence_properties(),
-            &self.alias_map,
+            &self.columns_map,
             &mut new_properties,
         );
         new_properties

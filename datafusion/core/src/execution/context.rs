@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SessionContext contains methods for registering data sources and executing queries
+//! [`SessionContext`] contains methods for registering data sources and executing queries
 use crate::{
     catalog::catalog::{CatalogList, MemoryCatalogList},
     datasource::{
@@ -32,7 +32,8 @@ use crate::{
     },
 };
 use datafusion_expr::{
-    logical_plan::Statement, DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
+    logical_plan::{DdlStatement, Statement},
+    DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -158,11 +159,15 @@ where
     }
 }
 
-/// SessionContext is the main interface for executing queries with DataFusion. It stands for
-/// the connection between user and DataFusion/Ballista cluster.
-/// The context provides the following functionality
+/// Main interface for executing queries with DataFusion. Maintains
+/// the state of the connection between a user and an instance of the
+/// DataFusion engine.
 ///
-/// * Create DataFrame from a CSV or Parquet data source.
+/// # Overview
+///
+/// [`SessionContext`] provides the following functionality:
+///
+/// * Create a DataFrame from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
@@ -199,6 +204,20 @@ where
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # `SessionContext`, `SessionState`, and `TaskContext`
+///
+/// A [`SessionContext`] can be created from a [`SessionConfig`] and
+/// stores the state for a particular query session. A single
+/// [`SessionContext`] can run multiple queries.
+///
+/// [`SessionState`] contains information available during query
+/// planning (creating [`LogicalPlan`]s and [`ExecutionPlan`]s).
+///
+/// [`TaskContext`] contains the state available during query
+/// execution [`ExecutionPlan::execute`].  It contains a subset of the
+/// information in[`SessionState`] and is created from a
+/// [`SessionContext`] or a [`SessionState`].
 #[derive(Clone)]
 pub struct SessionContext {
     /// UUID for the session
@@ -216,7 +235,7 @@ impl Default for SessionContext {
 }
 
 impl SessionContext {
-    /// Creates a new execution context using a default session configuration.
+    /// Creates a new `SessionContext` using the default [`SessionConfig`].
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
     }
@@ -241,19 +260,35 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Creates a new session context using the provided session configuration.
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a new [`RuntimeEnv`].
+    ///
+    /// See [`Self::with_config_rt`] for more details on resource
+    /// limits.
     pub fn with_config(config: SessionConfig) -> Self {
         let runtime = Arc::new(RuntimeEnv::default());
         Self::with_config_rt(config, runtime)
     }
 
-    /// Creates a new session context using the provided configuration and [`RuntimeEnv`].
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a [`RuntimeEnv`].
+    ///
+    /// # Resource Limits
+    ///
+    /// By default, each new `SessionContext` creates a new
+    /// `RuntimeEnv`, and therefore will not enforce memory or disk
+    /// limits for queries run on different `SessionContext`s.
+    ///
+    /// To enforce resource limits (e.g. to limit the total amount of
+    /// memory used) across all DataFusion queries in a process,
+    /// all `SessionContext`'s should be configured with the
+    /// same `RuntimeEnv`.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
         Self::with_state(state)
     }
 
-    /// Creates a new session context using the provided session state.
+    /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
@@ -262,7 +297,7 @@ impl SessionContext {
         }
     }
 
-    /// Returns the time this session was created
+    /// Returns the time this `SessionContext` was created
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time
     }
@@ -282,12 +317,12 @@ impl SessionContext {
         )
     }
 
-    /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
+    /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return the `session_id` of this Session
+    /// Returns an id that uniquely identifies this `SessionContext`.
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
@@ -351,88 +386,19 @@ impl SessionContext {
                 }
                 self.return_empty_dataframe()
             }
-            LogicalPlan::CreateExternalTable(cmd) => {
-                self.create_external_table(&cmd).await
-            }
-
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                name,
-                input,
-                if_not_exists,
-                or_replace,
-                primary_key,
-            }) => {
-                if !primary_key.is_empty() {
-                    Err(DataFusionError::Execution(
-                        "Primary keys on MemoryTables are not currently supported!"
-                            .to_string(),
-                    ))?;
+            LogicalPlan::Ddl(ddl) => match ddl {
+                DdlStatement::CreateExternalTable(cmd) => {
+                    self.create_external_table(&cmd).await
                 }
-
-                let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
-                let table = self.table(&name).await;
-
-                match (if_not_exists, or_replace, table) {
-                    (true, false, Ok(_)) => self.return_empty_dataframe(),
-                    (false, true, Ok(_)) => {
-                        self.deregister_table(&name)?;
-                        let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state(), input);
-
-                        let batches: Vec<_> = physical.collect_partitioned().await?;
-                        let table = Arc::new(MemTable::try_new(schema, batches)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (true, true, Ok(_)) => Err(DataFusionError::Execution(
-                        "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
-                    )),
-                    (_, _, Err(_)) => {
-                        let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state(), input);
-
-                        let batches: Vec<_> = physical.collect_partitioned().await?;
-                        let table = Arc::new(MemTable::try_new(schema, batches)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{name}' already exists"
-                    ))),
+                DdlStatement::CreateMemoryTable(cmd) => {
+                    self.create_memory_table(cmd).await
                 }
-            }
-
-            LogicalPlan::CreateView(CreateView {
-                name,
-                input,
-                or_replace,
-                definition,
-            }) => {
-                let view = self.table(&name).await;
-
-                match (or_replace, view) {
-                    (true, Ok(_)) => {
-                        self.deregister_table(&name)?;
-                        let table =
-                            Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (_, Err(_)) => {
-                        let table =
-                            Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{name}' already exists"
-                    ))),
+                DdlStatement::CreateView(cmd) => self.create_view(cmd).await,
+                DdlStatement::CreateCatalogSchema(cmd) => {
+                    self.create_catalog_schema(cmd).await
                 }
-            }
+                DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
+            },
 
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
@@ -474,78 +440,6 @@ impl SessionContext {
 
             LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
                 self.return_describe_table_dataframe(schema).await
-            }
-
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists,
-                ..
-            }) => {
-                // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
-                // so for now, we default to default catalog
-                let tokens: Vec<&str> = schema_name.split('.').collect();
-                let (catalog, schema_name) = match tokens.len() {
-                    1 => {
-                        let state = self.state.read();
-                        let name = &state.config.options().catalog.default_catalog;
-                        let catalog =
-                            state.catalog_list.catalog(name).ok_or_else(|| {
-                                DataFusionError::Execution(format!(
-                                    "Missing default catalog '{name}'"
-                                ))
-                            })?;
-                        (catalog, tokens[0])
-                    }
-                    2 => {
-                        let name = &tokens[0];
-                        let catalog = self.catalog(name).ok_or_else(|| {
-                            DataFusionError::Execution(format!(
-                                "Missing catalog '{name}'"
-                            ))
-                        })?;
-                        (catalog, tokens[1])
-                    }
-                    _ => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Unable to parse catalog from {schema_name}"
-                        )))
-                    }
-                };
-                let schema = catalog.schema(schema_name);
-
-                match (if_not_exists, schema) {
-                    (true, Some(_)) => self.return_empty_dataframe(),
-                    (true, None) | (false, None) => {
-                        let schema = Arc::new(MemorySchemaProvider::new());
-                        catalog.register_schema(schema_name, schema)?;
-                        self.return_empty_dataframe()
-                    }
-                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Schema '{schema_name}' already exists"
-                    ))),
-                }
-            }
-            LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name,
-                if_not_exists,
-                ..
-            }) => {
-                let catalog = self.catalog(catalog_name.as_str());
-
-                match (if_not_exists, catalog) {
-                    (true, Some(_)) => self.return_empty_dataframe(),
-                    (true, None) | (false, None) => {
-                        let new_catalog = Arc::new(MemoryCatalogProvider::new());
-                        self.state
-                            .write()
-                            .catalog_list
-                            .register_catalog(catalog_name, new_catalog);
-                        self.return_empty_dataframe()
-                    }
-                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Catalog '{catalog_name}' already exists"
-                    ))),
-                }
             }
 
             plan => Ok(DataFrame::new(self.state(), plan)),
@@ -626,6 +520,159 @@ impl SessionContext {
             self.create_custom_table(cmd).await?;
         self.register_table(&cmd.name, table_provider)?;
         self.return_empty_dataframe()
+    }
+
+    async fn create_memory_table(&self, cmd: CreateMemoryTable) -> Result<DataFrame> {
+        let CreateMemoryTable {
+            name,
+            input,
+            if_not_exists,
+            or_replace,
+            primary_key,
+        } = cmd;
+
+        if !primary_key.is_empty() {
+            Err(DataFusionError::Execution(
+                "Primary keys on MemoryTables are not currently supported!".to_string(),
+            ))?;
+        }
+
+        let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let table = self.table(&name).await;
+
+        match (if_not_exists, or_replace, table) {
+            (true, false, Ok(_)) => self.return_empty_dataframe(),
+            (false, true, Ok(_)) => {
+                self.deregister_table(&name)?;
+                let schema = Arc::new(input.schema().as_ref().into());
+                let physical = DataFrame::new(self.state(), input);
+
+                let batches: Vec<_> = physical.collect_partitioned().await?;
+                let table = Arc::new(MemTable::try_new(schema, batches)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (true, true, Ok(_)) => Err(DataFusionError::Execution(
+                "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
+            )),
+            (_, _, Err(_)) => {
+                let schema = Arc::new(input.schema().as_ref().into());
+                let physical = DataFrame::new(self.state(), input);
+
+                let batches: Vec<_> = physical.collect_partitioned().await?;
+                let table = Arc::new(MemTable::try_new(schema, batches)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                "Table '{name}' already exists"
+            ))),
+        }
+    }
+
+    async fn create_view(&self, cmd: CreateView) -> Result<DataFrame> {
+        let CreateView {
+            name,
+            input,
+            or_replace,
+            definition,
+        } = cmd;
+
+        let view = self.table(&name).await;
+
+        match (or_replace, view) {
+            (true, Ok(_)) => {
+                self.deregister_table(&name)?;
+                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (_, Err(_)) => {
+                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                "Table '{name}' already exists"
+            ))),
+        }
+    }
+
+    async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
+        let CreateCatalogSchema {
+            schema_name,
+            if_not_exists,
+            ..
+        } = cmd;
+
+        // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+        // so for now, we default to default catalog
+        let tokens: Vec<&str> = schema_name.split('.').collect();
+        let (catalog, schema_name) = match tokens.len() {
+            1 => {
+                let state = self.state.read();
+                let name = &state.config.options().catalog.default_catalog;
+                let catalog = state.catalog_list.catalog(name).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Missing default catalog '{name}'"
+                    ))
+                })?;
+                (catalog, tokens[0])
+            }
+            2 => {
+                let name = &tokens[0];
+                let catalog = self.catalog(name).ok_or_else(|| {
+                    DataFusionError::Execution(format!("Missing catalog '{name}'"))
+                })?;
+                (catalog, tokens[1])
+            }
+            _ => {
+                return Err(DataFusionError::Execution(format!(
+                    "Unable to parse catalog from {schema_name}"
+                )))
+            }
+        };
+        let schema = catalog.schema(schema_name);
+
+        match (if_not_exists, schema) {
+            (true, Some(_)) => self.return_empty_dataframe(),
+            (true, None) | (false, None) => {
+                let schema = Arc::new(MemorySchemaProvider::new());
+                catalog.register_schema(schema_name, schema)?;
+                self.return_empty_dataframe()
+            }
+            (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                "Schema '{schema_name}' already exists"
+            ))),
+        }
+    }
+
+    async fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
+        let CreateCatalog {
+            catalog_name,
+            if_not_exists,
+            ..
+        } = cmd;
+        let catalog = self.catalog(catalog_name.as_str());
+
+        match (if_not_exists, catalog) {
+            (true, Some(_)) => self.return_empty_dataframe(),
+            (true, None) | (false, None) => {
+                let new_catalog = Arc::new(MemoryCatalogProvider::new());
+                self.state
+                    .write()
+                    .catalog_list
+                    .register_catalog(catalog_name, new_catalog);
+                self.return_empty_dataframe()
+            }
+            (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                "Catalog '{catalog_name}' already exists"
+            ))),
+        }
     }
 
     async fn create_custom_table(
@@ -1074,6 +1121,7 @@ impl SessionContext {
     ///
     /// [`table`]: SessionContext::table
     #[deprecated(
+        since = "23.0.0",
         note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
     )]
     pub fn tables(&self) -> Result<HashSet<String>> {
@@ -1090,6 +1138,7 @@ impl SessionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     #[deprecated(
+        since = "23.0.0",
         note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
     )]
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
@@ -1098,6 +1147,7 @@ impl SessionContext {
 
     /// Creates a physical plan from a logical plan.
     #[deprecated(
+        since = "23.0.0",
         note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
     )]
     pub async fn create_physical_plan(
@@ -1205,7 +1255,7 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
-    /// UUID for the session
+    /// A unique UUID that identifies the session
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
@@ -1247,12 +1297,17 @@ impl Debug for SessionState {
 }
 
 /// Default session builder using the provided configuration
+#[deprecated(
+    since = "23.0.0",
+    note = "See SessionContext::with_config() or SessionState::with_config_rt"
+)]
 pub fn default_session_builder(config: SessionConfig) -> SessionState {
     SessionState::with_config_rt(config, Arc::new(RuntimeEnv::default()))
 }
 
 impl SessionState {
-    /// Returns new SessionState using the provided configuration and runtime
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
         Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)

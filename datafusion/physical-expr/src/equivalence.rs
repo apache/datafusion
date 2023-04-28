@@ -297,11 +297,11 @@ pub fn project_equivalence_properties(
 /// 2) Truncate the EquivalentClasses that are not in the output schema
 pub fn project_ordering_equivalence_properties(
     input_eq: OrderingEquivalenceProperties,
-    alias_map: &HashMap<Column, Vec<Column>>,
+    columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
     let mut ec_classes = input_eq.classes().to_vec();
-    for (column, columns) in alias_map {
+    for (column, columns) in columns_map {
         let mut find_match = false;
         for class in ec_classes.iter_mut() {
             if let Some(EqualColumns { mode, .. }) = get_matching_column(class, column) {

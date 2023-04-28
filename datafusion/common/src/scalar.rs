@@ -1472,7 +1472,7 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
     // APIs and skipping validation, if it every comes up in
     // performance traces.
     Arc::new(
-        DictionaryArray::<K>::try_new(&key_array, &values_array)
+        DictionaryArray::<K>::try_new(key_array, values_array)
             // should always be valid by construction above
             .expect("Can not construct dictionary array"),
     )
@@ -1480,7 +1480,7 @@ fn dict_from_scalar<K: ArrowDictionaryKeyType>(
 
 /// Create a dictionary array representing all the values in values
 fn dict_from_values<K: ArrowDictionaryKeyType>(
-    values_array: &dyn Array,
+    values_array: ArrayRef,
 ) -> Result<ArrayRef> {
     // Create a key array with `size` elements of 0..array_len for all
     // non-null value elements
@@ -1508,7 +1508,7 @@ fn dict_from_values<K: ArrowDictionaryKeyType>(
     // Note: this path could be made faster by using the ArrayData
     // APIs and skipping validation, if it every comes up in
     // performance traces.
-    let dict_array = DictionaryArray::<K>::try_new(&key_array, values_array)?;
+    let dict_array = DictionaryArray::<K>::try_new(key_array, values_array)?;
     Ok(Arc::new(dict_array))
 }
 
@@ -2406,14 +2406,14 @@ impl ScalarValue {
                 assert_eq!(values.data_type(), value_type.as_ref());
 
                 match key_type.as_ref() {
-                    DataType::Int8 => dict_from_values::<Int8Type>(&values)?,
-                    DataType::Int16 => dict_from_values::<Int16Type>(&values)?,
-                    DataType::Int32 => dict_from_values::<Int32Type>(&values)?,
-                    DataType::Int64 => dict_from_values::<Int64Type>(&values)?,
-                    DataType::UInt8 => dict_from_values::<UInt8Type>(&values)?,
-                    DataType::UInt16 => dict_from_values::<UInt16Type>(&values)?,
-                    DataType::UInt32 => dict_from_values::<UInt32Type>(&values)?,
-                    DataType::UInt64 => dict_from_values::<UInt64Type>(&values)?,
+                    DataType::Int8 => dict_from_values::<Int8Type>(values)?,
+                    DataType::Int16 => dict_from_values::<Int16Type>(values)?,
+                    DataType::Int32 => dict_from_values::<Int32Type>(values)?,
+                    DataType::Int64 => dict_from_values::<Int64Type>(values)?,
+                    DataType::UInt8 => dict_from_values::<UInt8Type>(values)?,
+                    DataType::UInt16 => dict_from_values::<UInt16Type>(values)?,
+                    DataType::UInt32 => dict_from_values::<UInt32Type>(values)?,
+                    DataType::UInt64 => dict_from_values::<UInt64Type>(values)?,
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
