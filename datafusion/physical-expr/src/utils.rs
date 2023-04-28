@@ -474,24 +474,10 @@ fn requirements_compatible_concrete<
         required
             .iter()
             .map(|e| {
-                let normalized = normalize_sort_requirement_with_equivalence_properties(
-                    e.clone(),
-                    eq_classes,
-                );
-                normalize_sort_requirement_with_ordering_equivalence_properties(
-                    normalized,
-                    ordering_eq_classes,
-                )
+                normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes)
             })
             .zip(provided.iter().map(|e| {
-                let normalized = normalize_sort_requirement_with_equivalence_properties(
-                    e.clone(),
-                    eq_classes,
-                );
-                normalize_sort_requirement_with_ordering_equivalence_properties(
-                    normalized,
-                    ordering_eq_classes,
-                )
+                normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes)
             }))
             .all(|(req, given)| given.compatible(&req))
     }

@@ -172,12 +172,6 @@ impl<T: Eq + Hash + Clone> EquivalentClassGen<T> {
 pub type EquivalentClass = EquivalentClassGen<Column>;
 pub type OrderingEquivalentClass = EquivalentClassGen<OrderedColumns>;
 
-#[derive(Debug, Hash, Copy, PartialEq, Eq, Clone)]
-pub enum EquivalenceMode {
-    Exact,
-    Ordering(SortOptions),
-}
-
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct OrderedColumns {
     pub col: Column,

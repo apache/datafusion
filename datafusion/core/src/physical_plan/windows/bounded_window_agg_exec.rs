@@ -27,7 +27,7 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::windows::{
-    calc_requirements, get_ordered_partition_by_indices,
+    calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -47,7 +47,6 @@ use hashbrown::raw::RawTable;
 use indexmap::IndexMap;
 use log::debug;
 
-use arrow_schema::SortOptions;
 use std::any::Any;
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, VecDeque};
@@ -61,15 +60,14 @@ use datafusion_common::utils::{
 };
 use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
-    BuiltInWindowExpr, PartitionBatchState, PartitionBatches, PartitionKey,
-    PartitionWindowAggStates, WindowAggState, WindowState,
+    PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
+    WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EquivalenceProperties, OrderedColumns, OrderingEquivalenceProperties,
-    OrderingEquivalentClass, PhysicalExpr, PhysicalSortRequirement,
+    EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,56 +260,9 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().equivalence_properties()
     }
 
-    /// Get the EquivalenceProperties within the plan
+    /// Get the OrderingEquivalenceProperties within the plan
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        // We need to update schema. Hence we do not use input.ordering_equivalence_properties() directly.
-        let mut res = OrderingEquivalenceProperties::new(self.schema());
-        let eq_properties = self.input.ordering_equivalence_properties();
-        let eq_classes = eq_properties
-            .classes()
-            .iter()
-            .map(|elem| (*elem).clone())
-            .collect::<Vec<OrderingEquivalentClass>>();
-        res.extend(eq_classes);
-        let out_ordering = self.output_ordering().unwrap_or(&[]);
-        for expr in &self.window_expr {
-            if let Some(builtin_window_expr) =
-                expr.as_any().downcast_ref::<BuiltInWindowExpr>()
-            {
-                if !builtin_window_expr
-                    .get_built_in_func_expr()
-                    .as_any()
-                    .is::<RowNumber>()
-                {
-                    // If window function is not `RowNumber` skip it.
-                    continue;
-                }
-                // `RowNumber` builtin window function introduces a new ordering,
-                // If there is an existing ordering add new ordering as ordering equivalence
-                if let Some(first) = out_ordering.first() {
-                    if let Some(column) = first.expr.as_any().downcast_ref::<Column>() {
-                        let tmp =
-                            self.schema.column_with_name(expr.field().unwrap().name());
-                        if let Some((idx, elem)) = tmp {
-                            let new_col = Column::new(elem.name(), idx);
-                            let lhs = OrderedColumns {
-                                col: column.clone(),
-                                options: first.options,
-                            };
-                            let rhs = OrderedColumns {
-                                col: new_col,
-                                options: SortOptions {
-                                    descending: false,
-                                    nulls_first: false,
-                                }, // ASC, NULLS LAST
-                            };
-                            res.add_equal_conditions((&lhs, &rhs));
-                        }
-                    }
-                }
-            }
-        }
-        res
+        window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
