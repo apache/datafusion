@@ -44,8 +44,8 @@ pub fn add_sort_above(
     if !ordering_satisfy(
         node.output_ordering(),
         Some(&sort_expr),
-        || node.ordering_equivalence_properties(),
         || node.equivalence_properties(),
+        || node.ordering_equivalence_properties(),
     ) {
         let new_sort = SortExec::new(sort_expr, node.clone());
 

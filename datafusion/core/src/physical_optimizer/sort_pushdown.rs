@@ -128,8 +128,8 @@ pub(crate) fn pushdown_sorts(
         if !ordering_satisfy_requirement(
             plan.output_ordering(),
             parent_required,
-            || plan.ordering_equivalence_properties(),
             || plan.equivalence_properties(),
+            || plan.ordering_equivalence_properties(),
         ) {
             // If the current plan is a SortExec, modify it to satisfy parent requirements:
             let parent_required_expr = PhysicalSortRequirement::to_sort_exprs(
@@ -161,8 +161,8 @@ pub(crate) fn pushdown_sorts(
         if ordering_satisfy_requirement(
             plan.output_ordering(),
             parent_required,
-            || plan.ordering_equivalence_properties(),
             || plan.equivalence_properties(),
+            || plan.ordering_equivalence_properties(),
         ) {
             // Satisfies parent requirements, immediately return.
             return Ok(Transformed::Yes(SortPushDown {

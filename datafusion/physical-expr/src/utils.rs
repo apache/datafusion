@@ -307,13 +307,13 @@ pub fn normalize_sort_requirement(
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<
-    F: FnOnce() -> OrderingEquivalenceProperties,
-    F2: FnOnce() -> EquivalenceProperties,
+    F: FnOnce() -> EquivalenceProperties,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
-    ordering_equal_properties: F,
-    equal_properties: F2,
+    equal_properties: F,
+    ordering_equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
@@ -321,8 +321,8 @@ pub fn ordering_satisfy<
         (Some(provided), Some(required)) => ordering_satisfy_concrete(
             provided,
             required,
-            ordering_equal_properties,
             equal_properties,
+            ordering_equal_properties,
         ),
     }
 }
@@ -330,13 +330,13 @@ pub fn ordering_satisfy<
 /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 fn ordering_satisfy_concrete<
-    F: FnOnce() -> OrderingEquivalenceProperties,
-    F2: FnOnce() -> EquivalenceProperties,
+    F: FnOnce() -> EquivalenceProperties,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
-    ordering_equal_properties: F,
-    equal_properties: F2,
+    equal_properties: F,
+    ordering_equal_properties: F2,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -366,13 +366,13 @@ fn ordering_satisfy_concrete<
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement<
-    F: FnOnce() -> OrderingEquivalenceProperties,
-    F2: FnOnce() -> EquivalenceProperties,
+    F: FnOnce() -> EquivalenceProperties,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortRequirement]>,
-    ordering_equal_properties: F,
-    equal_properties: F2,
+    equal_properties: F,
+    ordering_equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
@@ -380,8 +380,8 @@ pub fn ordering_satisfy_requirement<
         (Some(provided), Some(required)) => ordering_satisfy_requirement_concrete(
             provided,
             required,
-            ordering_equal_properties,
             equal_properties,
+            ordering_equal_properties,
         ),
     }
 }
@@ -389,13 +389,13 @@ pub fn ordering_satisfy_requirement<
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement_concrete<
-    F: FnOnce() -> OrderingEquivalenceProperties,
-    F2: FnOnce() -> EquivalenceProperties,
+    F: FnOnce() -> EquivalenceProperties,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortRequirement],
-    ordering_equal_properties: F,
-    equal_properties: F2,
+    equal_properties: F,
+    ordering_equal_properties: F2,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -1069,14 +1069,14 @@ mod tests {
         assert!(ordering_satisfy(
             finer,
             crude,
+            || { EquivalenceProperties::new(empty_schema.clone()) },
             || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
-            || { EquivalenceProperties::new(empty_schema.clone()) }
         ));
         assert!(!ordering_satisfy(
             crude,
             finer,
+            || { EquivalenceProperties::new(empty_schema.clone()) },
             || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
-            || { EquivalenceProperties::new(empty_schema.clone()) }
         ));
         Ok(())
     }
