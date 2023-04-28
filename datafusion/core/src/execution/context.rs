@@ -33,7 +33,7 @@ use crate::{
 };
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
+    DescribeTable, StringifiedPlan,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;

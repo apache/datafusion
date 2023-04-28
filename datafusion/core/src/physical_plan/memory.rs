@@ -397,7 +397,7 @@ enum MemorySinkStreamState {
 /// A stream that saves record batches in memory-backed storage.
 /// Can work even when multiple input partitions map to the same table
 /// partition, achieves buffer exclusivity by locking before writing.
-pub struct MemorySinkStream {
+struct MemorySinkStream {
     /// Stream of record batches to be inserted into the memory table.
     data: SendableRecordBatchStream,
     /// Memory table partition that stores the record batches.
@@ -500,7 +500,7 @@ enum MemorySinkOneToOneStreamState {
 /// A stream that saves record batches in memory-backed storage.
 /// Assumes that every table partition has at most one corresponding input
 /// partition, so it locks the table partition only once.
-pub struct MemorySinkOneToOneStream {
+struct MemorySinkOneToOneStream {
     /// Stream of record batches to be inserted into the memory table.
     data: SendableRecordBatchStream,
     /// Memory table partition that stores the record batches.
