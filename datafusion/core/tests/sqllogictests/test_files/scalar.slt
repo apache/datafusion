@@ -215,6 +215,18 @@ select exp(null);
 ----
 NULL
 
+# factorial scalar function
+query RRR rowsort
+select factorial(0), factorial(10), factorial(20);
+----
+1 3628800 2432902008176640000
+
+# factorial scalar nulls
+query R rowsort
+select factorial(null);
+----
+NULL
+
 # floor scalar function
 query RRR rowsort
 select floor(1.4), floor(1.5), floor(1.6);
@@ -224,6 +236,30 @@ select floor(1.4), floor(1.5), floor(1.6);
 # floor scalar nulls
 query R rowsort
 select floor(null);
+----
+NULL
+
+# gcd scalar function
+query RRR rowsort
+select gcd(0, 0), gcd(20, 16), gcd(13, 4);
+----
+0 4 1
+
+# gcd scalar nulls
+query R rowsort
+select gcd(NULL);
+----
+NULL
+
+# lcm scalar function
+query RRR rowsort
+select lcm(0, 0), lcm(4, 5), lcm(10, 15);
+----
+0 20 30
+
+# lcm scalar nulls
+query R rowsort
+select lcm(null);
 ----
 NULL
 

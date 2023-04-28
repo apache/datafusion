@@ -347,7 +347,16 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Cosh => Arc::new(math_expressions::cosh),
         BuiltinScalarFunction::Degrees => Arc::new(math_expressions::to_degrees),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
+        BuiltinScalarFunction::Factorial => {
+            Arc::new(|args| make_scalar_function(math_expressions::factorial)(args))
+        }
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
+        BuiltinScalarFunction::Gcd => {
+            Arc::new(|args| make_scalar_function(math_expressions::gcd)(args))
+        }
+        BuiltinScalarFunction::Lcm => {
+            Arc::new(|args| make_scalar_function(math_expressions::lcm)(args))
+        }
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
         BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),

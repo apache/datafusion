@@ -35,7 +35,10 @@
 - [cosh](#cosh)
 - [degrees](#degrees)
 - [exp](#exp)
+- [factorial](#factorial)
 - [floor](#floor)
+- [gcd](#gcd)
+- [lcm](#lcm)
 - [ln](#ln)
 - [log](#log)
 - [log10](#log10)
@@ -238,6 +241,19 @@ exp(numeric_expression)
 - **numeric_expression**: Numeric expression to use as the exponent.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+### `factorial`
+
+Factorial
+
+```
+factorial(numeric_expression)
+```
+
+#### Arguments
+
+- **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
 ### `floor`
 
 Returns the nearest integer less than or equal to a number.
@@ -249,6 +265,36 @@ floor(numeric_expression)
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `gcd`
+
+Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.
+
+```
+gcd(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: First numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_y**: Second numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `lcm`
+
+Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.
+
+```
+lcm(expression_x, expression_y)
+```
+
+#### Arguments
+
+- **expression_x**: First numeric expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+- **expression_y**: Second numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `ln`

@@ -467,6 +467,7 @@ scalar_expr!(Atan, atan, num, "inverse tangent");
 scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
 scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
 scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
+scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
     Floor,
     floor,
@@ -486,6 +487,8 @@ scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
+scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
+scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
 scalar_expr!(Log2, log2, num, "base 2 logarithm");
 scalar_expr!(Log10, log10, num, "base 10 logarithm");
 scalar_expr!(Ln, ln, num, "natural logarithm");
@@ -788,6 +791,7 @@ mod test {
         test_unary_scalar_expr!(Asinh, asinh);
         test_unary_scalar_expr!(Acosh, acosh);
         test_unary_scalar_expr!(Atanh, atanh);
+        test_unary_scalar_expr!(Factorial, factorial);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_unary_scalar_expr!(Degrees, degrees);
@@ -810,6 +814,8 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
+        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
+        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);

@@ -39,7 +39,7 @@ use datafusion_expr::{
     cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
     date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, Sort, WindowFunction},
-    floor, from_unixtime, left, ln, log, log10, log2,
+    factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
     regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
@@ -427,6 +427,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Log10 => Self::Log10,
             ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Radians => Self::Radians,
+            ScalarFunction::Factorial => Self::Factorial,
+            ScalarFunction::Gcd => Self::Gcd,
+            ScalarFunction::Lcm => Self::Lcm,
             ScalarFunction::Floor => Self::Floor,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
@@ -1165,6 +1168,9 @@ pub fn parse_expr(
                 ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Factorial => {
+                    Ok(factorial(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Round => Ok(round(
                     args.to_owned()
@@ -1218,6 +1224,14 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
                 ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Gcd => Ok(gcd(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Lcm => Ok(lcm(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Left => Ok(left(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
