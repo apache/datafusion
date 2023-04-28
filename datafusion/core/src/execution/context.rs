@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SessionContext contains methods for registering data sources and executing queries
+//! [`SessionContext`] contains methods for registering data sources and executing queries
 use crate::{
     catalog::catalog::{CatalogList, MemoryCatalogList},
     datasource::{
@@ -156,11 +156,15 @@ where
     }
 }
 
-/// SessionContext is the main interface for executing queries with DataFusion. It stands for
-/// the connection between user and DataFusion/Ballista cluster.
-/// The context provides the following functionality
+/// Main interface for executing queries with DataFusion. Maintains
+/// the state of the connection between a user and an instance of the
+/// DataFusion engine.
 ///
-/// * Create DataFrame from a CSV or Parquet data source.
+/// # Overview
+///
+/// [`SessionContext`] provides the following functionality:
+///
+/// * Create a DataFrame from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
 /// * Execution a SQL query
@@ -197,6 +201,20 @@ where
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # `SessionContext`, `SessionState`, and `TaskContext`
+///
+/// A [`SessionContext`] can be created from a [`SessionConfig`] and
+/// stores the state for a particular query session. A single
+/// [`SessionContext`] can run multiple queries.
+///
+/// [`SessionState`] contains information available during query
+/// planning (creating [`LogicalPlan`]s and [`ExecutionPlan`]s).
+///
+/// [`TaskContext`] contains the state available during query
+/// execution [`ExecutionPlan::execute`].  It contains a subset of the
+/// information in[`SessionState`] and is created from a
+/// [`SessionContext`] or a [`SessionState`].
 #[derive(Clone)]
 pub struct SessionContext {
     /// UUID for the session
@@ -214,7 +232,7 @@ impl Default for SessionContext {
 }
 
 impl SessionContext {
-    /// Creates a new execution context using a default session configuration.
+    /// Creates a new `SessionContext` using the default [`SessionConfig`].
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
     }
@@ -239,19 +257,35 @@ impl SessionContext {
         Ok(())
     }
 
-    /// Creates a new session context using the provided session configuration.
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a new [`RuntimeEnv`].
+    ///
+    /// See [`Self::with_config_rt`] for more details on resource
+    /// limits.
     pub fn with_config(config: SessionConfig) -> Self {
         let runtime = Arc::new(RuntimeEnv::default());
         Self::with_config_rt(config, runtime)
     }
 
-    /// Creates a new session context using the provided configuration and [`RuntimeEnv`].
+    /// Creates a new `SessionContext` using the provided
+    /// [`SessionConfig`] and a [`RuntimeEnv`].
+    ///
+    /// # Resource Limits
+    ///
+    /// By default, each new `SessionContext` creates a new
+    /// `RuntimeEnv`, and therefore will not enforce memory or disk
+    /// limits for queries run on different `SessionContext`s.
+    ///
+    /// To enforce resource limits (e.g. to limit the total amount of
+    /// memory used) across all DataFusion queries in a process,
+    /// all `SessionContext`'s should be configured with the
+    /// same `RuntimeEnv`.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
         Self::with_state(state)
     }
 
-    /// Creates a new session context using the provided session state.
+    /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
@@ -260,7 +294,7 @@ impl SessionContext {
         }
     }
 
-    /// Returns the time this session was created
+    /// Returns the time this `SessionContext` was created
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time
     }
@@ -280,12 +314,12 @@ impl SessionContext {
         )
     }
 
-    /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
+    /// Return the [RuntimeEnv] used to run queries with this `SessionContext`
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return the `session_id` of this Session
+    /// Returns an id that uniquely identifies this `SessionContext`.
     pub fn session_id(&self) -> String {
         self.session_id.clone()
     }
@@ -1185,7 +1219,7 @@ impl QueryPlanner for DefaultQueryPlanner {
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
-    /// UUID for the session
+    /// A unique UUID that identifies the session
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
@@ -1232,7 +1266,8 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 }
 
 impl SessionState {
-    /// Returns new SessionState using the provided configuration and runtime
+    /// Returns new [`SessionState`] using the provided
+    /// [`SessionConfig`] and [`RuntimeEnv`].
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
         Self::with_config_rt_and_catalog_list(config, runtime, catalog_list)

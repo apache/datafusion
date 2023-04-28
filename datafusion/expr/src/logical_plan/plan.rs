@@ -18,7 +18,7 @@
 ///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::statement::{DmlStatement, Statement};
+use crate::logical_plan::{DmlStatement, Statement};
 
 use crate::logical_plan::plan;
 use crate::utils::{
@@ -482,6 +482,104 @@ impl LogicalPlan {
                 input_plan.replace_params_with_values(&param_values)
             }
             _ => Ok(self),
+        }
+    }
+
+    /// Returns the maximum number of rows that this plan can output, if known.
+    ///
+    /// If `None`, the plan can return any number of rows.
+    /// If `Some(n)` then the plan can return at most `n` rows but may return fewer.
+    pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
+        match self {
+            LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
+            LogicalPlan::Filter(Filter { input, .. }) => input.max_rows(),
+            LogicalPlan::Window(Window { input, .. }) => input.max_rows(),
+            LogicalPlan::Aggregate(Aggregate {
+                input, group_expr, ..
+            }) => {
+                // Empty group_expr will return Some(1)
+                if group_expr
+                    .iter()
+                    .all(|expr| matches!(expr, Expr::Literal(_)))
+                {
+                    Some(1)
+                } else {
+                    input.max_rows()
+                }
+            }
+            LogicalPlan::Sort(Sort { input, fetch, .. }) => {
+                match (fetch, input.max_rows()) {
+                    (Some(fetch_limit), Some(input_max)) => {
+                        Some(input_max.min(*fetch_limit))
+                    }
+                    (Some(fetch_limit), None) => Some(*fetch_limit),
+                    (None, Some(input_max)) => Some(input_max),
+                    (None, None) => None,
+                }
+            }
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows(), right.max_rows()) {
+                        (Some(left_max), Some(right_max)) => {
+                            let min_rows = match join_type {
+                                JoinType::Left => left_max,
+                                JoinType::Right => right_max,
+                                JoinType::Full => left_max + right_max,
+                                _ => 0,
+                            };
+                            Some((left_max * right_max).max(min_rows))
+                        }
+                        _ => None,
+                    }
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => left.max_rows(),
+                JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
+            },
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
+                match (left.max_rows(), right.max_rows()) {
+                    (Some(left_max), Some(right_max)) => Some(left_max * right_max),
+                    _ => None,
+                }
+            }
+            LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
+            LogicalPlan::Union(Union { inputs, .. }) => inputs
+                .iter()
+                .map(|plan| plan.max_rows())
+                .try_fold(0usize, |mut acc, input_max| {
+                    if let Some(i_max) = input_max {
+                        acc += i_max;
+                        Some(acc)
+                    } else {
+                        None
+                    }
+                }),
+            LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
+            LogicalPlan::EmptyRelation(_) => Some(0),
+            LogicalPlan::Subquery(_) => None,
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
+            LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
+            LogicalPlan::Distinct(Distinct { input }) => input.max_rows(),
+            LogicalPlan::Values(v) => Some(v.values.len()),
+            LogicalPlan::Unnest(_) => None,
+            LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Extension(_) => None,
         }
     }
 }
