@@ -40,7 +40,7 @@ arrow = { workspace = true }
 cranelift = "0.89.0"
 cranelift-jit = "0.89.0"
 cranelift-module = "0.89.0"
-cranelift-native = "0.89.0"
+cranelift-native = "0.95.1"
 datafusion-common = { path = "../common", version = "23.0.0", features = ["jit"] }
 datafusion-expr = { path = "../expr", version = "23.0.0" }
 
