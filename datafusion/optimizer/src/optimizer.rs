@@ -293,7 +293,7 @@ impl Optimizer {
                             i
                         );
                     }
-                    Err(ref e) => {
+                    Err(e) => {
                         if options.optimizer.skip_failed_rules {
                             // Note to future readers: if you see this warning it signals a
                             // bug in the DataFusion optimizer. Please consider filing a ticket
@@ -304,13 +304,8 @@ impl Optimizer {
                             e
                         );
                         } else {
-                            let e = DataFusionError::Internal(format!(
-                                "Optimizer rule '{}' failed due to unexpected error: {}",
-                                rule.name(),
-                                e
-                            ));
                             return Err(DataFusionError::Context(
-                                rule.name().to_string(),
+                                format!("Optimizer rule '{}' failed", rule.name(),),
                                 Box::new(e),
                             ));
                         }
