@@ -740,8 +740,7 @@ mod test {
     use datafusion_common::DFSchema;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
-        avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
-        Operator,
+        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
         AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
@@ -765,15 +764,7 @@ mod test {
 
     #[test]
     fn id_array_visitor() -> Result<()> {
-        let expr = binary_expr(
-            binary_expr(
-                sum(binary_expr(col("a"), Operator::Plus, lit(1))),
-                Operator::Minus,
-                avg(col("c")),
-            ),
-            Operator::Multiply,
-            lit(2),
-        );
+        let expr = ((sum(col("a") + lit(1))) - avg(col("c"))) * lit(2);
 
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![
@@ -854,20 +845,8 @@ mod test {
             .aggregate(
                 iter::empty::<Expr>(),
                 vec![
-                    sum(binary_expr(
-                        col("a"),
-                        Operator::Multiply,
-                        binary_expr(lit(1), Operator::Minus, col("b")),
-                    )),
-                    sum(binary_expr(
-                        binary_expr(
-                            col("a"),
-                            Operator::Multiply,
-                            binary_expr(lit(1), Operator::Minus, col("b")),
-                        ),
-                        Operator::Multiply,
-                        binary_expr(lit(1), Operator::Plus, col("c")),
-                    )),
+                    sum(col("a") * (lit(1) - col("b"))),
+                    sum((col("a") * (lit(1) - col("b"))) * (lit(1) + col("c"))),
                 ],
             )?
             .build()?;
@@ -936,10 +915,10 @@ mod test {
             .aggregate(
                 iter::empty::<Expr>(),
                 vec![
-                    binary_expr(lit(1), Operator::Plus, avg(col("a"))),
-                    binary_expr(lit(1), Operator::Minus, avg(col("a"))),
-                    binary_expr(lit(1), Operator::Plus, udf_agg(col("a"))),
-                    binary_expr(lit(1), Operator::Minus, udf_agg(col("a"))),
+                    lit(1) + avg(col("a")),
+                    lit(1) - avg(col("a")),
+                    lit(1) + udf_agg(col("a")),
+                    lit(1) - udf_agg(col("a")),
                 ],
             )?
             .build()?;
@@ -950,14 +929,13 @@ mod test {
 
         assert_optimized_plan_eq(expected, &plan);
 
-        // test: trafo before aggregate
+        // test: transformation before aggregate
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .aggregate(
                 iter::empty::<Expr>(),
                 vec![
-                    avg(binary_expr(lit(1u32), Operator::Plus, col("a"))).alias("col1"),
-                    udf_agg(binary_expr(lit(1u32), Operator::Plus, col("a")))
-                        .alias("col2"),
+                    avg(lit(1u32) + col("a")).alias("col1"),
+                    udf_agg(lit(1u32) + col("a")).alias("col2"),
                 ],
             )?
             .build()?;
@@ -971,11 +949,10 @@ mod test {
         // test: common between agg and group
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .aggregate(
-                vec![binary_expr(lit(1u32), Operator::Plus, col("a"))],
+                vec![lit(1u32) + col("a")],
                 vec![
-                    avg(binary_expr(lit(1u32), Operator::Plus, col("a"))).alias("col1"),
-                    udf_agg(binary_expr(lit(1u32), Operator::Plus, col("a")))
-                        .alias("col2"),
+                    avg(lit(1u32) + col("a")).alias("col1"),
+                    udf_agg(lit(1u32) + col("a")).alias("col2"),
                 ],
             )?
             .build()?;
@@ -989,34 +966,14 @@ mod test {
         // test: all mixed
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
-                vec![binary_expr(lit(1u32), Operator::Plus, col("a"))],
+                vec![lit(1u32) + col("a")],
                 vec![
-                    binary_expr(
-                        lit(1u32),
-                        Operator::Plus,
-                        avg(binary_expr(lit(1u32), Operator::Plus, col("a"))),
-                    )
-                    .alias("col1"),
-                    binary_expr(
-                        lit(1u32),
-                        Operator::Minus,
-                        avg(binary_expr(lit(1u32), Operator::Plus, col("a"))),
-                    )
-                    .alias("col2"),
-                    avg(binary_expr(lit(1u32), Operator::Plus, col("a"))),
-                    binary_expr(
-                        lit(1u32),
-                        Operator::Plus,
-                        udf_agg(binary_expr(lit(1u32), Operator::Plus, col("a"))),
-                    )
-                    .alias("col3"),
-                    binary_expr(
-                        lit(1u32),
-                        Operator::Minus,
-                        udf_agg(binary_expr(lit(1u32), Operator::Plus, col("a"))),
-                    )
-                    .alias("col4"),
-                    udf_agg(binary_expr(lit(1u32), Operator::Plus, col("a"))),
+                    (lit(1u32) + avg(lit(1u32) + col("a"))).alias("col1"),
+                    (lit(1u32) - avg(lit(1u32) + col("a"))).alias("col2"),
+                    avg(lit(1u32) + col("a")),
+                    (lit(1u32) + udf_agg(lit(1u32) + col("a"))).alias("col3"),
+                    (lit(1u32) - udf_agg(lit(1u32) + col("a"))).alias("col4"),
+                    udf_agg(lit(1u32) + col("a")),
                 ],
             )?
             .build()?;
@@ -1037,8 +994,8 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                binary_expr(lit(1), Operator::Plus, col("a")).alias("first"),
-                binary_expr(lit(1), Operator::Plus, col("a")).alias("second"),
+                (lit(1) + col("a")).alias("first"),
+                (lit(1) + col("a")).alias("second"),
             ])?
             .build()?;
 
@@ -1056,10 +1013,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![
-                binary_expr(lit(1), Operator::Plus, col("a")),
-                binary_expr(col("a"), Operator::Plus, lit(1)),
-            ])?
+            .project(vec![lit(1) + col("a"), col("a") + lit(1)])?
             .build()?;
 
         let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
@@ -1075,8 +1029,8 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
-            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
+            .project(vec![lit(1) + col("a")])?
+            .project(vec![lit(1) + col("a")])?
             .build()?;
 
         let expected = "Projection: Int32(1) + test.a\
