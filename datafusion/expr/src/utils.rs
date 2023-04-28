@@ -915,8 +915,6 @@ pub fn from_plan(
         }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Ddl(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::DropView(_)
         | LogicalPlan::Statement(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{plan:?} should have no exprs");
