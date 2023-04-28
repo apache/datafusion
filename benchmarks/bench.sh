@@ -37,9 +37,7 @@ CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --profile release-nonlto"}  # TEMP: fo
 
 usage() {
     echo "
-DataFusion Benchmark script
-
-This script orchestrates running benchmarks for DataFusion
+Orchestrates running benchmarks against DataFusion checkouts
 
 Usage:
 $0 data [benchmark]
@@ -49,7 +47,6 @@ $0 compare <branch1> <branch2>
 **********
 Examples:
 **********
-
 # Create the datasets for all benchmarks in $DATA_DIR
 ./bench.sh data
 
@@ -59,7 +56,6 @@ DATAFASION_DIR=/source/arrow-datafusion ./bench.sh run tpch
 **********
 * Commands
 **********
-
 data:         Generates data needed for benchmarking
 run:          Runs the named benchmark
 compare:      Comares results from benchmark runs
@@ -67,22 +63,16 @@ compare:      Comares results from benchmark runs
 **********
 * Benchmarks
 **********
-
 all(default): Data/Run/Compare for all benchmarks
 tpch:         TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
 tpch_mem:     TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
 
-
 **********
-* Environment Variables
+* Supported Configuration (Environment Variables)
 **********
-
-The following environment variables to control this script:
-
-DATA_DIR = directory to store datasets
-CARGO_COMMAND = command that runs the benchmark binary
-
-
+DATA_DIR        directory to store datasets
+CARGO_COMMAND   command that runs the benchmark binary
+DATAFASION_DIR  directory to use (default $DATAFUSION_DIR)
 "
     exit 1
 }
