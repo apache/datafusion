@@ -61,7 +61,6 @@ use datafusion_common::utils::{
 };
 use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::equivalence::EquivalenceMode;
 use datafusion_physical_expr::expressions::{Column, RowNumber};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
@@ -69,7 +68,7 @@ use datafusion_physical_expr::window::{
     PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use datafusion_physical_expr::{
-    EqualColumns, EquivalenceProperties, OrderingEquivalenceProperties,
+    EquivalenceProperties, OrderedColumns, OrderingEquivalenceProperties,
     OrderingEquivalentClass, PhysicalExpr, PhysicalSortRequirement,
 };
 
@@ -267,11 +266,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         // We need to update schema. Hence we do not use input.ordering_equivalence_properties() directly.
         let mut res = OrderingEquivalenceProperties::new(self.schema());
-        let eq_properties = self.equivalence_properties();
+        let eq_properties = self.input.ordering_equivalence_properties();
         let eq_classes = eq_properties
             .classes()
             .iter()
-            .map(|elem| (*elem).clone().into())
+            .map(|elem| (*elem).clone())
             .collect::<Vec<OrderingEquivalentClass>>();
         res.extend(eq_classes);
         let out_ordering = self.output_ordering().unwrap_or(&[]);
@@ -295,16 +294,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
                             self.schema.column_with_name(expr.field().unwrap().name());
                         if let Some((idx, elem)) = tmp {
                             let new_col = Column::new(elem.name(), idx);
-                            let lhs = EqualColumns {
+                            let lhs = OrderedColumns {
                                 col: column.clone(),
-                                mode: EquivalenceMode::Ordering(first.options),
+                                options: first.options,
                             };
-                            let rhs = EqualColumns {
+                            let rhs = OrderedColumns {
                                 col: new_col,
-                                mode: EquivalenceMode::Ordering(SortOptions {
+                                options: SortOptions {
                                     descending: false,
                                     nulls_first: false,
-                                }), // ASC, NULLS LAST
+                                }, // ASC, NULLS LAST
                             };
                             res.add_equal_conditions((&lhs, &rhs));
                         }

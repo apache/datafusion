@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::equivalence::{
-    EqualColumns, EquivalenceMode, EquivalentClass, OrderingEquivalenceProperties,
+    EquivalentClass, OrderedColumns, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
@@ -175,23 +175,17 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
-            let normalized_form: Option<EqualColumns> =
+            let normalized_form: Option<OrderedColumns> =
                 expr.as_any().downcast_ref::<Column>().and_then(|column| {
-                    for class in eq_properties {
-                        let ordered_column = EqualColumns {
-                            col: column.clone(),
-                            mode: sort_options
-                                .map(EquivalenceMode::Ordering)
-                                .unwrap_or(EquivalenceMode::Exact),
-                        };
-                        let ordered_column2 = EqualColumns {
-                            col: column.clone(),
-                            mode: EquivalenceMode::Exact,
-                        };
-                        if class.contains(&ordered_column)
-                            || class.contains(&ordered_column2)
-                        {
-                            return Some(class.head().clone());
+                    if let Some(options) = sort_options {
+                        for class in eq_properties {
+                            let ordered_column = OrderedColumns {
+                                col: column.clone(),
+                                options,
+                            };
+                            if class.contains(&ordered_column) {
+                                return Some(class.head().clone());
+                            }
                         }
                     }
                     None
@@ -205,7 +199,7 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
         .unwrap_or(expr)
 }
 
-pub fn normalize_sort_expr_with_equivalence_properties(
+fn normalize_sort_expr_with_ordering_equivalence_properties(
     sort_expr: PhysicalSortExpr,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortExpr {
@@ -221,9 +215,7 @@ pub fn normalize_sort_expr_with_equivalence_properties(
             for eq_class in eq_properties.iter() {
                 let head = eq_class.head();
                 if head.col.eq(col) {
-                    if let EquivalenceMode::Ordering(new_options) = head.mode {
-                        options = new_options
-                    }
+                    options = head.options;
                     break;
                 }
             }
@@ -237,7 +229,37 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     }
 }
 
-pub fn normalize_sort_requirement_with_equivalence_properties(
+fn normalize_sort_expr_with_equivalence_properties(
+    sort_expr: PhysicalSortExpr,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortExpr {
+    let normalized_expr =
+        normalize_expr_with_equivalence_properties(sort_expr.expr.clone(), eq_properties);
+
+    if sort_expr.expr.ne(&normalized_expr) {
+        PhysicalSortExpr {
+            expr: normalized_expr,
+            options: sort_expr.options,
+        }
+    } else {
+        sort_expr
+    }
+}
+
+pub fn normalize_sort_expr(
+    sort_expr: PhysicalSortExpr,
+    eq_properties: &[EquivalentClass],
+    ordering_eq_properties: &[OrderingEquivalentClass],
+) -> PhysicalSortExpr {
+    let normalized =
+        normalize_sort_expr_with_equivalence_properties(sort_expr, eq_properties);
+    normalize_sort_expr_with_ordering_equivalence_properties(
+        normalized,
+        ordering_eq_properties,
+    )
+}
+
+fn normalize_sort_requirement_with_ordering_equivalence_properties(
     sort_requirement: PhysicalSortRequirement,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortRequirement {
@@ -253,27 +275,68 @@ pub fn normalize_sort_requirement_with_equivalence_properties(
     }
 }
 
+fn normalize_sort_requirement_with_equivalence_properties(
+    sort_requirement: PhysicalSortRequirement,
+    eq_properties: &[EquivalentClass],
+) -> PhysicalSortRequirement {
+    let normalized_expr = normalize_expr_with_equivalence_properties(
+        sort_requirement.expr().clone(),
+        eq_properties,
+    );
+    if sort_requirement.expr().ne(&normalized_expr) {
+        sort_requirement.with_expr(normalized_expr)
+    } else {
+        sort_requirement
+    }
+}
+
+pub fn normalize_sort_requirement(
+    sort_requirement: PhysicalSortRequirement,
+    eq_classes: &[EquivalentClass],
+    ordering_eq_classes: &[OrderingEquivalentClass],
+) -> PhysicalSortRequirement {
+    let normalized = normalize_sort_requirement_with_equivalence_properties(
+        sort_requirement,
+        eq_classes,
+    );
+    normalize_sort_requirement_with_ordering_equivalence_properties(
+        normalized,
+        ordering_eq_classes,
+    )
+}
+
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
-pub fn ordering_satisfy<F: FnOnce() -> OrderingEquivalenceProperties>(
+pub fn ordering_satisfy<
+    F: FnOnce() -> OrderingEquivalenceProperties,
+    F2: FnOnce() -> EquivalenceProperties,
+>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
+    ordering_equal_properties: F,
+    equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
         (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            ordering_satisfy_concrete(provided, required, equal_properties)
-        }
+        (Some(provided), Some(required)) => ordering_satisfy_concrete(
+            provided,
+            required,
+            ordering_equal_properties,
+            equal_properties,
+        ),
     }
 }
 
 /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
-fn ordering_satisfy_concrete<F: FnOnce() -> OrderingEquivalenceProperties>(
+fn ordering_satisfy_concrete<
+    F: FnOnce() -> OrderingEquivalenceProperties,
+    F2: FnOnce() -> EquivalenceProperties,
+>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
-    equal_properties: F,
+    ordering_equal_properties: F,
+    equal_properties: F2,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -283,34 +346,43 @@ fn ordering_satisfy_concrete<F: FnOnce() -> OrderingEquivalenceProperties>(
         .all(|(req, given)| req.eq(given))
     {
         true
-    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+    } else {
+        let tmp = ordering_equal_properties();
+        let ordering_eq_classes = tmp.classes();
+        let tmp = equal_properties();
+        let eq_classes = tmp.classes();
         required
             .iter()
-            .map(|e| {
-                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            })
-            .zip(provided.iter().map(|e| {
-                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            }))
+            .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
+            .zip(
+                provided.iter().map(|e| {
+                    normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes)
+                }),
+            )
             .all(|(req, given)| req.eq(&given))
-    } else {
-        false
     }
 }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
-pub fn ordering_satisfy_requirement<F: FnOnce() -> OrderingEquivalenceProperties>(
+pub fn ordering_satisfy_requirement<
+    F: FnOnce() -> OrderingEquivalenceProperties,
+    F2: FnOnce() -> EquivalenceProperties,
+>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortRequirement]>,
-    equal_properties: F,
+    ordering_equal_properties: F,
+    equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
         (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            ordering_satisfy_requirement_concrete(provided, required, equal_properties)
-        }
+        (Some(provided), Some(required)) => ordering_satisfy_requirement_concrete(
+            provided,
+            required,
+            ordering_equal_properties,
+            equal_properties,
+        ),
     }
 }
 
@@ -318,10 +390,12 @@ pub fn ordering_satisfy_requirement<F: FnOnce() -> OrderingEquivalenceProperties
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement_concrete<
     F: FnOnce() -> OrderingEquivalenceProperties,
+    F2: FnOnce() -> EquivalenceProperties,
 >(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortRequirement],
-    equal_properties: F,
+    ordering_equal_properties: F,
+    equal_properties: F2,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -331,46 +405,58 @@ pub fn ordering_satisfy_requirement_concrete<
         .all(|(req, given)| given.satisfy(req))
     {
         true
-    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+    } else {
+        let tmp = ordering_equal_properties();
+        let ordering_eq_classes = tmp.classes();
+        let tmp = equal_properties();
+        let eq_classes = tmp.classes();
         required
             .iter()
             .map(|e| {
-                normalize_sort_requirement_with_equivalence_properties(
-                    e.clone(),
-                    eq_classes,
-                )
+                normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes)
             })
-            .zip(provided.iter().map(|e| {
-                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
-            }))
+            .zip(
+                provided.iter().map(|e| {
+                    normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes)
+                }),
+            )
             .all(|(req, given)| given.satisfy(&req))
-    } else {
-        false
     }
 }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
-pub fn requirements_compatible<F: FnOnce() -> OrderingEquivalenceProperties>(
+pub fn requirements_compatible<
+    F: FnOnce() -> OrderingEquivalenceProperties,
+    F2: FnOnce() -> EquivalenceProperties,
+>(
     provided: Option<&[PhysicalSortRequirement]>,
     required: Option<&[PhysicalSortRequirement]>,
-    equal_properties: F,
+    ordering_equal_properties: F,
+    equal_properties: F2,
 ) -> bool {
     match (provided, required) {
         (_, None) => true,
         (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            requirements_compatible_concrete(provided, required, equal_properties)
-        }
+        (Some(provided), Some(required)) => requirements_compatible_concrete(
+            provided,
+            required,
+            ordering_equal_properties,
+            equal_properties,
+        ),
     }
 }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
-fn requirements_compatible_concrete<F: FnOnce() -> OrderingEquivalenceProperties>(
+fn requirements_compatible_concrete<
+    F: FnOnce() -> OrderingEquivalenceProperties,
+    F2: FnOnce() -> EquivalenceProperties,
+>(
     provided: &[PhysicalSortRequirement],
     required: &[PhysicalSortRequirement],
-    equal_properties: F,
+    ordering_equal_properties: F,
+    equal_properties: F2,
 ) -> bool {
     if required.len() > provided.len() {
         false
@@ -380,24 +466,34 @@ fn requirements_compatible_concrete<F: FnOnce() -> OrderingEquivalenceProperties
         .all(|(req, given)| given.compatible(req))
     {
         true
-    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+    } else {
+        let tmp = ordering_equal_properties();
+        let ordering_eq_classes = tmp.classes();
+        let tmp = equal_properties();
+        let eq_classes = tmp.classes();
         required
             .iter()
             .map(|e| {
-                normalize_sort_requirement_with_equivalence_properties(
+                let normalized = normalize_sort_requirement_with_equivalence_properties(
                     e.clone(),
                     eq_classes,
+                );
+                normalize_sort_requirement_with_ordering_equivalence_properties(
+                    normalized,
+                    ordering_eq_classes,
                 )
             })
             .zip(provided.iter().map(|e| {
-                normalize_sort_requirement_with_equivalence_properties(
+                let normalized = normalize_sort_requirement_with_equivalence_properties(
                     e.clone(),
                     eq_classes,
+                );
+                normalize_sort_requirement_with_ordering_equivalence_properties(
+                    normalized,
+                    ordering_eq_classes,
                 )
             }))
             .all(|(req, given)| given.compatible(&req))
-    } else {
-        false
     }
 }
 
@@ -970,12 +1066,18 @@ mod tests {
         ];
         let finer = Some(&finer[..]);
         let empty_schema = &Arc::new(Schema::empty());
-        assert!(ordering_satisfy(finer, crude, || {
-            OrderingEquivalenceProperties::new(empty_schema.clone())
-        }));
-        assert!(!ordering_satisfy(crude, finer, || {
-            OrderingEquivalenceProperties::new(empty_schema.clone())
-        }));
+        assert!(ordering_satisfy(
+            finer,
+            crude,
+            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
+            || { EquivalenceProperties::new(empty_schema.clone()) }
+        ));
+        assert!(!ordering_satisfy(
+            crude,
+            finer,
+            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
+            || { EquivalenceProperties::new(empty_schema.clone()) }
+        ));
         Ok(())
     }
 

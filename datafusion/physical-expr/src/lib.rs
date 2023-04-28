@@ -50,8 +50,8 @@ pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
-    EqualColumns, EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
-    OrderingEquivalentClass,
+    EquivalenceProperties, EquivalentClass, OrderedColumns,
+    OrderingEquivalenceProperties, OrderingEquivalentClass,
 };
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;
@@ -60,6 +60,5 @@ pub use sort_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,
     normalize_expr_with_equivalence_properties, normalize_out_expr_with_columns_map,
-    normalize_sort_expr_with_equivalence_properties, sort_expr_list_eq_strict_order,
-    split_conjunction,
+    sort_expr_list_eq_strict_order, split_conjunction,
 };

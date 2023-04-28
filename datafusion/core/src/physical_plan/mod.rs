@@ -189,7 +189,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Get the EquivalenceProperties within the plan
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        self.equivalence_properties().into()
+        OrderingEquivalenceProperties::new(self.schema())
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
