@@ -26,7 +26,6 @@ use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use core::fmt;
-use futures::FutureExt;
 use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
@@ -34,11 +33,11 @@ use std::task::{Context, Poll};
 
 use crate::datasource::memory::PartitionData;
 use crate::execution::context::TaskContext;
+use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::Distribution;
 use datafusion_common::DataFusionError;
-use futures::{ready, Stream};
-use std::mem;
-use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
+use futures::Stream;
+use tokio::sync::RwLock;
 
 /// Execution plan for reading in-memory batches of data
 pub struct MemoryExec {
@@ -327,24 +326,20 @@ impl ExecutionPlan for MemoryWriteExec {
     ) -> Result<SendableRecordBatchStream> {
         let batch_count = self.batches.len();
         let data = self.input.execute(partition, context)?;
-        if batch_count >= self.input.output_partitioning().partition_count() {
-            // If the number of input partitions matches the number of MemTable partitions,
-            // use a lightweight implementation that doesn't utilize as many locks.
-            let table_partition = self.batches[partition].clone();
-            Ok(Box::pin(MemorySinkOneToOneStream::try_new(
-                table_partition,
-                data,
-                self.schema.clone(),
-            )?))
-        } else {
-            // Otherwise, use the locked implementation.
-            let table_partition = self.batches[partition % batch_count].clone();
-            Ok(Box::pin(MemorySinkStream::try_new(
-                table_partition,
-                data,
-                self.schema.clone(),
-            )?))
-        }
+        let schema = self.schema.clone();
+        let state = (data, self.batches[partition % batch_count].clone());
+
+        let stream = futures::stream::unfold(state, |mut state| async move {
+            loop {
+                let batch = match state.0.next().await {
+                    Some(Ok(batch)) => batch,
+                    Some(Err(e)) => return Some((Err(e), state)),
+                    None => return None,
+                };
+                state.1.write().await.push(batch)
+            }
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
     fn fmt_as(
@@ -382,205 +377,6 @@ impl MemoryWriteExec {
             batches,
             schema,
         })
-    }
-}
-
-/// This object encodes the different states of the [`MemorySinkStream`] when
-/// processing record batches.
-enum MemorySinkStreamState {
-    /// The stream is pulling data from the input.
-    Pull,
-    /// The stream is writing data to the table partition.
-    Write { maybe_batch: Option<RecordBatch> },
-}
-
-/// A stream that saves record batches in memory-backed storage.
-/// Can work even when multiple input partitions map to the same table
-/// partition, achieves buffer exclusivity by locking before writing.
-struct MemorySinkStream {
-    /// Stream of record batches to be inserted into the memory table.
-    data: SendableRecordBatchStream,
-    /// Memory table partition that stores the record batches.
-    table_partition: PartitionData,
-    /// Schema representing the structure of the data.
-    schema: SchemaRef,
-    /// State of the iterator when processing multiple polls.
-    state: MemorySinkStreamState,
-}
-
-impl MemorySinkStream {
-    /// Create a new `MemorySinkStream` with the provided parameters.
-    pub fn try_new(
-        table_partition: PartitionData,
-        data: SendableRecordBatchStream,
-        schema: SchemaRef,
-    ) -> Result<Self> {
-        Ok(Self {
-            table_partition,
-            data,
-            schema,
-            state: MemorySinkStreamState::Pull,
-        })
-    }
-
-    /// Implementation of the `poll_next` method. Continuously polls the record
-    /// batch stream, switching between the Pull and Write states. In case of
-    /// an error, returns the error immediately.
-    fn poll_next_impl(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        loop {
-            match &mut self.state {
-                MemorySinkStreamState::Pull => {
-                    // Pull data from the input stream.
-                    if let Some(result) = ready!(self.data.as_mut().poll_next(cx)) {
-                        match result {
-                            Ok(batch) => {
-                                // Switch to the Write state with the received batch.
-                                self.state = MemorySinkStreamState::Write {
-                                    maybe_batch: Some(batch),
-                                }
-                            }
-                            Err(e) => return Poll::Ready(Some(Err(e))), // Return the error immediately.
-                        }
-                    } else {
-                        return Poll::Ready(None); // If the input stream is exhausted, return None.
-                    }
-                }
-                MemorySinkStreamState::Write { maybe_batch } => {
-                    // Acquire a write lock on the table partition.
-                    let mut partition =
-                        ready!(self.table_partition.write().boxed().poll_unpin(cx));
-                    if let Some(b) = mem::take(maybe_batch) {
-                        partition.push(b); // Insert the batch into the table partition.
-                    }
-                    self.state = MemorySinkStreamState::Pull; // Switch back to the Pull state.
-                }
-            }
-        }
-    }
-}
-
-impl Stream for MemorySinkStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
-    }
-}
-
-impl RecordBatchStream for MemorySinkStream {
-    /// Get the schema
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
-/// This object encodes the different states of the [`MemorySinkOneToOneStream`]
-/// when processing record batches.
-enum MemorySinkOneToOneStreamState {
-    /// The `Acquire` variant represents the state where the [`MemorySinkOneToOneStream`]
-    /// is waiting to acquire the write lock on the shared partition to store the record batches.
-    Acquire,
-
-    /// The `Pull` variant represents the state where the [`MemorySinkOneToOneStream`] has
-    /// acquired the write lock on the shared partition and can pull record batches from
-    /// the input stream to store in the partition.
-    Pull {
-        /// The `partition` field contains an [`OwnedRwLockWriteGuard`] which wraps the
-        /// shared partition, providing exclusive write access to the underlying `Vec<RecordBatch>`.
-        partition: OwnedRwLockWriteGuard<Vec<RecordBatch>>,
-    },
-}
-
-/// A stream that saves record batches in memory-backed storage.
-/// Assumes that every table partition has at most one corresponding input
-/// partition, so it locks the table partition only once.
-struct MemorySinkOneToOneStream {
-    /// Stream of record batches to be inserted into the memory table.
-    data: SendableRecordBatchStream,
-    /// Memory table partition that stores the record batches.
-    table_partition: PartitionData,
-    /// Schema representing the structure of the data.
-    schema: SchemaRef,
-    /// State of the iterator when processing multiple polls.
-    state: MemorySinkOneToOneStreamState,
-}
-
-impl MemorySinkOneToOneStream {
-    /// Create a new `MemorySinkOneToOneStream` with the provided parameters.
-    pub fn try_new(
-        table_partition: Arc<RwLock<Vec<RecordBatch>>>,
-        data: SendableRecordBatchStream,
-        schema: SchemaRef,
-    ) -> Result<Self> {
-        Ok(Self {
-            table_partition,
-            data,
-            schema,
-            state: MemorySinkOneToOneStreamState::Acquire,
-        })
-    }
-
-    /// Implementation of the `poll_next` method. Continuously polls the record
-    /// batch stream and pushes batches to their corresponding table partition,
-    /// which are lock-acquired only once. In case of an error, returns the
-    /// error immediately.
-    fn poll_next_impl(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        loop {
-            match &mut self.state {
-                MemorySinkOneToOneStreamState::Acquire => {
-                    // Acquire a write lock on the table partition.
-                    self.state = MemorySinkOneToOneStreamState::Pull {
-                        partition: ready!(self
-                            .table_partition
-                            .clone()
-                            .write_owned()
-                            .boxed()
-                            .poll_unpin(cx)),
-                    };
-                }
-                MemorySinkOneToOneStreamState::Pull { partition } => {
-                    // Iterate over the batches in the input data stream.
-                    while let Some(result) = ready!(self.data.poll_next_unpin(cx)) {
-                        match result {
-                            Ok(batch) => {
-                                partition.push(batch);
-                            } // Insert the batch into the table partition.
-                            Err(e) => return Poll::Ready(Some(Err(e))), // Return the error immediately.
-                        }
-                    }
-                    // If the input stream is exhausted, return None to indicate the end of the stream.
-                    return Poll::Ready(None);
-                }
-            }
-        }
-    }
-}
-
-impl Stream for MemorySinkOneToOneStream {
-    type Item = Result<RecordBatch>;
-
-    /// Poll the stream for the next item.
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
-    }
-}
-
-impl RecordBatchStream for MemorySinkOneToOneStream {
-    /// Get the schema of the record batches in the stream.
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 }
 
