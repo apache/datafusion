@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Reusable JIT version of row writer backed by Vec<u8> to stitch attributes together
+//! Reusable JIT version of row writer backed by `Vec<u8>` to stitch attributes together
 
 use crate::jit::fn_name;
-use crate::layout::RowType;
 use crate::reg_fn;
 use crate::schema_null_free;
 use crate::writer::RowWriter;
@@ -44,9 +43,8 @@ pub fn write_batch_unchecked_jit(
     row_idx: usize,
     schema: Arc<Schema>,
     assembler: &Assembler,
-    row_type: RowType,
 ) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema, row_type);
+    let mut writer = RowWriter::new(&schema);
     let mut current_offset = offset;
     let mut offsets = vec![];
     register_write_functions(assembler)?;
@@ -61,7 +59,6 @@ pub fn write_batch_unchecked_jit(
     for cur_row in row_idx..batch.num_rows() {
         offsets.push(current_offset);
         code_fn(&mut writer, cur_row, batch);
-        writer.end_padding();
         let row_width = writer.row_width;
         output[current_offset..current_offset + row_width]
             .copy_from_slice(writer.get_row());
@@ -76,10 +73,9 @@ pub fn write_batch_unchecked_jit(
 pub fn bench_write_batch_jit(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
-    row_type: RowType,
 ) -> Result<Vec<usize>> {
     let assembler = Assembler::default();
-    let mut writer = RowWriter::new(&schema, row_type);
+    let mut writer = RowWriter::new(&schema);
     let mut lengths = vec![];
     register_write_functions(&assembler)?;
     let gen_func = gen_write_row(&schema, &assembler)?;
@@ -92,7 +88,6 @@ pub fn bench_write_batch_jit(
     for batch in batches.iter().flatten() {
         for cur_row in 0..batch.num_rows() {
             code_fn(&mut writer, cur_row, batch);
-            writer.end_padding();
             lengths.push(writer.row_width);
             writer.reset()
         }
@@ -123,9 +118,7 @@ fn register_write_functions(asm: &Assembler) -> Result<()> {
     reg_fn!(asm, write_field_f32, reader_param.clone(), None);
     reg_fn!(asm, write_field_f64, reader_param.clone(), None);
     reg_fn!(asm, write_field_date32, reader_param.clone(), None);
-    reg_fn!(asm, write_field_date64, reader_param.clone(), None);
-    reg_fn!(asm, write_field_utf8, reader_param.clone(), None);
-    reg_fn!(asm, write_field_binary, reader_param, None);
+    reg_fn!(asm, write_field_date64, reader_param, None);
     Ok(())
 }
 
@@ -202,8 +195,6 @@ fn write_typed_field_stmt(
         Float64 => b.call_stmt("write_field_f64", params)?,
         Date32 => b.call_stmt("write_field_date32", params)?,
         Date64 => b.call_stmt("write_field_date64", params)?,
-        Utf8 => b.call_stmt("write_field_utf8", params)?,
-        Binary => b.call_stmt("write_field_binary", params)?,
         _ => unimplemented!(),
     }
     Ok(())

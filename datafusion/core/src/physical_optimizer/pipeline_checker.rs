@@ -158,6 +158,9 @@ pub fn check_finiteness_requirements(
 /// data pruning. For this to be possible, it needs to have a filter where
 /// all involved [`PhysicalExpr`]s, [`Operator`]s and data types support
 /// interval calculations.
+///
+/// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
+/// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().map_or(false, |filter| {
         check_support(filter.expression())
@@ -314,7 +317,7 @@ mod sql_tests {
                   FROM test
                   LIMIT 5".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Window Error".to_string()
+            error_operator: "Sort Error".to_string()
         };
 
         case.run().await?;
@@ -337,7 +340,7 @@ mod sql_tests {
                         SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING) as sum1
                   FROM test".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Window Error".to_string()
+            error_operator: "Sort Error".to_string()
         };
         case.run().await?;
         Ok(())

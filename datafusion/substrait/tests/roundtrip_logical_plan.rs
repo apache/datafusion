@@ -251,6 +251,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn simple_intersect_table_reuse() -> Result<()> {
+        assert_expected_plan(
+            "SELECT COUNT(*) FROM (SELECT data.a FROM data INTERSECT SELECT data.a FROM data);",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n  LeftSemi Join: data.a = data.a\
+            \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
+            \n      TableScan: data projection=[a]\
+            \n    TableScan: data projection=[a]",
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn simple_window_function() -> Result<()> {
         roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, SUM(b) OVER (PARTITION BY a) FROM data;").await
     }
@@ -492,14 +505,10 @@ mod tests {
             Field::new("fixed_size_binary_col", DataType::FixedSizeBinary(42), true),
             Field::new("utf8_col", DataType::Utf8, true),
             Field::new("large_utf8_col", DataType::LargeUtf8, true),
-            Field::new(
-                "list_col",
-                DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
-                true,
-            ),
-            Field::new(
+            Field::new_list("list_col", Field::new("item", DataType::Int64, true), true),
+            Field::new_list(
                 "large_list_col",
-                DataType::LargeList(Box::new(Field::new("item", DataType::Int64, true))),
+                Field::new("item", DataType::Int64, true),
                 true,
             ),
             Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),

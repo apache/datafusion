@@ -48,7 +48,9 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use crate::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -65,7 +67,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{logical_plan, StringifiedPlan};
+use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -487,6 +489,23 @@ impl DefaultPhysicalPlanner {
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                     source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
                 }
+                LogicalPlan::Dml(DmlStatement {
+                    table_name,
+                    op: WriteOp::Insert,
+                    input,
+                    ..
+                }) => {
+                    let name = table_name.table();
+                    let schema = session_state.schema_for_ref(table_name)?;
+                    if let Some(provider) = schema.table(name).await {
+                        let input_exec = self.create_initial_plan(input, session_state).await?;
+                        provider.insert_into(session_state, input_exec).await
+                    } else {
+                        return Err(DataFusionError::Execution(format!(
+                            "Table '{table_name}' does not exist"
+                        )));
+                    }
+                }
                 LogicalPlan::Values(Values {
                     values,
                     schema,
@@ -600,6 +619,7 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
+                            PartitionSearchMode::Sorted,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -627,10 +647,10 @@ impl DefaultPhysicalPlanner {
                         &physical_input_schema,
                         session_state)?;
 
-                    let aggregates = aggr_expr
+                    let agg_filter = aggr_expr
                         .iter()
                         .map(|e| {
-                            create_aggregate_expr(
+                            create_aggregate_expr_and_maybe_filter(
                                 e,
                                 logical_input_schema,
                                 &physical_input_schema,
@@ -638,11 +658,13 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    let (aggregates, filters): (Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
+                        filters.clone(),
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -678,6 +700,7 @@ impl DefaultPhysicalPlanner {
                         next_partition_mode,
                         final_grouping_set,
                         aggregates,
+                        filters,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -1081,13 +1104,14 @@ impl DefaultPhysicalPlanner {
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                     Ok(Arc::new(UnnestExec::new(input, column_exec, schema)))
                 }
-                LogicalPlan::CreateExternalTable(_) => {
-                    // There is no default plan for "CREATE EXTERNAL
-                    // TABLE" -- it must be handled at a higher level (so
-                    // that the appropriate table can be registered with
+                LogicalPlan::Ddl(ddl) => {
+                    // There is no default plan for DDl statements --
+                    // it must be handled at a higher level (so that
+                    // the appropriate table can be registered with
                     // the context)
+                    let name = ddl.name();
                     Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateExternalTable".to_string(),
+                        format!("Unsupported logical plan: {name}")
                     ))
                 }
                 LogicalPlan::Prepare(_) => {
@@ -1096,60 +1120,6 @@ impl DefaultPhysicalPlanner {
                     // statement can be prepared)
                     Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: Prepare".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateCatalogSchema(_) => {
-                    // There is no default plan for "CREATE SCHEMA".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateCatalogSchema".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateCatalog(_) => {
-                    // There is no default plan for "CREATE DATABASE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateCatalog".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateMemoryTable(_) => {
-                    // There is no default plan for "CREATE MEMORY TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateMemoryTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropTable(_) => {
-                    // There is no default plan for "DROP TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropView(_) => {
-                    // There is no default plan for "DROP VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropView".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateView(_) => {
-                    // There is no default plan for "CREATE VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
                 LogicalPlan::Dml(_) => {
@@ -1289,8 +1259,8 @@ impl DefaultPhysicalPlanner {
     }
 }
 
-/// Expand and align  a GROUPING SET expression.
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// Expand and align a GROUPING SET expression.
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 ///
 /// This will take a list of grouping sets and ensure that each group is
 /// properly aligned for the physical execution plan. We do this by
@@ -1298,7 +1268,7 @@ impl DefaultPhysicalPlanner {
 /// group to the same set of expression types and ordering.
 /// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
 /// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn merge_grouping_set_physical_expr(
     grouping_sets: &[Vec<Expr>],
     input_dfschema: &DFSchema,
@@ -1349,7 +1319,7 @@ fn merge_grouping_set_physical_expr(
 }
 
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn create_cube_physical_expr(
     exprs: &[Expr],
     input_dfschema: &DFSchema,
@@ -1396,7 +1366,7 @@ fn create_cube_physical_expr(
 }
 
 /// Expand and align a ROLLUP expression. This is a special case of GROUPING SETS
-/// (see https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS)
+/// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn create_rollup_physical_expr(
     exprs: &[Expr],
     input_dfschema: &DFSchema,
@@ -1609,20 +1579,23 @@ pub fn create_window_expr(
     )
 }
 
+type AggregateExprWithOptionalFilter =
+    (Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>);
+
 /// Create an aggregate expression with a name from a logical expression
-pub fn create_aggregate_expr_with_name(
+pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: impl Into<String>,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<Arc<dyn AggregateExpr>> {
+) -> Result<AggregateExprWithOptionalFilter> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
-            ..
+            filter,
         }) => {
             let args = args
                 .iter()
@@ -1635,15 +1608,25 @@ pub fn create_aggregate_expr_with_name(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            aggregates::create_aggregate_expr(
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
+            let agg_expr = aggregates::create_aggregate_expr(
                 fun,
                 *distinct,
                 &args,
                 physical_input_schema,
                 name,
-            )
+            );
+            Ok((agg_expr?, filter))
         }
-        Expr::AggregateUDF { fun, args, .. } => {
+        Expr::AggregateUDF { fun, args, filter } => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1656,7 +1639,19 @@ pub fn create_aggregate_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            udaf::create_aggregate_expr(fun, &args, physical_input_schema, name)
+            let filter = match filter {
+                Some(e) => Some(create_physical_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
+                None => None,
+            };
+
+            let agg_expr =
+                udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
+            Ok((agg_expr?, filter))
         }
         other => Err(DataFusionError::Internal(format!(
             "Invalid aggregate expression '{other:?}'"
@@ -1665,19 +1660,19 @@ pub fn create_aggregate_expr_with_name(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-pub fn create_aggregate_expr(
+pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<Arc<dyn AggregateExpr>> {
+) -> Result<AggregateExprWithOptionalFilter> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
         _ => (physical_name(e)?, e),
     };
 
-    create_aggregate_expr_with_name(
+    create_aggregate_expr_with_name_and_maybe_filter(
         e,
         name,
         logical_input_schema,
@@ -1788,7 +1783,10 @@ impl DefaultPhysicalPlanner {
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent()
         );
-        trace!("Detailed input physical plan:\n{:?}", plan);
+        trace!(
+            "Detailed input physical plan:\n{}",
+            displayable(plan.as_ref()).indent()
+        );
 
         let mut new_plan = plan;
         for optimizer in optimizers {
@@ -2176,7 +2174,7 @@ mod tests {
     fn struct_literal() -> Expr {
         let struct_literal = ScalarValue::Struct(
             None,
-            Box::new(vec![Field::new("foo", DataType::Boolean, false)]),
+            vec![Field::new("foo", DataType::Boolean, false)].into(),
         );
         lit(struct_literal)
     }

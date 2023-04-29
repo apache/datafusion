@@ -32,6 +32,11 @@ use crate::{
 };
 
 /// Task Execution Context
+///
+/// A [`TaskContext`] has represents the state available during a single query's
+/// execution.
+///
+/// # Task Context
 pub struct TaskContext {
     /// Session Id
     session_id: String,
@@ -98,7 +103,7 @@ impl TaskContext {
         ))
     }
 
-    /// Return the SessionConfig associated with the Task
+    /// Return the SessionConfig associated with this [TaskContext]
     pub fn session_config(&self) -> &SessionConfig {
         &self.session_config
     }

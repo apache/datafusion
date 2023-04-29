@@ -36,9 +36,9 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     // Since ARRAY_AGG(DISTINCT) ordering is nondeterministic, check the schema and contents.
     assert_eq!(
         *actual[0].schema(),
-        Schema::new(vec![Field::new(
+        Schema::new(vec![Field::new_list(
             "ARRAYAGG(DISTINCT aggregate_test_100.c2)",
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, true))),
+            Field::new("item", DataType::UInt32, true),
             false
         ),])
     );
@@ -538,6 +538,57 @@ async fn count_multi_expr() -> Result<()> {
         "+------------------------+",
         "| 2                      |",
         "+------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn count_multi_expr_group_by() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+        Field::new("c3", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                None,
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(10),
+                Some(10),
+                Some(10),
+                Some(10),
+                Some(10),
+            ])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", data)?;
+    let sql = "SELECT c3, count(c1, c2) FROM test group by c3";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----+------------------------+",
+        "| c3 | COUNT(test.c1,test.c2) |",
+        "+----+------------------------+",
+        "| 10 | 2                      |",
+        "+----+------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &actual);
     Ok(())

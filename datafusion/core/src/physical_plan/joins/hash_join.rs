@@ -44,7 +44,7 @@ use arrow::{
 };
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use hashbrown::raw::RawTable;
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec;
 use std::fmt;
 use std::sync::Arc;
 use std::task::Poll;
@@ -87,26 +87,7 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-
-// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
-//
-// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
-// to put the indices in a certain bucket.
-// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
-// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
-// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
-// As the key is a hash value, we need to check possible hash collisions in the probe stage
-// During this stage it might be the case that a row is contained the same hashmap value,
-// but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collision check and move away from using a hashbrown HashMap
-// https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
-
-impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
-    }
-}
+use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 
 type JoinLeftData = (JoinHashMap, RecordBatch);
 
@@ -266,7 +247,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         let (left, right) = (children[0], children[1]);

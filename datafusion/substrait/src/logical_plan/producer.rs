@@ -118,38 +118,34 @@ pub fn to_substrait_rel(
                     .collect()
             });
 
-            if let Some(struct_items) = projection {
-                Ok(Box::new(Rel {
-                    rel_type: Some(RelType::Read(Box::new(ReadRel {
-                        common: None,
-                        base_schema: Some(NamedStruct {
-                            names: scan
-                                .source
-                                .schema()
-                                .fields()
-                                .iter()
-                                .map(|f| f.name().to_owned())
-                                .collect(),
-                            r#struct: None,
-                        }),
-                        filter: None,
-                        best_effort_filter: None,
-                        projection: Some(MaskExpression {
-                            select: Some(StructSelect { struct_items }),
-                            maintain_singular_struct: false,
-                        }),
+            let projection = projection.map(|struct_items| MaskExpression {
+                select: Some(StructSelect { struct_items }),
+                maintain_singular_struct: false,
+            });
+
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Read(Box::new(ReadRel {
+                    common: None,
+                    base_schema: Some(NamedStruct {
+                        names: scan
+                            .source
+                            .schema()
+                            .fields()
+                            .iter()
+                            .map(|f| f.name().to_owned())
+                            .collect(),
+                        r#struct: None,
+                    }),
+                    filter: None,
+                    best_effort_filter: None,
+                    projection,
+                    advanced_extension: None,
+                    read_type: Some(ReadType::NamedTable(NamedTable {
+                        names: scan.table_name.to_vec(),
                         advanced_extension: None,
-                        read_type: Some(ReadType::NamedTable(NamedTable {
-                            names: scan.table_name.to_vec(),
-                            advanced_extension: None,
-                        })),
-                    }))),
-                }))
-            } else {
-                Err(DataFusionError::NotImplemented(
-                    "TableScan without projection is not supported".to_string(),
-                ))
-            }
+                    })),
+                }))),
+            }))
         }
         LogicalPlan::Projection(p) => {
             let expressions = p
@@ -288,7 +284,16 @@ pub fn to_substrait_rel(
             // join schema from left and right to maintain all nececesary columns from inputs
             // note that we cannot simple use join.schema here since we discard some input columns
             // when performing semi and anti joins
-            let join_schema = join.left.schema().join(join.right.schema());
+            let join_schema = match join.left.schema().join(join.right.schema()) {
+                Ok(schema) => Ok(schema),
+                Err(DataFusionError::SchemaError(
+                    datafusion::common::SchemaError::DuplicateQualifiedField {
+                        qualifier: _,
+                        name: _,
+                    },
+                )) => Ok(join.schema.as_ref().clone()),
+                Err(e) => Err(e),
+            };
             if let Some(e) = join_expression {
                 Ok(Box::new(Rel {
                     rel_type: Some(RelType::Join(Box::new(JoinRel {
@@ -1333,11 +1338,11 @@ mod test {
     }
 
     fn round_trip_literal(scalar: ScalarValue) -> Result<()> {
-        println!("Checking round trip of {:?}", scalar);
+        println!("Checking round trip of {scalar:?}");
 
         let substrait = to_substrait_literal(&scalar)?;
         let Expression { rex_type: Some(RexType::Literal(substrait_literal)) } = substrait else {
-            panic!("Expected Literal expression, got {:?}", substrait);
+            panic!("Expected Literal expression, got {substrait:?}");
         };
 
         let roundtrip_scalar = from_substrait_literal(&substrait_literal)?;

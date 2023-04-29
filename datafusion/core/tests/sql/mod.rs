@@ -91,7 +91,6 @@ pub mod group_by;
 pub mod joins;
 pub mod json;
 pub mod limit;
-pub mod math;
 pub mod order;
 pub mod parquet;
 pub mod predicates;
@@ -159,22 +158,6 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     } else {
         unimplemented!()
     }
-}
-
-fn create_case_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
-    let data = RecordBatch::try_new(
-        schema,
-        vec![Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("b"),
-            Some("c"),
-            None,
-        ]))],
-    )?;
-    ctx.register_batch("t1", data)?;
-    Ok(ctx)
 }
 
 fn create_join_context(
@@ -768,7 +751,11 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
 }
 
 fn create_union_context() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_target_partitions(4)
+            .with_batch_size(4096),
+    );
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, true),
         Field::new("name", DataType::UInt8, true),
@@ -1283,7 +1270,7 @@ where
     make_timestamp_tz_table::<A>(None)
 }
 
-fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
+fn make_timestamp_tz_table<A>(tz: Option<Arc<str>>) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,
 {
@@ -1319,8 +1306,8 @@ where
 }
 
 fn make_timestamp_tz_sub_table<A>(
-    tz1: Option<String>,
-    tz2: Option<String>,
+    tz1: Option<Arc<str>>,
+    tz2: Option<Arc<str>>,
 ) -> Result<Arc<MemTable>>
 where
     A: ArrowTimestampType<Native = i64>,

@@ -18,6 +18,7 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
+use arrow::datatypes::Fields;
 use std::sync::Arc;
 
 use datafusion::{
@@ -151,7 +152,7 @@ impl FirstSelector {
     }
 
     /// Return the schema fields
-    fn fields() -> Vec<Field> {
+    fn fields() -> Fields {
         vec![
             Field::new("value", DataType::Float64, true),
             Field::new(
@@ -160,14 +161,7 @@ impl FirstSelector {
                 true,
             ),
         ]
-    }
-
-    fn update(&mut self, val: f64, time: i64) {
-        // remember the point with the earliest timestamp
-        if time < self.time {
-            self.value = val;
-            self.time = time;
-        }
+        .into()
     }
 
     // output data type
@@ -201,7 +195,7 @@ impl FirstSelector {
 
     /// return this selector as a single scalar (struct) value
     fn to_scalar(&self) -> ScalarValue {
-        ScalarValue::Struct(Some(self.to_state()), Box::new(Self::fields()))
+        ScalarValue::Struct(Some(self.to_state()), Self::fields())
     }
 }
 
@@ -226,7 +220,10 @@ impl Accumulator for FirstSelector {
         // Update the actual values
         for (value, time) in v.iter().zip(t.iter()) {
             if let (Some(time), Some(value)) = (time, value) {
-                self.update(value, time)
+                if time < self.time {
+                    self.value = value;
+                    self.time = time;
+                }
             }
         }
 

@@ -24,7 +24,7 @@ use crate::{
     array_expressions, conditional_expressions, struct_expressions, Accumulator,
     BuiltinScalarFunction, Signature, TypeSignature,
 };
-use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
@@ -112,7 +112,7 @@ pub fn return_type(
     // Some built-in functions' return type depends on the incoming type.
     match fun {
         BuiltinScalarFunction::MakeArray => Ok(DataType::FixedSizeList(
-            Box::new(Field::new("item", input_expr_types[0].clone(), true)),
+            Arc::new(Field::new("item", input_expr_types[0].clone(), true)),
             input_expr_types.len() as i32,
         )),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
@@ -132,26 +132,24 @@ pub fn return_type(
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Float64),
-        BuiltinScalarFunction::DateTrunc => match input_expr_types[1] {
-            DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
-                Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin => {
+            match input_expr_types[1] {
+                DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
+                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+                }
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    Ok(DataType::Timestamp(TimeUnit::Second, None))
+                }
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {fun} function can only accept timestamp as the second arg."
+                ))),
             }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-            }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                Ok(DataType::Timestamp(TimeUnit::Second, None))
-            }
-            _ => Err(DataFusionError::Internal(
-                "The date_trunc function can only accept timestamp as the second arg."
-                    .to_string(),
-            )),
-        },
-        BuiltinScalarFunction::DateBin => {
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
         BuiltinScalarFunction::InitCap => {
             utf8_to_str_type(&input_expr_types[0], "initcap")
@@ -169,6 +167,7 @@ pub fn return_type(
         BuiltinScalarFunction::OctetLength => {
             utf8_to_int_type(&input_expr_types[0], "octet_length")
         }
+        BuiltinScalarFunction::Pi => Ok(DataType::Float64),
         BuiltinScalarFunction::Random => Ok(DataType::Float64),
         BuiltinScalarFunction::Uuid => Ok(DataType::Utf8),
         BuiltinScalarFunction::RegexpReplace => {
@@ -233,7 +232,7 @@ pub fn return_type(
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(
             TimeUnit::Nanosecond,
-            Some("+00:00".to_owned()),
+            Some("+00:00".into()),
         )),
         BuiltinScalarFunction::CurrentDate => Ok(DataType::Date32),
         BuiltinScalarFunction::CurrentTime => Ok(DataType::Time64(TimeUnit::Nanosecond)),
@@ -244,10 +243,10 @@ pub fn return_type(
         BuiltinScalarFunction::Upper => utf8_to_str_type(&input_expr_types[0], "upper"),
         BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
             DataType::LargeUtf8 => {
-                DataType::List(Box::new(Field::new("item", DataType::LargeUtf8, true)))
+                DataType::List(Arc::new(Field::new("item", DataType::LargeUtf8, true)))
             }
             DataType::Utf8 => {
-                DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
             }
             DataType::Null => DataType::Null,
             _ => {
@@ -263,7 +262,7 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
-        BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
+        BuiltinScalarFunction::Struct => Ok(DataType::Struct(Fields::empty())),
 
         BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
@@ -287,11 +286,13 @@ pub fn return_type(
         | BuiltinScalarFunction::Ceil
         | BuiltinScalarFunction::Cos
         | BuiltinScalarFunction::Cosh
+        | BuiltinScalarFunction::Degrees
         | BuiltinScalarFunction::Exp
         | BuiltinScalarFunction::Floor
         | BuiltinScalarFunction::Ln
         | BuiltinScalarFunction::Log10
         | BuiltinScalarFunction::Log2
+        | BuiltinScalarFunction::Radians
         | BuiltinScalarFunction::Round
         | BuiltinScalarFunction::Signum
         | BuiltinScalarFunction::Sin
@@ -470,29 +471,43 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
-        BuiltinScalarFunction::DateBin => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![
-                    DataType::Interval(IntervalUnit::DayTime),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Interval(IntervalUnit::MonthDayNano),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Interval(IntervalUnit::DayTime),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Interval(IntervalUnit::MonthDayNano),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-            ],
-            fun.volatility(),
-        ),
+        BuiltinScalarFunction::DateBin => {
+            let base_sig = |array_type: TimeUnit| {
+                vec![
+                    TypeSignature::Exact(vec![
+                        DataType::Interval(IntervalUnit::MonthDayNano),
+                        DataType::Timestamp(array_type.clone(), None),
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Interval(IntervalUnit::DayTime),
+                        DataType::Timestamp(array_type.clone(), None),
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Interval(IntervalUnit::MonthDayNano),
+                        DataType::Timestamp(array_type.clone(), None),
+                    ]),
+                    TypeSignature::Exact(vec![
+                        DataType::Interval(IntervalUnit::DayTime),
+                        DataType::Timestamp(array_type, None),
+                    ]),
+                ]
+            };
+
+            let full_sig = [
+                TimeUnit::Nanosecond,
+                TimeUnit::Microsecond,
+                TimeUnit::Millisecond,
+                TimeUnit::Second,
+            ]
+            .into_iter()
+            .map(base_sig)
+            .collect::<Vec<_>>()
+            .concat();
+
+            Signature::one_of(full_sig, fun.volatility())
+        }
         BuiltinScalarFunction::DatePart => Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Utf8, DataType::Date32]),
@@ -515,7 +530,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 ]),
                 TypeSignature::Exact(vec![
                     DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 ]),
             ],
             fun.volatility(),
@@ -623,6 +638,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::Pi => Signature::exact(vec![], fun.volatility()),
         BuiltinScalarFunction::Random => Signature::exact(vec![], fun.volatility()),
         BuiltinScalarFunction::Uuid => Signature::exact(vec![], fun.volatility()),
         BuiltinScalarFunction::Power => Signature::one_of(

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::{Decimal128Type, DecimalType};
 use bigdecimal::BigDecimal;
 use half::f16;
 use rust_decimal::prelude::*;
@@ -74,9 +75,9 @@ pub fn f64_to_str(value: f64) -> String {
     }
 }
 
-pub fn i128_to_str(value: i128, scale: u32) -> String {
+pub fn i128_to_str(value: i128, precision: &u8, scale: &i8) -> String {
     big_decimal_to_str(
-        BigDecimal::from_str(&Decimal::from_i128_with_scale(value, scale).to_string())
+        BigDecimal::from_str(&Decimal128Type::format_decimal(value, *precision, *scale))
             .unwrap(),
     )
 }

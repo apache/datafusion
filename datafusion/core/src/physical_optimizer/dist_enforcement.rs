@@ -29,6 +29,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortOptions;
+use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -252,6 +253,7 @@ fn adjust_input_keys_ordering(
         mode,
         group_by,
         aggr_expr,
+        filter_expr,
         input,
         input_schema,
         ..
@@ -264,6 +266,7 @@ fn adjust_input_keys_ordering(
                     &parent_required,
                     group_by,
                     aggr_expr,
+                    filter_expr,
                     input.clone(),
                     input_schema,
                 )?),
@@ -369,6 +372,7 @@ fn reorder_aggregate_keys(
     parent_required: &[Arc<dyn PhysicalExpr>],
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
+    filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
     agg_input: Arc<dyn ExecutionPlan>,
     input_schema: &SchemaRef,
 ) -> Result<PlanWithKeyRequirements> {
@@ -398,6 +402,7 @@ fn reorder_aggregate_keys(
                     mode,
                     group_by,
                     aggr_expr,
+                    filter_expr,
                     input,
                     input_schema,
                     ..
@@ -416,6 +421,7 @@ fn reorder_aggregate_keys(
                             AggregateMode::Partial,
                             new_partial_group_by,
                             aggr_expr.clone(),
+                            filter_expr.clone(),
                             input.clone(),
                             input_schema.clone(),
                         )?))
@@ -446,6 +452,7 @@ fn reorder_aggregate_keys(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
                         aggr_expr.to_vec(),
+                        filter_expr.to_vec(),
                         partial_agg,
                         input_schema.clone(),
                     )?);
@@ -819,6 +826,35 @@ fn ensure_distribution(
         return Ok(Transformed::No(plan));
     }
 
+    // special case for UnionExec: We want to "bubble up" hash-partitioned data. So instead of:
+    //
+    // Agg:
+    //   Repartition (hash):
+    //     Union:
+    //       - Agg:
+    //           Repartition (hash):
+    //             Data
+    //       - Agg:
+    //           Repartition (hash):
+    //             Data
+    //
+    // We can use:
+    //
+    // Agg:
+    //   Interleave:
+    //     - Agg:
+    //         Repartition (hash):
+    //           Data
+    //     - Agg:
+    //         Repartition (hash):
+    //           Data
+    if let Some(union_exec) = plan.as_any().downcast_ref::<UnionExec>() {
+        if can_interleave(union_exec.inputs()) {
+            let plan = InterleaveExec::try_new(union_exec.inputs().clone())?;
+            return Ok(Transformed::Yes(Arc::new(plan)));
+        }
+    }
+
     let required_input_distributions = plan.required_input_distribution();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
     assert_eq!(children.len(), required_input_distributions.len());
@@ -1067,10 +1103,12 @@ mod tests {
                 AggregateMode::FinalPartitioned,
                 final_grouping,
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         group_by,
+                        vec![],
                         vec![],
                         input,
                         schema.clone(),
@@ -2124,6 +2162,44 @@ mod tests {
             "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, exec);
+        Ok(())
+    }
+
+    #[test]
+    fn union_to_interleave() -> Result<()> {
+        // group by (a as a1)
+        let left = aggregate_exec_with_alias(
+            parquet_exec(),
+            vec![("a".to_string(), "a1".to_string())],
+        );
+        // group by (a as a2)
+        let right = aggregate_exec_with_alias(
+            parquet_exec(),
+            vec![("a".to_string(), "a1".to_string())],
+        );
+
+        //  Union
+        let plan = Arc::new(UnionExec::new(vec![left, right]));
+
+        // final agg
+        let plan =
+            aggregate_exec_with_alias(plan, vec![("a1".to_string(), "a2".to_string())]);
+
+        // Only two RepartitionExecs added, no final RepartionExec required
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]",
+            "InterleaveExec",
+            "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
+            "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
+            "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected, plan);
         Ok(())
     }
 }

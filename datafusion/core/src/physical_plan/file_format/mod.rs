@@ -26,7 +26,7 @@ mod json;
 mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::CsvExec;
+pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
@@ -39,7 +39,7 @@ pub use avro::AvroExec;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
-pub use json::NdJsonExec;
+pub use json::{JsonOpener, NdJsonExec};
 
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
@@ -53,6 +53,7 @@ use crate::{
 use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
+use datafusion_physical_expr::expressions::Column;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -77,6 +78,8 @@ use super::{ColumnStatistics, Statistics};
 /// different dictionary type.
 ///
 /// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
+///
+/// [`ListingTable`]: crate::datasource::listing::ListingTable
 pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
@@ -156,9 +159,13 @@ pub struct FileScanConfig {
 
 impl FileScanConfig {
     /// Project the schema and the statistics on the given column indices
-    fn project(&self) -> (SchemaRef, Statistics) {
+    fn project(&self) -> (SchemaRef, Statistics, Option<Vec<PhysicalSortExpr>>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
-            return (Arc::clone(&self.file_schema), self.statistics.clone());
+            return (
+                Arc::clone(&self.file_schema),
+                self.statistics.clone(),
+                self.output_ordering.clone(),
+            );
         }
 
         let proj_iter: Box<dyn Iterator<Item = usize>> = match &self.projection {
@@ -201,8 +208,9 @@ impl FileScanConfig {
         let table_schema = Arc::new(
             Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
         );
-
-        (table_schema, table_stats)
+        let projected_output_ordering =
+            get_projected_output_ordering(self, &table_schema);
+        (table_schema, table_stats, projected_output_ordering)
     }
 
     #[allow(unused)] // Only used by avro
@@ -532,7 +540,7 @@ where
     let mut builder = ArrayData::builder(data_type)
         .len(len)
         .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.data().clone());
+    builder = builder.add_child_data(dict_vals.to_data());
     Arc::new(DictionaryArray::<UInt16Type>::from(
         builder.build().unwrap(),
     ))
@@ -702,17 +710,35 @@ impl From<ObjectMeta> for FileMeta {
 ///
 ///              ParquetExec
 ///```
-pub(crate) fn get_output_ordering(
+fn get_projected_output_ordering(
     base_config: &FileScanConfig,
-) -> Option<&[PhysicalSortExpr]> {
-    base_config.output_ordering.as_ref()
-        .map(|output_ordering| if base_config.file_groups.iter().any(|group| group.len() > 1) {
+    projected_schema: &SchemaRef,
+) -> Option<Vec<PhysicalSortExpr>> {
+    let mut new_ordering = vec![];
+    if let Some(output_ordering) = &base_config.output_ordering {
+        if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
                    output_ordering, base_config.file_groups);
-            None
-        } else {
-            Some(output_ordering.as_slice())
-        }).unwrap_or_else(|| None)
+            return None;
+        }
+        for PhysicalSortExpr { expr, options } in output_ordering {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let name = col.name();
+                if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                    // Compute the new sort expression (with correct index) after projection:
+                    new_ordering.push(PhysicalSortExpr {
+                        expr: Arc::new(Column::new(name, idx)),
+                        options: *options,
+                    });
+                    continue;
+                }
+            }
+            // Cannot find expression in the projected_schema, stop iterating
+            // since rest of the orderings are violated
+            break;
+        }
+    }
+    (!new_ordering.is_empty()).then_some(new_ordering)
 }
 
 #[cfg(test)]
@@ -739,7 +765,7 @@ mod tests {
             )],
         );
 
-        let (proj_schema, proj_statistics) = conf.project();
+        let (proj_schema, proj_statistics, _) = conf.project();
         assert_eq!(proj_schema.fields().len(), file_schema.fields().len() + 1);
         assert_eq!(
             proj_schema.field(file_schema.fields().len()).name(),
@@ -788,7 +814,7 @@ mod tests {
             )],
         );
 
-        let (proj_schema, proj_statistics) = conf.project();
+        let (proj_schema, proj_statistics, _) = conf.project();
         assert_eq!(
             columns(&proj_schema),
             vec!["date".to_owned(), "c1".to_owned()]
@@ -843,7 +869,7 @@ mod tests {
             Statistics::default(),
             partition_cols.clone(),
         );
-        let (proj_schema, _) = conf.project();
+        let (proj_schema, ..) = conf.project();
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,

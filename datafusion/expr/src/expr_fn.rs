@@ -47,6 +47,12 @@ pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 
+/// Create an out reference column which hold a reference that has been resolved to a field
+/// outside of the current plan.
+pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
+    Expr::OuterReferenceColumn(dt, ident.into())
+}
+
 /// Create an unqualified column expression from the provided name, without normalizing
 /// the column.
 ///
@@ -226,6 +232,14 @@ pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     }
 }
 
+/// Returns an approximate value of π
+pub fn pi() -> Expr {
+    Expr::ScalarFunction {
+        fun: built_in_function::BuiltinScalarFunction::Pi,
+        args: vec![],
+    }
+}
+
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
     Expr::ScalarFunction {
@@ -296,10 +310,11 @@ pub fn approx_percentile_cont_with_weight(
 
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::Exists {
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: false,
     }
@@ -307,10 +322,11 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::Exists {
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: true,
     }
@@ -318,11 +334,12 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create an IN subquery expression
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::InSubquery {
         expr: Box::new(expr),
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: false,
     }
@@ -330,11 +347,12 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a NOT IN subquery expression
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::InSubquery {
         expr: Box::new(expr),
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: true,
     }
@@ -342,9 +360,10 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::ScalarSubquery(Subquery {
         subquery,
-        outer_ref_columns: vec![],
+        outer_ref_columns,
     })
 }
 
@@ -471,6 +490,8 @@ scalar_expr!(
     num,
     "nearest integer greater than or equal to argument"
 );
+scalar_expr!(Degrees, degrees, num, "converts radians to degrees");
+scalar_expr!(Radians, radians, num, "converts degrees to radians");
 nary_scalar_expr!(Round, round, "round to nearest integer");
 scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
@@ -542,9 +563,9 @@ scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
 scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
 scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
-scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index. ");
+scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index.");
 scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
-scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matchs the `string`");
+scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matches the `string`");
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
@@ -780,6 +801,8 @@ mod test {
         test_unary_scalar_expr!(Atanh, atanh);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
+        test_unary_scalar_expr!(Degrees, degrees);
+        test_unary_scalar_expr!(Radians, radians);
         test_nary_scalar_expr!(Round, round, input);
         test_nary_scalar_expr!(Round, round, input, decimal_places);
         test_unary_scalar_expr!(Trunc, trunc);

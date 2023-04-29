@@ -97,13 +97,13 @@ enum FileStreamState {
     /// Currently performing asynchronous IO to obtain a stream of RecordBatch
     /// for a given parquet file
     Open {
-        /// A [`FileOpenFuture`] returned by [`FormatReader::open`]
+        /// A [`FileOpenFuture`] returned by [`FileOpener::open`]
         future: FileOpenFuture,
         /// The partition values for this file
         partition_values: Vec<ScalarValue>,
     },
     /// Scanning the [`BoxStream`] returned by the completion of a [`FileOpenFuture`]
-    /// returned by [`FormatReader::open`]
+    /// returned by [`FileOpener::open`]
     Scan {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
@@ -121,6 +121,7 @@ enum FileStreamState {
     Limit,
 }
 
+/// A timer that can be started and stopped.
 struct StartableTime {
     metrics: Time,
     // use for record each part cost time, will eventually add into 'metrics'.
@@ -140,14 +141,37 @@ impl StartableTime {
     }
 }
 
+/// Metrics for [`FileStream`]
+///
+/// Note that all of these metrics are in terms of wall clock time
+/// (not cpu time) so they include time spent waiting on I/O as well
+/// as other operators.
 struct FileStreamMetrics {
-    /// Time elapsed for file opening
+    /// Wall clock time elapsed for file opening.
+    ///
+    /// Time between when [`FileOpener::open`] is called and when the
+    /// [`FileStream`] receives a stream for reading.
+    ///
+    /// If there are multiple files being scanned, the stream
+    /// will open the next file in the background while scanning the
+    /// current file. This metric will only capture time spent opening
+    /// while not also scanning.
     pub time_opening: StartableTime,
-    /// Time elapsed for file scanning + first record batch of decompression + decoding
+    /// Wall clock time elapsed for file scanning + first record batch of decompression + decoding
+    ///
+    /// Time between when the [`FileStream`] requests data from the
+    /// stream and when the first [`RecordBatch`] is produced.
     pub time_scanning_until_data: StartableTime,
-    /// Total elapsed time for for scanning + record batch decompression / decoding
+    /// Total elapsed wall clock time for for scanning + record batch decompression / decoding
+    ///
+    /// Sum of time between when the [`FileStream`] requests data from
+    /// the stream and when a [`RecordBatch`] is produced for all
+    /// record batches in the stream. Note that this metric also
+    /// includes the time of the parent operator's execution.
     pub time_scanning_total: StartableTime,
-    /// Time elapsed for data decompression + decoding
+    /// Wall clock time elapsed for data decompression + decoding
+    ///
+    /// Time spent waiting for the FileStream's input.
     pub time_processing: StartableTime,
 }
 
@@ -194,7 +218,7 @@ impl<F: FileOpener> FileStream<F> {
         file_reader: F,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let (projected_schema, _) = config.project();
+        let (projected_schema, ..) = config.project();
         let pc_projector = PartitionColumnProjector::new(
             projected_schema.clone(),
             &config
@@ -218,9 +242,10 @@ impl<F: FileOpener> FileStream<F> {
         })
     }
 
-    // Begin opening the next file in parallel while decoding the current file in FileStream.
-    // Since file opening is mostly IO (and may involve a
-    // bunch of sequential IO), it can be parallelized with decoding.
+    /// Begin opening the next file in parallel while decoding the current file in FileStream.
+    ///
+    /// Since file opening is mostly IO (and may involve a
+    /// bunch of sequential IO), it can be parallelized with decoding.
     fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
         let part_file = self.file_iter.pop_front()?;
 

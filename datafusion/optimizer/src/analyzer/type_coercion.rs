@@ -28,7 +28,7 @@ use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunctio
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    coerce_types, comparison_coercion, like_coercion,
+    any_decimal, coerce_types, comparison_coercion, like_coercion, math_decimal_coercion,
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
@@ -242,20 +242,19 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 op,
                 ref right,
             }) => {
+                // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
                 let left_type = left.get_type(&self.schema)?;
                 let right_type = right.get_type(&self.schema)?;
                 match (&left_type, &right_type) {
+                    // Handle some case about Interval.
                     (
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                         &DataType::Interval(_),
-                    )
-                    | (
+                    ) if matches!(op, Operator::Plus | Operator::Minus) => Ok(expr),
+                    (
                         &DataType::Interval(_),
                         DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    ) => {
-                        // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
-                        Ok(expr.clone())
-                    }
+                    ) if matches!(op, Operator::Plus) => Ok(expr),
                     (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
                         if op.is_numerical_operators() =>
                     {
@@ -266,6 +265,33 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                                 "Unsupported operation {op:?} between {left_type:?} and {right_type:?}"
                             )))
                         }
+                    }
+                    // For numerical operations between decimals, we don't coerce the types.
+                    // But if only one of the operands is decimal, we cast the other operand to decimal
+                    // if the other operand is integer. If the other operand is float, we cast the
+                    // decimal operand to float.
+                    (lhs_type, rhs_type)
+                        if op.is_numerical_operators()
+                            && any_decimal(lhs_type, rhs_type) =>
+                    {
+                        let (coerced_lhs_type, coerced_rhs_type) =
+                            math_decimal_coercion(lhs_type, rhs_type);
+                        let new_left = if let Some(lhs_type) = coerced_lhs_type {
+                            left.clone().cast_to(&lhs_type, &self.schema)?
+                        } else {
+                            left.as_ref().clone()
+                        };
+                        let new_right = if let Some(rhs_type) = coerced_rhs_type {
+                            right.clone().cast_to(&rhs_type, &self.schema)?
+                        } else {
+                            right.as_ref().clone()
+                        };
+                        let expr = Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(new_left),
+                            op,
+                            Box::new(new_right),
+                        ));
+                        Ok(expr)
                     }
                     _ => {
                         let coerced_type = coerce_types(&left_type, &op, &right_type)?;
@@ -836,7 +862,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
+            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed."))"#,
             &format!("{err:?}")
         );
         Ok(())
@@ -867,7 +893,12 @@ mod test {
             DataType::Float64,
             Arc::new(DataType::Float64),
             Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(|_| {
+                Ok(Box::new(AvgAccumulator::try_new(
+                    &DataType::Float64,
+                    &DataType::Float64,
+                )?))
+            }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
         let udaf = Expr::AggregateUDF {
@@ -887,8 +918,12 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
         let state_type: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?)));
+        let accumulator: AccumulatorFunctionImplementation = Arc::new(|_| {
+            Ok(Box::new(AvgAccumulator::try_new(
+                &DataType::Float64,
+                &DataType::Float64,
+            )?))
+        });
         let my_avg = AggregateUDF::new(
             "MY_AVG",
             &Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
@@ -906,7 +941,7 @@ mod test {
             .err()
             .unwrap();
         assert_eq!(
-            "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.\")",
+            r#"Context("type_coercion", Plan("Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed."))"#,
             &format!("{err:?}")
         );
         Ok(())
@@ -999,8 +1034,40 @@ mod test {
         let expected =
             "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
              \n  EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
-        Ok(())
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+    }
+
+    #[test]
+    fn between_case() -> Result<()> {
+        let expr = col("a").between(
+            lit("2002-05-08"),
+            // (cast('2002-05-08' as date) + interval '1 months')
+            cast(lit("2002-05-08"), DataType::Date32)
+                + lit(ScalarValue::new_interval_ym(0, 1)),
+        );
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
+        let expected =
+            "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
+            \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
+    }
+
+    #[test]
+    fn between_infer_cheap_type() -> Result<()> {
+        let expr = col("a").between(
+            // (cast('2002-05-08' as date) + interval '1 months')
+            cast(lit("2002-05-08"), DataType::Date32)
+                + lit(ScalarValue::new_interval_ym(0, 1)),
+            lit("2002-12-08"),
+        );
+        let empty = empty_with_type(DataType::Utf8);
+        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
+        // TODO: we should cast col(a).
+        let expected =
+            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
+            \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }
 
     #[test]

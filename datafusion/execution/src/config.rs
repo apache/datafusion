@@ -57,6 +57,11 @@ impl SessionConfig {
         Ok(ConfigOptions::from_env()?.into())
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        Ok(ConfigOptions::from_string_hash_map(settings)?.into())
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.options.set(key, &value.to_string()).unwrap();
@@ -94,7 +99,7 @@ impl SessionConfig {
 
     /// Customize [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
@@ -104,7 +109,7 @@ impl SessionConfig {
 
     /// Get [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }

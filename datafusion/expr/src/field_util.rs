@@ -41,7 +41,7 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
                     None => Err(DataFusionError::Plan(format!(
                         "Field {s} not found in struct"
                     ))),
-                    Some(f) => Ok(f.clone()),
+                    Some(f) => Ok(f.as_ref().clone()),
                 }
             }
         }
@@ -51,9 +51,8 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
         (DataType::List(_), _) => Err(DataFusionError::Plan(
             "Only ints are valid as an indexed field in a list".to_string(),
         )),
-        _ => Err(DataFusionError::Plan(
-            "The expression to get an indexed field is only valid for `List` types"
-                .to_string(),
+        (other, _) => Err(DataFusionError::Plan(
+            format!("The expression to get an indexed field is only valid for `List` or `Struct` types, got {other}")
         )),
     }
 }

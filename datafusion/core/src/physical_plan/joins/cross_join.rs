@@ -22,7 +22,7 @@ use futures::{ready, StreamExt};
 use futures::{Stream, TryStreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
@@ -68,7 +68,7 @@ impl CrossJoinExec {
     /// Create a new [CrossJoinExec].
     pub fn new(left: Arc<dyn ExecutionPlan>, right: Arc<dyn ExecutionPlan>) -> Self {
         // left then right
-        let all_columns = {
+        let all_columns: Fields = {
             let left_schema = left.schema();
             let right_schema = right.schema();
             let left_fields = left_schema.fields().iter();
@@ -160,7 +160,7 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.    
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] || children[1] {

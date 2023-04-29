@@ -18,16 +18,16 @@
 //! This module provides the bisect function, which implements binary search.
 
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::compute;
 use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
-use arrow_array::types::UInt32Type;
-use arrow_array::PrimitiveArray;
+use arrow::datatypes::UInt32Type;
+use arrow::record_batch::RecordBatch;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
 use sqlparser::tokenizer::{Token, TokenWithLocation};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -37,6 +37,16 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
+}
+
+/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
+pub fn get_record_batch_at_indices(
+    record_batch: &RecordBatch,
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<RecordBatch> {
+    let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
+    RecordBatch::try_new(record_batch.schema(), new_columns)
+        .map_err(DataFusionError::ArrowError)
 }
 
 /// This function compares two tuples depending on the given sort options.
@@ -263,7 +273,7 @@ pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     Ok(idents)
 }
 
-/// Construct a new Vec<ArrayRef> from the rows of the `arrays` at the `indices`.
+/// Construct a new [`Vec`] of [`ArrayRef`] from the rows of the `arrays` at the `indices`.
 pub fn get_arrayref_at_indices(
     arrays: &[ArrayRef],
     indices: &PrimitiveArray<UInt32Type>,
@@ -292,10 +302,45 @@ pub(crate) fn parse_identifiers_normalized(s: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+/// This function "takes" the elements at `indices` from the slice `items`.
+pub fn get_at_indices<T: Clone, I: Borrow<usize>>(
+    items: &[T],
+    indices: impl IntoIterator<Item = I>,
+) -> Result<Vec<T>> {
+    indices
+        .into_iter()
+        .map(|idx| items.get(*idx.borrow()).cloned())
+        .collect::<Option<Vec<T>>>()
+        .ok_or_else(|| {
+            DataFusionError::Execution(
+                "Expects indices to be in the range of searched vector".to_string(),
+            )
+        })
+}
+
+/// This function finds the longest prefix of the form 0, 1, 2, ... within the
+/// collection `sequence`. Examples:
+/// - For 0, 1, 2, 4, 5; we would produce 3, meaning 0, 1, 2 is the longest satisfying
+/// prefix.
+/// - For 1, 2, 3, 4; we would produce 0, meaning there is no such prefix.
+pub fn longest_consecutive_prefix<T: Borrow<usize>>(
+    sequence: impl IntoIterator<Item = T>,
+) -> usize {
+    let mut count = 0;
+    for item in sequence {
+        if !count.eq(item.borrow()) {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::Float64Array;
     use arrow_array::Array;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;
@@ -632,5 +677,23 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_get_at_indices() -> Result<()> {
+        let in_vec = vec![1, 2, 3, 4, 5, 6, 7];
+        assert_eq!(get_at_indices(&in_vec, [0, 2])?, vec![1, 3]);
+        assert_eq!(get_at_indices(&in_vec, [4, 2])?, vec![5, 3]);
+        // 7 is outside the range
+        assert!(get_at_indices(&in_vec, [7]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_longest_consecutive_prefix() {
+        assert_eq!(longest_consecutive_prefix([0, 3, 4]), 1);
+        assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
+        assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
+        assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
     }
 }

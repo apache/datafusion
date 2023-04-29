@@ -28,7 +28,7 @@ use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{get_output_ordering, FileScanConfig};
+use super::FileScanConfig;
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -37,6 +37,7 @@ pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -44,12 +45,14 @@ pub struct AvroExec {
 impl AvroExec {
     /// Create a new Avro reader execution plan provided base configurations
     pub fn new(base_config: FileScanConfig) -> Self {
-        let (projected_schema, projected_statistics) = base_config.project();
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -77,7 +80,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        get_output_ordering(&self.base_config)
+        self.projected_output_ordering.as_deref()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -216,7 +219,7 @@ mod tests {
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
@@ -324,10 +327,10 @@ mod tests {
             .infer_schema(&state, &object_store, &[meta.clone()])
             .await?;
 
-        let mut fields = actual_schema.fields().clone();
-        fields.push(Field::new("missing_col", DataType::Int32, true));
+        let mut builder = SchemaBuilder::from(actual_schema.fields());
+        builder.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(builder.finish());
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 

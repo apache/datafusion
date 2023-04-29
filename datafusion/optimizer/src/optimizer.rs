@@ -17,7 +17,6 @@
 
 //! Query optimizer traits
 
-use crate::analyzer::Analyzer;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
@@ -41,11 +40,12 @@ use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
+use crate::utils::log_plan;
 use chrono::{DateTime, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
-use log::{debug, trace, warn};
+use log::{debug, warn};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -156,7 +156,7 @@ impl OptimizerConfig for OptimizerContext {
 /// A rule-based optimizer.
 #[derive(Clone)]
 pub struct Optimizer {
-    /// All rules to apply
+    /// All optimizer rules to apply
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
 }
 
@@ -264,8 +264,7 @@ impl Optimizer {
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
         let options = config.options();
-        // execute_and_check has it's own timer
-        let mut new_plan = Analyzer::default().execute_and_check(plan, options)?;
+        let mut new_plan = plan.clone();
 
         let start_time = Instant::now();
 
@@ -436,12 +435,6 @@ fn assert_schema_is_the_same(
     }
 }
 
-/// Log the plan in debug/tracing mode after some part of the optimizer runs
-fn log_plan(description: &str, plan: &LogicalPlan) {
-    debug!("{description}:\n{}\n", plan.display_indent());
-    trace!("{description}::\n{}\n", plan.display_indent_schema());
-}
-
 #[cfg(test)]
 mod tests {
     use crate::optimizer::Optimizer;
@@ -592,7 +585,7 @@ mod tests {
                 let metadata =
                     [("key".into(), format!("value {i}"))].into_iter().collect();
 
-                let new_arrow_field = f.field().clone().with_metadata(metadata);
+                let new_arrow_field = f.field().as_ref().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
                     DFField::from_qualified(qualifier.clone(), new_arrow_field)
                 } else {

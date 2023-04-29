@@ -58,6 +58,7 @@ pub fn simplify_regex_expr(
     Ok(Expr::BinaryExpr(BinaryExpr { left, op, right }))
 }
 
+#[derive(Debug)]
 struct OperatorMode {
     not: bool,
     i: bool,
@@ -101,11 +102,8 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
     s.push('%');
 
     for sub in parts {
-        if let HirKind::Literal(Literal::Unicode(c)) = sub.kind() {
-            if !is_safe_for_like(*c) {
-                return None;
-            }
-            s.push(*c);
+        if let HirKind::Literal(l) = sub.kind() {
+            s.push_str(str_from_literal(l)?);
         } else {
             return None;
         }
@@ -115,17 +113,32 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
     Some(s)
 }
 
+/// returns a str represented by `Literal` if it contains a valid utf8
+/// sequence and is safe for like (has no '%' and '_')
+fn str_from_literal(l: &Literal) -> Option<&str> {
+    // if not utf8, no good
+    let s = std::str::from_utf8(&l.0).ok()?;
+
+    if s.chars().all(is_safe_for_like) {
+        Some(s)
+    } else {
+        None
+    }
+}
+
 fn is_safe_for_like(c: char) -> bool {
     (c != '%') && (c != '_')
 }
 
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
+    println!("Considering hir kind: mode {mode:?} hir: {hir:?}");
     match hir.kind() {
         HirKind::Empty => {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
         }
-        HirKind::Literal(Literal::Unicode(c)) if is_safe_for_like(*c) => {
-            return Some(mode.expr(Box::new(left.clone()), format!("%{c}%")));
+        HirKind::Literal(l) => {
+            let s = str_from_literal(l)?;
+            return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = collect_concat_to_like_string(inner) {

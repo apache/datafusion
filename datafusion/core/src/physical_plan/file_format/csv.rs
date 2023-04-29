@@ -46,7 +46,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
 
-use super::{get_output_ordering, FileScanConfig};
+use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
@@ -54,6 +54,7 @@ pub struct CsvExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
     has_header: bool,
     delimiter: u8,
     /// Execution metrics
@@ -69,12 +70,14 @@ impl CsvExec {
         delimiter: u8,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        let (projected_schema, projected_statistics) = base_config.project();
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            projected_output_ordering,
             has_header,
             delimiter,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -118,7 +121,7 @@ impl ExecutionPlan for CsvExec {
 
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        get_output_ordering(&self.base_config)
+        self.projected_output_ordering.as_deref()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -188,14 +191,36 @@ impl ExecutionPlan for CsvExec {
     }
 }
 
+/// A Config for [`CsvOpener`]
 #[derive(Debug, Clone)]
-struct CsvConfig {
+pub struct CsvConfig {
     batch_size: usize,
     file_schema: SchemaRef,
     file_projection: Option<Vec<usize>>,
     has_header: bool,
     delimiter: u8,
     object_store: Arc<dyn ObjectStore>,
+}
+
+impl CsvConfig {
+    /// Returns a [`CsvConfig`]
+    pub fn new(
+        batch_size: usize,
+        file_schema: SchemaRef,
+        file_projection: Option<Vec<usize>>,
+        has_header: bool,
+        delimiter: u8,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            batch_size,
+            file_schema,
+            file_projection,
+            has_header,
+            delimiter,
+            object_store,
+        }
+    }
 }
 
 impl CsvConfig {
@@ -228,9 +253,23 @@ impl CsvConfig {
     }
 }
 
-struct CsvOpener {
+/// A [`FileOpener`] that opens a CSV file and yields a [`FileOpenFuture`]
+pub struct CsvOpener {
     config: Arc<CsvConfig>,
     file_compression_type: FileCompressionType,
+}
+
+impl CsvOpener {
+    /// Returns a [`CsvOpener`]
+    pub fn new(
+        config: Arc<CsvConfig>,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        Self {
+            config,
+            file_compression_type,
+        }
+    }
 }
 
 impl FileOpener for CsvOpener {
@@ -246,7 +285,8 @@ impl FileOpener for CsvOpener {
                 GetResult::Stream(s) => {
                     let mut decoder = config.builder().build_decoder();
                     let s = s.map_err(DataFusionError::from);
-                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut input =
+                        file_compression_type.convert_stream(s.boxed())?.fuse();
                     let mut buffered = Bytes::new();
 
                     let s = futures::stream::poll_fn(move |cx| {

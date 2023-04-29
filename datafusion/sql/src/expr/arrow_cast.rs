@@ -29,8 +29,8 @@ pub const ARROW_CAST_NAME: &str = "arrow_cast";
 
 /// Create an [`Expr`] that evaluates the `arrow_cast` function
 ///
-/// This function is not a [`BuiltInScalarFunction`] because the
-/// return type of [`BuiltInScalarFunction`] depends only on the
+/// This function is not a [`BuiltinScalarFunction`] because the
+/// return type of [`BuiltinScalarFunction`] depends only on the
 /// *types* of the arguments. However, the type of `arrow_type` depends on
 /// the *value* of its second argument.
 ///
@@ -48,6 +48,7 @@ pub const ARROW_CAST_NAME: &str = "arrow_cast";
 /// ```sql
 /// select arrow_cast(column_x, 'Float64')
 /// ```
+/// [`BuiltinScalarFunction`]: datafusion_expr::BuiltinScalarFunction
 pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr> {
     if args.len() != 2 {
         return Err(DataFusionError::Plan(format!(
@@ -246,7 +247,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::Comma)?;
         let timezone = self.parse_timezone("Timestamp")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::Timestamp(time_unit, timezone))
+        Ok(DataType::Timestamp(time_unit, timezone.map(Into::into)))
     }
 
     /// Parses the next Time32 (called after `Time32` has been consumed)

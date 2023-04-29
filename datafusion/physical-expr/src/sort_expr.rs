@@ -180,6 +180,8 @@ impl PhysicalSortRequirement {
     ///
     /// This method takes `&'a PhysicalSortExpr` to make it easy to
     /// use implementing [`ExecutionPlan::required_input_ordering`].
+    ///
+    /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
     pub fn from_sort_exprs<'a>(
         ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
     ) -> Vec<PhysicalSortRequirement> {

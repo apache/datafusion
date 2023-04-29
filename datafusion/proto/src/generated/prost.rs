@@ -448,8 +448,8 @@ pub struct SelectionExecNode {
 pub struct SubqueryAliasNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(string, tag = "2")]
-    pub alias: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub alias: ::core::option::Option<OwnedTableReference>,
 }
 /// logical expressions
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -1245,6 +1245,12 @@ pub mod arrow_type {
 pub struct EmptyMessage {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AnalyzedLogicalPlanType {
+    #[prost(string, tag = "1")]
+    pub analyzer_name: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OptimizedLogicalPlanType {
     #[prost(string, tag = "1")]
     pub optimizer_name: ::prost::alloc::string::String,
@@ -1258,7 +1264,7 @@ pub struct OptimizedPhysicalPlanType {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlanType {
-    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 2, 3, 4, 5, 6")]
+    #[prost(oneof = "plan_type::PlanTypeEnum", tags = "1, 7, 8, 2, 3, 4, 5, 6")]
     pub plan_type_enum: ::core::option::Option<plan_type::PlanTypeEnum>,
 }
 /// Nested message and enum types in `PlanType`.
@@ -1268,6 +1274,10 @@ pub mod plan_type {
     pub enum PlanTypeEnum {
         #[prost(message, tag = "1")]
         InitialLogicalPlan(super::EmptyMessage),
+        #[prost(message, tag = "7")]
+        AnalyzedLogicalPlan(super::AnalyzedLogicalPlanType),
+        #[prost(message, tag = "8")]
+        FinalAnalyzedLogicalPlan(super::EmptyMessage),
         #[prost(message, tag = "2")]
         OptimizedLogicalPlan(super::OptimizedLogicalPlanType),
         #[prost(message, tag = "3")]
@@ -1477,12 +1487,25 @@ pub struct PhysicalScalarUdfNode {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
-    #[prost(enumeration = "AggregateFunction", tag = "1")]
-    pub aggr_function: i32,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
+    #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
+    pub aggregate_function: ::core::option::Option<
+        physical_aggregate_expr_node::AggregateFunction,
+    >,
+}
+/// Nested message and enum types in `PhysicalAggregateExprNode`.
+pub mod physical_aggregate_expr_node {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum AggregateFunction {
+        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
+        AggrFunction(i32),
+        #[prost(string, tag = "4")]
+        UserDefinedAggrFunction(::prost::alloc::string::String),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1791,6 +1814,12 @@ pub struct WindowAggExecNode {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaybeFilter {
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "1")]
     pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
@@ -1811,6 +1840,8 @@ pub struct AggregateExecNode {
     pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, repeated, tag = "9")]
     pub groups: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, repeated, tag = "10")]
+    pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2133,6 +2164,9 @@ pub enum ScalarFunction {
     Sinh = 77,
     Cosh = 78,
     Tanh = 79,
+    Pi = 80,
+    Degrees = 81,
+    Radians = 82,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2221,6 +2255,9 @@ impl ScalarFunction {
             ScalarFunction::Sinh => "Sinh",
             ScalarFunction::Cosh => "Cosh",
             ScalarFunction::Tanh => "Tanh",
+            ScalarFunction::Pi => "Pi",
+            ScalarFunction::Degrees => "Degrees",
+            ScalarFunction::Radians => "Radians",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2306,6 +2343,9 @@ impl ScalarFunction {
             "Sinh" => Some(Self::Sinh),
             "Cosh" => Some(Self::Cosh),
             "Tanh" => Some(Self::Tanh),
+            "Pi" => Some(Self::Pi),
+            "Degrees" => Some(Self::Degrees),
+            "Radians" => Some(Self::Radians),
             _ => None,
         }
     }
@@ -2650,6 +2690,7 @@ pub enum AggregateMode {
     Partial = 0,
     Final = 1,
     FinalPartitioned = 2,
+    Single = 3,
 }
 impl AggregateMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2661,6 +2702,7 @@ impl AggregateMode {
             AggregateMode::Partial => "PARTIAL",
             AggregateMode::Final => "FINAL",
             AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
+            AggregateMode::Single => "SINGLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2669,6 +2711,7 @@ impl AggregateMode {
             "PARTIAL" => Some(Self::Partial),
             "FINAL" => Some(Self::Final),
             "FINAL_PARTITIONED" => Some(Self::FinalPartitioned),
+            "SINGLE" => Some(Self::Single),
             _ => None,
         }
     }

@@ -29,6 +29,7 @@ use datafusion_common::tree_node::{
 };
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -109,15 +110,14 @@ fn split_conjunction_impl<'a>(
     }
 }
 
-/// Normalize the output expressions based on Alias Map and SchemaRef.
+/// Normalize the output expressions based on Columns Map.
 ///
-/// 1) If there is mapping in Alias Map, replace the Column in the output expressions with the 1st Column in Alias Map
-/// 2) If the Column is invalid for the current Schema, replace the Column with a place holder UnKnownColumn
+/// If there is a mapping in Columns Map, replace the Column in the output expressions with the 1st Column in the Columns Map.
+/// Otherwise, replace the Column with a place holder of [UnKnownColumn]
 ///
-pub fn normalize_out_expr_with_alias_schema(
+pub fn normalize_out_expr_with_columns_map(
     expr: Arc<dyn PhysicalExpr>,
-    alias_map: &HashMap<Column, Vec<Column>>,
-    schema: &SchemaRef,
+    columns_map: &HashMap<Column, Vec<Column>>,
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
@@ -125,16 +125,10 @@ pub fn normalize_out_expr_with_alias_schema(
                 .as_any()
                 .downcast_ref::<Column>()
             {
-                Some(column) => {
-                    alias_map
-                        .get(column)
-                        .map(|c| Arc::new(c[0].clone()) as _)
-                        .or_else(|| match schema.index_of(column.name()) {
-                            // Exactly matching, return None, no need to do the transform
-                            Ok(idx) if column.index() == idx => None,
-                            _ => Some(Arc::new(UnKnownColumn::new(column.name())) as _),
-                        })
-                }
+                Some(column) => columns_map
+                    .get(column)
+                    .map(|c| Arc::new(c[0].clone()) as _)
+                    .or_else(|| Some(Arc::new(UnKnownColumn::new(column.name())) as _)),
                 None => None,
             };
             Ok(if let Some(normalized_form) = normalized_form {
@@ -153,19 +147,14 @@ pub fn normalize_expr_with_equivalence_properties(
     expr.clone()
         .transform(&|expr| {
             let normalized_form: Option<Arc<dyn PhysicalExpr>> =
-                match expr.as_any().downcast_ref::<Column>() {
-                    Some(column) => {
-                        let mut normalized: Option<Arc<dyn PhysicalExpr>> = None;
-                        for class in eq_properties {
-                            if class.contains(column) {
-                                normalized = Some(Arc::new(class.head().clone()));
-                                break;
-                            }
+                expr.as_any().downcast_ref::<Column>().and_then(|column| {
+                    for class in eq_properties {
+                        if class.contains(column) {
+                            return Some(Arc::new(class.head().clone()) as _);
                         }
-                        normalized
                     }
-                    None => None,
-                };
+                    None
+                });
             Ok(if let Some(normalized_form) = normalized_form {
                 Transformed::Yes(normalized_form)
             } else {
@@ -376,13 +365,58 @@ pub fn map_columns_before_projection(
     parent_required
         .iter()
         .filter_map(|r| {
-            if let Some(column) = r.as_any().downcast_ref::<Column>() {
-                column_mapping.get(column.name())
-            } else {
-                None
-            }
+            r.as_any()
+                .downcast_ref::<Column>()
+                .and_then(|c| column_mapping.get(c.name()))
         })
         .map(|e| Arc::new(e.clone()) as _)
+        .collect()
+}
+
+/// This function returns all `Arc<dyn PhysicalExpr>`s inside the given
+/// `PhysicalSortExpr` sequence.
+pub fn convert_to_expr<T: Borrow<PhysicalSortExpr>>(
+    sequence: impl IntoIterator<Item = T>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    sequence
+        .into_iter()
+        .map(|elem| elem.borrow().expr.clone())
+        .collect()
+}
+
+/// This function finds the indices of `targets` within `items`, taking into
+/// account equivalences according to `equal_properties`.
+pub fn get_indices_of_matching_exprs<
+    T: Borrow<Arc<dyn PhysicalExpr>>,
+    F: FnOnce() -> EquivalenceProperties,
+>(
+    targets: impl IntoIterator<Item = T>,
+    items: &[Arc<dyn PhysicalExpr>],
+    equal_properties: F,
+) -> Vec<usize> {
+    if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let normalized_targets = targets.into_iter().map(|e| {
+            normalize_expr_with_equivalence_properties(e.borrow().clone(), eq_classes)
+        });
+        let normalized_items = items
+            .iter()
+            .map(|e| normalize_expr_with_equivalence_properties(e.clone(), eq_classes))
+            .collect::<Vec<_>>();
+        get_indices_of_exprs_strict(normalized_targets, &normalized_items)
+    } else {
+        get_indices_of_exprs_strict(targets, items)
+    }
+}
+
+/// This function finds the indices of `targets` within `items` using strict
+/// equality.
+fn get_indices_of_exprs_strict<T: Borrow<Arc<dyn PhysicalExpr>>>(
+    targets: impl IntoIterator<Item = T>,
+    items: &[Arc<dyn PhysicalExpr>],
+) -> Vec<usize> {
+    targets
+        .into_iter()
+        .filter_map(|target| items.iter().position(|e| e.eq(target.borrow())))
         .collect()
 }
 
@@ -539,8 +573,10 @@ pub fn reassign_predicate_columns(
     schema: &SchemaRef,
     ignore_not_found: bool,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform(&|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+    pred.transform_down(&|expr| {
+        let expr_any = expr.as_any();
+
+        if let Some(column) = expr_any.downcast_ref::<Column>() {
             let index = match schema.index_of(column.name()) {
                 Ok(idx) => idx,
                 Err(_) if ignore_not_found => usize::MAX,
@@ -551,7 +587,6 @@ pub fn reassign_predicate_columns(
                 index,
             ))));
         }
-
         Ok(Transformed::No(expr))
     })
 }
@@ -559,7 +594,7 @@ pub fn reassign_predicate_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{binary, cast, col, lit, Column, Literal};
+    use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
     use crate::PhysicalSortExpr;
     use arrow::compute::SortOptions;
     use datafusion_common::{Result, ScalarValue};
@@ -672,6 +707,42 @@ mod tests {
             2
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_convert_to_expr() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::UInt64, false)]);
+        let sort_expr = vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: Default::default(),
+        }];
+        assert!(convert_to_expr(&sort_expr)[0].eq(&sort_expr[0].expr));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_indices_of_matching_exprs() {
+        let empty_schema = &Arc::new(Schema::empty());
+        let equal_properties = || EquivalenceProperties::new(empty_schema.clone());
+        let list1: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("a", 0)),
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("d", 3)),
+        ];
+        let list2: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new("b", 1)),
+            Arc::new(Column::new("c", 2)),
+            Arc::new(Column::new("a", 0)),
+        ];
+        assert_eq!(
+            get_indices_of_matching_exprs(&list1, &list2, equal_properties),
+            vec![2, 0, 1]
+        );
+        assert_eq!(
+            get_indices_of_matching_exprs(&list2, &list1, equal_properties),
+            vec![1, 2, 0]
+        );
     }
 
     #[test]
@@ -839,10 +910,7 @@ mod tests {
             },
         ];
         let finer = Some(&finer[..]);
-        let empty_schema = &Arc::new(Schema {
-            fields: vec![],
-            metadata: Default::default(),
-        });
+        let empty_schema = &Arc::new(Schema::empty());
         assert!(ordering_satisfy(finer, crude, || {
             EquivalenceProperties::new(empty_schema.clone())
         }));
@@ -850,5 +918,42 @@ mod tests {
             EquivalenceProperties::new(empty_schema.clone())
         }));
         Ok(())
+    }
+
+    #[test]
+    fn test_reassign_predicate_columns_in_list() {
+        let int_field = Field::new("should_not_matter", DataType::Int64, true);
+        let dict_field = Field::new(
+            "id",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        );
+        let schema_small = Arc::new(Schema::new(vec![dict_field.clone()]));
+        let schema_big = Arc::new(Schema::new(vec![int_field, dict_field]));
+        let pred = in_list(
+            Arc::new(Column::new_with_schema("id", &schema_big).unwrap()),
+            vec![lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("2")),
+            ))],
+            &false,
+            &schema_big,
+        )
+        .unwrap();
+
+        let actual = reassign_predicate_columns(pred, &schema_small, false).unwrap();
+
+        let expected = in_list(
+            Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),
+            vec![lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::from("2")),
+            ))],
+            &false,
+            &schema_small,
+        )
+        .unwrap();
+
+        assert_eq!(actual.as_ref(), expected.as_any());
     }
 }

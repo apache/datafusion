@@ -17,7 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::{is_date, is_interval, is_numeric, is_timestamp};
+use crate::type_coercion::{is_date, is_decimal, is_interval, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -35,9 +35,39 @@ pub fn binary_operator_data_type(
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
-    // validate that it is possible to perform the operation on incoming types.
-    // (or the return datatype cannot be inferred)
-    let result_type = coerce_types(lhs_type, op, rhs_type)?;
+    let result_type = if !any_decimal(lhs_type, rhs_type) {
+        // validate that it is possible to perform the operation on incoming types.
+        // (or the return datatype cannot be inferred)
+        coerce_types(lhs_type, op, rhs_type)?
+    } else {
+        let (coerced_lhs_type, coerced_rhs_type) =
+            math_decimal_coercion(lhs_type, rhs_type);
+        let lhs_type = if let Some(lhs_type) = coerced_lhs_type {
+            lhs_type
+        } else {
+            lhs_type.clone()
+        };
+        let rhs_type = if let Some(rhs_type) = coerced_rhs_type {
+            rhs_type
+        } else {
+            rhs_type.clone()
+        };
+
+        match op {
+            Operator::Plus
+            | Operator::Minus
+            | Operator::Divide
+            | Operator::Multiply
+            | Operator::Modulo => decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
+                .or_else(|| coerce_types(&lhs_type, op, &rhs_type).ok())
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Could not get return type for {op:?} between {lhs_type:?} and {rhs_type:?}"
+                    ))
+                })?,
+            _ => coerce_types(&lhs_type, op, &rhs_type)?,
+        }
+    };
 
     match op {
         // operators that return a boolean
@@ -112,7 +142,9 @@ pub fn coerce_types(
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
-        | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
+        | Operator::LtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
             if (is_date(lhs_type)
@@ -125,7 +157,7 @@ pub fn coerce_types(
                     || !is_timestamp(rhs_type)
                     || *op != Operator::Minus) =>
         {
-            temporal_add_sub_coercion(lhs_type, rhs_type, op)?
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
@@ -133,16 +165,13 @@ pub fn coerce_types(
         | Operator::Minus
         | Operator::Modulo
         | Operator::Divide
-        | Operator::Multiply => mathematics_numerical_coercion(op, lhs_type, rhs_type),
+        | Operator::Multiply => mathematics_numerical_coercion(lhs_type, rhs_type),
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
         | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type),
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
-        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
-            eq_coercion(lhs_type, rhs_type)
-        }
     };
 
     // re-write the error message of failed coercions to include the operator's information
@@ -153,6 +182,46 @@ pub fn coerce_types(
             ),
         )),
         Some(t) => Ok(t)
+    }
+}
+
+/// Coercion rules for mathematics operators between decimal and non-decimal types.
+pub fn math_decimal_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> (Option<DataType>, Option<DataType>) {
+    use arrow::datatypes::DataType::*;
+
+    if both_decimal(lhs_type, rhs_type) {
+        return (None, None);
+    }
+
+    match (lhs_type, rhs_type) {
+        (Null, dec_type @ Decimal128(_, _)) => (Some(dec_type.clone()), None),
+        (dec_type @ Decimal128(_, _), Null) => (None, Some(dec_type.clone())),
+        (Dictionary(key_type, value_type), _) => {
+            let (value_type, rhs_type) = math_decimal_coercion(value_type, rhs_type);
+            let lhs_type = value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)));
+            (lhs_type, rhs_type)
+        }
+        (_, Dictionary(key_type, value_type)) => {
+            let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type);
+            let rhs_type = value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)));
+            (lhs_type, rhs_type)
+        }
+        (Decimal128(_, _), Float32 | Float64) => (Some(Float64), Some(Float64)),
+        (Float32 | Float64, Decimal128(_, _)) => (Some(Float64), Some(Float64)),
+        (Decimal128(_, _), _) => {
+            let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
+            (None, converted_decimal_type)
+        }
+        (_, Decimal128(_, _)) => {
+            let converted_decimal_type = coerce_numeric_type_to_decimal(lhs_type);
+            (converted_decimal_type, None)
+        }
+        _ => (None, None),
     }
 }
 
@@ -211,35 +280,37 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 // This function performs temporal coercion between the two input data types and the provided operator.
-// It returns an error if the operands are date or timestamp data types with an unsupported operation,
-// or None if the coercion is not possible. If the coercion is possible, it returns a new data type as Some(DataType).
+// It returns None (it will convert a Err outside) if the operands are an unsupported/wrong operation.
+// If the coercion is possible, it returns a new data type as Some(DataType).
 pub fn temporal_add_sub_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
     op: &Operator,
-) -> Result<Option<DataType>> {
+) -> Option<DataType> {
     match (lhs_type, rhs_type, op) {
         // if an interval is being added/subtracted from a date/timestamp, return the date/timestamp data type
         (lhs, rhs, _) if is_interval(lhs) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Ok(Some(rhs.clone()))
+            Some(rhs.clone())
         }
         (lhs, rhs, _) if is_interval(rhs) && (is_date(lhs) || is_timestamp(lhs)) => {
-            Ok(Some(lhs.clone()))
+            Some(lhs.clone())
         }
         // if two timestamps are being subtracted, check their time units and return the corresponding interval data type
         (lhs, rhs, Operator::Minus) if is_timestamp(lhs) && is_timestamp(rhs) => {
             handle_timestamp_minus(lhs, rhs)
         }
         // if two intervals are being added/subtracted, check their interval units and return the corresponding interval data type
-        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => handle_interval_addition(lhs, rhs),
-        // if two date/timestamp are being added/subtracted, return an error indicating that the operation is not supported
-        (lhs, rhs, _) if (is_date(lhs) || is_timestamp(lhs)) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Err(DataFusionError::Plan(format!(
-                "{lhs_type:?} {rhs_type:?} is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types"
-            )))
+        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
+            handle_interval_addition(lhs, rhs)
+        }
+        (lhs, rhs, Operator::Minus)
+            if (is_date(lhs) || is_timestamp(lhs))
+                && (is_date(rhs) || is_timestamp(rhs)) =>
+        {
+            temporal_coercion(lhs, rhs)
         }
         // return None if no coercion is possible
-        _ => Ok(None),
+        _ => None,
     }
 }
 
@@ -247,19 +318,19 @@ pub fn temporal_add_sub_coercion(
 // representing the sum of them. If the two interval data types have different units, it returns an interval data type
 // with "IntervalUnit::MonthDayNano". If the two interval data types are already "IntervalUnit::YearMonth" or "IntervalUnit::DayTime",
 // it returns an interval data type with the same unit as the operands.
-fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Result<Option<DataType>> {
+fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     match (lhs, rhs) {
         // operation with the same types
         (
             DataType::Interval(IntervalUnit::YearMonth),
             DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::YearMonth))),
+        ) => Some(DataType::Interval(IntervalUnit::YearMonth)),
         (
             DataType::Interval(IntervalUnit::DayTime),
             DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
         // operation with MonthDayNano's or different types
-        (_, _) => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
+        (_, _) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
     }
 }
 
@@ -267,7 +338,7 @@ fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Result<Option<Dat
 // representing the difference between them, either "IntervalUnit::DayTime" if the time unit is second or millisecond,
 // or "IntervalUnit::MonthDayNano" if the time unit is microsecond or nanosecond. If the two timestamp data types have
 // different time units, it returns an error indicating that "The timestamps have different types".
-fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataType>> {
+fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     match (lhs, rhs) {
         (
             DataType::Timestamp(TimeUnit::Second, _),
@@ -276,7 +347,7 @@ fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataT
         | (
             DataType::Timestamp(TimeUnit::Millisecond, _),
             DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::DayTime))),
+        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
         (
             DataType::Timestamp(TimeUnit::Microsecond, _),
             DataType::Timestamp(TimeUnit::Microsecond, _),
@@ -284,10 +355,8 @@ fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Result<Option<DataT
         | (
             DataType::Timestamp(TimeUnit::Nanosecond, _),
             DataType::Timestamp(TimeUnit::Nanosecond, _),
-        ) => Ok(Some(DataType::Interval(IntervalUnit::MonthDayNano))),
-        (_, _) => Err(DataFusionError::Plan(
-            "The timestamps have different types".to_string(),
-        )),
+        ) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
+        (_, _) => None,
     }
 }
 
@@ -429,7 +498,6 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
 /// Returns the output type of applying mathematics operations such as
 /// `+` to arguments of `lhs_type` and `rhs_type`.
 fn mathematics_numerical_coercion(
-    mathematics_op: &Operator,
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
@@ -453,47 +521,16 @@ fn mathematics_numerical_coercion(
     // these are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
-        (Decimal128(_, _), Decimal128(_, _)) => {
-            coercion_decimal_mathematics_type(mathematics_op, lhs_type, rhs_type)
-        }
-        (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
-            Some(dec_type.clone())
-        }
         (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
-            mathematics_numerical_coercion(mathematics_op, lhs_value_type, rhs_value_type)
+            mathematics_numerical_coercion(lhs_value_type, rhs_value_type)
         }
         (Dictionary(key_type, value_type), _) => {
-            let value_type =
-                mathematics_numerical_coercion(mathematics_op, value_type, rhs_type);
+            let value_type = mathematics_numerical_coercion(value_type, rhs_type);
             value_type
                 .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
         }
         (_, Dictionary(_, value_type)) => {
-            mathematics_numerical_coercion(mathematics_op, lhs_type, value_type)
-        }
-        (Decimal128(_, _), Float32 | Float64) => Some(Float64),
-        (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
-        (Decimal128(_, _), _) => {
-            let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
-            match converted_decimal_type {
-                None => None,
-                Some(right_decimal_type) => coercion_decimal_mathematics_type(
-                    mathematics_op,
-                    lhs_type,
-                    &right_decimal_type,
-                ),
-            }
-        }
-        (_, Decimal128(_, _)) => {
-            let converted_decimal_type = coerce_numeric_type_to_decimal(lhs_type);
-            match converted_decimal_type {
-                None => None,
-                Some(left_decimal_type) => coercion_decimal_mathematics_type(
-                    mathematics_op,
-                    &left_decimal_type,
-                    rhs_type,
-                ),
-            }
+            mathematics_numerical_coercion(lhs_type, value_type)
         }
         (Float64, _) | (_, Float64) => Some(Float64),
         (_, Float32) | (Float32, _) => Some(Float32),
@@ -516,7 +553,38 @@ fn create_decimal_type(precision: u8, scale: i8) -> DataType {
     )
 }
 
-fn coercion_decimal_mathematics_type(
+/// Returns the coerced type of applying mathematics operations on decimal types.
+/// Two sides of the mathematics operation will be coerced to the same type. Note
+/// that we don't coerce the decimal operands in analysis phase, but do it in the
+/// execution phase because this is not idempotent.
+pub fn coercion_decimal_mathematics_type(
+    mathematics_op: &Operator,
+    left_decimal_type: &DataType,
+    right_decimal_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (left_decimal_type, right_decimal_type) {
+        // The promotion rule from spark
+        // https://github.com/apache/spark/blob/c20af535803a7250fef047c2bf0fe30be242369d/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala#L35
+        (Decimal128(_, _), Decimal128(_, _)) => match mathematics_op {
+            Operator::Plus | Operator::Minus => decimal_op_mathematics_type(
+                mathematics_op,
+                left_decimal_type,
+                right_decimal_type,
+            ),
+            Operator::Multiply | Operator::Divide | Operator::Modulo => {
+                get_wider_decimal_type(left_decimal_type, right_decimal_type)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns the output type of applying mathematics operations on decimal types.
+/// The rule is from spark. Note that this is different to the coerced type applied
+/// to two sides of the arithmetic operation.
+pub fn decimal_op_mathematics_type(
     mathematics_op: &Operator,
     left_decimal_type: &DataType,
     right_decimal_type: &DataType,
@@ -560,6 +628,27 @@ fn coercion_decimal_mathematics_type(
                 _ => None,
             }
         }
+        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+            decimal_op_mathematics_type(
+                mathematics_op,
+                lhs_value_type.as_ref(),
+                rhs_value_type.as_ref(),
+            )
+        }
+        (Dictionary(key_type, value_type), _) => {
+            let value_type = decimal_op_mathematics_type(
+                mathematics_op,
+                value_type.as_ref(),
+                right_decimal_type,
+            );
+            value_type
+                .map(|value_type| Dictionary(key_type.clone(), Box::new(value_type)))
+        }
+        (_, Dictionary(_, value_type)) => decimal_op_mathematics_type(
+            mathematics_op,
+            left_decimal_type,
+            value_type.as_ref(),
+        ),
         _ => None,
     }
 }
@@ -580,6 +669,35 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
             is_numeric(lhs_type) && is_numeric(value_type)
         }
         _ => is_numeric(lhs_type) && is_numeric(rhs_type),
+    }
+}
+
+/// Determine if at least of one of lhs and rhs is decimal, and the other must be NULL or decimal
+fn both_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    match (lhs_type, rhs_type) {
+        (_, DataType::Null) => is_decimal(lhs_type),
+        (DataType::Null, _) => is_decimal(rhs_type),
+        (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => true,
+        (DataType::Dictionary(_, value_type), _) => {
+            is_decimal(value_type) && is_decimal(rhs_type)
+        }
+        (_, DataType::Dictionary(_, value_type)) => {
+            is_decimal(lhs_type) && is_decimal(value_type)
+        }
+        _ => false,
+    }
+}
+
+/// Determine if at least of one of lhs and rhs is decimal
+pub fn any_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    match (lhs_type, rhs_type) {
+        (DataType::Dictionary(_, value_type), _) => {
+            is_decimal(value_type) || is_decimal(rhs_type)
+        }
+        (_, DataType::Dictionary(_, value_type)) => {
+            is_decimal(lhs_type) || is_decimal(value_type)
+        }
+        (_, _) => is_decimal(lhs_type) || is_decimal(rhs_type),
     }
 }
 
@@ -752,51 +870,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
     }
 }
 
-/// Coercion rule for numerical types: The type that both lhs and rhs
-/// can be casted to for numerical calculation, while maintaining
-/// maximum precision
-fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-
-    // error on any non-numeric type
-    if !is_numeric(lhs_type) || !is_numeric(rhs_type) {
-        return None;
-    };
-
-    if lhs_type == rhs_type {
-        // same type => all good
-        return Some(lhs_type.clone());
-    }
-
-    // these are ordered from most informative to least informative so
-    // that the coercion removes the least amount of information
-    match (lhs_type, rhs_type) {
-        (Float64, _) | (_, Float64) => Some(Float64),
-        (_, Float32) | (Float32, _) => Some(Float32),
-        (Int64, _) | (_, Int64) => Some(Int64),
-        (Int32, _) | (_, Int32) => Some(Int32),
-        (Int16, _) | (_, Int16) => Some(Int16),
-        (Int8, _) | (_, Int8) => Some(Int8),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
-        (UInt32, _) | (_, UInt32) => Some(UInt32),
-        (UInt16, _) | (_, UInt16) => Some(UInt16),
-        (UInt8, _) | (_, UInt8) => Some(UInt8),
-        _ => None,
-    }
-}
-
-/// coercion rules for equality operations. This is a superset of all numerical coercion rules.
-fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => equality is possible
-        return Some(lhs_type.clone());
-    }
-    numerical_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true))
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
-        .or_else(|| null_coercion(lhs_type, rhs_type))
-}
-
 /// coercion rules from NULL type. Since NULL can be casted to most of types in arrow,
 /// either lhs or rhs is NULL, if NULL can be casted to type of the other side, the coercion is valid.
 fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -931,6 +1004,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(31, 7), result.unwrap());
         let op = Operator::Divide;
         let result = coercion_decimal_mathematics_type(
@@ -938,6 +1014,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(35, 24), result.unwrap());
         let op = Operator::Modulo;
         let result = coercion_decimal_mathematics_type(
@@ -945,6 +1024,9 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
+        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        let result =
+            decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(11, 4), result.unwrap());
     }
 
@@ -1003,12 +1085,12 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert_contains!(&err, "The timestamps have different types");
+        assert_contains!(&err, "Timestamp(Nanosecond, None) - Timestamp(Millisecond, None) can't be evaluated because there isn't a common type to coerce the types to");
 
         let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
             .unwrap_err()
             .to_string();
-        assert_contains!(&err, "Date32 Date64 is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+        assert_contains!(&err, "Date32 + Date64 can't be evaluated because there isn't a common type to coerce the types to");
 
         Ok(())
     }
@@ -1200,45 +1282,101 @@ mod tests {
             Operator::Multiply,
             DataType::Float64
         );
-        // decimal
-        // bug: https://github.com/apache/arrow-datafusion/issues/3387 will be fixed in the next pr
-        // test_coercion_binary_rule!(
-        //     DataType::Decimal128(10, 2),
-        //     DataType::Decimal128(10, 2),
-        //     Operator::Plus,
-        //     DataType::Decimal128(11, 2)
-        // );
-        test_coercion_binary_rule!(
+        // TODO add other data type
+        Ok(())
+    }
+
+    fn test_math_decimal_coercion_rule(
+        lhs_type: DataType,
+        rhs_type: DataType,
+        mathematics_op: Operator,
+        expected_lhs_type: Option<DataType>,
+        expected_rhs_type: Option<DataType>,
+        expected_coerced_type: DataType,
+        expected_output_type: DataType,
+    ) {
+        // The coerced types for lhs and rhs, if any of them is not decimal
+        let (l, r) = math_decimal_coercion(&lhs_type, &rhs_type);
+        assert_eq!(l, expected_lhs_type);
+        assert_eq!(r, expected_rhs_type);
+
+        let lhs_type = l.unwrap_or(lhs_type);
+        let rhs_type = r.unwrap_or(rhs_type);
+
+        // The coerced type of decimal math expression, applied during expression evaluation
+        let coerced_type =
+            coercion_decimal_mathematics_type(&mathematics_op, &lhs_type, &rhs_type)
+                .unwrap();
+        assert_eq!(coerced_type, expected_coerced_type);
+
+        // The output type of decimal math expression
+        let output_type =
+            decimal_op_mathematics_type(&mathematics_op, &lhs_type, &rhs_type).unwrap();
+        assert_eq!(output_type, expected_output_type);
+    }
+
+    #[test]
+    fn test_coercion_arithmetic_decimal() -> Result<()> {
+        test_math_decimal_coercion_rule(
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(10, 2),
+            Operator::Plus,
+            None,
+            None,
+            DataType::Decimal128(11, 2),
+            DataType::Decimal128(11, 2),
+        );
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Plus,
-            DataType::Decimal128(13, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(13, 2),
+            DataType::Decimal128(13, 2),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Minus,
-            DataType::Decimal128(13, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(13, 2),
+            DataType::Decimal128(13, 2),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Multiply,
-            DataType::Decimal128(21, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(12, 2),
+            DataType::Decimal128(21, 2),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Divide,
-            DataType::Decimal128(23, 11)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(12, 2),
+            DataType::Decimal128(23, 11),
         );
-        test_coercion_binary_rule!(
+
+        test_math_decimal_coercion_rule(
             DataType::Int32,
             DataType::Decimal128(10, 2),
             Operator::Modulo,
-            DataType::Decimal128(10, 2)
+            Some(DataType::Decimal128(10, 0)),
+            None,
+            DataType::Decimal128(12, 2),
+            DataType::Decimal128(10, 2),
         );
-        // TODO add other data type
+
         Ok(())
     }
 

@@ -19,7 +19,7 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, like, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -195,42 +195,22 @@ pub fn create_physical_expr(
                     DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
                 (
                     DataType::Interval(_),
                     Operator::Plus | Operator::Minus,
                     DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    rhs,
-                    *op,
-                    lhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(rhs, *op, lhs, input_schema)?),
                 (
                     DataType::Timestamp(_, _),
                     Operator::Minus,
                     DataType::Timestamp(_, _),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
                 (
                     DataType::Interval(_),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
                 _ => {
                     // Note that the logical planner is responsible
                     // for type coercion on the arguments (e.g. if one

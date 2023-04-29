@@ -140,3 +140,43 @@ async fn test_union_upcast_types() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn union_with_hash_aggregate() -> Result<()> {
+    let ctx = create_union_context()?;
+    let sql = "select count(*) from (
+        select distinct name from t1
+        union all
+        select distinct name from t2
+        ) group by name";
+
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let plan = ctx.state().create_physical_plan(&plan).await.unwrap();
+    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+
+    let expected = vec![
+        "ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]",
+        "  AggregateExec: mode=Single, gby=[name@0 as name], aggr=[COUNT(UInt8(1))]",
+        "    InterleaveExec",
+        "      AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"name\", index: 0 }], 4), input_partitions=4",
+        "            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "              AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]",
+        "                MemoryExec: partitions=1, partition_sizes=[1]",
+        "      AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"name\", index: 0 }], 4), input_partitions=4",
+        "            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1",
+        "              AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]",
+        "                MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}

@@ -20,13 +20,14 @@
 use crate::expr::{Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Unnest, Values, Window,
+    Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
+    Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest,
+    Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, GroupingSet, LogicalPlan,
-    LogicalPlanBuilder, Operator, TableScan, TryCast,
+    BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
+    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
+    TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{
@@ -69,7 +70,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
-/// The power set (or powerset) of a set S is the set of all subsets of S, \
+/// The [power set] (or powerset) of a set S is the set of all subsets of S, \
 /// including the empty set and S itself.
 ///
 /// Example:
@@ -85,7 +86,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 ///  {x, y, z} \
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
-/// Reference: https://en.wikipedia.org/wiki/Power_set
+/// [power set]: https://en.wikipedia.org/wiki/Power_set
 fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
     if slice.len() >= 64 {
         return Err("The size of the set must be less than 64.".into());
@@ -836,29 +837,31 @@ pub fn from_plan(
             fetch: *fetch,
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
             name,
             if_not_exists,
             or_replace,
             ..
-        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-            input: Arc::new(inputs[0].clone()),
-            primary_key: vec![],
-            name: name.clone(),
-            if_not_exists: *if_not_exists,
-            or_replace: *or_replace,
-        })),
-        LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+            CreateMemoryTable {
+                input: Arc::new(inputs[0].clone()),
+                primary_key: vec![],
+                name: name.clone(),
+                if_not_exists: *if_not_exists,
+                or_replace: *or_replace,
+            },
+        ))),
+        LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             name,
             or_replace,
             definition,
             ..
-        }) => Ok(LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
             definition: definition.clone(),
-        })),
+        }))),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
@@ -911,12 +914,8 @@ pub fn from_plan(
             }))
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::DropView(_)
-        | LogicalPlan::Statement(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_) => {
+        | LogicalPlan::Ddl(_)
+        | LogicalPlan::Statement(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{plan:?} should have no exprs");
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
@@ -956,13 +955,12 @@ pub fn from_plan(
 }
 
 /// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
-    Ok(agg
-        .aggr_expr
+fn agg_cols(agg: &Aggregate) -> Vec<Column> {
+    agg.aggr_expr
         .iter()
         .chain(&agg.group_expr)
         .flat_map(find_columns_referenced_by_expr)
-        .collect())
+        .collect()
 }
 
 fn exprlist_to_fields_aggregate(
@@ -970,7 +968,7 @@ fn exprlist_to_fields_aggregate(
     plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
-    let agg_cols = agg_cols(agg)?;
+    let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
         match expr {
