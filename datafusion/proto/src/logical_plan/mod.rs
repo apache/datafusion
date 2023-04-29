@@ -1372,6 +1372,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropView(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropView",
             )),
+            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropCatalogSchema",
+            )),
             LogicalPlan::Statement(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Statement",
             )),
