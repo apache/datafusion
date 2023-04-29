@@ -401,3 +401,35 @@ select
 'x' IS NOT DISTINCT FROM 'x' as d
 ----
 true false false true
+
+# select between simple expression
+query B
+SELECT 1 NOT BETWEEN 3 AND 5
+----
+true
+
+
+statement ok
+create table select_between_data(c1 bigint) as values (1), (2), (3), (4);
+
+# select between complex expression
+
+query B
+SELECT abs(c1) BETWEEN 0 AND LoG(c1 * 100 ) FROM select_between_data ORDER BY c1
+----
+true
+true
+false
+false
+
+# explain select between
+query TT
+EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM select_between_data
+----
+logical_plan
+Projection: select_between_data.c1 >= Int64(2) AND select_between_data.c1 <= Int64(3) AS select_between_data.c1 BETWEEN Int64(2) AND Int64(3)
+  TableScan: select_between_data projection=[c1]
+physical_plan
+ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
+  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+    MemoryExec: partitions=1, partition_sizes=[1]

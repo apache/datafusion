@@ -21,54 +21,6 @@ use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn use_between_expression_in_select_query() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------------------------------+",
-        "| Int64(1) NOT BETWEEN Int64(3) AND Int64(5) |",
-        "+--------------------------------------------+",
-        "| true                                       |",
-        "+--------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let input = Int64Array::from_slice([1, 2, 3, 4]);
-    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
-    ctx.register_batch("test", batch)?;
-
-    let sql = "SELECT abs(c1) BETWEEN 0 AND LoG(c1 * 100 ) FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    // Expect field name to be correctly converted for expr, low and high.
-    let expected = vec![
-        "+-------------------------------------------------------------+",
-        "| abs(test.c1) BETWEEN Int64(0) AND log(test.c1 * Int64(100)) |",
-        "+-------------------------------------------------------------+",
-        "| true                                                        |",
-        "| true                                                        |",
-        "| false                                                       |",
-        "| false                                                       |",
-        "+-------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
-        .unwrap()
-        .to_string();
-
-    // Only test that the projection exprs are correct, rather than entire output
-    let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
-    assert_contains!(&formatted, needle);
-    let needle = "Projection: test.c1 >= Int64(2) AND test.c1 <= Int64(3)";
-    assert_contains!(&formatted, needle);
-    Ok(())
-}
-
-#[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new_list(
