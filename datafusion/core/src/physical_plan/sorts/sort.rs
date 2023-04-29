@@ -37,7 +37,6 @@ use crate::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
-use arrow::array::ArrayRef;
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
