@@ -16,21 +16,20 @@
 // under the License.
 
 use crate::equivalence::{
-    EquivalentClass, OrderedColumns, OrderingEquivalenceProperties,
+    EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
-use crate::{
-    EquivalenceProperties, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
-};
-use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
-use datafusion_expr::Operator;
+use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
+use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
+use datafusion_common::Result;
+use datafusion_expr::Operator;
+
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use std::borrow::Borrow;
@@ -207,11 +206,11 @@ pub fn normalize_expr_with_ordering_equivalence_properties(
 ) -> Arc<dyn PhysicalExpr> {
     expr.clone()
         .transform(&|expr| {
-            let normalized_form: Option<OrderedColumns> =
+            let normalized_form =
                 expr.as_any().downcast_ref::<Column>().and_then(|column| {
                     if let Some(options) = sort_options {
                         for class in eq_properties {
-                            let ordered_column = OrderedColumns {
+                            let ordered_column = OrderedColumn {
                                 col: column.clone(),
                                 options,
                             };
@@ -241,7 +240,9 @@ fn normalize_sort_expr_with_ordering_equivalence_properties(
         eq_properties,
     );
 
-    if sort_expr.expr.ne(&normalized_expr) {
+    if sort_expr.expr.eq(&normalized_expr) {
+        sort_expr
+    } else {
         let mut options = sort_expr.options;
         if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
             for eq_class in eq_properties.iter() {
@@ -256,8 +257,6 @@ fn normalize_sort_expr_with_ordering_equivalence_properties(
             expr: normalized_expr,
             options,
         }
-    } else {
-        sort_expr
     }
 }
 
@@ -270,8 +269,9 @@ fn normalize_sort_requirement_with_ordering_equivalence_properties(
         sort_requirement.options(),
         eq_properties,
     );
-    if sort_requirement.expr().ne(&normalized_expr) {
-        // sort_requirement.with_expr(normalized_expr)
+    if sort_requirement.expr().eq(&normalized_expr) {
+        sort_requirement
+    } else {
         let mut options = sort_requirement.options();
         if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
             for eq_class in eq_properties.iter() {
@@ -286,8 +286,6 @@ fn normalize_sort_requirement_with_ordering_equivalence_properties(
             }
         }
         PhysicalSortRequirement::new(normalized_expr, options)
-    } else {
-        sort_requirement
     }
 }
 
@@ -361,10 +359,10 @@ fn ordering_satisfy_concrete<
     {
         true
     } else {
-        let tmp = ordering_equal_properties();
-        let ordering_eq_classes = tmp.classes();
-        let tmp = equal_properties();
-        let eq_classes = tmp.classes();
+        let oeq_properties = ordering_equal_properties();
+        let ordering_eq_classes = oeq_properties.classes();
+        let eq_properties = equal_properties();
+        let eq_classes = eq_properties.classes();
         required
             .iter()
             .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
@@ -373,7 +371,7 @@ fn ordering_satisfy_concrete<
                     normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes)
                 }),
             )
-            .all(|(req, given)| req.eq(&given))
+            .all(|(req, given)| req == given)
     }
 }
 
@@ -420,10 +418,10 @@ pub fn ordering_satisfy_requirement_concrete<
     {
         true
     } else {
-        let tmp = ordering_equal_properties();
-        let ordering_eq_classes = tmp.classes();
-        let tmp = equal_properties();
-        let eq_classes = tmp.classes();
+        let oeq_properties = ordering_equal_properties();
+        let ordering_eq_classes = oeq_properties.classes();
+        let eq_properties = equal_properties();
+        let eq_classes = eq_properties.classes();
         required
             .iter()
             .map(|e| {
@@ -481,10 +479,10 @@ fn requirements_compatible_concrete<
     {
         true
     } else {
-        let tmp = ordering_equal_properties();
-        let ordering_eq_classes = tmp.classes();
-        let tmp = equal_properties();
-        let eq_classes = tmp.classes();
+        let oeq_properties = ordering_equal_properties();
+        let ordering_eq_classes = oeq_properties.classes();
+        let eq_properties = equal_properties();
+        let eq_classes = eq_properties.classes();
         required
             .iter()
             .map(|e| {

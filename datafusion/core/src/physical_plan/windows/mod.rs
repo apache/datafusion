@@ -53,8 +53,8 @@ pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr::{
-    normalize_expr_with_equivalence_properties, OrderedColumns,
-    OrderingEquivalenceProperties, OrderingEquivalentClass, PhysicalSortRequirement,
+    normalize_expr_with_equivalence_properties, OrderedColumn,
+    OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
 pub use window_agg_exec::WindowAggExec;
 
@@ -252,59 +252,59 @@ pub(crate) fn window_ordering_equivalence(
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> OrderingEquivalenceProperties {
-    // We need to update schema. Hence we do not use input.ordering_equivalence_properties() directly.
-    let mut res = OrderingEquivalenceProperties::new(schema.clone());
-    let eq_properties = input.ordering_equivalence_properties();
-    let eq_classes = eq_properties
-        .classes()
-        .iter()
-        .map(|elem| (*elem).clone())
-        .collect::<Vec<OrderingEquivalentClass>>();
-    res.extend(eq_classes);
+    // We need to update the schema, so we can not directly use
+    // `input.ordering_equivalence_properties()`.
+    let mut result = OrderingEquivalenceProperties::new(schema.clone());
+    result.extend(
+        input
+            .ordering_equivalence_properties()
+            .classes()
+            .iter()
+            .cloned(),
+    );
     let out_ordering = input.output_ordering().unwrap_or(&[]);
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            if !builtin_window_expr
+            // Only the built-in `RowNumber` window function introduces a new
+            // ordering:
+            if builtin_window_expr
                 .get_built_in_func_expr()
                 .as_any()
                 .is::<RowNumber>()
             {
-                // If window function is not `RowNumber` skip it.
-                continue;
-            }
-            // `RowNumber` builtin window function introduces a new ordering,
-            // If there is an existing ordering add new ordering as ordering equivalence
-            if let Some(first) = out_ordering.first() {
-                // Normalize expression because ordering equivalence is searched on
-                // normalized version
-                let normalized = normalize_expr_with_equivalence_properties(
-                    first.expr.clone(),
-                    input.equivalence_properties().classes(),
-                );
-                if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
-                    let tmp = schema.column_with_name(expr.field().unwrap().name());
-                    if let Some((idx, elem)) = tmp {
-                        let new_col = Column::new(elem.name(), idx);
-                        let lhs = OrderedColumns {
-                            col: column.clone(),
-                            options: first.options,
-                        };
-                        let rhs = OrderedColumns {
-                            col: new_col,
-                            options: SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            }, // ASC, NULLS LAST
-                        };
-                        res.add_equal_conditions((&lhs, &rhs));
+                // If there is an existing ordering, add new ordering as an equivalence:
+                if let Some(first) = out_ordering.first() {
+                    // Normalize expression, as we search for ordering equivalences
+                    // on normalized versions:
+                    let normalized = normalize_expr_with_equivalence_properties(
+                        first.expr.clone(),
+                        input.equivalence_properties().classes(),
+                    );
+                    if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
+                        let column_info =
+                            schema.column_with_name(expr.field().unwrap().name());
+                        if let Some((idx, field)) = column_info {
+                            let lhs = OrderedColumn {
+                                col: column.clone(),
+                                options: first.options,
+                            };
+                            let rhs = OrderedColumn {
+                                col: Column::new(field.name(), idx),
+                                options: SortOptions {
+                                    descending: false,
+                                    nulls_first: false,
+                                }, // ASC, NULLS LAST
+                            };
+                            result.add_equal_conditions((&lhs, &rhs));
+                        }
                     }
                 }
             }
         }
     }
-    res
+    result
 }
 #[cfg(test)]
 mod tests {

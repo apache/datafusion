@@ -50,8 +50,8 @@ pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
-    EquivalenceProperties, EquivalentClass, OrderedColumns,
-    OrderingEquivalenceProperties, OrderingEquivalentClass,
+    EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
+    OrderingEquivalentClass,
 };
 pub use physical_expr::{AnalysisContext, ExprBoundaries, PhysicalExpr, PhysicalExprRef};
 pub use planner::create_physical_expr;

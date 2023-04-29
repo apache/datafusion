@@ -32,6 +32,7 @@ use arrow::record_batch::RecordBatch;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::DisplayFormatType;
 use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
@@ -683,7 +684,6 @@ use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, type_coercion, udf,
 };

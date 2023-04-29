@@ -27,25 +27,24 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::error::Result;
+use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use futures::stream::{Stream, StreamExt};
 use log::debug;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::execution::context::TaskContext;
-use datafusion_physical_expr::normalize_out_expr_with_columns_map;
+
 use datafusion_physical_expr::{
-    project_equivalence_properties, project_ordering_equivalence_properties,
-    OrderingEquivalenceProperties,
+    normalize_out_expr_with_columns_map, project_equivalence_properties,
+    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
 };
-use futures::stream::Stream;
-use futures::stream::StreamExt;
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -98,12 +97,14 @@ impl ProjectionExec {
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
-                // For some executors logical plan schema fields and physical plan schema fields are not same
-                // Information in the column is get from the logical plan schema. Hence to produce correct results
-                // use the field in the input schema with same index. This corresponds to physical plan `Column`.
-                let matching_input_field = input_schema.field(column.index());
-                let matching_input_column =
-                    Column::new(matching_input_field.name(), column.index());
+                // For some executors, logical and physical plan schema fields
+                // are not the same. The information in a `Column` comes from
+                // the logical plan schema. Therefore, to produce correct results
+                // we use the field in the input schema with the same index. This
+                // corresponds to the physical plan `Column`.
+                let idx = column.index();
+                let matching_input_field = input_schema.field(idx);
+                let matching_input_column = Column::new(matching_input_field.name(), idx);
                 let new_col_idx = schema.index_of(name)?;
                 let entry = columns_map
                     .entry(matching_input_column)
