@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion::{datasource::empty::EmptyTable, from_slice::FromSlice};
+use datafusion::datasource::empty::EmptyTable;
 use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
