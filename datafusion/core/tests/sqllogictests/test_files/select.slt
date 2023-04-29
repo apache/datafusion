@@ -16,6 +16,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
+statement ok
+CREATE EXTERNAL TABLE aggregate_simple (
+  c1 FLOAT NOT NULL,
+  c2 DOUBLE NOT NULL,
+  c3 BOOLEAN NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION 'tests/data/aggregate_simple.csv'
+
+
 ##########
 ## SELECT Tests
 ##########
@@ -265,3 +276,128 @@ query B
 select column1 is not distinct from column2 from t;
 ----
 false
+
+
+# select all
+# these two queries should return the same result
+query R
+SELECT c1 FROM aggregate_simple order by c1
+----
+0.00001
+0.00002
+0.00002
+0.00003
+0.00003
+0.00003
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
+0.00005
+0.00005
+
+query R
+SELECT ALL c1 FROM aggregate_simple order by c1
+----
+0.00001
+0.00002
+0.00002
+0.00003
+0.00003
+0.00003
+0.00004
+0.00004
+0.00004
+0.00004
+0.00005
+0.00005
+0.00005
+0.00005
+0.00005
+
+# select distinct
+query RRB rowsort
+SELECT DISTINCT * FROM aggregate_simple
+----
+0.00001 0.000000000001 true
+0.00002 0.000000000002 false
+0.00003 0.000000000003 true
+0.00004 0.000000000004 false
+0.00005 0.000000000005 true
+
+# select distinct with projection and order by
+query R
+SELECT DISTINCT c1 FROM aggregate_simple order by c1
+----
+0.00001
+0.00002
+0.00003
+0.00004
+0.00005
+
+# select distinct with multi-columns projection and single-column order by
+query RR
+SELECT DISTINCT c1, c2 FROM aggregate_simple order by c1
+----
+0.00001 0.000000000001
+0.00002 0.000000000002
+0.00003 0.000000000003
+0.00004 0.000000000004
+0.00005 0.000000000005
+
+# select distinct boolean column
+query B
+SELECT DISTINCT c3 FROM aggregate_simple order by c3
+----
+false
+true
+
+# select distinct with addition expression
+query R rowsort
+SELECT DISTINCT c1 + c2 AS a FROM aggregate_simple
+----
+0.000010000001
+0.000020000001
+0.000030000002
+0.000040000003
+0.000050000004
+
+# select distinct from
+query BBBBBBBB
+select
+1 IS DISTINCT FROM CAST(NULL as INT) as a,
+1 IS DISTINCT FROM 1 as b,
+1 IS NOT DISTINCT FROM CAST(NULL as INT) as c,
+1 IS NOT DISTINCT FROM 1 as d,
+NULL IS DISTINCT FROM NULL as e,
+NULL IS NOT DISTINCT FROM NULL as f,
+NULL is DISTINCT FROM 1 as g,
+NULL is NOT DISTINCT FROM 1 as h
+----
+true false false true false true true false
+
+query BBBBBBBB
+select
+NULL IS DISTINCT FROM NULL as a,
+NULL IS NOT DISTINCT FROM NULL as b,
+NULL is DISTINCT FROM 1 as c,
+NULL is NOT DISTINCT FROM 1 as d,
+1 IS DISTINCT FROM CAST(NULL as INT) as e,
+1 IS DISTINCT FROM 1 as f,
+1 IS NOT DISTINCT FROM CAST(NULL as INT) as g,
+1 IS NOT DISTINCT FROM 1 as h
+----
+false true true false true false false true
+
+# select distinct from utf8
+query BBBB
+select
+'x' IS DISTINCT FROM NULL as a,
+'x' IS DISTINCT FROM 'x' as b,
+'x' IS NOT DISTINCT FROM NULL as c,
+'x' IS NOT DISTINCT FROM 'x' as d
+----
+true false false true
