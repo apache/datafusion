@@ -107,6 +107,7 @@ mod tests {
     use arrow::{array::*, datatypes::*};
     use datafusion_common::Result;
     use DataType::*;
+    use crate::layout::RowLayout;
 
     macro_rules! fn_test_single_type {
         ($ARRAY: ident, $TYPE: expr, $VEC: expr) => {
@@ -115,9 +116,10 @@ mod tests {
                 #[allow(non_snake_case)]
                 fn [<test _single_ $TYPE>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
+                    let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
                     let a = $ARRAY::from($VEC);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-                    let mut vector = vec![0; 1024];
+                    let mut vector = vec![0; record_width * batch.num_rows()];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
                     let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
@@ -129,10 +131,11 @@ mod tests {
                 #[allow(non_snake_case)]
                 fn [<test_single_ $TYPE _null_free>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
+                    let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
                     let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
                     let a = $ARRAY::from(v);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-                    let mut vector = vec![0; 1024];
+                    let mut vector = vec![0; record_width * batch.num_rows()];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
                     let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
@@ -222,7 +225,6 @@ mod tests {
     );
 
     #[test]
-    #[allow(non_snake_case)]
     fn test_single_decimal128() -> Result<()> {
         let v = vec![
             Some(0),
@@ -234,9 +236,10 @@ mod tests {
         ];
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", Decimal128(38, 10), true)]));
+        let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
         let a = Decimal128Array::from(v);
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-        let mut vector = vec![0; 1024];
+        let mut vector = vec![0; record_width * batch.num_rows()];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
         let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
@@ -245,7 +248,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
     fn test_single_decimal128_null_free() -> Result<()> {
         let v = vec![
             Some(0),
@@ -260,10 +262,11 @@ mod tests {
             Decimal128(38, 10),
             false,
         )]));
+        let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
         let v = v.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
         let a = Decimal128Array::from(v);
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-        let mut vector = vec![0; 1024];
+        let mut vector = vec![0; record_width * batch.num_rows()];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
         let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
