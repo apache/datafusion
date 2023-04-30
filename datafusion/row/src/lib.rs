@@ -222,6 +222,56 @@ mod tests {
     );
 
     #[test]
+    #[allow(non_snake_case)]
+    fn test_single_decimal128() -> Result<()> {
+        let v = vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(-1),
+            Some(i128::MIN),
+            Some(i128::MAX),
+        ];
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", Decimal128(38, 10), true)]));
+        let a = Decimal128Array::from(v);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 1024];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn test_single_decimal128_null_free() -> Result<()> {
+        let v = vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(-1),
+            Some(i128::MIN),
+            Some(i128::MAX),
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            Decimal128(38, 10),
+            false,
+        )]));
+        let v = v.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
+        let a = Decimal128Array::from(v);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 1024];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
     #[should_panic(expected = "not supported yet")]
     fn test_unsupported_type() {
         let a: ArrayRef = Arc::new(StringArray::from(vec!["hello", "world"]));
