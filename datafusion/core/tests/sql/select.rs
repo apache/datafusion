@@ -1006,37 +1006,3 @@ async fn unprojected_filter() {
     ];
     assert_batches_sorted_eq!(expected, &results);
 }
-
-#[tokio::test]
-async fn case_sensitive_in_default_dialect() {
-    let int32_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-    let schema = Schema::new(vec![Field::new("INT32", DataType::Int32, false)]);
-    let batch =
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(int32_array)]).unwrap();
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
-
-    {
-        let sql = "select \"int32\" from t";
-        ctx.sql(sql).await.unwrap_err();
-    }
-
-    {
-        let sql = "select \"INT32\" from t";
-        let actual = execute_to_batches(&ctx, sql).await;
-
-        let expected = vec![
-            "+-------+",
-            "| INT32 |",
-            "+-------+",
-            "| 1     |",
-            "| 2     |",
-            "| 3     |",
-            "| 4     |",
-            "| 5     |",
-            "+-------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-}

@@ -481,4 +481,20 @@ SELECT * FROM empty_table
 
 # TODO: unprojected_filter
 
-# TODO: case_sensitive_in_default_dialect
+
+# case sensitive in default dialect
+
+statement ok
+CREATE TABLE case_sensitive_table("INT32" int) AS VALUES (1), (2), (3), (4), (5);
+
+statement error DataFusion error: Schema error: No field named int32. Valid fields are case_sensitive_table."INT32".
+select "int32" from case_sensitive_table
+
+query I
+select "INT32" from case_sensitive_table;
+----
+1
+2
+3
+4
+5
