@@ -26,7 +26,7 @@ use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, TableReference, ToDFSchema,
+    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -35,8 +35,8 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropTable, DropView, EmptyRelation, Explain,
-    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
+    Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
     SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     WriteOp,
@@ -242,7 +242,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 object_type,
                 if_exists,
                 mut names,
-                cascade: _,
+                cascade,
                 restrict: _,
                 purge: _,
             } => {
@@ -272,8 +272,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
+                    ObjectType::Schema => {
+                        let name = match name {
+                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table } ) ,
+                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table,catalog: schema }),
+                            TableReference::Full { catalog: _, schema: _, table: _ } => {
+                                Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
+                            },
+                        }?;
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
+                            name,
+                            if_exists,
+                            cascade,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))},
                     _ => Err(DataFusionError::NotImplemented(
-                        "Only `DROP TABLE/VIEW  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
                             .to_string(),
                     )),
                 }

@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::Column;
 use datafusion_common::{
     parsers::CompressionTypeVariant, DFSchemaRef, OwnedTableReference,
 };
+use datafusion_common::{Column, OwnedSchemaReference};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{
@@ -45,6 +45,8 @@ pub enum DdlStatement {
     DropTable(DropTable),
     /// Drops a view.
     DropView(DropView),
+    /// Drops a catalog schema
+    DropCatalogSchema(DropCatalogSchema),
 }
 
 impl DdlStatement {
@@ -62,6 +64,7 @@ impl DdlStatement {
             DdlStatement::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             DdlStatement::DropTable(DropTable { schema, .. }) => schema,
             DdlStatement::DropView(DropView { schema, .. }) => schema,
+            DdlStatement::DropCatalogSchema(DropCatalogSchema { schema, .. }) => schema,
         }
     }
 
@@ -76,6 +79,7 @@ impl DdlStatement {
             DdlStatement::CreateCatalog(_) => "CreateCatalog",
             DdlStatement::DropTable(_) => "DropTable",
             DdlStatement::DropView(_) => "DropView",
+            DdlStatement::DropCatalogSchema(_) => "DropCatalogSchema",
         }
     }
 
@@ -91,6 +95,7 @@ impl DdlStatement {
             DdlStatement::CreateView(CreateView { input, .. }) => vec![input],
             DdlStatement::DropTable(_) => vec![],
             DdlStatement::DropView(_) => vec![],
+            DdlStatement::DropCatalogSchema(_) => vec![],
         }
     }
 
@@ -146,6 +151,14 @@ impl DdlStatement {
                         name, if_exists, ..
                     }) => {
                         write!(f, "DropView: {name:?} if not exist:={if_exists}")
+                    }
+                    DdlStatement::DropCatalogSchema(DropCatalogSchema {
+                        name,
+                        if_exists,
+                        cascade,
+                        ..
+                    }) => {
+                        write!(f, "DropCatalogSchema: {name:?} if not exist:={if_exists} cascade:={cascade}")
                     }
                 }
             }
@@ -270,6 +283,19 @@ pub struct DropView {
     pub name: OwnedTableReference,
     /// If the view exists
     pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Drops a schema
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct DropCatalogSchema {
+    /// The schema name
+    pub name: OwnedSchemaReference,
+    /// If the schema exists
+    pub if_exists: bool,
+    /// Whether drop should cascade
+    pub cascade: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
