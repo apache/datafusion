@@ -47,14 +47,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Parse number in sql string, convert to Expr::Literal
     fn parse_sql_number(&self, n: &str) -> Result<Expr> {
-        if n.find('E').is_some() {
-            // not implemented yet
-            // https://github.com/apache/arrow-datafusion/issues/3448
-            Err(DataFusionError::NotImplemented(
-                "sql numeric literals in scientific notation are not supported"
-                    .to_string(),
-            ))
-        } else if let Ok(n) = n.parse::<i64>() {
+        if let Ok(n) = n.parse::<i64>() {
             Ok(lit(n))
         } else if let Ok(n) = n.parse::<u64>() {
             Ok(lit(n))
