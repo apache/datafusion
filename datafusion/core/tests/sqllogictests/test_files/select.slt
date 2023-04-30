@@ -477,9 +477,47 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 
 # TODO: query_cte
 
-# TODO: csv_select_nested
+# nested select
+query TII
+SELECT o1, o2, c3
+FROM (
+    SELECT c1 AS o1, c2 + 1 AS o2, c3
+    FROM (
+        SELECT c1, c2, c3, c4
+        FROM aggregate_test_100
+        WHERE c1 = 'a' AND c2 >= 4
+        ORDER BY c2 ASC, c3 ASC
+    ) AS a
+) AS b
+----
+a 5 -101
+a 5 -54
+a 5 -38
+a 5 65
+a 6 -101
+a 6 -31
+a 6 36
 
-# TODO: csv_select_nested_without_aliases
+# nested select without aliases
+query TII
+SELECT o1, o2, c3
+FROM (
+    SELECT c1 AS o1, c2 + 1 AS o2, c3
+    FROM (
+        SELECT c1, c2, c3, c4
+        FROM aggregate_test_100
+        WHERE c1 = 'a' AND c2 >= 4
+        ORDER BY c2 ASC, c3 ASC
+    )
+)
+----
+a 5 -101
+a 5 -54
+a 5 -38
+a 5 65
+a 6 -101
+a 6 -31
+a 6 36
 
 # TODO: csv_join_unaliased_subqueries
 
