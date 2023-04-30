@@ -357,8 +357,8 @@ impl ExecutionPlan for HashJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
-                let reservation = MemoryConsumer::new("HashJoinInput")
-                    .register(context.memory_pool());
+                let reservation =
+                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
                 collect_left_input(
                     None,
                     self.random_state.clone(),
