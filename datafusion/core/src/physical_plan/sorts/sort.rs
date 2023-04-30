@@ -324,7 +324,7 @@ fn sort_batch_stream(
         tracking_metrics.record_output(sorted.num_rows());
         Ok(sorted)
     }));
-    return Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)));
+    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
 }
 
 fn sort_batch(
