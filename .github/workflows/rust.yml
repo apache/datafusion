@@ -67,8 +67,7 @@ jobs:
 
       # Note: this does not include dictionary_expressions to reduce codegen
       - name: Check workspace with all features
-        run: cargo check --workspace --benches --features avro,jit,json
-
+        run: cargo check --workspace --benches --features avro,json
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
@@ -97,7 +96,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,jit,json,dictionary_expressions
+        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -153,7 +152,7 @@ jobs:
           rust-version: stable
       # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run doctests
-        run: cargo test --doc --features avro,jit,json
+        run: cargo test --doc --features avro,json
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -272,7 +271,7 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,jit,json,dictionary_expressions
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -305,7 +304,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --lib --tests --bins --features avro,jit,json,dictionary_expressions
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"

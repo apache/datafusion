@@ -437,9 +437,6 @@ pub use datafusion_physical_expr as physical_expr;
 pub use datafusion_row as row;
 pub use datafusion_sql as sql;
 
-#[cfg(feature = "jit")]
-pub use datafusion_jit as jit;
-
 pub use common::from_slice;
 
 #[cfg(test)]

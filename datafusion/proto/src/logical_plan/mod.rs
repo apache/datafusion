@@ -1366,11 +1366,14 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
-            LogicalPlan::DropTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
-            LogicalPlan::DropView(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropView(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropView",
+            )),
+            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
             LogicalPlan::Statement(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Statement",

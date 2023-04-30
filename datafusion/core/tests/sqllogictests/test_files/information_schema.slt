@@ -375,7 +375,7 @@ SHOW CREATE TABLE test.xyz
 ----
 datafusion test xyz CREATE VIEW test.xyz AS SELECT * FROM abc
 
-statement error DataFusion error: This feature is not implemented: Only `DROP TABLE/VIEW
+statement error DataFusion error: Execution error: Cannot drop schema test because other tables depend on it: xyz
 DROP SCHEMA test;
 
 statement ok
