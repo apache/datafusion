@@ -275,6 +275,10 @@ pub(crate) fn add_to_row(
         ScalarValue::Decimal128(rhs, _, _) => {
             sum_row!(index, accessor, rhs, i128)
         }
+        ScalarValue::Dictionary(_, value) => {
+            let value = value.as_ref();
+            return add_to_row(index, accessor, value);
+        }
         _ => {
             let msg =
                 format!("Row sum updater is not expected to receive a scalar {s:?}");
@@ -307,6 +311,10 @@ pub(crate) fn update_avg_to_row(
         }
         ScalarValue::Decimal128(rhs, _, _) => {
             avg_row!(index, accessor, rhs, i128)
+        }
+        ScalarValue::Dictionary(_, value) => {
+            let value = value.as_ref();
+            return update_avg_to_row(index, accessor, value);
         }
         _ => {
             let msg =
