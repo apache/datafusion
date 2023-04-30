@@ -467,7 +467,30 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 
 # TODO: parallel_query_with_filter
 
-# TODO: query_with_filter_string_type_coercion
+
+# query with filter string type coercion
+
+statement ok
+create table utf8_data(str string) as values ('1'), ('2'), ('3'), ('4'), ('5');
+
+statement ok
+create table largeutf8_data as
+select arrow_cast(str, 'LargeUtf8') as large_str
+from utf8_data;
+
+query T
+select * from largeutf8_data where large_str = '1'
+----
+1
+
+query T
+select * from largeutf8_data where large_str != '1'
+----
+2
+3
+4
+5
+
 
 # query empty table
 statement ok
@@ -476,6 +499,7 @@ CREATE TABLE empty_table;
 query
 SELECT * FROM empty_table
 ----
+
 
 # TODO: boolean_literal
 
