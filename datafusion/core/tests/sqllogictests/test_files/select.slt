@@ -519,7 +519,19 @@ a 6 -101
 a 6 -31
 a 6 36
 
-# TODO: csv_join_unaliased_subqueries
+# select with join unaliased subqueries
+query TIITII
+SELECT o1, o2, c3, p1, p2, p3
+FROM
+    (SELECT c1 AS o1, c2 + 1 AS o2, c3 FROM aggregate_test_100),
+    (SELECT c1 AS p1, c2 - 1 AS p2, c3 AS p3 FROM aggregate_test_100)
+LIMIT 5
+----
+c 3 1 c 1 1
+c 3 1 d 4 -40
+c 3 1 b 0 29
+c 3 1 a 0 -85
+c 3 1 b 4 -82
 
 # TODO: test_prepare_statement
 

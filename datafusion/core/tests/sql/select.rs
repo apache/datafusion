@@ -744,29 +744,6 @@ async fn query_cte() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn csv_join_unaliased_subqueries() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT o1, o2, c3, p1, p2, p3 FROM \
-        (SELECT c1 AS o1, c2 + 1 AS o2, c3 FROM aggregate_test_100), \
-        (SELECT c1 AS p1, c2 - 1 AS p2, c3 AS p3 FROM aggregate_test_100) LIMIT 5";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----+----+----+----+----+-----+",
-        "| o1 | o2 | c3 | p1 | p2 | p3  |",
-        "+----+----+----+----+----+-----+",
-        "| c  | 3  | 1  | c  | 1  | 1   |",
-        "| c  | 3  | 1  | d  | 4  | -40 |",
-        "| c  | 3  | 1  | b  | 0  | 29  |",
-        "| c  | 3  | 1  | a  | 0  | -85 |",
-        "| c  | 3  | 1  | b  | 4  | -82 |",
-        "+----+----+----+----+----+-----+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
 // Test prepare statement from sql to final result
 // This test is equivalent with the test parallel_query_with_filter below but using prepare statement
 #[tokio::test]
