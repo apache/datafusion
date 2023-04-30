@@ -433,3 +433,52 @@ physical_plan
 ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
     MemoryExec: partitions=1, partition_sizes=[1]
+
+
+# TODO: query_get_indexed_field
+
+# TODO: query_nested_get_indexed_field
+
+# TODO: query_nested_get_indexed_field_on_struct
+
+# TODO: query_on_string_dictionary
+
+# TODO: sort_on_window_null_string
+
+# TODO: filter_with_time32second
+
+# TODO: filter_with_time32millisecond
+
+# TODO: filter_with_time64microsecond
+
+# TODO: filter_with_time64nanosecond
+
+# TODO: query_cte_with_alias
+
+# TODO: query_cte
+
+# TODO: csv_select_nested
+
+# TODO: csv_select_nested_without_aliases
+
+# TODO: csv_join_unaliased_subqueries
+
+# TODO: test_prepare_statement
+
+# TODO: parallel_query_with_filter
+
+# TODO: query_with_filter_string_type_coercion
+
+# query empty table
+statement ok
+CREATE TABLE empty_table;
+
+query
+SELECT * FROM empty_table
+----
+
+# TODO: boolean_literal
+
+# TODO: unprojected_filter
+
+# TODO: case_sensitive_in_default_dialect

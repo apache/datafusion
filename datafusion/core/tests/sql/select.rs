@@ -959,19 +959,6 @@ async fn query_with_filter_string_type_coercion() {
 }
 
 #[tokio::test]
-async fn query_empty_table() {
-    let ctx = SessionContext::new();
-    let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
-    ctx.register_table("test_tbl", empty_table).unwrap();
-    let sql = "SELECT * FROM test_tbl";
-    let result = plan_and_collect(&ctx, sql)
-        .await
-        .expect("Query empty table");
-    let expected = vec!["++", "++"];
-    assert_batches_sorted_eq!(expected, &result);
-}
-
-#[tokio::test]
 async fn boolean_literal() -> Result<()> {
     let results =
         execute_with_partition("SELECT c1, c3 FROM test WHERE c1 > 2 AND c3 = true", 4)
