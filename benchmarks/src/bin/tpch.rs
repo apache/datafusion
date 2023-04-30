@@ -37,7 +37,6 @@ use std::{iter::Iterator, path::PathBuf, sync::Arc, time::Instant};
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use futures::TryStreamExt;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -514,7 +513,7 @@ mod tests {
             if sql.starts_with("select") {
                 let explain = "explain ".to_string() + sql;
                 let result_batch =
-                    execute_query(&ctx, explain.as_str(), false, false).await?;
+                    execute_query(&ctx, explain.as_str(), false).await?;
                 if !actual.is_empty() {
                     actual += "\n";
                 }
@@ -526,7 +525,7 @@ mod tests {
                 // let mut file = File::create(format!("expected-plans/q{}.txt", query))?;
                 // file.write_all(actual.as_bytes())?;
             } else {
-                execute_query(&ctx, sql.as_str(), false, false).await?;
+                execute_query(&ctx, sql.as_str(), false).await?;
             }
         }
 
@@ -710,7 +709,7 @@ mod tests {
 
         let sql = &get_query_sql(n)?;
         for query in sql {
-            execute_query(&ctx, query, false, false).await?;
+            execute_query(&ctx, query, false).await?;
         }
 
         Ok(())
