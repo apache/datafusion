@@ -101,13 +101,13 @@ fn get_columns(mut arrays: Vec<Box<dyn ArrayBuilder>>) -> Vec<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::RowLayout;
     use crate::reader::read_as_batch;
     use crate::writer::write_batch_unchecked;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
     use datafusion_common::Result;
     use DataType::*;
-    use crate::layout::RowLayout;
 
     macro_rules! fn_test_single_type {
         ($ARRAY: ident, $TYPE: expr, $VEC: expr) => {
