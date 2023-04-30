@@ -18,4 +18,4 @@
 # under the License.
 
 set -ex
-cargo clippy --all-targets --workspace --features avro,pyarrow,scheduler -- -D warnings
+cargo clippy --all-targets --workspace --features avro,pyarrow -- -D warnings

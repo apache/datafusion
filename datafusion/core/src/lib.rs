@@ -422,8 +422,6 @@ pub mod physical_optimizer;
 pub mod physical_plan;
 pub mod prelude;
 pub mod scalar;
-#[cfg(feature = "scheduler")]
-pub mod scheduler;
 pub mod variable;
 
 // re-export dependencies from arrow-rs to minimise version maintenance for crate users

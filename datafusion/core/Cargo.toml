@@ -46,8 +46,6 @@ dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "da
 force_hash_collisions = []
 pyarrow = ["datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
-# Used to enable scheduler
-scheduler = ["rayon"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusion-optimizer/unicode_expressions", "datafusion-sql/unicode_expressions"]
 
@@ -86,7 +84,6 @@ parquet = { workspace = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
-rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
 sqlparser = { version = "0.33", features = ["visitor"] }
 tempfile = "3"
@@ -150,7 +147,6 @@ name = "physical_plan"
 [[bench]]
 harness = false
 name = "parquet_query_sql"
-required-features = ["scheduler"]
 
 [[bench]]
 harness = false
