@@ -39,8 +39,6 @@ pub use layout::row_supported;
 use std::sync::Arc;
 
 pub mod accessor;
-#[cfg(feature = "jit")]
-pub mod jit;
 pub mod layout;
 pub mod reader;
 mod validity;
