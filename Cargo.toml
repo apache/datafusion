@@ -22,7 +22,6 @@ members = [
     "datafusion/core",
     "datafusion/expr",
     "datafusion/execution",
-    "datafusion/jit",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/proto",

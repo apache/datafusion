@@ -44,8 +44,6 @@ default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "co
 dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "datafusion-optimizer/dictionary_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
-# Used to enable JIT code generation
-jit = ["datafusion-jit", "datafusion-row/jit"]
 pyarrow = ["datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
 # Used to enable scheduler
@@ -68,7 +66,6 @@ dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "23.0.0", features = ["parquet", "object_store"] }
 datafusion-execution = { path = "../execution", version = "23.0.0" }
 datafusion-expr = { path = "../expr", version = "23.0.0" }
-datafusion-jit = { path = "../jit", version = "23.0.0", optional = true }
 datafusion-optimizer = { path = "../optimizer", version = "23.0.0", default-features = false }
 datafusion-physical-expr = { path = "../physical-expr", version = "23.0.0", default-features = false }
 datafusion-row = { path = "../row", version = "23.0.0" }
@@ -158,11 +155,6 @@ required-features = ["scheduler"]
 [[bench]]
 harness = false
 name = "sql_planner"
-
-[[bench]]
-harness = false
-name = "jit"
-required-features = ["jit"]
 
 [[bench]]
 harness = false
