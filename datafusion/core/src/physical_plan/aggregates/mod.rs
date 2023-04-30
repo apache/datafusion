@@ -80,7 +80,7 @@ pub enum AggregateMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
     /// Some of the expressions in the GROUP BY clause have an ordering.
-    // For example, if the input is ordered by a, b, c, d and we group by b, a, d;
+    // For example, if the input is ordered by a, b, c and we group by b, a, d;
     // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
     // defines a preset for the existing ordering, e.g a, b defines a preset.
     PartiallyOrdered,
@@ -510,7 +510,7 @@ impl ExecutionPlan for AggregateExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             if self.aggregation_ordering.is_none() {
