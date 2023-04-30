@@ -512,8 +512,7 @@ mod tests {
             // handle special q15 which contains "create view" sql statement
             if sql.starts_with("select") {
                 let explain = "explain ".to_string() + sql;
-                let result_batch =
-                    execute_query(&ctx, explain.as_str(), false).await?;
+                let result_batch = execute_query(&ctx, explain.as_str(), false).await?;
                 if !actual.is_empty() {
                     actual += "\n";
                 }
