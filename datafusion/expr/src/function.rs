@@ -257,8 +257,9 @@ pub fn return_type(
             }
         }),
 
-        BuiltinScalarFunction::Factorial
-        | BuiltinScalarFunction::Gcd
+        BuiltinScalarFunction::Factorial => Ok(DataType::UInt64),
+        
+        BuiltinScalarFunction::Gcd
         | BuiltinScalarFunction::Lcm => Ok(DataType::Int64),
 
         BuiltinScalarFunction::Power => match &input_expr_types[0] {
