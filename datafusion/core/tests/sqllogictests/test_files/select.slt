@@ -473,9 +473,51 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 
 # TODO: filter_with_time64nanosecond
 
-# TODO: query_cte_with_alias
+# query cte with alias
+# the purpose of this test is just to make sure the query produces a valid plan
+statement ok
+create table t1(id smallint, a smallint);
 
-# TODO: query_cte
+query III
+WITH
+    v1 AS (SELECT * FROM t1),
+    v2 AS (SELECT v1.id AS id, v1a.id AS id_a, v1b.id AS id_b
+FROM v1, v1 v1a, v1 v1b
+WHERE v1a.id = v1.id - 1
+  AND v1b.id = v1.id + 1)
+SELECT * FROM v2
+----
+
+# query cte
+query I
+WITH t AS (SELECT 1) SELECT * FROM t
+----
+1
+
+# query cte + union
+query I rowsort
+WITH t AS (SELECT 1 AS a), u AS (SELECT 2 AS a)
+SELECT * FROM t
+UNION ALL
+SELECT * FROM u
+----
+1
+2
+
+# query cte + join
+query I
+WITH t AS (SELECT 1 AS id1), u AS (SELECT 1 AS id2, 5 as x)
+SELECT x
+FROM t
+JOIN u ON (id1 = id2)
+----
+5
+
+# query cte with backward reference
+query I
+WITH t AS (SELECT 1 AS id1), u AS (SELECT * FROM t) SELECT * from u
+----
+1
 
 # nested select
 query TII
