@@ -465,13 +465,66 @@ ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN 
 
 # TODO: sort_on_window_null_string
 
-# TODO: filter_with_time32second
 
-# TODO: filter_with_time32millisecond
+# # Create time tables with different precisions but the same logical values
 
-# TODO: filter_with_time64microsecond
+statement ok
+create table time_data(ts bigint, value bigint) as values
+  (5000000000000, 2505),
+  (5000000000000, 2436),
+  (5500000000000, 2384),
+  (5500000000000, 1815),
+  (5900000000000, 2330),
+  (5900000000000, 2065);
 
-# TODO: filter_with_time64nanosecond
+statement ok
+create table time64_nanos as
+select arrow_cast(ts, 'Time64(Nanosecond)') as time, value
+from time_data;
+
+statement ok
+create table time64_micros as
+select arrow_cast(ts / 1000, 'Time64(Microsecond)') as time, value
+from time_data;
+
+statement ok
+create table time32_millis as
+select arrow_cast(arrow_cast(ts / 1000 / 1000, 'Int32'), 'Time32(Millisecond)') as time, value
+from time_data;
+
+statement ok
+create table time32_s as
+select arrow_cast(arrow_cast(ts / 1000 / 1000 / 1000, 'Int32'), 'Time32(Second)') as time, value
+from time_data;
+
+# select with time filter and seconds precision
+query I rowsort
+SELECT value FROM time32_s WHERE time = '01:23:20'
+----
+2436
+2505
+
+# select with time filter and milliseconds precision
+query I rowsort
+SELECT value FROM time32_millis WHERE time = '01:23:20'
+----
+2436
+2505
+
+# select with time filter and microseconds precision
+query I rowsort
+SELECT value FROM time64_micros WHERE time = '01:23:20'
+----
+2436
+2505
+
+# select with time filter and nanoseconds precision
+query I rowsort
+SELECT value FROM time64_nanos WHERE time = '01:23:20'
+----
+2436
+2505
+
 
 # query cte with alias
 # the purpose of this test is just to make sure the query produces a valid plan
