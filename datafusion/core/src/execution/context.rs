@@ -65,8 +65,8 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
-    SetVariable, TableSource, TableType, UNNAMED_TABLE,
+    CreateView, DropCatalogSchema, DropTable, DropView, Explain, LogicalPlan,
+    LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
 use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
@@ -86,7 +86,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::OwnedTableReference;
+use datafusion_common::{OwnedTableReference, SchemaReference};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -383,6 +383,7 @@ impl SessionContext {
                 DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
                 DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
                 DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
+                DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
             },
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
@@ -651,6 +652,46 @@ impl SessionContext {
                 "View '{name}' doesn't exist."
             ))),
         }
+    }
+
+    async fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
+        let DropCatalogSchema {
+            name,
+            if_exists: allow_missing,
+            cascade,
+            schema: _,
+        } = cmd;
+        let catalog = {
+            let state = self.state.read();
+            let catalog_name = match &name {
+                SchemaReference::Full { catalog, .. } => catalog.to_string(),
+                SchemaReference::Bare { .. } => {
+                    state.config_options().catalog.default_catalog.to_string()
+                }
+            };
+            if let Some(catalog) = state.catalog_list.catalog(&catalog_name) {
+                catalog
+            } else if allow_missing {
+                return self.return_empty_dataframe();
+            } else {
+                return self.schema_doesnt_exist_err(name);
+            }
+        };
+        let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
+        match (dereg, allow_missing) {
+            (None, true) => self.return_empty_dataframe(),
+            (None, false) => self.schema_doesnt_exist_err(name),
+            (Some(_), _) => self.return_empty_dataframe(),
+        }
+    }
+
+    fn schema_doesnt_exist_err(
+        &self,
+        schemaref: SchemaReference<'_>,
+    ) -> Result<DataFrame> {
+        Err(DataFusionError::Execution(format!(
+            "Schema '{schemaref}' doesn't exist."
+        )))
     }
 
     async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
