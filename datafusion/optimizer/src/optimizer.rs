@@ -463,10 +463,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "bad rule\ncaused by\n\
-            Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
-            Error during planning: rule failed. This was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker",
+            "Optimizer rule 'bad rule' failed\ncaused by\n\
+            Error during planning: rule failed",
             err.to_string()
         );
     }
