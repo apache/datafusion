@@ -560,19 +560,21 @@ mod tests {
         array: &ArrayRef,
         agg: Arc<dyn AggregateExpr>,
         row_accessor: &mut RowAccessor,
+        row_indexs: Vec<usize>,
     ) -> Result<ScalarValue> {
         let mut accum = agg.create_row_accumulator(0)?;
-        let scalar_value = ScalarValue::try_from_array(array, 0)?;
 
-        accum.update_scalar(&scalar_value, row_accessor)?;
+        for row_index in row_indexs {
+            let scalar_value = ScalarValue::try_from_array(array, row_index)?;
+            accum.update_scalar(&scalar_value, row_accessor)?;
+        }
         accum.evaluate(row_accessor)
     }
 
     #[test]
     fn sum_dictionary_f64() -> Result<()> {
-        let keys = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        let values =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let keys = Int32Array::from(vec![2, 3, 1, 0, 1]);
+        let values = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64]));
 
         let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
 
@@ -581,7 +583,7 @@ mod tests {
         let mut buffer: Vec<u8> = vec![0; 16];
         row_accessor.point_to(0, &mut buffer);
 
-        let expected = ScalarValue::from(1_f64);
+        let expected = ScalarValue::from(9_f64);
 
         let agg = Arc::new(Sum::new(
             col("a", &row_schema)?,
@@ -589,8 +591,7 @@ mod tests {
             expected.get_datatype(),
         ));
 
-        let actual = row_aggregate(&a, agg, &mut row_accessor)?;
-
+        let actual = row_aggregate(&a, agg, &mut row_accessor, vec![0, 1, 2])?;
         assert_eq!(expected, actual);
 
         Ok(())
@@ -598,9 +599,8 @@ mod tests {
 
     #[test]
     fn avg_dictionary_f64() -> Result<()> {
-        let keys = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        let values =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let keys = Int32Array::from(vec![2, 1, 1, 3, 0]);
+        let values = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64]));
 
         let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
 
@@ -612,7 +612,7 @@ mod tests {
         let mut buffer: Vec<u8> = vec![0; 24];
         row_accessor.point_to(0, &mut buffer);
 
-        let expected = ScalarValue::from(1_f64);
+        let expected = ScalarValue::from(2.3333333333333335_f64);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         let agg = Arc::new(Avg::new(
@@ -621,8 +621,7 @@ mod tests {
             expected.get_datatype(),
         ));
 
-        let actual = row_aggregate(&a, agg, &mut row_accessor)?;
-
+        let actual = row_aggregate(&a, agg, &mut row_accessor, vec![0, 1, 2])?;
         assert_eq!(expected, actual);
 
         Ok(())
