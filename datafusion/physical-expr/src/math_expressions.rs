@@ -178,7 +178,7 @@ pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
             { |value: u64| { (1..=value).product() } }
         )) as ArrayRef),
         other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function factorial"
+            "Unsupported data type {other:?} for function factorial. Requires bigint"
         ))),
     }
 }
