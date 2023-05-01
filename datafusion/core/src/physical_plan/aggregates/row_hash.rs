@@ -98,6 +98,9 @@ pub(crate) struct GroupedHashAggregateStream {
     random_state: RandomState,
     /// size to be used for resulting RecordBatches
     batch_size: usize,
+    /// threshold for using `ScalarValue`s to update
+    /// accumulators during high-cardinality aggregations for each input batch.
+    scalar_update_factor: usize,
     /// if the result is chunked into batches,
     /// last offset is preserved for continuation.
     row_group_skip_position: usize,
@@ -119,6 +122,7 @@ impl GroupedHashAggregateStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         batch_size: usize,
+        scalar_update_factor: usize,
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
@@ -219,6 +223,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             random_state: Default::default(),
             batch_size,
+            scalar_update_factor,
             row_group_skip_position: 0,
             indices: [normal_agg_indices, row_agg_indices],
         })
@@ -555,7 +560,7 @@ impl GroupedHashAggregateStream {
             if matches!(self.mode, AggregateMode::Partial | AggregateMode::Single)
                 && normal_aggr_input_values.is_empty()
                 && normal_filter_values.is_empty()
-                && groups_with_rows.len() >= batch.num_rows() / 10
+                && groups_with_rows.len() >= batch.num_rows() / self.scalar_update_factor
             {
                 self.update_accumulators_using_scalar(
                     &groups_with_rows,
