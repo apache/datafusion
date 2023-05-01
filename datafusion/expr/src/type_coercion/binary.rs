@@ -150,14 +150,16 @@ pub fn coerce_types(
         | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
-            if (is_datetime(lhs_type)
+            if is_datetime(lhs_type)
                 || is_datetime(rhs_type)
                 || is_interval(lhs_type)
-                || is_interval(rhs_type))
-                && (!is_interval(lhs_type)
-                    || !is_datetime(rhs_type)
-                    || *op != Operator::Minus) =>
+                || is_interval(rhs_type) =>
         {
+            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
+                return Err(DataFusionError::Plan(format!(
+                    "interval can't subtract timestamp/date",
+                )));
+            }
             temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
         // for math expressions, the final value of the coercion is also the return type
