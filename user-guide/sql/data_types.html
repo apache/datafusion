@@ -377,7 +377,7 @@ the <code class="docutils literal notranslate"><span class="pre">arrow_typeof</s
 </pre></div>
 </div>
 <p>You can cast a SQL expression to a specific Arrow type using the <code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code> function
-For example, to cast the output of <code class="docutils literal notranslate"><span class="pre">now()</span></code> to a <code class="docutils literal notranslate"><span class="pre">Timestamp</span></code> with second precision rather:</p>
+For example, to cast the output of <code class="docutils literal notranslate"><span class="pre">now()</span></code> to a <code class="docutils literal notranslate"><span class="pre">Timestamp</span></code> with second precision:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select arrow_cast(now(), &#39;Timestamp(Second, None)&#39;);
 +---------------------+
 | now()               |
@@ -693,7 +693,7 @@ For example, to cast the output of <code class="docutils literal notranslate"><s
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.1.3.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.2.1.<br>
 </p>
     </div>
     
