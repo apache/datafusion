@@ -1269,7 +1269,7 @@ mod test {
     fn binary_op_date32_eq_ts() -> Result<()> {
         let expr = cast(
             lit("1998-03-18"),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
@@ -1435,7 +1435,7 @@ mod test {
             Operator::Plus,
             Box::new(cast(
                 lit("2000-01-01T00:00:00"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();
@@ -1450,12 +1450,12 @@ mod test {
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
             Operator::Minus,
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();
