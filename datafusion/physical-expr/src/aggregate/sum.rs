@@ -427,8 +427,8 @@ impl RowAccumulator for SumRowAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
+    use crate::expressions::{col, Avg};
     use crate::generic_test_op;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
@@ -571,9 +571,10 @@ mod tests {
     #[test]
     fn sum_dictionary_f64() -> Result<()> {
         let keys = Int32Array::from(vec![0, 1, 2, 3, 4]);
-        let values = Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]);
+        let values =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
 
-        let a: ArrayRef = Arc::new(DictionaryArray::try_new(&keys, &values).unwrap());
+        let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
 
         let row_schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
         let mut row_accessor = RowAccessor::new(&row_schema);
@@ -584,6 +585,38 @@ mod tests {
 
         let agg = Arc::new(Sum::new(
             col("a", &row_schema)?,
+            "bla".to_string(),
+            expected.get_datatype(),
+        ));
+
+        let actual = row_aggregate(&a, agg, &mut row_accessor)?;
+
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_dictionary_f64() -> Result<()> {
+        let keys = Int32Array::from(vec![0, 1, 2, 3, 4]);
+        let values =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+
+        let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+
+        let row_schema = Schema::new(vec![
+            Field::new("count", DataType::UInt64, true),
+            Field::new("a", DataType::Float64, true),
+        ]);
+        let mut row_accessor = RowAccessor::new(&row_schema);
+        let mut buffer: Vec<u8> = vec![0; 24];
+        row_accessor.point_to(0, &mut buffer);
+
+        let expected = ScalarValue::from(1_f64);
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let agg = Arc::new(Avg::new(
+            col("a", &schema)?,
             "bla".to_string(),
             expected.get_datatype(),
         ));
