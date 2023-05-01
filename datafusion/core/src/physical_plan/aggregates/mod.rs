@@ -424,6 +424,7 @@ impl AggregateExec {
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
         let batch_size = context.session_config().batch_size();
+        let scalar_update_factor = context.session_config().agg_scalar_update_factor();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
@@ -448,6 +449,7 @@ impl AggregateExec {
                 input,
                 baseline_metrics,
                 batch_size,
+                scalar_update_factor,
                 context,
                 partition,
                 aggregation_ordering.clone(),
@@ -463,6 +465,7 @@ impl AggregateExec {
                     input,
                     baseline_metrics,
                     batch_size,
+                    scalar_update_factor,
                     context,
                     partition,
                 )?,
