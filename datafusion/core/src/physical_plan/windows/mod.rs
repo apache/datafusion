@@ -286,17 +286,15 @@ pub(crate) fn window_ordering_equivalence(
                         let column_info =
                             schema.column_with_name(expr.field().unwrap().name());
                         if let Some((idx, field)) = column_info {
-                            let lhs = OrderedColumn {
-                                col: column.clone(),
-                                options: first.options,
-                            };
-                            let rhs = OrderedColumn {
-                                col: Column::new(field.name(), idx),
-                                options: SortOptions {
-                                    descending: false,
-                                    nulls_first: false,
-                                }, // ASC, NULLS LAST
-                            };
+                            let lhs = OrderedColumn::new(column.clone(), first.options);
+                            let options = SortOptions {
+                                descending: false,
+                                nulls_first: false,
+                            }; // ASC, NULLS LAST
+                            let rhs = OrderedColumn::new(
+                                Column::new(field.name(), idx),
+                                options,
+                            );
                             result.add_equal_conditions((&lhs, &rhs));
                         }
                     }

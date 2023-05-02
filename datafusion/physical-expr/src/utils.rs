@@ -199,7 +199,7 @@ fn normalize_sort_requirement_with_equivalence_properties(
     }
 }
 
-pub fn normalize_expr_with_ordering_equivalence_properties(
+fn normalize_expr_with_ordering_equivalence_properties(
     expr: Arc<dyn PhysicalExpr>,
     sort_options: Option<SortOptions>,
     eq_properties: &[OrderingEquivalentClass],
@@ -796,6 +796,18 @@ mod tests {
         }
     }
 
+    // Generate a schema which consists of 5 columns (a, b, c, d, e)
+    fn create_test_schema() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+
+        Ok(schema)
+    }
+
     #[test]
     fn test_build_dag() -> Result<()> {
         let schema = Schema::new(vec![
@@ -1080,6 +1092,85 @@ mod tests {
     }
 
     #[test]
+    fn test_ordering_satisfy_with_equivalence() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let col_c = &Column::new("c", 2);
+        let col_d = &Column::new("d", 3);
+        let col_e = &Column::new("e", 4);
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option2 = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        // The schema is ordered by a ASC NULLS LAST, b ASC NULLS LAST
+        let provided = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()),
+                options: option1,
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(col_b.clone()),
+                options: option1,
+            },
+        ];
+        let provided = Some(&provided[..]);
+        let test_schema = create_test_schema()?;
+        let eq_properties = &mut EquivalenceProperties::new(test_schema.clone());
+        eq_properties.add_equal_conditions((col_a, col_c));
+        let ordering_eq_properties = &mut OrderingEquivalenceProperties::new(test_schema);
+        ordering_eq_properties.add_equal_conditions((
+            &OrderedColumn::new(col_a.clone(), option1),
+            &OrderedColumn::new(col_d.clone(), option1),
+        ));
+        ordering_eq_properties.add_equal_conditions((
+            &OrderedColumn::new(col_a.clone(), option1),
+            &OrderedColumn::new(col_e.clone(), option2),
+        ));
+        // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
+        let requirements = vec![
+            // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
+            (vec![(col_a, option1)], true),
+            (vec![(col_a, option2)], false),
+            // Test whether equivalence works as expected
+            (vec![(col_c, option1)], true),
+            (vec![(col_c, option2)], false),
+            // Test whether ordering equivalence works as expected
+            (vec![(col_d, option1)], true),
+            (vec![(col_d, option2)], false),
+            (vec![(col_e, option2)], true),
+            (vec![(col_e, option1)], false),
+        ];
+        for (cols, expected) in requirements {
+            let err_msg = format!("Error in test case:{:?}", cols);
+            let required = cols
+                .into_iter()
+                .map(|(col, options)| PhysicalSortExpr {
+                    expr: Arc::new(col.clone()),
+                    options,
+                })
+                .collect::<Vec<_>>();
+
+            let required = Some(&required[..]);
+            assert_eq!(
+                ordering_satisfy(
+                    provided,
+                    required,
+                    || eq_properties.clone(),
+                    || ordering_eq_properties.clone(),
+                ),
+                expected,
+                "{}",
+                err_msg
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_reassign_predicate_columns_in_list() {
         let int_field = Field::new("should_not_matter", DataType::Int64, true);
         let dict_field = Field::new(
@@ -1114,5 +1205,67 @@ mod tests {
         .unwrap();
 
         assert_eq!(actual.as_ref(), expected.as_any());
+    }
+
+    #[test]
+    fn test_normalize_expr_with_equivalence() -> Result<()> {
+        // Assume schema satisfies ordering a ASC NULLS LAST
+        // and d ASC NULLS LAST and e DESC NULLS FIRST
+        // Assume that column a and c are aliases.
+        let col_a = &Column::new("a", 0);
+        let _col_b = &Column::new("b", 1);
+        let col_c = &Column::new("c", 2);
+        let col_d = &Column::new("d", 3);
+        let col_e = &Column::new("e", 4);
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option2 = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let test_schema = create_test_schema()?;
+        let eq_properties = &mut EquivalenceProperties::new(test_schema.clone());
+        eq_properties.add_equal_conditions((col_a, col_c));
+        let ordering_eq_properties = &mut OrderingEquivalenceProperties::new(test_schema);
+        ordering_eq_properties.add_equal_conditions((
+            &OrderedColumn::new(col_a.clone(), option1),
+            &OrderedColumn::new(col_d.clone(), option1),
+        ));
+        ordering_eq_properties.add_equal_conditions((
+            &OrderedColumn::new(col_a.clone(), option1),
+            &OrderedColumn::new(col_e.clone(), option2),
+        ));
+
+        let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
+        let col_c_expr = Arc::new(col_c.clone()) as Arc<dyn PhysicalExpr>;
+        let col_d_expr = Arc::new(col_d.clone()) as Arc<dyn PhysicalExpr>;
+        let col_e_expr = Arc::new(col_e.clone()) as Arc<dyn PhysicalExpr>;
+        // When column c and a are normalized they should be mapped to the column a.
+        assert!(col_a_expr.eq(&normalize_expr_with_equivalence_properties(
+            col_a_expr.clone(),
+            eq_properties.classes()
+        )));
+        assert!(col_a_expr.eq(&normalize_expr_with_equivalence_properties(
+            col_c_expr.clone(),
+            eq_properties.classes()
+        )));
+        // When column d ASC and e DESC are normalized they should be mapped to the column a.
+        assert!(
+            col_a_expr.eq(&normalize_expr_with_ordering_equivalence_properties(
+                col_d_expr.clone(),
+                Some(option1),
+                ordering_eq_properties.classes()
+            ))
+        );
+        assert!(
+            col_a_expr.eq(&normalize_expr_with_ordering_equivalence_properties(
+                col_e_expr.clone(),
+                Some(option2),
+                ordering_eq_properties.classes()
+            ))
+        );
+        Ok(())
     }
 }
