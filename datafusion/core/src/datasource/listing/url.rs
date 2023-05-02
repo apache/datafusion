@@ -150,11 +150,8 @@ impl ListingTableUrl {
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
         use object_store::path::DELIMITER;
-        let path: &str = path.as_ref();
-        let stripped = match self.prefix.as_ref() {
-            "" => path,
-            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
-        };
+        let stripped = path.as_ref().strip_prefix(self.prefix.as_ref())?;
+        let stripped = stripped.strip_prefix(DELIMITER).unwrap_or(stripped);
         Some(stripped.split(DELIMITER))
     }
 
