@@ -234,29 +234,15 @@ fn normalize_sort_expr_with_ordering_equivalence_properties(
     sort_expr: PhysicalSortExpr,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortExpr {
-    let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
-        sort_expr.expr.clone(),
-        Some(sort_expr.options),
+    let sort_req = PhysicalSortRequirement::from(sort_expr);
+    let res = normalize_sort_requirement_with_ordering_equivalence_properties(
+        sort_req,
         eq_properties,
     );
-
-    if sort_expr.expr.eq(&normalized_expr) {
-        sort_expr
-    } else {
-        let mut options = sort_expr.options;
-        if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
-            for eq_class in eq_properties.iter() {
-                let head = eq_class.head();
-                if head.col.eq(col) {
-                    options = head.options;
-                    break;
-                }
-            }
-        }
-        PhysicalSortExpr {
-            expr: normalized_expr,
-            options,
-        }
+    PhysicalSortExpr {
+        expr: res.expr().clone(),
+        // We are sure options will be Some.
+        options: res.options().unwrap(),
     }
 }
 
