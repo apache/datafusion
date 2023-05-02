@@ -60,7 +60,8 @@ pub enum TypeSignature {
     OneOf(Vec<TypeSignature>),
 }
 
-///The Signature of a function defines its supported input types as well as its volatility.
+/// The signature of a function defines the supported argument types
+/// and its volatility.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Signature {
     /// type_signature - The types that the function accepts. See [TypeSignature] for more information.
