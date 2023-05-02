@@ -37,45 +37,16 @@ pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
-    // TODO: move type checking to the planning phase and not in the physical expr
-    // so we can remove this
-    input_schema: Schema,
 }
 
 impl DateTimeIntervalExpr {
     /// Create a new instance of DateIntervalExpr
-    pub fn try_new(
+    pub fn new(
         lhs: Arc<dyn PhysicalExpr>,
         op: Operator,
         rhs: Arc<dyn PhysicalExpr>,
-        input_schema: &Schema,
-    ) -> Result<Self> {
-        match (
-            lhs.data_type(input_schema)?,
-            op,
-            rhs.data_type(input_schema)?,
-        ) {
-            (
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                Operator::Plus | Operator::Minus,
-                DataType::Interval(_),
-            )
-            | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
-            | (DataType::Interval(_), Operator::Plus, DataType::Timestamp(_, _))
-            | (
-                DataType::Interval(_),
-                Operator::Plus | Operator::Minus,
-                DataType::Interval(_),
-            ) => Ok(Self {
-                lhs,
-                op,
-                rhs,
-                input_schema: input_schema.clone(),
-            }),
-            (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
-                "Invalid operation {op} between '{lhs}' and '{rhs}' for DateIntervalExpr"
-            ))),
-        }
+    ) -> Self {
+        Self { lhs, op, rhs }
     }
 
     /// Get the left-hand side expression
@@ -202,12 +173,11 @@ impl PhysicalExpr for DateTimeIntervalExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(DateTimeIntervalExpr::try_new(
+        Ok(Arc::new(DateTimeIntervalExpr::new(
             children[0].clone(),
             self.op,
             children[1].clone(),
-            &self.input_schema,
-        )?))
+        )))
     }
 }
 
@@ -217,6 +187,36 @@ impl PartialEq<dyn Any> for DateTimeIntervalExpr {
             .downcast_ref::<Self>()
             .map(|x| self.lhs.eq(&x.lhs) && self.op == x.op && self.rhs.eq(&x.rhs))
             .unwrap_or(false)
+    }
+}
+
+/// create a DateIntervalExpr
+pub fn date_time_interval_expr(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    match (
+        lhs.data_type(input_schema)?,
+        op,
+        rhs.data_type(input_schema)?,
+    ) {
+        (
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+            Operator::Plus | Operator::Minus,
+            DataType::Interval(_),
+        )
+        | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
+        | (DataType::Interval(_), Operator::Plus, DataType::Timestamp(_, _))
+        | (
+            DataType::Interval(_),
+            Operator::Plus | Operator::Minus,
+            DataType::Interval(_),
+        ) => Ok(Arc::new(DateTimeIntervalExpr::new(lhs, op, rhs))),
+        (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
+            "Invalid operation {op} between '{lhs}' and '{rhs}' for DateIntervalExpr"
+        ))),
     }
 }
 
@@ -535,7 +535,7 @@ mod tests {
         let lhs = create_physical_expr(&dt, &dfs, &schema, &props)?;
         let rhs = create_physical_expr(&interval, &dfs, &schema, &props)?;
 
-        let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let cut = date_time_interval_expr(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
 
         let mut builder = Date32Builder::with_capacity(8);
@@ -613,7 +613,7 @@ mod tests {
         let lhs_str = format!("{lhs}");
         let rhs_str = format!("{rhs}");
 
-        let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let cut = DateTimeIntervalExpr::new(lhs, op, rhs);
 
         assert_eq!(lhs_str, format!("{}", cut.lhs()));
         assert_eq!(op, cut.op().clone());

@@ -29,7 +29,7 @@ use crate::{
 use datafusion::{
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
-    logical_expr::CreateExternalTable,
+    logical_expr::{CreateExternalTable, DdlStatement},
 };
 use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
 use object_store::ObjectStore;
@@ -178,7 +178,7 @@ async fn exec_and_print(
 
     let plan = ctx.state().create_logical_plan(&sql).await?;
     let df = match &plan {
-        LogicalPlan::CreateExternalTable(cmd) => {
+        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
             create_external_table(&ctx, cmd)?;
             ctx.execute_logical_plan(plan).await?
         }
@@ -238,7 +238,7 @@ mod tests {
         let plan = ctx.state().create_logical_plan(&sql).await?;
 
         match &plan {
-            LogicalPlan::CreateExternalTable(cmd) => {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
                 create_external_table(&ctx, cmd)?;
             }
             _ => assert!(false),

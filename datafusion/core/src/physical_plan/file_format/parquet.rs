@@ -28,7 +28,6 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
-use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -49,15 +48,14 @@ use crate::{
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
-use parquet::errors::ParquetError;
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 
@@ -69,8 +67,6 @@ mod row_groups;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 pub use metrics::ParquetFileMetrics;
-
-use super::get_output_ordering;
 
 #[derive(Default)]
 struct RepartitionState {
@@ -94,6 +90,7 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
@@ -151,7 +148,8 @@ impl ParquetExec {
             }
         });
 
-        let (projected_schema, projected_statistics) = base_config.project();
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
 
         Self {
             pushdown_filters: None,
@@ -160,6 +158,7 @@ impl ParquetExec {
             base_config,
             projected_schema,
             projected_statistics,
+            projected_output_ordering,
             metrics,
             predicate,
             pruning_predicate,
@@ -343,7 +342,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        get_output_ordering(&self.base_config)
+        self.projected_output_ordering.as_deref()
     }
 
     fn with_new_children(
@@ -624,10 +623,8 @@ impl DefaultParquetFileReaderFactory {
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage
 struct ParquetFileReader {
-    store: Arc<dyn ObjectStore>,
-    meta: ObjectMeta,
     file_metrics: ParquetFileMetrics,
-    metadata_size_hint: Option<usize>,
+    inner: ParquetObjectReader,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -636,13 +633,7 @@ impl AsyncFileReader for ParquetFileReader {
         range: Range<usize>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         self.file_metrics.bytes_scanned.add(range.end - range.start);
-
-        self.store
-            .get_range(&self.meta.location, range)
-            .map_err(|e| {
-                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}"))
-            })
-            .boxed()
+        self.inner.get_bytes(range)
     }
 
     fn get_byte_ranges(
@@ -654,37 +645,13 @@ impl AsyncFileReader for ParquetFileReader {
     {
         let total = ranges.iter().map(|r| r.end - r.start).sum();
         self.file_metrics.bytes_scanned.add(total);
-
-        async move {
-            self.store
-                .get_ranges(&self.meta.location, &ranges)
-                .await
-                .map_err(|e| {
-                    ParquetError::General(format!(
-                        "AsyncChunkReader::get_byte_ranges error: {e}"
-                    ))
-                })
-        }
-        .boxed()
+        self.inner.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        Box::pin(async move {
-            let metadata = fetch_parquet_metadata(
-                self.store.as_ref(),
-                &self.meta,
-                self.metadata_size_hint,
-            )
-            .await
-            .map_err(|e| {
-                ParquetError::General(format!(
-                    "AsyncChunkReader::get_metadata error: {e}"
-                ))
-            })?;
-            Ok(Arc::new(metadata))
-        })
+        self.inner.get_metadata()
     }
 }
 
@@ -701,11 +668,15 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             file_meta.location().as_ref(),
             metrics,
         );
+        let store = Arc::clone(&self.store);
+        let mut inner = ParquetObjectReader::new(store, file_meta.object_meta);
+
+        if let Some(hint) = metadata_size_hint {
+            inner = inner.with_footer_size_hint(hint)
+        };
 
         Ok(Box::new(ParquetFileReader {
-            meta: file_meta.object_meta,
-            store: Arc::clone(&self.store),
-            metadata_size_hint,
+            inner,
             file_metrics,
         }))
     }

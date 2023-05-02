@@ -78,7 +78,7 @@ pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 pub use column::{col, Column, UnKnownColumn};
-pub use datetime::DateTimeIntervalExpr;
+pub use datetime::{date_time_interval_expr, DateTimeIntervalExpr};
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};

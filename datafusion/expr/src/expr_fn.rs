@@ -47,6 +47,12 @@ pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 
+/// Create an out reference column which hold a reference that has been resolved to a field
+/// outside of the current plan.
+pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
+    Expr::OuterReferenceColumn(dt, ident.into())
+}
+
 /// Create an unqualified column expression from the provided name, without normalizing
 /// the column.
 ///
@@ -304,10 +310,11 @@ pub fn approx_percentile_cont_with_weight(
 
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::Exists {
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: false,
     }
@@ -315,10 +322,11 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::Exists {
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: true,
     }
@@ -326,11 +334,12 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create an IN subquery expression
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::InSubquery {
         expr: Box::new(expr),
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: false,
     }
@@ -338,11 +347,12 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a NOT IN subquery expression
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::InSubquery {
         expr: Box::new(expr),
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: true,
     }
@@ -350,9 +360,10 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
 
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::ScalarSubquery(Subquery {
         subquery,
-        outer_ref_columns: vec![],
+        outer_ref_columns,
     })
 }
 

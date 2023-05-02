@@ -1210,13 +1210,14 @@ date_trunc(precision, expression)
 - **precision**: Time precision to truncate to.
   The following precisions are supported:
 
-  - year
-  - month
-  - week
-  - day
-  - hour
-  - minute
-  - second
+  - year / YEAR
+  - quarter / QUARTER
+  - month / MONTH
+  - week / WEEK
+  - day / DAY
+  - hour / HOUR
+  - minute / MINUTE
+  - second / SECOND
 
 - **expression**: Time expression to operate on.
   Can be a constant, column, or function.

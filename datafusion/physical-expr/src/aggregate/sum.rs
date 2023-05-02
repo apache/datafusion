@@ -275,6 +275,10 @@ pub(crate) fn add_to_row(
         ScalarValue::Decimal128(rhs, _, _) => {
             sum_row!(index, accessor, rhs, i128)
         }
+        ScalarValue::Dictionary(_, value) => {
+            let value = value.as_ref();
+            return add_to_row(index, accessor, value);
+        }
         _ => {
             let msg =
                 format!("Row sum updater is not expected to receive a scalar {s:?}");
@@ -307,6 +311,10 @@ pub(crate) fn update_avg_to_row(
         }
         ScalarValue::Decimal128(rhs, _, _) => {
             avg_row!(index, accessor, rhs, i128)
+        }
+        ScalarValue::Dictionary(_, value) => {
+            let value = value.as_ref();
+            return update_avg_to_row(index, accessor, value);
         }
         _ => {
             let msg =
@@ -419,11 +427,12 @@ impl RowAccumulator for SumRowAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
+    use crate::expressions::{col, Avg};
     use crate::generic_test_op;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+    use arrow_array::DictionaryArray;
     use datafusion_common::Result;
 
     #[test]
@@ -545,5 +554,76 @@ mod tests {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(a, DataType::Float64, Sum, ScalarValue::from(15_f64))
+    }
+
+    fn row_aggregate(
+        array: &ArrayRef,
+        agg: Arc<dyn AggregateExpr>,
+        row_accessor: &mut RowAccessor,
+        row_indexs: Vec<usize>,
+    ) -> Result<ScalarValue> {
+        let mut accum = agg.create_row_accumulator(0)?;
+
+        for row_index in row_indexs {
+            let scalar_value = ScalarValue::try_from_array(array, row_index)?;
+            accum.update_scalar(&scalar_value, row_accessor)?;
+        }
+        accum.evaluate(row_accessor)
+    }
+
+    #[test]
+    fn sum_dictionary_f64() -> Result<()> {
+        let keys = Int32Array::from(vec![2, 3, 1, 0, 1]);
+        let values = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64]));
+
+        let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+
+        let row_schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let mut row_accessor = RowAccessor::new(&row_schema);
+        let mut buffer: Vec<u8> = vec![0; 16];
+        row_accessor.point_to(0, &mut buffer);
+
+        let expected = ScalarValue::from(9_f64);
+
+        let agg = Arc::new(Sum::new(
+            col("a", &row_schema)?,
+            "bla".to_string(),
+            expected.get_datatype(),
+        ));
+
+        let actual = row_aggregate(&a, agg, &mut row_accessor, vec![0, 1, 2])?;
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_dictionary_f64() -> Result<()> {
+        let keys = Int32Array::from(vec![2, 1, 1, 3, 0]);
+        let values = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64]));
+
+        let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+
+        let row_schema = Schema::new(vec![
+            Field::new("count", DataType::UInt64, true),
+            Field::new("a", DataType::Float64, true),
+        ]);
+        let mut row_accessor = RowAccessor::new(&row_schema);
+        let mut buffer: Vec<u8> = vec![0; 24];
+        row_accessor.point_to(0, &mut buffer);
+
+        let expected = ScalarValue::from(2.3333333333333335_f64);
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let agg = Arc::new(Avg::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            expected.get_datatype(),
+        ));
+
+        let actual = row_aggregate(&a, agg, &mut row_accessor, vec![0, 1, 2])?;
+        assert_eq!(expected, actual);
+
+        Ok(())
     }
 }

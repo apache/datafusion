@@ -39,8 +39,8 @@ use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::Wildcard;
 use datafusion_expr::{
-    avg, col, count, exists, expr, in_subquery, lit, max, scalar_subquery, sum,
-    AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
+    avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col, scalar_subquery,
+    sum, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunction,
 };
 
@@ -241,7 +241,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(col("t1.a").eq(col("t2.a")))?
+                    .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
                     .aggregate(vec![], vec![count(lit(COUNT_STAR_EXPANSION))])?
                     .select(vec![count(lit(COUNT_STAR_EXPANSION))])?
                     .into_unoptimized_plan(),

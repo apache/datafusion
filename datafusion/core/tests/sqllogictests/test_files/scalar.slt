@@ -880,3 +880,40 @@ drop table test_boolean
 
 statement ok
 drop table test_int32
+
+# scientific notation (0s)
+query RRRR
+SELECT 0e0 AS c1, 0.e-0 AS c2, -.0e+0 AS c3, 00.00e-00 AS c4
+----
+0 0 0 0
+
+# scientific notation (integer)
+query RRRR
+SELECT -1e-1, 0e100, 10E-2, 1E+0;
+----
+-0.1 0 0.1 1
+
+# scientific notation (decimal)
+query RRRR
+SELECT -1.5e-1, 00.0e1, 150.0E-3, 0.015E+2;
+----
+-0.15 0 0.15 1.5
+
+# scientific notation (integer or decimal part only)
+query RRRR
+SELECT -2.e-1, 0.e0, .0002E+3, .02E+2;
+----
+-0.2 0 0.2 2
+
+# scientific notation (overflows)
+# FLOAT64 range: -1.79E+308 to -2.22E-308, or from 2.22E-308 to 1.79E+308
+query RRRR
+SELECT -1.79e309, -2.22e-309, 2.22E-309, 1.79E+309;
+----
+-Infinity 0 0 Infinity
+
+# scientific notation (other edgecases)
+query IRRR
+SELECT 1ea, 1e-2a, 1E-2-2, 1E-1e2;
+----
+1 0.01 -1.99 0.1
