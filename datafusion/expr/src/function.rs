@@ -678,19 +678,10 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             fun.volatility(),
         ),
         BuiltinScalarFunction::Factorial => {
-            Signature::uniform(
-                1,
-                vec![DataType::UInt64],
-                fun.volatility(),
-            )
+            Signature::uniform(1, vec![DataType::UInt64], fun.volatility())
         }
-        BuiltinScalarFunction::Gcd
-        | BuiltinScalarFunction::Lcm => {
-            Signature::uniform(
-                2,
-                vec![DataType::Int64],
-                fun.volatility(),
-            )
+        BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
+            Signature::uniform(2, vec![DataType::Int64], fun.volatility())
         }
         BuiltinScalarFunction::ArrowTypeof => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::Abs
