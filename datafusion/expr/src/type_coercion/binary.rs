@@ -17,14 +17,18 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::{is_date, is_decimal, is_interval, is_numeric, is_timestamp};
-use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
+
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+
+use crate::type_coercion::{
+    is_datetime, is_decimal, is_interval, is_numeric, is_timestamp,
+};
+use crate::Operator;
 
 /// Returns the return type of a binary operator or an error when the binary operator cannot
 /// perform the computation between the argument's types, even after type coercion.
@@ -129,11 +133,10 @@ pub fn coerce_types(
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools or nulls
-            (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            (DataType::Null, DataType::Null) => Some(DataType::Boolean),
-            (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
-                Some(DataType::Boolean)
-            }
+            (DataType::Boolean, DataType::Boolean)
+            | (DataType::Null, DataType::Null)
+            | (DataType::Boolean, DataType::Null)
+            | (DataType::Null, DataType::Boolean) => Some(DataType::Boolean),
             _ => None,
         },
         // logical comparison operators have their own rules, and always return a boolean
@@ -147,16 +150,16 @@ pub fn coerce_types(
         | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
-            if (is_date(lhs_type)
-                || is_date(rhs_type)
-                || is_timestamp(lhs_type)
-                || is_timestamp(rhs_type)
+            if is_datetime(lhs_type)
+                || is_datetime(rhs_type)
                 || is_interval(lhs_type)
-                || is_interval(rhs_type))
-                && (!is_interval(lhs_type)
-                    || !is_timestamp(rhs_type)
-                    || *op != Operator::Minus) =>
+                || is_interval(rhs_type) =>
         {
+            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
+                return Err(DataFusionError::Plan(
+                    "interval can't subtract timestamp/date".to_string(),
+                ));
+            }
             temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
         // for math expressions, the final value of the coercion is also the return type
@@ -289,12 +292,8 @@ pub fn temporal_add_sub_coercion(
 ) -> Option<DataType> {
     match (lhs_type, rhs_type, op) {
         // if an interval is being added/subtracted from a date/timestamp, return the date/timestamp data type
-        (lhs, rhs, _) if is_interval(lhs) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Some(rhs.clone())
-        }
-        (lhs, rhs, _) if is_interval(rhs) && (is_date(lhs) || is_timestamp(lhs)) => {
-            Some(lhs.clone())
-        }
+        (lhs, rhs, _) if is_interval(lhs) && is_datetime(rhs) => Some(rhs.clone()),
+        (lhs, rhs, _) if is_interval(rhs) && is_datetime(lhs) => Some(lhs.clone()),
         // if two timestamps are being subtracted, check their time units and return the corresponding interval data type
         (lhs, rhs, Operator::Minus) if is_timestamp(lhs) && is_timestamp(rhs) => {
             handle_timestamp_minus(lhs, rhs)
@@ -303,10 +302,7 @@ pub fn temporal_add_sub_coercion(
         (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
             handle_interval_addition(lhs, rhs)
         }
-        (lhs, rhs, Operator::Minus)
-            if (is_date(lhs) || is_timestamp(lhs))
-                && (is_date(rhs) || is_timestamp(rhs)) =>
-        {
+        (lhs, rhs, Operator::Minus) if is_datetime(lhs) && is_datetime(rhs) => {
             temporal_coercion(lhs, rhs)
         }
         // return None if no coercion is possible
@@ -887,12 +883,15 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Operator;
     use arrow::datatypes::DataType;
+
     use datafusion_common::assert_contains;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
+
+    use crate::Operator;
+
+    use super::*;
 
     #[test]
     fn test_coercion_error() -> Result<()> {
