@@ -150,8 +150,10 @@ impl ListingTableUrl {
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
         use object_store::path::DELIMITER;
-        let stripped = path.as_ref().strip_prefix(self.prefix.as_ref())?;
-        let stripped = stripped.strip_prefix(DELIMITER).unwrap_or(stripped);
+        let mut stripped = path.as_ref().strip_prefix(self.prefix.as_ref())?;
+        if !stripped.is_empty() && !self.prefix.as_ref().is_empty() {
+            stripped = stripped.strip_prefix(DELIMITER)?;
+        }
         Some(stripped.split(DELIMITER))
     }
 
@@ -259,6 +261,10 @@ mod tests {
         let url = ListingTableUrl::parse("file:///foo").unwrap();
         let child = Path::parse("/foob/bar").unwrap();
         assert!(url.strip_prefix(&child).is_none());
+
+        let url = ListingTableUrl::parse("file:///foo/file").unwrap();
+        let child = Path::parse("/foo/file").unwrap();
+        assert!(url.strip_prefix(&child).is_some());
 
         let url = ListingTableUrl::parse("file:///foo/ bar").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/ bar");
