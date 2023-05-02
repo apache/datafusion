@@ -272,14 +272,17 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let granularity =
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = granularity {
-            v
+            v.to_lowercase()
         } else {
             return Err(DataFusionError::Execution(
                 "Granularity of `date_trunc` must be non-null scalar Utf8".to_string(),
             ));
         };
 
-    let f = |x: Option<i64>| x.map(|x| date_trunc_single(granularity, x)).transpose();
+    let f = |x: Option<i64>| {
+        x.map(|x| date_trunc_single(granularity.as_str(), x))
+            .transpose()
+    };
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
