@@ -21,7 +21,7 @@
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
-try DataFusion out with your own data sources, and test out its SQL support.
+try DataFusion's SQL support with your own data.
 
 ## Example
 
