@@ -228,8 +228,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
                 CreateMemoryTable {
                     name: self.object_name_to_table_reference(select_into.name)?,
+                    // SELECT INTO statement does not copy constraints such as primary key
                     primary_key: Vec::new(),
                     input: Arc::new(plan),
+                    // These are not applicable with SELECT INTO
                     if_not_exists: false,
                     or_replace: false,
                 },
