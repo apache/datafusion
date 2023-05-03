@@ -713,10 +713,6 @@ impl ObjectStore for MirroringObjectStore {
         let mut objects = vec![];
 
         for k in &self.files {
-            if !k.as_ref().starts_with(prefix.as_ref()) {
-                break;
-            }
-
             let mut parts = match k.prefix_match(prefix) {
                 Some(parts) => parts,
                 None => continue,
