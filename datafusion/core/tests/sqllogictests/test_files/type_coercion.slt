@@ -29,3 +29,25 @@ query B
 select 's' is not distinct from arrow_cast('s', 'LargeUtf8');
 ----
 true
+
+# date - interval
+query D
+select '2023-05-01'::date - interval '1 month';
+----
+2023-04-01
+
+# timestamp - interval
+query P
+SELECT '2023-05-01 12:30:00'::timestamp - interval '1 month';
+----
+2023-04-01T12:30:00
+
+# TODO: https://github.com/apache/arrow-datafusion/issues/6180
+# interval - date
+query error DataFusion error: This feature is not implemented: Unsupported interval argument\. Expected string literal, got: BinaryOp \{ left: Value\(SingleQuotedString\("1 month"\)\), op: Minus, right: Cast \{ expr: Value\(SingleQuotedString\("2023\-05\-01"\)\), data_type: Date \} \}
+select interval '1 month' - '2023-05-01'::date;
+
+# TODO: https://github.com/apache/arrow-datafusion/issues/6180
+# interval - timestamp
+query error DataFusion error: This feature is not implemented: Unsupported interval argument\. Expected string literal, got: BinaryOp \{ left: Value\(SingleQuotedString\("1 month"\)\), op: Minus, right: Cast \{ expr: Value\(SingleQuotedString\("2023\-05\-01 12:30:00"\)\), data_type: Timestamp\(None, None\) \} \}
+SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;

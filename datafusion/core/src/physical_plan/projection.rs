@@ -27,22 +27,24 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::error::Result;
+use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use futures::stream::{Stream, StreamExt};
 use log::debug;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::execution::context::TaskContext;
-use datafusion_physical_expr::equivalence::project_equivalence_properties;
-use datafusion_physical_expr::normalize_out_expr_with_columns_map;
-use futures::stream::Stream;
-use futures::stream::StreamExt;
+
+use datafusion_physical_expr::{
+    normalize_out_expr_with_columns_map, project_equivalence_properties,
+    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
+};
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -95,8 +97,18 @@ impl ProjectionExec {
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                // For some executors, logical and physical plan schema fields
+                // are not the same. The information in a `Column` comes from
+                // the logical plan schema. Therefore, to produce correct results
+                // we use the field in the input schema with the same index. This
+                // corresponds to the physical plan `Column`.
+                let idx = column.index();
+                let matching_input_field = input_schema.field(idx);
+                let matching_input_column = Column::new(matching_input_field.name(), idx);
                 let new_col_idx = schema.index_of(name)?;
-                let entry = columns_map.entry(column.clone()).or_insert_with(Vec::new);
+                let entry = columns_map
+                    .entry(matching_input_column)
+                    .or_insert_with(Vec::new);
                 entry.push(Column::new(name, new_col_idx));
             };
         }
@@ -156,7 +168,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
@@ -198,6 +210,16 @@ impl ExecutionPlan for ProjectionExec {
         let mut new_properties = EquivalenceProperties::new(self.schema());
         project_equivalence_properties(
             self.input.equivalence_properties(),
+            &self.columns_map,
+            &mut new_properties,
+        );
+        new_properties
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        project_ordering_equivalence_properties(
+            self.input.ordering_equivalence_properties(),
             &self.columns_map,
             &mut new_properties,
         );

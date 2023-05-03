@@ -687,3 +687,25 @@ select * from t;
 
 statement ok
 drop table t;
+
+##########
+# Dropping schemas
+##########
+
+statement error DataFusion error: Execution error: Cannot drop schema foo_schema because other tables depend on it: bar
+DROP SCHEMA foo_schema;
+
+statement ok
+DROP SCHEMA foo_schema CASCADE;
+
+statement error DataFusion error: Execution error: Schema 'doesnt_exist' doesn't exist.
+DROP SCHEMA doesnt_exist;
+
+statement ok
+DROP SCHEMA IF EXISTS doesnt_exist;
+
+statement ok
+CREATE SCHEMA empty_schema;
+
+statement ok
+DROP SCHEMA empty_schema;

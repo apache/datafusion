@@ -339,16 +339,24 @@ fn get_test_data() -> Result<(RecordBatch, Vec<Expr>)> {
 
 // Return a static RecordBatch and its ordering for tests. RecordBatch is ordered by a, b, c
 fn get_test_data2() -> Result<(RecordBatch, Vec<Expr>)> {
+    let a0 = Field::new("a0", DataType::Int32, false);
     let a = Field::new("a", DataType::Int32, false);
     let b = Field::new("b", DataType::Int32, false);
     let c = Field::new("c", DataType::Int32, false);
     let d = Field::new("d", DataType::Int32, false);
 
-    let schema = Arc::new(Schema::new(vec![a, b, c, d]));
+    let schema = Arc::new(Schema::new(vec![a0, a, b, c, d]));
 
     let batch = RecordBatch::try_new(
         schema,
         vec![
+            Arc::new(Int32Array::from_slice([
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+            ])),
             Arc::new(Int32Array::from_slice([
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
