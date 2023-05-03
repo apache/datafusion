@@ -32,7 +32,7 @@ COMMAND=
 BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
-#CARGO_COMMAND=$CARGO_COMMAND:"cargo run --release"}
+#CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --profile release-nonlto"}  # TEMP: for faster iterations
 
 usage() {
@@ -66,6 +66,8 @@ compare:      Comares results from benchmark runs
 all(default): Data/Run/Compare for all benchmarks
 tpch:         TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), single parquet file per table
 tpch_mem:     TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
+parquet:      Benchmark of parquet reader's filtering speed
+sort:         Benchmark of sorting speed
 
 **********
 * Supported Configuration (Environment Variables)
@@ -162,12 +164,20 @@ main() {
                 all)
                     run_tpch
                     run_tpch_mem
+                    run_parquet
+                    run_sort
                     ;;
                 tpch)
                     run_tpch
                     ;;
                 tpch_mem)
                     run_tpch_mem
+                    ;;
+                parquet)
+                    run_parquet
+                    ;;
+                sort)
+                    run_sort
                     ;;
                 *)
                     echo "Error: unknown benchmark '$BENCHMARK' for run"
@@ -245,6 +255,22 @@ run_tpch_mem() {
     echo "Running tpch_mem benchmark..."
     # -m means in memory
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${DATA_DIR}" -m --format parquet -o ${RESULTS_FILE}
+}
+
+# Runs the parquet filter benchmark
+run_parquet() {
+    RESULTS_FILE="${RESULTS_DIR}/parquet.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running parquet filter benchmark..."
+    $CARGO_COMMAND --bin parquet -- filter --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o ${RESULTS_FILE}
+}
+
+# Runs the sort benchmark
+run_sort() {
+    RESULTS_FILE="${RESULTS_DIR}/sort.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running sort benchmark..."
+    $CARGO_COMMAND --bin parquet -- sort --path "${DATA_DIR}" --scale-factor 1.0 --iterations 5 -o ${RESULTS_FILE}
 }
 
 compare_benchmarks() {
