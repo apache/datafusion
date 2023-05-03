@@ -92,7 +92,7 @@ async fn json_explain() {
             \n  CoalescePartitionsExec\
             \n    AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-            \n        JsonExec: limit=None, files={1 group: [[WORKING_DIR/tests/jsons/2.json]]}\n",
+            \n        JsonExec: file_groups={1 group: [[WORKING_DIR/tests/jsons/2.json]]}, projection=[a], limit=None, output_ordering=[]\n",
         ],
     ];
     assert_eq!(expected, actual);

@@ -234,6 +234,39 @@ impl FileScanConfig {
     }
 }
 
+impl Display for FileScanConfig {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let (schema, _, ordering) = self.project();
+
+        let output_ordering_str = ordering
+            .map(|v| make_output_ordering_string(&v))
+            .unwrap_or(String::from("[]"));
+
+        write!(
+            f,
+            "file_groups={}, projection={}, limit={:?}, output_ordering={}",
+            FileGroupsDisplay(&self.file_groups),
+            ProjectSchemaDisplay(&schema),
+            self.limit,
+            output_ordering_str
+        )
+    }
+}
+
+fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
+    use std::fmt::Write;
+    let mut w: String = "[".into();
+
+    for (i, e) in ordering.iter().enumerate() {
+        if i > 0 {
+            write!(&mut w, ", ").unwrap()
+        }
+        write!(&mut w, "{e}").unwrap()
+    }
+    write!(&mut w, "]").unwrap();
+    w
+}
+
 /// A wrapper to customize partitioned file display
 ///
 /// Prints in the format:

@@ -165,7 +165,7 @@ Projection: aggregate_test_100.c1, aggregate_test_100.c2
 physical_plan
 ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
   SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
-    CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2, c3]
+    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], limit=None, output_ordering=[], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 ORDER BY c2, c3, c2
