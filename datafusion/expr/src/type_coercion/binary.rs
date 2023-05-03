@@ -106,6 +106,133 @@ pub fn binary_operator_data_type(
     }
 }
 
+/// The result of applying coercion to a binary operator.
+pub struct Coercion {
+    pub lhs_type: DataType, // The type to cast the left input argument to
+    pub rhs_type: DataType, // The type to cast the right input argument to
+    pub output_type: DataType,
+}
+
+impl Coercion {
+    pub fn new(lhs_type: DataType, rhs_type: DataType, output_type: DataType) -> Self {
+        Coercion {
+            lhs_type,
+            rhs_type,
+            output_type,
+        }
+    }
+
+    // creates a new coercion where the argument types and result
+    // types are the same
+    pub fn new_uniform(output_type: DataType) -> Self {
+        Coercion::new(
+            output_type.clone(),
+            output_type.clone(),
+            output_type.clone(),
+        )
+    }
+}
+
+/// Coercion rules for binary operators. Returns the input / output
+/// types needed when applying `op` to arguments of `lhs_type` and
+/// `rhs_type`.
+///
+/// returns None if no coercion can be found
+pub fn binary_coerce(
+    lhs_type: &DataType,
+    op: &Operator,
+    rhs_type: &DataType,
+) -> Option<Coercion> {
+    match op {
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseXor
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type)
+            .map(|result_type| Coercion::new_uniform(result_type)),
+        Operator::And | Operator::Or => {
+            match (lhs_type, rhs_type) {
+                // logical binary boolean operators can only be evaluated in bools or nulls
+                (DataType::Boolean, DataType::Boolean)
+                | (DataType::Null, DataType::Null)
+                | (DataType::Boolean, DataType::Null)
+                | (DataType::Null, DataType::Boolean) => {
+                    Some(Coercion::new_uniform(DataType::Boolean))
+                }
+                _ => None,
+            }
+        }
+        // logical comparison operators have their own rules, and always return a boolean
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::LtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type)
+            .map(|result_type| Coercion::new_uniform(result_type)),
+        // interval - timestamp is an erroneous case, cannot coerce a type
+        Operator::Plus | Operator::Minus
+            if is_datetime(lhs_type)
+                || is_datetime(rhs_type)
+                || is_interval(lhs_type)
+                || is_interval(rhs_type) =>
+        {
+            // special case this to generate a specific error
+            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
+                None
+            } else {
+                temporal_add_sub_coercion(lhs_type, rhs_type, op).map(|result_type| {
+                    Coercion::new(lhs_type.clone(), rhs_type.clone(), result_type)
+                })
+            }
+        }
+        // for math expressions, the final value of the coercion is also the return type
+        // because coercion favours higher information types
+        Operator::Plus
+        | Operator::Minus
+        | Operator::Modulo
+        | Operator::Divide
+        | Operator::Multiply => {
+            mathematics_numerical_coercion(lhs_type, rhs_type).map(|result_type| {
+                Coercion::new(result_type.clone(), result_type.clone(), result_type)
+            })
+        }
+        Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type)
+            .map(|result_type| Coercion::new_uniform(result_type)),
+        // "||" operator has its own rules, and always return a string type
+        Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type)
+            .map(|result_type| Coercion::new_uniform(result_type)),
+    }
+}
+
+/// Call [`binary_coerce`] and returns an error if there is no coercion possible
+pub fn binary_coerce_or_error(
+    lhs_type: &DataType,
+    op: &Operator,
+    rhs_type: &DataType,
+) -> Result<Coercion> {
+    // re-write the error message of failed coercions to include the operator's information
+    binary_coerce(lhs_type, op, rhs_type)
+        .ok_or_else(|| {
+            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
+                DataFusionError::Plan(
+                    "interval can't subtract timestamp/date".to_string(),
+                )
+            } else {
+                DataFusionError::Plan(
+                    format!(
+                        "{lhs_type:?} {op} {rhs_type:?} can't be evaluated because there isn't a common type to coerce the types to"
+                    ),
+                )
+            }
+        })
+}
+
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
 ///
@@ -124,68 +251,7 @@ pub fn coerce_types(
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
-    // This result MUST be compatible with `binary_coerce`
-    let result = match op {
-        Operator::BitwiseAnd
-        | Operator::BitwiseOr
-        | Operator::BitwiseXor
-        | Operator::BitwiseShiftRight
-        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
-        Operator::And | Operator::Or => match (lhs_type, rhs_type) {
-            // logical binary boolean operators can only be evaluated in bools or nulls
-            (DataType::Boolean, DataType::Boolean)
-            | (DataType::Null, DataType::Null)
-            | (DataType::Boolean, DataType::Null)
-            | (DataType::Null, DataType::Boolean) => Some(DataType::Boolean),
-            _ => None,
-        },
-        // logical comparison operators have their own rules, and always return a boolean
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::Lt
-        | Operator::Gt
-        | Operator::GtEq
-        | Operator::LtEq
-        | Operator::IsDistinctFrom
-        | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
-        // interval - timestamp is an erroneous case, cannot coerce a type
-        Operator::Plus | Operator::Minus
-            if is_datetime(lhs_type)
-                || is_datetime(rhs_type)
-                || is_interval(lhs_type)
-                || is_interval(rhs_type) =>
-        {
-            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
-                return Err(DataFusionError::Plan(
-                    "interval can't subtract timestamp/date".to_string(),
-                ));
-            }
-            temporal_add_sub_coercion(lhs_type, rhs_type, op)
-        }
-        // for math expressions, the final value of the coercion is also the return type
-        // because coercion favours higher information types
-        Operator::Plus
-        | Operator::Minus
-        | Operator::Modulo
-        | Operator::Divide
-        | Operator::Multiply => mathematics_numerical_coercion(lhs_type, rhs_type),
-        Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type),
-        // "||" operator has its own rules, and always return a string type
-        Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
-    };
-
-    // re-write the error message of failed coercions to include the operator's information
-    match result {
-        None => Err(DataFusionError::Plan(
-            format!(
-                "{lhs_type:?} {op} {rhs_type:?} can't be evaluated because there isn't a common type to coerce the types to"
-            ),
-        )),
-        Some(t) => Ok(t)
-    }
+    binary_coerce_or_error(lhs_type, op, rhs_type).map(|c| c.output_type)
 }
 
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
@@ -285,7 +351,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 // This function performs temporal coercion between the two input data types and the provided operator.
 // It returns None (it will convert a Err outside) if the operands are an unsupported/wrong operation.
 // If the coercion is possible, it returns a new data type as Some(DataType).
-pub fn temporal_add_sub_coercion(
+fn temporal_add_sub_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
     op: &Operator,
