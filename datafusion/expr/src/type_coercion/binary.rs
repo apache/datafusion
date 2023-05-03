@@ -62,8 +62,7 @@ pub fn binary_operator_data_type(
                 .or_else(|| coerce_types(&lhs_type, op, &rhs_type).ok())
                 .ok_or_else(|| {
                     DataFusionError::Internal(format!(
-                        "Could not get return type for {:?} between {:?} and {:?}",
-                        op, lhs_type, rhs_type
+                        "Could not get return type for {op:?} between {lhs_type:?} and {rhs_type:?}"
                     ))
                 })?,
             _ => coerce_types(&lhs_type, op, &rhs_type)?,

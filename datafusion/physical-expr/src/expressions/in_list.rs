@@ -47,8 +47,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<Box<dyn Set>>,
-    input_schema: Schema,
+    static_filter: Option<Arc<dyn Set>>,
 }
 
 impl Debug for InListExpr {
@@ -62,7 +61,7 @@ impl Debug for InListExpr {
 }
 
 /// A type-erased container of array elements
-trait Set: Send + Sync {
+pub trait Set: Send + Sync {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
 }
 
@@ -172,36 +171,36 @@ where
 }
 
 /// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`
-fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
+fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
     Ok(downcast_primitive_array! {
-        array => Box::new(ArraySet::new(array, make_hash_set(array))),
+        array => Arc::new(ArraySet::new(array, make_hash_set(array))),
         DataType::Boolean => {
             let array = as_boolean_array(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         },
         DataType::Decimal128(_, _) => {
             let array = as_primitive_array::<Decimal128Type>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Decimal256(_, _) => {
             let array = as_primitive_array::<Decimal256Type>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Utf8 => {
             let array = as_string_array(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeUtf8 => {
             let array = as_largestring_array(array);
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Binary => {
             let array = as_generic_binary_array::<i32>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeBinary => {
             let array = as_generic_binary_array::<i64>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
         d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
@@ -233,7 +232,7 @@ fn evaluate_list(
 fn try_cast_static_filter_to_set(
     list: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
-) -> Result<Box<dyn Set>> {
+) -> Result<Arc<dyn Set>> {
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
     make_set(evaluate_list(list, &batch)?.as_ref())
 }
@@ -244,15 +243,13 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        schema: &Schema,
+        static_filter: Option<Arc<dyn Set>>,
     ) -> Self {
-        let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
         Self {
             expr,
             list,
             negated,
             static_filter,
-            input_schema: schema.clone(),
         }
     }
 
@@ -325,12 +322,13 @@ impl PhysicalExpr for InListExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        in_list(
+        // assume the static_filter will not change during the rewrite process
+        Ok(Arc::new(InListExpr::new(
             children[0].clone(),
             children[1..].to_vec(),
-            &self.negated,
-            &self.input_schema,
-        )
+            self.negated,
+            self.static_filter.clone(),
+        )))
     }
 }
 
@@ -364,7 +362,13 @@ pub fn in_list(
             )));
         }
     }
-    Ok(Arc::new(InListExpr::new(expr, list, *negated, schema)))
+    let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
+    Ok(Arc::new(InListExpr::new(
+        expr,
+        list,
+        *negated,
+        static_filter,
+    )))
 }
 
 #[cfg(test)]

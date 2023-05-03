@@ -32,6 +32,9 @@ use arrow::{
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
 };
+use arrow_array::{
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
+};
 use chrono::prelude::*;
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::cast::{
@@ -269,14 +272,17 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let granularity =
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = granularity {
-            v
+            v.to_lowercase()
         } else {
             return Err(DataFusionError::Execution(
                 "Granularity of `date_trunc` must be non-null scalar Utf8".to_string(),
             ));
         };
 
-    let f = |x: Option<i64>| x.map(|x| date_trunc_single(granularity, x)).transpose();
+    let f = |x: Option<i64>| {
+        x.map(|x| date_trunc_single(granularity.as_str(), x))
+            .transpose()
+    };
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
@@ -420,6 +426,14 @@ enum Interval {
 }
 
 impl Interval {
+    /// Returns (`stride_nanos`, `fn`) where
+    ///
+    /// 1. `stride_nanos` is a width, in nanoseconds
+    /// 2. `fn` is a function that takes (stride_nanos, source, origin)
+    ///
+    /// `source` is the timestamp being binned
+    ///
+    /// `origin`  is the time, in nanoseconds, where windows are measured from
     fn bin_fn(&self) -> (i64, fn(i64, i64, i64) -> i64) {
         match self {
             Interval::Nanoseconds(nanos) => (*nanos, date_bin_nanos_interval),
@@ -496,7 +510,7 @@ fn date_bin_impl(
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(v), _)) => *v,
         ColumnarValue::Scalar(v) => {
             return Err(DataFusionError::Execution(format!(
-                "DATE_BIN expects origin argument to be a TIMESTAMP but got {}",
+                "DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got {}",
                 v.get_datatype()
             )))
         }
@@ -507,18 +521,76 @@ fn date_bin_impl(
     };
 
     let (stride, stride_fn) = stride.bin_fn();
-    let f = |x: Option<i64>| x.map(|x| stride_fn(stride, x, origin));
+
+    let f_nanos = |x: Option<i64>| x.map(|x| stride_fn(stride, x, origin));
+    let f_micros = |x: Option<i64>| {
+        let scale = 1_000;
+        x.map(|x| stride_fn(stride, x * scale, origin) / scale)
+    };
+    let f_millis = |x: Option<i64>| {
+        let scale = 1_000_000;
+        x.map(|x| stride_fn(stride, x * scale, origin) / scale)
+    };
+    let f_secs = |x: Option<i64>| {
+        let scale = 1_000_000_000;
+        x.map(|x| stride_fn(stride, x * scale, origin) / scale)
+    };
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(f(*v), tz_opt.clone()))
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                f_nanos(*v),
+                tz_opt.clone(),
+            ))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(v, tz_opt)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                f_micros(*v),
+                tz_opt.clone(),
+            ))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(v, tz_opt)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampMillisecond(
+                f_millis(*v),
+                tz_opt.clone(),
+            ))
+        }
+        ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampSecond(
+                f_secs(*v),
+                tz_opt.clone(),
+            ))
         }
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 let array = as_timestamp_nanosecond_array(array)?
                     .iter()
-                    .map(f)
+                    .map(f_nanos)
                     .collect::<TimestampNanosecondArray>();
+
+                ColumnarValue::Array(Arc::new(array))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                let array = as_timestamp_microsecond_array(array)?
+                    .iter()
+                    .map(f_micros)
+                    .collect::<TimestampMicrosecondArray>();
+
+                ColumnarValue::Array(Arc::new(array))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                let array = as_timestamp_millisecond_array(array)?
+                    .iter()
+                    .map(f_millis)
+                    .collect::<TimestampMillisecondArray>();
+
+                ColumnarValue::Array(Arc::new(array))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                let array = as_timestamp_second_array(array)?
+                    .iter()
+                    .map(f_secs)
+                    .collect::<TimestampSecondArray>();
 
                 ColumnarValue::Array(Arc::new(array))
             }
@@ -717,10 +789,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{
-        ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder,
-        TimestampMicrosecondArray,
-    };
+    use arrow::array::{ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder};
 
     use super::*;
 
@@ -1001,31 +1070,15 @@ mod tests {
         ]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
+            "Execution error: DATE_BIN expects origin argument to be a TIMESTAMP with nanosececond precision but got Timestamp(Microsecond, None)"
         );
 
-        // source: invalid scalar type
         let res = date_bin(&[
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
             ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(1), None)),
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
         ]);
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects source argument to be a TIMESTAMP scalar or array"
-        );
-
-        let timestamps =
-            Arc::new((1..6).map(Some).collect::<TimestampMicrosecondArray>());
-        let res = date_bin(&[
-            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(1))),
-            ColumnarValue::Array(timestamps),
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
-        ]);
-        assert_eq!(
-            res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN expects source argument to be a TIMESTAMP but got Timestamp(Microsecond, None)"
-        );
+        assert!(res.is_ok());
 
         // unsupported array type for stride
         let intervals = Arc::new((1..6).map(Some).collect::<IntervalDayTimeArray>());

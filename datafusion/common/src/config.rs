@@ -19,7 +19,7 @@
 
 use crate::{DataFusionError, Result};
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 
 /// A macro that wraps a configuration struct and automatically derives
@@ -223,6 +223,9 @@ config_namespace! {
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
+
+        /// Aggregate options
+        pub aggregate: AggregateOptions, default = Default::default()
     }
 }
 
@@ -257,6 +260,23 @@ config_namespace! {
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
+    }
+}
+
+config_namespace! {
+    /// Options related to aggregate execution
+    pub struct AggregateOptions {
+        /// Specifies the threshold for using `ScalarValue`s to update
+        /// accumulators during high-cardinality aggregations for each input batch.
+        ///
+        /// The aggregation is considered high-cardinality if the number of affected groups
+        /// is greater than or equal to `batch_size / scalar_update_factor`. In such cases,
+        /// `ScalarValue`s are utilized for updating accumulators, rather than the default
+        /// batch-slice approach. This can lead to performance improvements.
+        ///
+        /// By adjusting the `scalar_update_factor`, you can balance the trade-off between
+        /// more efficient accumulator updates and the number of groups affected.
+        pub scalar_update_factor: usize, default = 10
     }
 }
 
@@ -474,6 +494,36 @@ impl ConfigOptions {
             let env = key.to_uppercase().replace('.', "_");
             if let Some(var) = std::env::var_os(env) {
                 ret.set(&key, var.to_string_lossy().as_ref())?;
+            }
+        }
+
+        Ok(ret)
+    }
+
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    ///
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        let mut keys = Visitor(vec![]);
+        let mut ret = Self::default();
+        ret.visit(&mut keys, "datafusion", "");
+
+        for key in keys.0 {
+            if let Some(var) = settings.get(&key) {
+                ret.set(&key, var)?;
             }
         }
 

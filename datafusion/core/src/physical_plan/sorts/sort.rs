@@ -739,7 +739,7 @@ impl ExecutionPlan for SortExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
@@ -1089,7 +1089,7 @@ mod tests {
     #[tokio::test]
     async fn test_sort_fetch_memory_calculation() -> Result<()> {
         // This test mirrors down the size from the example above.
-        let avg_batch_size = 6000;
+        let avg_batch_size = 5000;
         let partitions = 4;
 
         // A tuple of (fetch, expect_spillage)

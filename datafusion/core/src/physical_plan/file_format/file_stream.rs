@@ -218,7 +218,7 @@ impl<F: FileOpener> FileStream<F> {
         file_reader: F,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        let (projected_schema, _) = config.project();
+        let (projected_schema, ..) = config.project();
         let pc_projector = PartitionColumnProjector::new(
             projected_schema.clone(),
             &config

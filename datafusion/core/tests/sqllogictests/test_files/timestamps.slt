@@ -500,6 +500,60 @@ FROM (
     (TIMESTAMP '2021-06-10 17:19:10Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.3)
   ) as t (time, origin, val)
 
+# different input timestamp type
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Microsecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Millisecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Second, None)
 
 # month interval with INTERVAL keyword in date_bin with default start time
 query P
@@ -768,7 +822,17 @@ SELECT DATE_TRUNC('year', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-01-01T00:00:00
 
 query P
+SELECT DATE_TRUNC('YEAR', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-01-01T00:00:00
+
+query P
 SELECT DATE_TRUNC('quarter', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-07-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('QUARTER', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-07-01T00:00:00
 
@@ -778,7 +842,27 @@ SELECT DATE_TRUNC('month', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-01T00:00:00
 
 query P
+SELECT DATE_TRUNC('MONTH', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('week', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('WEEK', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
 SELECT DATE_TRUNC('day', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T00:00:00
+
+query P
+SELECT DATE_TRUNC('DAY', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T00:00:00
 
@@ -788,12 +872,27 @@ SELECT DATE_TRUNC('hour', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-03T14:00:00
 
 query P
+SELECT DATE_TRUNC('HOUR', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:00:00
+
+query P
 SELECT DATE_TRUNC('minute', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:00
 
 query P
+SELECT DATE_TRUNC('MINUTE', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:00
+
+query P
 SELECT DATE_TRUNC('second', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:50
+
+query P
+SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
 

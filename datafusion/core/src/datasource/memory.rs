@@ -15,17 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! In-memory data source for presenting a `Vec<RecordBatch>` as a data source that can be
-//! queried by DataFusion. This allows data to be pre-loaded into memory and then
-//! repeatedly queried without incurring additional file I/O overhead.
+//! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
+use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use futures::StreamExt;
 use tokio::sync::RwLock;
 
 use crate::datasource::{TableProvider, TableType};
@@ -35,15 +33,21 @@ use crate::logical_expr::Expr;
 use crate::physical_plan::common;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::memory_insert::MemoryWriteExec;
+use crate::physical_plan::memory::MemoryWriteExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
-/// In-memory table
+/// Type alias for partition data
+pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
+
+/// In-memory data source for presenting a `Vec<RecordBatch>` as a
+/// data source that can be queried by DataFusion. This allows data to
+/// be pre-loaded into memory and then repeatedly queried without
+/// incurring additional file I/O overhead.
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    pub(crate) batches: Arc<Vec<Arc<RwLock<Vec<RecordBatch>>>>>,
+    pub(crate) batches: Vec<PartitionData>,
 }
 
 impl MemTable {
@@ -56,12 +60,10 @@ impl MemTable {
         {
             Ok(Self {
                 schema,
-                batches: Arc::new(
-                    partitions
-                        .into_iter()
-                        .map(|e| Arc::new(RwLock::new(e)))
-                        .collect::<Vec<_>>(),
-                ),
+                batches: partitions
+                    .into_iter()
+                    .map(|e| Arc::new(RwLock::new(e)))
+                    .collect::<Vec<_>>(),
             })
         } else {
             Err(DataFusionError::Plan(
@@ -162,13 +164,13 @@ impl TableProvider for MemTable {
         )?))
     }
 
-    /// Inserts the execution results of a given LogicalPlan into this [`MemTable`].
-    /// The `LogicalPlan` must have the same schema as this `MemTable`.
+    /// Inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
+    /// The [`ExecutionPlan`] must have the same schema as this [`MemTable`].
     ///
     /// # Arguments
     ///
     /// * `state` - The [`SessionState`] containing the context for executing the plan.
-    /// * `input` - The LogicalPlan to execute and insert.
+    /// * `input` - The [`ExecutionPlan`] to execute and insert.
     ///
     /// # Returns
     ///

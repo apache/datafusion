@@ -57,6 +57,11 @@ impl SessionConfig {
         Ok(ConfigOptions::from_env()?.into())
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        Ok(ConfigOptions::from_string_hash_map(settings)?.into())
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.options.set(key, &value.to_string()).unwrap();
@@ -230,6 +235,19 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.options.execution.batch_size
+    }
+
+    /// Get the currently configured scalar_update_factor for aggregate
+    pub fn agg_scalar_update_factor(&self) -> usize {
+        self.options.execution.aggregate.scalar_update_factor
+    }
+
+    /// Customize scalar_update_factor for aggregate
+    pub fn with_agg_scalar_update_factor(mut self, n: usize) -> Self {
+        // scalar update factor must be greater than zero
+        assert!(n > 0);
+        self.options.execution.aggregate.scalar_update_factor = n;
+        self
     }
 
     /// Convert configuration options to name-value pairs with values

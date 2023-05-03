@@ -48,7 +48,9 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
+use crate::physical_plan::windows::{
+    BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -617,6 +619,7 @@ impl DefaultPhysicalPlanner {
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
+                            PartitionSearchMode::Sorted,
                         )?)
                     } else {
                         Arc::new(WindowAggExec::try_new(
@@ -1101,13 +1104,14 @@ impl DefaultPhysicalPlanner {
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                     Ok(Arc::new(UnnestExec::new(input, column_exec, schema)))
                 }
-                LogicalPlan::CreateExternalTable(_) => {
-                    // There is no default plan for "CREATE EXTERNAL
-                    // TABLE" -- it must be handled at a higher level (so
-                    // that the appropriate table can be registered with
+                LogicalPlan::Ddl(ddl) => {
+                    // There is no default plan for DDl statements --
+                    // it must be handled at a higher level (so that
+                    // the appropriate table can be registered with
                     // the context)
+                    let name = ddl.name();
                     Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateExternalTable".to_string(),
+                        format!("Unsupported logical plan: {name}")
                     ))
                 }
                 LogicalPlan::Prepare(_) => {
@@ -1116,60 +1120,6 @@ impl DefaultPhysicalPlanner {
                     // statement can be prepared)
                     Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: Prepare".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateCatalogSchema(_) => {
-                    // There is no default plan for "CREATE SCHEMA".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateCatalogSchema".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateCatalog(_) => {
-                    // There is no default plan for "CREATE DATABASE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateCatalog".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateMemoryTable(_) => {
-                    // There is no default plan for "CREATE MEMORY TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateMemoryTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropTable(_) => {
-                    // There is no default plan for "DROP TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropView(_) => {
-                    // There is no default plan for "DROP VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropView".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateView(_) => {
-                    // There is no default plan for "CREATE VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
                 LogicalPlan::Dml(_) => {

@@ -27,15 +27,16 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
-use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
-use datafusion::physical_plan::expressions::GetIndexedFieldExpr;
-use datafusion::physical_plan::expressions::LikeExpr;
+use datafusion::physical_plan::expressions::{
+    date_time_interval_expr, GetIndexedFieldExpr,
+};
+use datafusion::physical_plan::expressions::{in_list, LikeExpr};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
-        BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-        Literal, NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
+        BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
+        NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
     },
     functions, Partitioning,
 };
@@ -99,7 +100,7 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
         )),
-        ExprType::DateTimeIntervalExpr(expr) => Arc::new(DateTimeIntervalExpr::try_new(
+        ExprType::DateTimeIntervalExpr(expr) => date_time_interval_expr(
             parse_required_physical_expr(
                 expr.l.as_deref(),
                 registry,
@@ -114,7 +115,7 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
             input_schema,
-        )?),
+        )?,
         ExprType::AggregateExpr(_) => {
             return Err(DataFusionError::NotImplemented(
                 "Cannot convert aggregate expr node to physical expression".to_owned(),
@@ -160,7 +161,7 @@ pub fn parse_physical_expr(
                 input_schema,
             )?))
         }
-        ExprType::InList(e) => Arc::new(InListExpr::new(
+        ExprType::InList(e) => in_list(
             parse_required_physical_expr(
                 e.expr.as_deref(),
                 registry,
@@ -171,9 +172,9 @@ pub fn parse_physical_expr(
                 .iter()
                 .map(|x| parse_physical_expr(x, registry, input_schema))
                 .collect::<Result<Vec<_>, _>>()?,
-            e.negated,
+            &e.negated,
             input_schema,
-        )),
+        )?,
         ExprType::Case(e) => Arc::new(CaseExpr::try_new(
             e.expr
                 .as_ref()

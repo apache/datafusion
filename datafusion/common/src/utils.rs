@@ -18,11 +18,11 @@
 //! This module provides the bisect function, which implements binary search.
 
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::compute;
 use arrow::compute::{lexicographical_partition_ranges, SortColumn, SortOptions};
-use arrow_array::types::UInt32Type;
-use arrow_array::PrimitiveArray;
+use arrow::datatypes::UInt32Type;
+use arrow::record_batch::RecordBatch;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::{Parser, ParserError};
@@ -37,6 +37,16 @@ pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValu
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
         .collect()
+}
+
+/// Construct a new RecordBatch from the rows of the `record_batch` at the `indices`.
+pub fn get_record_batch_at_indices(
+    record_batch: &RecordBatch,
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<RecordBatch> {
+    let new_columns = get_arrayref_at_indices(record_batch.columns(), indices)?;
+    RecordBatch::try_new(record_batch.schema(), new_columns)
+        .map_err(DataFusionError::ArrowError)
 }
 
 /// This function compares two tuples depending on the given sort options.
