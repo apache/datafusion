@@ -154,7 +154,7 @@ impl ListingTableUrl {
         if !stripped.is_empty() && !self.prefix.as_ref().is_empty() {
             stripped = stripped.strip_prefix(DELIMITER)?;
         }
-        Some(stripped.split(DELIMITER))
+        Some(stripped.split_terminator(DELIMITER))
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
@@ -264,7 +264,7 @@ mod tests {
 
         let url = ListingTableUrl::parse("file:///foo/file").unwrap();
         let child = Path::parse("/foo/file").unwrap();
-        assert!(url.strip_prefix(&child).is_some());
+        assert_eq!(url.strip_prefix(&child).unwrap().count(), 0);
 
         let url = ListingTableUrl::parse("file:///foo/ bar").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/ bar");
