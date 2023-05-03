@@ -667,7 +667,6 @@ pub mod filter;
 pub mod joins;
 pub mod limit;
 pub mod memory;
-pub mod memory_insert;
 pub mod metrics;
 pub mod planner;
 pub mod projection;
