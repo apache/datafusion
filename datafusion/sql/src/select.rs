@@ -224,21 +224,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        if select.into.is_some() {
-            match select.into {
-                Some(select_into) => Ok(LogicalPlan::Ddl(
-                    DdlStatement::CreateMemoryTable(CreateMemoryTable {
-                        name: self.object_name_to_table_reference(select_into.name)?,
-                        primary_key: Vec::new(),
-                        input: Arc::new(plan),
-                        if_not_exists: false,
-                        or_replace: false,
-                    }),
-                )),
-                None => Err(DataFusionError::Internal(
-                    "Erroneous statement to convert a SELECT INTO plan".to_string(),
-                )),
-            }
+        if let Some(select_into) = select.into {
+            Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                CreateMemoryTable {
+                    name: self.object_name_to_table_reference(select_into.name)?,
+                    primary_key: Vec::new(),
+                    input: Arc::new(plan),
+                    if_not_exists: false,
+                    or_replace: false,
+                },
+            )))
         } else {
             Ok(plan)
         }

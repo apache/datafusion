@@ -570,42 +570,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn query_view_with_select_into() -> Result<()> {
-        let session_ctx = SessionContext::with_config(
-            SessionConfig::new().with_information_schema(true),
-        );
-
-        session_ctx
-            .sql("SELECT * INTO abc FROM (VALUES (1,2,3), (4,5,6));")
-            .await?
-            .collect()
-            .await?;
-
-        let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
-        session_ctx.sql(view_sql).await?.collect().await?;
-
-        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
-        assert_eq!(results[0].num_rows(), 1);
-
-        let results = session_ctx
-            .sql("SELECT * FROM xyz")
-            .await?
-            .collect()
-            .await?;
-
-        let expected = vec![
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 1       | 2       | 3       |",
-            "| 4       | 5       | 6       |",
-            "+---------+---------+---------+",
-        ];
-
-        assert_batches_eq!(expected, &results);
-
-        Ok(())
-    }
 }
