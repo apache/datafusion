@@ -31,8 +31,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    CreateMemoryTable, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    Partitioning,
+    CreateMemoryTable, DdlStatement, Expr, Filter, GroupingSet, LogicalPlan,
+    LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
 use sqlparser::ast::{Select, SelectItem, TableWithJoins};
@@ -226,15 +226,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         if select.into.is_some() {
             match select.into {
-                Some(select_into) => {
-                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                Some(select_into) => Ok(LogicalPlan::Ddl(
+                    DdlStatement::CreateMemoryTable(CreateMemoryTable {
                         name: self.object_name_to_table_reference(select_into.name)?,
                         primary_key: Vec::new(),
                         input: Arc::new(plan),
                         if_not_exists: false,
                         or_replace: false,
-                    }))
-                }
+                    }),
+                )),
                 None => Err(DataFusionError::Internal(
                     "Erroneous statement to convert a SELECT INTO plan".to_string(),
                 )),
