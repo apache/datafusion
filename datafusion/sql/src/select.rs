@@ -31,7 +31,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    CreateMemoryTable, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    Partitioning,
 };
 use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
 use sqlparser::ast::{Select, SelectItem, TableWithJoins};
@@ -60,9 +61,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         if !select.sort_by.is_empty() {
             return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
-        }
-        if select.into.is_some() {
-            return Err(DataFusionError::NotImplemented("INTO".to_string()));
         }
 
         // process `from` clause
@@ -207,7 +205,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }?;
 
         // DISTRIBUTE BY
-        if !select.distribute_by.is_empty() {
+        let plan = if !select.distribute_by.is_empty() {
             let x = select
                 .distribute_by
                 .iter()
@@ -221,7 +219,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
-                .build()
+                .build()?
+        } else {
+            plan
+        };
+
+        if select.into.is_some() {
+            match select.into {
+                Some(select_into) => {
+                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                        name: self.object_name_to_table_reference(select_into.name)?,
+                        primary_key: Vec::new(),
+                        input: Arc::new(plan),
+                        if_not_exists: false,
+                        or_replace: false,
+                    }))
+                }
+                None => Err(DataFusionError::Internal(
+                    "Erroneous statement to convert a SELECT INTO plan".to_string(),
+                )),
+            }
         } else {
             Ok(plan)
         }

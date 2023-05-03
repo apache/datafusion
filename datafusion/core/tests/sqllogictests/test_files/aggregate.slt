@@ -365,6 +365,18 @@ create table cpu (host string, usage float) as select * from (values
 ('host1', 90.4)
 );
 
+statement ok
+drop table cpu;
+
+# this test is to show create table as and select into works in the same way
+statement ok
+SELECT * INTO cpu 
+FROM (VALUES
+    ('host0', 90.1),
+    ('host1', 90.2),
+    ('host1', 90.4)
+  ) AS cpu_data (host, usage);
+
 query TR rowsort
 select host, median(usage) from cpu group by host;
 ----
@@ -375,7 +387,6 @@ query R
 select median(usage) from cpu;
 ----
 90.2
-
 
 statement ok
 drop table cpu;
@@ -394,6 +405,23 @@ create table cpu (host string, usage float) as select * from (values
   ('host0', 87.9),
   ('host1', 89.3)
 );
+
+statement ok
+drop table cpu;
+
+# this test is to show create table as and select into works in the same way
+statement ok
+SELECT * INTO cpu 
+FROM (VALUES
+    ('host0', 90.2),
+    ('host1', 90.1),
+    ('host1', 90.5),
+    ('host0', 90.5),
+    ('host1', 90.0),
+    ('host1', 90.3),
+    ('host0', 87.9),
+    ('host1', 89.3)
+  ) AS cpu_data (host, usage);
 
 query TR rowsort
 select host, median(usage) from cpu group by host;
@@ -1341,6 +1369,25 @@ SELECT count(column1), column2 from the_nulls group by column2 order by column2;
 0 1
 0 2
 
+statement ok
+drop table the_nulls;
+
+# this test is to show create table as and select into works in the same way
+statement ok
+SELECT * INTO the_nulls 
+FROM (VALUES 
+  (null::bigint, 1), 
+  (null::bigint, 1), 
+  (null::bigint, 2)
+) AS null_data (column1, column2);
+
+# counts should be zeros (even for nulls)
+query II
+SELECT count(column1), column2 from the_nulls group by column2 order by column2;
+----
+0 1
+0 2
+
 # sums should be null
 query II
 SELECT sum(column1), column2 from the_nulls group by column2 order by column2;
@@ -1388,6 +1435,19 @@ as values
  ('2011-12-13T11:13:10.12345', 'Row 1'),
  (null, 'Row 2'),
  ('2021-01-01T05:11:10.432', 'Row 3');
+
+statement ok
+drop table t_source;
+
+# this test is to show create table as and select into works in the same way
+statement ok
+SELECT * INTO t_source
+FROM (VALUES
+  ('2018-11-13T17:11:10.011375885995', 'Row 0'),
+  ('2011-12-13T11:13:10.12345', 'Row 1'),
+  (null, 'Row 2'),
+  ('2021-01-01T05:11:10.432', 'Row 3')
+) AS source_data (column1, column2);
 
 
 statement ok
