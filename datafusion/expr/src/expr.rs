@@ -177,6 +177,8 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Optional filter applied prior to aggregating
         filter: Option<Box<Expr>>,
+        /// Optional order by applied prior to aggregating
+        order_by: Option<Box<Expr>>,
     },
     /// Returns whether the list contains the expr value.
     InList {
@@ -434,6 +436,8 @@ pub struct AggregateFunction {
     pub distinct: bool,
     /// Optional filter
     pub filter: Option<Box<Expr>>,
+    /// Optional Ordering
+    pub order_by: Option<Box<Expr>>,
 }
 
 impl AggregateFunction {
@@ -442,12 +446,14 @@ impl AggregateFunction {
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
+        order_by: Option<Box<Expr>>,
     ) -> Self {
         Self {
             fun,
             args,
             distinct,
             filter,
+            order_by,
         }
     }
 }
@@ -959,11 +965,15 @@ impl fmt::Debug for Expr {
                 distinct,
                 ref args,
                 filter,
+                order_by,
                 ..
             }) => {
                 fmt_function(f, &fun.to_string(), *distinct, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
+                }
+                if let Some(ob) = order_by {
+                    write!(f, " ORDER BY {ob}")?;
                 }
                 Ok(())
             }
@@ -1313,25 +1323,35 @@ fn create_name(e: &Expr) -> Result<String> {
             distinct,
             args,
             filter,
+            order_by,
         }) => {
-            let name = create_function_name(&fun.to_string(), *distinct, args)?;
+            let mut name = create_function_name(&fun.to_string(), *distinct, args)?;
             if let Some(fe) = filter {
-                Ok(format!("{name} FILTER (WHERE {fe})"))
-            } else {
-                Ok(name)
-            }
+                name = format!("{name} FILTER (WHERE {fe})");
+            };
+            if let Some(order_by) = order_by {
+                name = format!("{name} FILTER (ORDER BY {order_by})");
+            };
+            Ok(name)
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        } => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
                 names.push(create_name(e)?);
             }
-            let filter = if let Some(fe) = filter {
-                format!(" FILTER (WHERE {fe})")
-            } else {
-                "".to_string()
-            };
-            Ok(format!("{}({}){}", fun.name, names.join(","), filter))
+            let mut info = "".to_string();
+            if let Some(fe) = filter {
+                info += &format!(" FILTER (WHERE {fe})");
+            }
+            if let Some(ob) = order_by {
+                info += &format!(" ORDER BY ({ob})");
+            }
+            Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {

@@ -70,6 +70,9 @@ impl OptimizerRule for PushDownProjection {
                 for e in agg.aggr_expr.iter().chain(agg.group_expr.iter()) {
                     expr_to_columns(e, &mut required_columns)?
                 }
+                println!("agg.aggr_expr: {:?}", agg.aggr_expr);
+                println!("agg.group_expr: {:?}", agg.group_expr);
+                println!("required columns: {:?}", required_columns);
                 let new_expr = get_expr(&required_columns, agg.input.schema())?;
                 let projection = LogicalPlan::Projection(Projection::try_new(
                     new_expr,
@@ -266,6 +269,7 @@ impl OptimizerRule for PushDownProjection {
             LogicalPlan::Aggregate(agg) => {
                 let mut required_columns = HashSet::new();
                 exprlist_to_columns(&projection.expr, &mut required_columns)?;
+                println!("required_columns2:{:?}", required_columns);
                 // Gather all columns needed for expressions in this Aggregate
                 let mut new_aggr_expr = vec![];
                 for e in agg.aggr_expr.iter() {
@@ -1056,6 +1060,7 @@ mod tests {
             vec![col("b")],
             false,
             Some(Box::new(col("c").gt(lit(42)))),
+            None,
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)

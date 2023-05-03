@@ -407,6 +407,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 args,
                 distinct,
                 filter,
+                order_by,
             }) => {
                 let new_expr = coerce_agg_exprs_for_signature(
                     &fun,
@@ -415,11 +416,16 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     &aggregate_function::signature(&fun),
                 )?;
                 let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, new_expr, distinct, filter,
+                    fun, new_expr, distinct, filter, order_by,
                 ));
                 Ok(expr)
             }
-            Expr::AggregateUDF { fun, args, filter } => {
+            Expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            } => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
@@ -429,6 +435,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     fun,
                     args: new_expr,
                     filter,
+                    order_by,
                 };
                 Ok(expr)
             }
@@ -905,6 +912,7 @@ mod test {
             fun: Arc::new(my_avg),
             args: vec![lit(10i64)],
             filter: None,
+            order_by: None,
         };
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
@@ -935,6 +943,7 @@ mod test {
             fun: Arc::new(my_avg),
             args: vec![lit("10")],
             filter: None,
+            order_by: None,
         };
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
@@ -956,6 +965,7 @@ mod test {
             vec![lit(12i64)],
             false,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
@@ -967,6 +977,7 @@ mod test {
             fun,
             vec![col("a")],
             false,
+            None,
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -983,6 +994,7 @@ mod test {
             fun,
             vec![lit("1")],
             false,
+            None,
             None,
         ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();

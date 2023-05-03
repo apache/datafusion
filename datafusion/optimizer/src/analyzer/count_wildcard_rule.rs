@@ -168,12 +168,14 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                 args,
                 distinct,
                 filter,
+                order_by,
             }) if args.len() == 1 => match args[0] {
                 Expr::Wildcard => Expr::AggregateFunction(AggregateFunction {
                     fun: aggregate_function::AggregateFunction::Count,
                     args: vec![lit(COUNT_STAR_EXPANSION)],
                     distinct,
                     filter,
+                    order_by,
                 }),
                 _ => old_expr,
             },

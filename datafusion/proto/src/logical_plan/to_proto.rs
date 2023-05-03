@@ -616,6 +616,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref args,
                 ref distinct,
                 ref filter,
+                ref order_by,
             }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -668,6 +669,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
+                    order_by: match order_by {
+                        Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                        None => None,
+                    },
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
@@ -703,7 +708,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args, filter } => Self {
+            Expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            } => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name.clone(),
@@ -713,6 +723,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         >>(
                         )?,
                         filter: match filter {
+                            Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                            None => None,
+                        },
+                        order_by: match order_by {
                             Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                             None => None,
                         },

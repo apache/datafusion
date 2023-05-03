@@ -78,6 +78,7 @@ use itertools::Itertools;
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::ops::Deref;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -199,10 +200,20 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             ..
         }) => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        } => {
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
                     "aggregate expression with filter is not supported".to_string(),
+                ));
+            }
+            if order_by.is_some() {
+                return Err(DataFusionError::Execution(
+                    "aggregate expression with order_by is not supported".to_string(),
                 ));
             }
             let mut names = Vec::with_capacity(args.len());
@@ -638,6 +649,9 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     // Initially need to perform the aggregate and then merge the partitions
                     let input_exec = self.create_initial_plan(input, session_state).await?;
+                    println!("INPUT PLAN");
+                    print_plan(&input_exec)?;
+                    println!("INPUT PLAN");
                     let physical_input_schema = input_exec.schema();
                     let logical_input_schema = input.as_ref().schema();
 
@@ -646,7 +660,8 @@ impl DefaultPhysicalPlanner {
                         logical_input_schema,
                         &physical_input_schema,
                         session_state)?;
-
+                    println!("aggr_expr: {:?}", aggr_expr);
+                    // let order_by_expr = vec![];
                     let agg_filter = aggr_expr
                         .iter()
                         .map(|e| {
@@ -658,13 +673,20 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    let (aggregates, filters): (Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
+                    let (mut aggregates,mut filters, mut order_bys) = (vec![], vec![], vec![]);
+                    for (aggregate, filter, order_by) in agg_filter.into_iter(){
+                        aggregates.push(aggregate);
+                        filters.push(filter);
+                        order_bys.push(order_by);
+                    }
+                    // let (aggregates, filters, order_bys): (Vec<_>, Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
+                        order_bys.clone(),
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -701,6 +723,7 @@ impl DefaultPhysicalPlanner {
                         final_grouping_set,
                         aggregates,
                         filters,
+                        order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -1318,6 +1341,13 @@ fn merge_grouping_set_physical_expr(
     ))
 }
 
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    println!("{:#?}", actual);
+    Ok(())
+}
+
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn create_cube_physical_expr(
@@ -1579,8 +1609,11 @@ pub fn create_window_expr(
     )
 }
 
-type AggregateExprWithOptionalFilter =
-    (Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>);
+type AggregateExprWithOptionalFilter = (
+    Arc<dyn AggregateExpr>,
+    Option<Arc<dyn PhysicalExpr>>,
+    Option<PhysicalSortExpr>,
+);
 
 /// Create an aggregate expression with a name from a logical expression
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
@@ -1596,7 +1629,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             distinct,
             args,
             filter,
+            order_by,
         }) => {
+            println!("order by: {:?}", order_by);
             let args = args
                 .iter()
                 .map(|e| {
@@ -1624,9 +1659,40 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 physical_input_schema,
                 name,
             );
-            Ok((agg_expr?, filter))
+            println!("logical_input_schema:{:?}", logical_input_schema.fields());
+            println!("physical_input_schema:{:?}", physical_input_schema.fields());
+            let order_by = match order_by {
+                Some(e) => Some(match e.deref() {
+                    Expr::Sort(expr::Sort {
+                        expr,
+                        asc,
+                        nulls_first,
+                    }) => create_physical_sort_expr(
+                        &expr,
+                        logical_input_schema,
+                        physical_input_schema,
+                        SortOptions {
+                            descending: !asc,
+                            nulls_first: *nulls_first,
+                        },
+                        execution_props,
+                    )?,
+                    _ => {
+                        return Err(DataFusionError::Plan(
+                            "Sort only accepts sort expressions".to_string(),
+                        ))
+                    }
+                }),
+                None => None,
+            };
+            Ok((agg_expr?, filter, order_by))
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        } => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1648,10 +1714,34 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
+            let order_by = match order_by {
+                Some(e) => Some(match e.deref() {
+                    Expr::Sort(expr::Sort {
+                        expr,
+                        asc,
+                        nulls_first,
+                    }) => create_physical_sort_expr(
+                        &*expr,
+                        logical_input_schema,
+                        physical_input_schema,
+                        SortOptions {
+                            descending: !asc,
+                            nulls_first: *nulls_first,
+                        },
+                        execution_props,
+                    )?,
+                    _ => {
+                        return Err(DataFusionError::Plan(
+                            "Sort only accepts sort expressions".to_string(),
+                        ))
+                    }
+                }),
+                None => None,
+            };
 
             let agg_expr =
                 udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
-            Ok((agg_expr?, filter))
+            Ok((agg_expr?, filter, order_by))
         }
         other => Err(DataFusionError::Internal(format!(
             "Invalid aggregate expression '{other:?}'"

@@ -54,7 +54,7 @@ use prost::Message;
 use crate::common::proto_error;
 use crate::common::{csv_delimiter_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_protobuf_file_scan_config,
+    parse_physical_expr, parse_physical_sort_expr, parse_protobuf_file_scan_config,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -416,6 +416,16 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         x.transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let physical_order_by_expr = hash_agg
+                    .order_by_expr
+                    .iter()
+                    .map(|expr| {
+                        let x = expr.expr.as_ref().map(|e| {
+                            parse_physical_sort_expr(e, registry, &physical_schema)
+                        });
+                        x.transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
@@ -473,6 +483,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
                     physical_filter_expr,
+                    physical_order_by_expr,
                     input,
                     Arc::new((&input_schema).try_into()?),
                 )?))
@@ -893,6 +904,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|expr| expr.to_owned().try_into())
                 .collect::<Result<Vec<_>>>()?;
 
+            let order_by = exec
+                .order_by_expr()
+                .iter()
+                .map(|expr| expr.to_owned().try_into())
+                .collect::<Result<Vec<_>>>()?;
+
             let agg = exec
                 .aggr_expr()
                 .iter()
@@ -942,6 +959,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         group_expr_name: group_names,
                         aggr_expr: agg,
                         filter_expr: filter,
+                        order_by_expr: order_by,
                         aggr_expr_name: agg_names,
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),
@@ -1425,6 +1443,7 @@ mod roundtrip_tests {
             PhysicalGroupBy::new_single(groups.clone()),
             aggregates.clone(),
             vec![None],
+            vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
@@ -1493,6 +1512,7 @@ mod roundtrip_tests {
                 AggregateMode::Final,
                 PhysicalGroupBy::new_single(groups.clone()),
                 aggregates.clone(),
+                vec![None],
                 vec![None],
                 Arc::new(EmptyExec::new(false, schema.clone())),
                 schema,
@@ -1706,6 +1726,7 @@ mod roundtrip_tests {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups),
             aggregates.clone(),
+            vec![None],
             vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,

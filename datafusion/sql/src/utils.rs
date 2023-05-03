@@ -168,6 +168,7 @@ where
                 args,
                 distinct,
                 filter,
+                order_by,
             }) => Ok(Expr::AggregateFunction(AggregateFunction::new(
                 fun.clone(),
                 args.iter()
@@ -175,6 +176,7 @@ where
                     .collect::<Result<Vec<Expr>>>()?,
                 *distinct,
                 filter.clone(),
+                order_by.clone(),
             ))),
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -197,13 +199,19 @@ where
                     .collect::<Result<Vec<_>>>()?,
                 window_frame.clone(),
             ))),
-            Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
+            Expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),
                 args: args
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
                 filter: filter.clone(),
+                order_by: order_by.clone(),
             }),
             Expr::Alias(nested_expr, alias_name) => Ok(Expr::Alias(
                 Box::new(clone_with_replacement(nested_expr, replacement_fn)?),

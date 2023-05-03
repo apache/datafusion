@@ -111,8 +111,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let distinct = function.distinct;
             let (fun, args) =
                 self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
+            /// TODO: make sure that ordering is parsed correctly
             return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun, args, distinct, None,
+                fun, args, distinct, None, None,
             )));
         };
 
@@ -131,6 +132,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fun: fm,
                 args,
                 filter: None,
+                order_by: None,
             });
         }
 

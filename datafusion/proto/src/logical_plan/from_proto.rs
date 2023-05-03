@@ -981,6 +981,7 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, _>>()?,
                 expr.distinct,
                 parse_optional_expr(expr.filter.as_deref(), registry)?.map(Box::new),
+                parse_optional_expr(expr.order_by.as_deref(), registry)?.map(Box::new),
             )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1372,6 +1373,8 @@ pub fn parse_expr(
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
                 filter: parse_optional_expr(pb.filter.as_deref(), registry)?
+                    .map(Box::new),
+                order_by: parse_optional_expr(pb.order_by.as_deref(), registry)?
                     .map(Box::new),
             })
         }

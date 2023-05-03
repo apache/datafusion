@@ -61,6 +61,33 @@ impl From<&protobuf::PhysicalColumn> for Column {
     }
 }
 
+/// Parses a physical sort expression from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with physical sort expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_sort_expr(
+    proto: &protobuf::PhysicalSortExprNode,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<PhysicalSortExpr> {
+    if let Some(expr) = &proto.expr {
+        let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+        let options = SortOptions {
+            descending: !proto.asc,
+            nulls_first: proto.nulls_first,
+        };
+        Ok(PhysicalSortExpr { expr, options })
+    } else {
+        Err(DataFusionError::Execution(
+            "Cannot parse proto to PhysicalSortExpr".to_string(),
+        ))
+    }
+}
+
 /// Parses a physical expression from a protobuf.
 ///
 /// # Arguments

@@ -42,7 +42,7 @@ use datafusion_physical_expr::{
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
-    AggregateExpr, PhysicalExpr, PhysicalSortExpr,
+    AggregateExpr, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -228,6 +228,8 @@ pub struct AggregateExec {
     pub(crate) aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
     pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    /// (ORDER BY clause) expression for each aggregate expression
+    pub(crate) order_by_expr: Vec<Option<PhysicalSortExpr>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -243,6 +245,7 @@ pub struct AggregateExec {
     metrics: ExecutionPlanMetricsSet,
     /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
+    required_input_ordering: Option<Vec<PhysicalSortRequirement>>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -344,6 +347,8 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        // TODO: make order_by_expr Option<PhysicalSortExpr> since all aggregators will have same requirement
+        order_by_expr: Vec<Option<PhysicalSortExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -356,6 +361,30 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
+        println!("aggr_expr: {:?}", aggr_expr);
+        println!("order_by_expr: {:?}", order_by_expr);
+        let mut required_input_ordering = None;
+        if mode == AggregateMode::Partial || mode == AggregateMode::Single {
+            if let Some(first) = order_by_expr.first() {
+                if let Some(req) = first {
+                    if group_by.groups.len() == 1 {
+                        let requirement_prefix = output_group_expr_helper(&group_by);
+                        let mut requirement = requirement_prefix
+                            .into_iter()
+                            .map(|expr| PhysicalSortRequirement::new(expr, None))
+                            .collect::<Vec<_>>();
+                        requirement.push(PhysicalSortRequirement::from(req.clone()));
+                        required_input_ordering = Some(requirement);
+                    } else {
+                        DataFusionError::Plan(
+                            "Cannot run order sensitive aggregation in grouping set queries"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        println!("required_input_ordering:{:?}", required_input_ordering);
 
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
@@ -368,18 +397,25 @@ impl AggregateExec {
         }
 
         let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
+        if let Some(aggregation_ordering) = &aggregation_ordering {
+            println!("ordering: {:?}", aggregation_ordering.ordering);
+        } else {
+            println!("ordering: None");
+        }
 
         Ok(AggregateExec {
             mode,
             group_by,
             aggr_expr,
             filter_expr,
+            order_by_expr,
             input,
             schema,
             input_schema,
             columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
             aggregation_ordering,
+            required_input_ordering,
         })
     }
 
@@ -406,6 +442,11 @@ impl AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
         &self.filter_expr
+    }
+
+    /// ORDER BY clause expression for each aggregate expression
+    pub fn order_by_expr(&self) -> &[Option<PhysicalSortExpr>] {
+        &self.order_by_expr
     }
 
     /// Input plan
@@ -547,6 +588,10 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![self.required_input_ordering.clone()]
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         let mut new_properties = EquivalenceProperties::new(self.schema());
         project_equivalence_properties(
@@ -570,6 +615,7 @@ impl ExecutionPlan for AggregateExec {
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
+            self.order_by_expr.clone(),
             children[0].clone(),
             self.input_schema.clone(),
         )?))
@@ -1131,6 +1177,7 @@ mod tests {
             grouping_set.clone(),
             aggregates.clone(),
             vec![None],
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -1173,6 +1220,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             vec![None],
             merge,
             input_schema,
@@ -1236,6 +1284,7 @@ mod tests {
             grouping_set.clone(),
             aggregates.clone(),
             vec![None],
+            vec![None],
             input,
             input_schema.clone(),
         )?);
@@ -1268,6 +1317,7 @@ mod tests {
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
+            vec![None],
             vec![None],
             merge,
             input_schema,
@@ -1483,6 +1533,7 @@ mod tests {
                 groups,
                 aggregates,
                 vec![None; 3],
+                vec![None; 3],
                 input.clone(),
                 input_schema.clone(),
             )?);
@@ -1539,6 +1590,7 @@ mod tests {
             groups.clone(),
             aggregates.clone(),
             vec![None],
+            vec![None],
             blocking_exec,
             schema,
         )?);
@@ -1577,6 +1629,7 @@ mod tests {
             AggregateMode::Partial,
             groups,
             aggregates.clone(),
+            vec![None],
             vec![None],
             blocking_exec,
             schema,

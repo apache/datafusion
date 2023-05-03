@@ -879,6 +879,7 @@ mod test {
             )),
             args: vec![inner],
             filter: None,
+            order_by: None,
         };
 
         // test: common aggregates

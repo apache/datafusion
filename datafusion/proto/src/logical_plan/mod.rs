@@ -2527,6 +2527,7 @@ mod roundtrip_tests {
             vec![col("bananas")],
             false,
             None,
+            None,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2539,6 +2540,7 @@ mod roundtrip_tests {
             vec![col("bananas")],
             true,
             None,
+            None,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2550,6 +2552,7 @@ mod roundtrip_tests {
             AggregateFunction::ApproxPercentileCont,
             vec![col("bananas"), lit(0.42_f32)],
             false,
+            None,
             None,
         ));
 
@@ -2608,6 +2611,7 @@ mod roundtrip_tests {
             fun: Arc::new(dummy_agg.clone()),
             args: vec![lit(1.0_f64)],
             filter: Some(Box::new(lit(true))),
+            order_by: None,
         };
 
         let ctx = SessionContext::new();

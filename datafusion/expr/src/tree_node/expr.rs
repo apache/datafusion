@@ -96,12 +96,15 @@ impl TreeNode for Expr {
                 }
                 expr_vec
             }
-            Expr::AggregateFunction(AggregateFunction { args, filter, .. })
-            | Expr::AggregateUDF { args, filter, .. } => {
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
+            | Expr::AggregateUDF { args, filter, order_by, .. } => {
                 let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
                     expr_vec.push(f.as_ref().clone());
+                }
+                if let Some(o) = order_by {
+                    expr_vec.push(o.as_ref().clone());
                 }
 
                 expr_vec
@@ -293,11 +296,13 @@ impl TreeNode for Expr {
                 fun,
                 distinct,
                 filter,
+                order_by,
             }) => Expr::AggregateFunction(AggregateFunction::new(
                 fun,
                 transform_vec(args, &mut transform)?,
                 distinct,
                 transform_option_box(filter, &mut transform)?,
+                order_by,
             )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
@@ -315,10 +320,16 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF { args, fun, filter } => Expr::AggregateUDF {
+            Expr::AggregateUDF {
+                args,
+                fun,
+                filter,
+                order_by,
+            } => Expr::AggregateUDF {
                 args: transform_vec(args, &mut transform)?,
                 fun,
                 filter: transform_option_box(filter, &mut transform)?,
+                order_by: transform_option_box(order_by, &mut transform)?,
             },
             Expr::InList {
                 expr,
