@@ -128,7 +128,7 @@ impl Coercion {
         Coercion::new(
             output_type.clone(),
             output_type.clone(),
-            output_type.clone(),
+            output_type,
         )
     }
 }
@@ -149,7 +149,7 @@ pub fn binary_coerce(
         | Operator::BitwiseXor
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type)
-            .map(|result_type| Coercion::new_uniform(result_type)),
+            .map(Coercion::new_uniform),
         Operator::And | Operator::Or => {
             match (lhs_type, rhs_type) {
                 // logical binary boolean operators can only be evaluated in bools or nulls
@@ -171,7 +171,7 @@ pub fn binary_coerce(
         | Operator::LtEq
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type)
-            .map(|result_type| Coercion::new_uniform(result_type)),
+            .map(Coercion::new_uniform),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
             if is_datetime(lhs_type)
@@ -206,7 +206,7 @@ pub fn binary_coerce(
             .map(|result_type| Coercion::new_uniform(result_type)),
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type)
-            .map(|result_type| Coercion::new_uniform(result_type)),
+            .map(Coercion::new_uniform),
     }
 }
 
