@@ -313,6 +313,9 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal128(new_precision, *scale))
         }
+        DataType::Dictionary(_, dict_value_type) => {
+            sum_return_type(dict_value_type.as_ref())
+        }
         other => Err(DataFusionError::Plan(format!(
             "SUM does not support type \"{other:?}\""
         ))),
@@ -374,6 +377,9 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
             Ok(DataType::Decimal128(new_precision, new_scale))
         }
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
+        DataType::Dictionary(_, dict_value_type) => {
+            avg_return_type(dict_value_type.as_ref())
+        }
         other => Err(DataFusionError::Plan(format!(
             "AVG does not support {other:?}"
         ))),
@@ -389,6 +395,9 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
             Ok(DataType::Decimal128(new_precision, *scale))
         }
         arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
+        DataType::Dictionary(_, dict_value_type) => {
+            avg_sum_type(dict_value_type.as_ref())
+        }
         other => Err(DataFusionError::Plan(format!(
             "AVG does not support {other:?}"
         ))),
@@ -396,19 +405,29 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
 }
 
 pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        arg_type if NUMERICS.contains(arg_type)
-        || matches!(arg_type, DataType::Decimal128(_, _))
-    )
+    match arg_type {
+        DataType::Dictionary(_, dict_value_type) => {
+            is_sum_support_arg_type(dict_value_type.as_ref())
+        }
+        _ => matches!(
+            arg_type,
+            arg_type if NUMERICS.contains(arg_type)
+            || matches!(arg_type, DataType::Decimal128(_, _))
+        ),
+    }
 }
 
 pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        arg_type if NUMERICS.contains(arg_type)
-            || matches!(arg_type, DataType::Decimal128(_, _))
-    )
+    match arg_type {
+        DataType::Dictionary(_, dict_value_type) => {
+            is_avg_support_arg_type(dict_value_type.as_ref())
+        }
+        _ => matches!(
+            arg_type,
+            arg_type if NUMERICS.contains(arg_type)
+                || matches!(arg_type, DataType::Decimal128(_, _))
+        ),
+    }
 }
 
 pub fn is_variance_support_arg_type(arg_type: &DataType) -> bool {
