@@ -78,7 +78,6 @@ use itertools::Itertools;
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::ops::Deref;
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -649,9 +648,6 @@ impl DefaultPhysicalPlanner {
                 }) => {
                     // Initially need to perform the aggregate and then merge the partitions
                     let input_exec = self.create_initial_plan(input, session_state).await?;
-                    println!("INPUT PLAN");
-                    print_plan(&input_exec)?;
-                    println!("INPUT PLAN");
                     let physical_input_schema = input_exec.schema();
                     let logical_input_schema = input.as_ref().schema();
 
@@ -660,8 +656,6 @@ impl DefaultPhysicalPlanner {
                         logical_input_schema,
                         &physical_input_schema,
                         session_state)?;
-                    println!("aggr_expr: {:?}", aggr_expr);
-                    // let order_by_expr = vec![];
                     let agg_filter = aggr_expr
                         .iter()
                         .map(|e| {
@@ -679,7 +673,6 @@ impl DefaultPhysicalPlanner {
                         filters.push(filter);
                         order_bys.push(order_by);
                     }
-                    // let (aggregates, filters, order_bys): (Vec<_>, Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
@@ -847,25 +840,12 @@ impl DefaultPhysicalPlanner {
                     let input_dfschema = input.as_ref().schema();
                     let sort_expr = expr
                         .iter()
-                        .map(|e| match e {
-                            Expr::Sort(expr::Sort {
-                                expr,
-                                asc,
-                                nulls_first,
-                            }) => create_physical_sort_expr(
-                                expr,
-                                input_dfschema,
-                                &input_schema,
-                                SortOptions {
-                                    descending: !*asc,
-                                    nulls_first: *nulls_first,
-                                },
-                                session_state.execution_props(),
-                            ),
-                            _ => Err(DataFusionError::Plan(
-                                "Sort only accepts sort expressions".to_string(),
-                            )),
-                        })
+                        .map(|e| create_physical_sort_expr(
+                            e,
+                            input_dfschema,
+                            &input_schema,
+                            session_state.execution_props(),
+                        ))
                         .collect::<Result<Vec<_>>>()?;
                     let new_sort = SortExec::new(sort_expr, physical_input)
                         .with_fetch(*fetch);
@@ -1341,13 +1321,6 @@ fn merge_grouping_set_physical_expr(
     ))
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-    let formatted = displayable(plan.as_ref()).indent().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-    Ok(())
-}
-
 /// Expand and align a CUBE expression. This is a special case of GROUPING SETS
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
 fn create_cube_physical_expr(
@@ -1544,24 +1517,13 @@ pub fn create_window_expr_with_name(
                 .collect::<Result<Vec<_>>>()?;
             let order_by = order_by
                 .iter()
-                .map(|e| match e {
-                    Expr::Sort(expr::Sort {
-                        expr,
-                        asc,
-                        nulls_first,
-                    }) => create_physical_sort_expr(
-                        expr,
+                .map(|e| {
+                    create_physical_sort_expr(
+                        e,
                         logical_input_schema,
                         physical_input_schema,
-                        SortOptions {
-                            descending: !*asc,
-                            nulls_first: *nulls_first,
-                        },
                         execution_props,
-                    ),
-                    _ => Err(DataFusionError::Plan(
-                        "Sort only accepts sort expressions".to_string(),
-                    )),
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
@@ -1631,7 +1593,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             filter,
             order_by,
         }) => {
-            println!("order by: {:?}", order_by);
             let args = args
                 .iter()
                 .map(|e| {
@@ -1659,30 +1620,13 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 physical_input_schema,
                 name,
             );
-            println!("logical_input_schema:{:?}", logical_input_schema.fields());
-            println!("physical_input_schema:{:?}", physical_input_schema.fields());
             let order_by = match order_by {
-                Some(e) => Some(match e.deref() {
-                    Expr::Sort(expr::Sort {
-                        expr,
-                        asc,
-                        nulls_first,
-                    }) => create_physical_sort_expr(
-                        &expr,
-                        logical_input_schema,
-                        physical_input_schema,
-                        SortOptions {
-                            descending: !asc,
-                            nulls_first: *nulls_first,
-                        },
-                        execution_props,
-                    )?,
-                    _ => {
-                        return Err(DataFusionError::Plan(
-                            "Sort only accepts sort expressions".to_string(),
-                        ))
-                    }
-                }),
+                Some(e) => Some(create_physical_sort_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
                 None => None,
             };
             Ok((agg_expr?, filter, order_by))
@@ -1715,27 +1659,12 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
             let order_by = match order_by {
-                Some(e) => Some(match e.deref() {
-                    Expr::Sort(expr::Sort {
-                        expr,
-                        asc,
-                        nulls_first,
-                    }) => create_physical_sort_expr(
-                        &*expr,
-                        logical_input_schema,
-                        physical_input_schema,
-                        SortOptions {
-                            descending: !asc,
-                            nulls_first: *nulls_first,
-                        },
-                        execution_props,
-                    )?,
-                    _ => {
-                        return Err(DataFusionError::Plan(
-                            "Sort only accepts sort expressions".to_string(),
-                        ))
-                    }
-                }),
+                Some(e) => Some(create_physical_sort_expr(
+                    e,
+                    logical_input_schema,
+                    physical_input_schema,
+                    execution_props,
+                )?),
                 None => None,
             };
 
@@ -1776,13 +1705,32 @@ pub fn create_physical_sort_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     input_schema: &Schema,
-    options: SortOptions,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    Ok(PhysicalSortExpr {
-        expr: create_physical_expr(e, input_dfschema, input_schema, execution_props)?,
-        options,
-    })
+    match e {
+        Expr::Sort(expr::Sort {
+            expr,
+            asc,
+            nulls_first,
+        }) => {
+            let options = SortOptions {
+                descending: !asc,
+                nulls_first: *nulls_first,
+            };
+            Ok(PhysicalSortExpr {
+                expr: create_physical_expr(
+                    expr,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                )?,
+                options,
+            })
+        }
+        _ => Err(DataFusionError::Plan(
+            "Sort only accepts sort expressions".to_string(),
+        )),
+    }
 }
 
 impl DefaultPhysicalPlanner {

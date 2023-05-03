@@ -524,13 +524,6 @@ mod tests {
         Ok(())
     }
 
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-        let formatted = displayable(plan.as_ref()).indent().to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_ordering_sensitive_aggregation() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(1);
@@ -550,11 +543,7 @@ mod tests {
         )
         .await?;
 
-        // let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.group_key DESC)) AS amounts
-        // FROM sales_global AS s
-        // GROUP BY s.group_key";
-
-        let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.sn ASC)) AS amounts
+        let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
         FROM sales_global AS s
         GROUP BY s.group_key";
 
@@ -566,9 +555,10 @@ mod tests {
         // To satisfy, requirements for Sorted mode. We should introduce `SortExec`s through physical plan.
         let expected = {
             vec![
-                "ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.sn ASC NULLS LAST)@1 as amounts]",
+                "ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST)@1 as amounts]",
                 "  AggregateExec: mode=Single, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)], ordering_mode=FullyOrdered",
-                "    SortExec: expr=[group_key@0 ASC NULLS LAST,sn@1 ASC NULLS LAST]",            ]
+                "    SortExec: expr=[group_key@0 ASC NULLS LAST,amount@1 ASC NULLS LAST]",
+            ]
         };
 
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -587,6 +577,161 @@ mod tests {
             "| [50, 200] |",
             "| [75, 100] |",
             "+-----------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ordering_sensitive_aggregation2() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        ctx.sql(
+            "CREATE TABLE sales_global (
+          group_key INT,
+          sn INT PRIMARY KEY,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount INT
+        ) as VALUES
+          (0, 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
+          (1, 2, '2022-01-01 11:30:00'::timestamp, 'EUR', 75.00),
+          (0, 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
+          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 100.00),
+          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
+          ",
+        )
+        .await?;
+
+        let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.group_key DESC)) AS amounts
+        FROM sales_global AS s
+        GROUP BY s.group_key";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        // We should produce `BoundedWindowAggExec`s that only works in Sorted mode, since source is finite.
+        // To satisfy, requirements for Sorted mode. We should introduce `SortExec`s through physical plan.
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.group_key DESC NULLS FIRST)@1 as amounts]",
+                "  AggregateExec: mode=Single, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)], ordering_mode=FullyOrdered",
+                "    SortExec: expr=[group_key@0 ASC NULLS LAST]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let actual = execute_to_batches(&ctx, sql).await;
+
+        let expected = vec![
+            "+---------------+",
+            "| amounts       |",
+            "+---------------+",
+            "| [50, 200]     |",
+            "| [75, 100, 80] |",
+            "+---------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ordering_sensitive_aggregation3() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        ctx.sql(
+            "CREATE TABLE sales_global (
+          group_key INT,
+          sn INT PRIMARY KEY,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount INT
+        ) as VALUES
+          (0, 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
+          (1, 2, '2022-01-01 11:30:00'::timestamp, 'EUR', 75.00),
+          (0, 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
+          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 100.00),
+          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
+          ",
+        )
+        .await?;
+
+        let sql = "SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+        ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2
+        FROM sales_global AS s
+        GROUP BY s.group_key";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await;
+        let err_msg = "Conflicting ordering requirements in aggregate functions";
+        assert_contains!(physical_plan.err().unwrap().to_string(), err_msg);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ordering_sensitive_aggregation4() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        ctx.sql(
+            "CREATE TABLE sales_global (
+          group_key INT,
+          sn INT PRIMARY KEY,
+          ts TIMESTAMP,
+          currency VARCHAR(3),
+          amount INT
+        ) as VALUES
+          (0, 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
+          (1, 2, '2022-01-01 11:30:00'::timestamp, 'EUR', 75.00),
+          (0, 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
+          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 100.00),
+          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
+          ",
+        )
+        .await?;
+
+        let sql = "SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+        SUM(s.amount) AS sum1
+        FROM sales_global AS s
+        GROUP BY s.group_key";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        // We should produce `BoundedWindowAggExec`s that only works in Sorted mode, since source is finite.
+        // To satisfy, requirements for Sorted mode. We should introduce `SortExec`s through physical plan.
+        let expected = {
+            vec![
+                "ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]",
+                "  AggregateExec: mode=Single, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered",
+                "    SortExec: expr=[group_key@0 ASC NULLS LAST,amount@1 DESC]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let actual = execute_to_batches(&ctx, sql).await;
+
+        let expected = vec![
+            "+---------------+------+",
+            "| amounts       | sum1 |",
+            "+---------------+------+",
+            "| [200, 50]     | 250  |",
+            "| [100, 80, 75] | 255  |",
+            "+---------------+------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())

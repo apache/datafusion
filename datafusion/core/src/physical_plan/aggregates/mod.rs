@@ -40,9 +40,10 @@ use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
-    normalize_out_expr_with_columns_map,
+    normalize_out_expr_with_columns_map, normalize_sort_expr_with_equivalence_properties,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
-    AggregateExpr, PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
+    AggregateExpr, EquivalentClass, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -340,6 +341,35 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .collect()
 }
 
+fn get_finest_requirement(
+    order_by_expr: &[Option<PhysicalSortExpr>],
+    eq_properties: &[EquivalentClass],
+) -> Result<Option<PhysicalSortExpr>> {
+    let mut res: Option<PhysicalSortExpr> = None;
+    for elem in order_by_expr.iter().flatten() {
+        if let Some(res) = &res {
+            let res_normalized = normalize_sort_expr_with_equivalence_properties(
+                res.clone(),
+                eq_properties,
+            );
+            let elem_normalized = normalize_sort_expr_with_equivalence_properties(
+                elem.clone(),
+                eq_properties,
+            );
+            if !res_normalized.eq(&elem_normalized) {
+                println!("Conflicting requirements");
+                return Err(DataFusionError::Plan(
+                    "Conflicting ordering requirements in aggregate functions"
+                        .to_string(),
+                ));
+            }
+        } else {
+            res = Some(elem.clone())
+        }
+    }
+    Ok(res)
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -347,7 +377,6 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        // TODO: make order_by_expr Option<PhysicalSortExpr> since all aggregators will have same requirement
         order_by_expr: Vec<Option<PhysicalSortExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -361,30 +390,38 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
-        println!("aggr_expr: {:?}", aggr_expr);
-        println!("order_by_expr: {:?}", order_by_expr);
         let mut required_input_ordering = None;
         if mode == AggregateMode::Partial || mode == AggregateMode::Single {
-            if let Some(first) = order_by_expr.first() {
-                if let Some(req) = first {
-                    if group_by.groups.len() == 1 {
-                        let requirement_prefix = output_group_expr_helper(&group_by);
-                        let mut requirement = requirement_prefix
-                            .into_iter()
-                            .map(|expr| PhysicalSortRequirement::new(expr, None))
-                            .collect::<Vec<_>>();
-                        requirement.push(PhysicalSortRequirement::from(req.clone()));
-                        required_input_ordering = Some(requirement);
-                    } else {
-                        DataFusionError::Plan(
-                            "Cannot run order sensitive aggregation in grouping set queries"
-                                .to_string(),
-                        );
+            let requirement = get_finest_requirement(
+                &order_by_expr,
+                input.equivalence_properties().classes(),
+            )?;
+            if let Some(req) = requirement {
+                if group_by.groups.len() == 1 {
+                    let requirement_prefix = output_group_expr_helper(&group_by);
+                    let mut requirement = requirement_prefix
+                        .into_iter()
+                        .map(|expr| PhysicalSortRequirement::new(expr, None))
+                        .collect::<Vec<_>>();
+                    let mut found = false;
+                    for elem in &requirement {
+                        if req.expr.eq(elem.expr()) {
+                            found = true;
+                            break;
+                        }
                     }
+                    if !found {
+                        requirement.push(PhysicalSortRequirement::from(req));
+                    }
+                    required_input_ordering = Some(requirement);
+                } else {
+                    return Err(DataFusionError::Plan(
+                        "Cannot run order sensitive aggregation in grouping set queries"
+                            .to_string(),
+                    ));
                 }
             }
         }
-        println!("required_input_ordering:{:?}", required_input_ordering);
 
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
@@ -397,11 +434,6 @@ impl AggregateExec {
         }
 
         let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
-        if let Some(aggregation_ordering) = &aggregation_ordering {
-            println!("ordering: {:?}", aggregation_ordering.ordering);
-        } else {
-            println!("ordering: None");
-        }
 
         Ok(AggregateExec {
             mode,
