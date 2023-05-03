@@ -211,7 +211,7 @@ async fn prune_partitions(
 
     for partition in &partitions {
         let cols = partition_cols.iter().map(|x| x.0.as_str());
-        let parsed = parse_partitions_for_path(&table_path, &partition.path, cols)
+        let parsed = parse_partitions_for_path(table_path, &partition.path, cols)
             .unwrap_or_default();
 
         let mut builders = builders.iter_mut();
@@ -231,14 +231,14 @@ async fn prune_partitions(
         .collect::<Result<_, _>>()?;
 
     let fields: Fields = partition_cols
-        .into_iter()
+        .iter()
         .map(|(n, d)| Field::new(n, d.clone(), true))
         .collect();
     let schema = Arc::new(Schema::new(fields));
 
     let df_schema = DFSchema::new_with_metadata(
         partition_cols
-            .into_iter()
+            .iter()
             .map(|(n, d)| DFField::new_unqualified(n, d.clone(), true))
             .collect(),
         Default::default(),
