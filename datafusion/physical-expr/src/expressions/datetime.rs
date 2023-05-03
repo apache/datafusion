@@ -120,16 +120,21 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(array_rhs)) => {
                 resolve_temporal_op_scalar(&array_lhs, sign, &array_rhs)
             }
+            // This function evaluates operations between a scalar value and an array of temporal
+            // values. One example is calculating the duration between a scalar timestamp and an
+            // array of timestamps (i.e. `now() - some_column`).
+            (ColumnarValue::Scalar(scalar_lhs), ColumnarValue::Array(array_rhs)) => {
+                let array_lhs = scalar_lhs.to_array_of_size(array_rhs.len());
+                Ok(ColumnarValue::Array(resolve_temporal_op(
+                    &array_lhs, sign, &array_rhs,
+                )?))
+            }
             // This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
             // timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
             // the operation (+1 for addition and -1 for subtraction).
             (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => Ok(
                 ColumnarValue::Array(resolve_temporal_op(&array_lhs, sign, &array_rhs)?),
             ),
-            (_, _) => {
-                let msg = "If RHS of the operation is an array, then LHS also must be";
-                Err(DataFusionError::Internal(msg.to_string()))
-            }
         }
     }
 
@@ -227,6 +232,7 @@ mod tests {
     use crate::execution_props::ExecutionProps;
     use arrow::array::{ArrayRef, Date32Builder};
     use arrow::datatypes::*;
+    use arrow_array::builder::{IntervalDayTimeBuilder, TimestampSecondBuilder};
     use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
     use datafusion_common::delta::shift_months;
@@ -769,6 +775,75 @@ mod tests {
         let interval_scalar = ScalarValue::new_interval_ym(0, 1);
 
         experiment(timestamp_scalar, interval_scalar)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_subtract_array_from_scalar() -> Result<()> {
+        let dt_expr = Expr::Literal(ScalarValue::TimestampSecond(
+            Some(
+                NaiveDate::from_ymd_opt(2023, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .timestamp(),
+            ),
+            None,
+        ));
+
+        let op = Operator::Minus;
+        let column_expr = Expr::Column(Column::from_name("field0"));
+
+        let mut builder = TimestampSecondBuilder::with_capacity(1);
+
+        builder.append_value(
+            NaiveDate::from_ymd_opt(2022, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .timestamp(),
+        );
+
+        let array_ref: ArrayRef = Arc::new(builder.finish());
+
+        let schema = Schema::new(vec![Field::new(
+            "field0",
+            DataType::Timestamp(TimeUnit::Second, None),
+            false,
+        )]);
+
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![array_ref])?;
+
+        let dfs = schema.clone().to_dfschema()?;
+        let props = ExecutionProps::new();
+
+        let lhs = create_physical_expr(&dt_expr, &dfs, &schema, &props)?;
+        let rhs = create_physical_expr(&column_expr, &dfs, &schema, &props)?;
+
+        let lhs_str = format!("{lhs}");
+        let rhs_str = format!("{rhs}");
+
+        let cut = DateTimeIntervalExpr::new(lhs, op, rhs);
+
+        assert_eq!(lhs_str, format!("{}", cut.lhs()));
+        assert_eq!(op, cut.op().clone());
+        assert_eq!(rhs_str, format!("{}", cut.rhs()));
+
+        let result = cut.evaluate(&batch)?;
+
+        let mut builder = IntervalDayTimeBuilder::with_capacity(1);
+        builder.append_value(IntervalDayTimeType::make_value(365, 0));
+        let expected: ArrayRef = Arc::new(builder.finish());
+
+        match result {
+            ColumnarValue::Array(actual) => {
+                assert_eq!(&actual, &expected)
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Unexpected result!".to_string(),
+            ))?,
+        }
 
         Ok(())
     }
