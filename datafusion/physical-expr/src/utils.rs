@@ -234,16 +234,11 @@ fn normalize_sort_expr_with_ordering_equivalence_properties(
     sort_expr: PhysicalSortExpr,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortExpr {
-    let sort_req = PhysicalSortRequirement::from(sort_expr);
-    let res = normalize_sort_requirement_with_ordering_equivalence_properties(
-        sort_req,
+    let requirement = normalize_sort_requirement_with_ordering_equivalence_properties(
+        PhysicalSortRequirement::from(sort_expr),
         eq_properties,
     );
-    PhysicalSortExpr {
-        expr: res.expr().clone(),
-        // We are sure options will be Some.
-        options: res.options().unwrap(),
-    }
+    requirement.into_sort_expr()
 }
 
 fn normalize_sort_requirement_with_ordering_equivalence_properties(
