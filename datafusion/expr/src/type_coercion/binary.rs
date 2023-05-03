@@ -200,8 +200,9 @@ pub fn binary_coerce(
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => regex_coercion(lhs_type, rhs_type)
-            .map(|result_type| Coercion::new_uniform(result_type)),
+        | Operator::RegexNotIMatch => {
+            regex_coercion(lhs_type, rhs_type).map(Coercion::new_uniform)
+        }
         // "||" operator has its own rules, and always return a string type
         Operator::StringConcat => {
             string_concat_coercion(lhs_type, rhs_type).map(Coercion::new_uniform)
