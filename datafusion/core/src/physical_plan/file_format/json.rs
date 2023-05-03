@@ -314,7 +314,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_DATA_BASE: &str = "tests/jsons";
+    const TEST_DATA_BASE: &str = "tests/data";
 
     async fn prepare_store(
         state: &SessionState,
