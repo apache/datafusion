@@ -473,6 +473,7 @@ fn ensure_sorting(
                     physical_ordering,
                     &required_ordering,
                     || child.equivalence_properties(),
+                    || child.ordering_equivalence_properties(),
                 ) {
                     // Make sure we preserve the ordering requirements:
                     update_child_to_remove_unnecessary_sort(child, sort_onwards, &plan)?;
@@ -539,6 +540,7 @@ fn analyze_immediate_sort_removal(
             sort_input.output_ordering(),
             sort_exec.output_ordering(),
             || sort_input.equivalence_properties(),
+            || sort_input.ordering_equivalence_properties(),
         ) {
             // Since we know that a `SortExec` has exactly one child,
             // we can use the zero index safely:
