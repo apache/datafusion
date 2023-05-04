@@ -99,7 +99,6 @@ pub mod select;
 pub mod timestamp;
 pub mod udf;
 pub mod wildcard;
-pub mod window;
 
 pub mod explain;
 pub mod information_schema;
