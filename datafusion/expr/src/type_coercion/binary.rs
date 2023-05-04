@@ -42,7 +42,7 @@ pub fn binary_operator_data_type(
     let result_type = if !any_decimal(lhs_type, rhs_type) {
         // validate that it is possible to perform the operation on incoming types.
         // (or the return datatype cannot be inferred)
-        coerce_types(lhs_type, op, rhs_type)?
+        get_result_type(lhs_type, op, rhs_type)?
     } else {
         let (coerced_lhs_type, coerced_rhs_type) =
             math_decimal_coercion(lhs_type, rhs_type);
@@ -103,6 +103,55 @@ pub fn binary_operator_data_type(
         | Operator::Modulo => Ok(result_type),
         // string operations return the same values as the common coerced type
         Operator::StringConcat => Ok(result_type),
+    }
+}
+
+pub fn get_result_type(
+    lhs_type: &DataType,
+    op: &Operator,
+    rhs_type: &DataType,
+) -> Result<DataType> {
+    let result = match op {
+        Operator::And
+        | Operator::Or
+        | Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::LtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => Some(DataType::Boolean),
+        Operator::Plus | Operator::Minus
+            if is_datetime(lhs_type)
+                || is_datetime(rhs_type)
+                || is_interval(lhs_type)
+                || is_interval(rhs_type) =>
+        {
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)
+        }
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseXor
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft
+        | Operator::Plus
+        | Operator::Minus
+        | Operator::Modulo
+        | Operator::Divide
+        | Operator::Multiply
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
+        | Operator::StringConcat => coerce_types(lhs_type, op, rhs_type).ok(),
+    };
+
+    match result {
+        None => Err(DataFusionError::Plan(format!(
+            "there isn't result type for {lhs_type:?} {op} {rhs_type:?}"
+        ))),
+        Some(t) => Ok(t),
     }
 }
 

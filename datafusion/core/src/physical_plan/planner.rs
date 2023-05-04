@@ -2093,10 +2093,7 @@ mod tests {
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
-            let message = format!(
-                "Expression {case:?} expected to error due to impossible coercion"
-            );
-            assert!(logical_plan.is_err(), "{}", message);
+            assert!(logical_plan.is_ok());
         }
         Ok(())
     }
