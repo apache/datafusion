@@ -197,9 +197,9 @@ pub fn coerce_types(
                 || is_interval(rhs_type) =>
         {
             if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
-                return Err(DataFusionError::Plan(
-                    "interval can't subtract timestamp/date".to_string(),
-                ));
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid interval subtraction: {lhs_type} - {rhs_type}"
+                )));
             }
             temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
