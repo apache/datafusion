@@ -118,7 +118,7 @@ fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
             RecordBatch::try_from_iter(vec![(
                 "x",
                 Arc::new(Int32Array::from_iter_values(
-                    std::iter::from_fn(|| Some(rng.gen())).take(to_read),
+                    (0..to_read).map(|_| rng.gen()),
                 )) as ArrayRef,
             )])
             .unwrap(),

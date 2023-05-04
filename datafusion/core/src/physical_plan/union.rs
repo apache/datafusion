@@ -32,8 +32,7 @@ use arrow::{
 use datafusion_common::{DFSchemaRef, DataFusionError};
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use log::debug;
-use log::warn;
+use log::{debug, trace, warn};
 
 use super::{
     expressions::PhysicalSortExpr,
@@ -157,7 +156,7 @@ impl ExecutionPlan for UnionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
@@ -223,7 +222,7 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -288,23 +287,23 @@ impl ExecutionPlan for UnionExec {
 /// |         |---+
 /// | Input 1 |   |
 /// |         |-------------+
-/// +---------+   |         |     
+/// +---------+   |         |
 ///               |         |         +---------+
 ///               +------------------>|         |
 ///                 +---------------->| Combine |-->
 ///                 | +-------------->|         |
 ///                 | |     |         +---------+
-/// +---------+     | |     |       
+/// +---------+     | |     |
 /// |         |-----+ |     |
 /// | Input 2 |       |     |
 /// |         |---------------+
-/// +---------+       |     | |    
+/// +---------+       |     | |
 ///                   |     | |       +---------+
 ///                   |     +-------->|         |
 ///                   |       +------>| Combine |-->
 ///                   |         +---->|         |
 ///                   |         |     +---------+
-/// +---------+       |         |     
+/// +---------+       |         |
 /// |         |-------+         |
 /// | Input 3 |                 |
 /// |         |-----------------+
@@ -355,7 +354,7 @@ impl ExecutionPlan for InterleaveExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
@@ -392,7 +391,7 @@ impl ExecutionPlan for InterleaveExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero

@@ -235,52 +235,9 @@ mod tests {
     use arrow_array::builder::{IntervalDayTimeBuilder, TimestampSecondBuilder};
     use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
-    use datafusion_common::delta::shift_months;
     use datafusion_common::{Column, Result, ScalarValue, ToDFSchema};
     use datafusion_expr::Expr;
     use std::ops::Add;
-
-    #[test]
-    fn add_11_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 11);
-        assert_eq!(format!("{actual:?}").as_str(), "2000-12-01");
-    }
-
-    #[test]
-    fn add_12_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 12);
-        assert_eq!(format!("{actual:?}").as_str(), "2001-01-01");
-    }
-
-    #[test]
-    fn add_13_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 13);
-        assert_eq!(format!("{actual:?}").as_str(), "2001-02-01");
-    }
-
-    #[test]
-    fn sub_11_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -11);
-        assert_eq!(format!("{actual:?}").as_str(), "1999-02-01");
-    }
-
-    #[test]
-    fn sub_12_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -12);
-        assert_eq!(format!("{actual:?}").as_str(), "1999-01-01");
-    }
-
-    #[test]
-    fn sub_13_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -13);
-        assert_eq!(format!("{actual:?}").as_str(), "1998-12-01");
-    }
 
     #[test]
     fn add_32_day_time() -> Result<()> {

@@ -32,7 +32,8 @@ use crate::{
     },
 };
 use datafusion_expr::{
-    logical_plan::Statement, DescribeTable, DmlStatement, StringifiedPlan, WriteOp,
+    logical_plan::{DdlStatement, Statement},
+    DescribeTable, StringifiedPlan,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -64,8 +65,8 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
-    SetVariable, TableSource, TableType, UNNAMED_TABLE,
+    CreateView, DropCatalogSchema, DropTable, DropView, Explain, LogicalPlan,
+    LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
 use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
@@ -85,7 +86,7 @@ use crate::physical_plan::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::OwnedTableReference;
+use datafusion_common::{OwnedTableReference, SchemaReference};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -368,218 +369,28 @@ impl SessionContext {
     /// Execute the [`LogicalPlan`], return a [`DataFrame`]
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
-            LogicalPlan::Dml(DmlStatement {
-                table_name,
-                op: WriteOp::Insert,
-                input,
-                ..
-            }) => {
-                if self.table_exist(&table_name)? {
-                    let name = table_name.table();
-                    let provider = self.table_provider(name).await?;
-                    provider.insert_into(&self.state(), &input).await?;
-                } else {
-                    return Err(DataFusionError::Execution(format!(
-                        "Table '{table_name}' does not exist"
-                    )));
+            LogicalPlan::Ddl(ddl) => match ddl {
+                DdlStatement::CreateExternalTable(cmd) => {
+                    self.create_external_table(&cmd).await
                 }
-                self.return_empty_dataframe()
-            }
-            LogicalPlan::CreateExternalTable(cmd) => {
-                self.create_external_table(&cmd).await
-            }
-
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                name,
-                input,
-                if_not_exists,
-                or_replace,
-                primary_key,
-            }) => {
-                if !primary_key.is_empty() {
-                    Err(DataFusionError::Execution(
-                        "Primary keys on MemoryTables are not currently supported!"
-                            .to_string(),
-                    ))?;
+                DdlStatement::CreateMemoryTable(cmd) => {
+                    self.create_memory_table(cmd).await
                 }
-
-                let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
-                let table = self.table(&name).await;
-
-                match (if_not_exists, or_replace, table) {
-                    (true, false, Ok(_)) => self.return_empty_dataframe(),
-                    (false, true, Ok(_)) => {
-                        self.deregister_table(&name)?;
-                        let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state(), input);
-
-                        let batches: Vec<_> = physical.collect_partitioned().await?;
-                        let table = Arc::new(MemTable::try_new(schema, batches)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (true, true, Ok(_)) => Err(DataFusionError::Execution(
-                        "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
-                    )),
-                    (_, _, Err(_)) => {
-                        let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state(), input);
-
-                        let batches: Vec<_> = physical.collect_partitioned().await?;
-                        let table = Arc::new(MemTable::try_new(schema, batches)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{name}' already exists"
-                    ))),
+                DdlStatement::CreateView(cmd) => self.create_view(cmd).await,
+                DdlStatement::CreateCatalogSchema(cmd) => {
+                    self.create_catalog_schema(cmd).await
                 }
+                DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd).await,
+                DdlStatement::DropTable(cmd) => self.drop_table(cmd).await,
+                DdlStatement::DropView(cmd) => self.drop_view(cmd).await,
+                DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd).await,
+            },
+            // TODO what about the other statements (like TransactionStart and TransactionEnd)
+            LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
+                self.set_variable(stmt).await
             }
-
-            LogicalPlan::CreateView(CreateView {
-                name,
-                input,
-                or_replace,
-                definition,
-            }) => {
-                let view = self.table(&name).await;
-
-                match (or_replace, view) {
-                    (true, Ok(_)) => {
-                        self.deregister_table(&name)?;
-                        let table =
-                            Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (_, Err(_)) => {
-                        let table =
-                            Arc::new(ViewTable::try_new((*input).clone(), definition)?);
-
-                        self.register_table(&name, table)?;
-                        self.return_empty_dataframe()
-                    }
-                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{name}' already exists"
-                    ))),
-                }
-            }
-
-            LogicalPlan::DropTable(DropTable {
-                name, if_exists, ..
-            }) => {
-                let result = self.find_and_deregister(&name, TableType::Base).await;
-                match (result, if_exists) {
-                    (Ok(true), _) => self.return_empty_dataframe(),
-                    (_, true) => self.return_empty_dataframe(),
-                    (_, _) => Err(DataFusionError::Execution(format!(
-                        "Table '{name}' doesn't exist."
-                    ))),
-                }
-            }
-
-            LogicalPlan::DropView(DropView {
-                name, if_exists, ..
-            }) => {
-                let result = self.find_and_deregister(&name, TableType::View).await;
-                match (result, if_exists) {
-                    (Ok(true), _) => self.return_empty_dataframe(),
-                    (_, true) => self.return_empty_dataframe(),
-                    (_, _) => Err(DataFusionError::Execution(format!(
-                        "View '{name}' doesn't exist."
-                    ))),
-                }
-            }
-
-            LogicalPlan::Statement(Statement::SetVariable(SetVariable {
-                variable,
-                value,
-                ..
-            })) => {
-                let mut state = self.state.write();
-                state.config.options_mut().set(&variable, &value)?;
-                drop(state);
-
-                self.return_empty_dataframe()
-            }
-
             LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
                 self.return_describe_table_dataframe(schema).await
-            }
-
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists,
-                ..
-            }) => {
-                // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
-                // so for now, we default to default catalog
-                let tokens: Vec<&str> = schema_name.split('.').collect();
-                let (catalog, schema_name) = match tokens.len() {
-                    1 => {
-                        let state = self.state.read();
-                        let name = &state.config.options().catalog.default_catalog;
-                        let catalog =
-                            state.catalog_list.catalog(name).ok_or_else(|| {
-                                DataFusionError::Execution(format!(
-                                    "Missing default catalog '{name}'"
-                                ))
-                            })?;
-                        (catalog, tokens[0])
-                    }
-                    2 => {
-                        let name = &tokens[0];
-                        let catalog = self.catalog(name).ok_or_else(|| {
-                            DataFusionError::Execution(format!(
-                                "Missing catalog '{name}'"
-                            ))
-                        })?;
-                        (catalog, tokens[1])
-                    }
-                    _ => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Unable to parse catalog from {schema_name}"
-                        )))
-                    }
-                };
-                let schema = catalog.schema(schema_name);
-
-                match (if_not_exists, schema) {
-                    (true, Some(_)) => self.return_empty_dataframe(),
-                    (true, None) | (false, None) => {
-                        let schema = Arc::new(MemorySchemaProvider::new());
-                        catalog.register_schema(schema_name, schema)?;
-                        self.return_empty_dataframe()
-                    }
-                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Schema '{schema_name}' already exists"
-                    ))),
-                }
-            }
-            LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name,
-                if_not_exists,
-                ..
-            }) => {
-                let catalog = self.catalog(catalog_name.as_str());
-
-                match (if_not_exists, catalog) {
-                    (true, Some(_)) => self.return_empty_dataframe(),
-                    (true, None) | (false, None) => {
-                        let new_catalog = Arc::new(MemoryCatalogProvider::new());
-                        self.state
-                            .write()
-                            .catalog_list
-                            .register_catalog(catalog_name, new_catalog);
-                        self.return_empty_dataframe()
-                    }
-                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Catalog '{catalog_name}' already exists"
-                    ))),
-                }
             }
 
             plan => Ok(DataFrame::new(self.state(), plan)),
@@ -659,6 +470,239 @@ impl SessionContext {
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
         self.register_table(&cmd.name, table_provider)?;
+        self.return_empty_dataframe()
+    }
+
+    async fn create_memory_table(&self, cmd: CreateMemoryTable) -> Result<DataFrame> {
+        let CreateMemoryTable {
+            name,
+            input,
+            if_not_exists,
+            or_replace,
+            primary_key,
+        } = cmd;
+
+        if !primary_key.is_empty() {
+            Err(DataFusionError::Execution(
+                "Primary keys on MemoryTables are not currently supported!".to_string(),
+            ))?;
+        }
+
+        let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let table = self.table(&name).await;
+
+        match (if_not_exists, or_replace, table) {
+            (true, false, Ok(_)) => self.return_empty_dataframe(),
+            (false, true, Ok(_)) => {
+                self.deregister_table(&name)?;
+                let schema = Arc::new(input.schema().as_ref().into());
+                let physical = DataFrame::new(self.state(), input);
+
+                let batches: Vec<_> = physical.collect_partitioned().await?;
+                let table = Arc::new(MemTable::try_new(schema, batches)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (true, true, Ok(_)) => Err(DataFusionError::Execution(
+                "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
+            )),
+            (_, _, Err(_)) => {
+                let schema = Arc::new(input.schema().as_ref().into());
+                let physical = DataFrame::new(self.state(), input);
+
+                let batches: Vec<_> = physical.collect_partitioned().await?;
+                let table = Arc::new(MemTable::try_new(schema, batches)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                "Table '{name}' already exists"
+            ))),
+        }
+    }
+
+    async fn create_view(&self, cmd: CreateView) -> Result<DataFrame> {
+        let CreateView {
+            name,
+            input,
+            or_replace,
+            definition,
+        } = cmd;
+
+        let view = self.table(&name).await;
+
+        match (or_replace, view) {
+            (true, Ok(_)) => {
+                self.deregister_table(&name)?;
+                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (_, Err(_)) => {
+                let table = Arc::new(ViewTable::try_new((*input).clone(), definition)?);
+
+                self.register_table(&name, table)?;
+                self.return_empty_dataframe()
+            }
+            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                "Table '{name}' already exists"
+            ))),
+        }
+    }
+
+    async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
+        let CreateCatalogSchema {
+            schema_name,
+            if_not_exists,
+            ..
+        } = cmd;
+
+        // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+        // so for now, we default to default catalog
+        let tokens: Vec<&str> = schema_name.split('.').collect();
+        let (catalog, schema_name) = match tokens.len() {
+            1 => {
+                let state = self.state.read();
+                let name = &state.config.options().catalog.default_catalog;
+                let catalog = state.catalog_list.catalog(name).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Missing default catalog '{name}'"
+                    ))
+                })?;
+                (catalog, tokens[0])
+            }
+            2 => {
+                let name = &tokens[0];
+                let catalog = self.catalog(name).ok_or_else(|| {
+                    DataFusionError::Execution(format!("Missing catalog '{name}'"))
+                })?;
+                (catalog, tokens[1])
+            }
+            _ => {
+                return Err(DataFusionError::Execution(format!(
+                    "Unable to parse catalog from {schema_name}"
+                )))
+            }
+        };
+        let schema = catalog.schema(schema_name);
+
+        match (if_not_exists, schema) {
+            (true, Some(_)) => self.return_empty_dataframe(),
+            (true, None) | (false, None) => {
+                let schema = Arc::new(MemorySchemaProvider::new());
+                catalog.register_schema(schema_name, schema)?;
+                self.return_empty_dataframe()
+            }
+            (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                "Schema '{schema_name}' already exists"
+            ))),
+        }
+    }
+
+    async fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
+        let CreateCatalog {
+            catalog_name,
+            if_not_exists,
+            ..
+        } = cmd;
+        let catalog = self.catalog(catalog_name.as_str());
+
+        match (if_not_exists, catalog) {
+            (true, Some(_)) => self.return_empty_dataframe(),
+            (true, None) | (false, None) => {
+                let new_catalog = Arc::new(MemoryCatalogProvider::new());
+                self.state
+                    .write()
+                    .catalog_list
+                    .register_catalog(catalog_name, new_catalog);
+                self.return_empty_dataframe()
+            }
+            (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                "Catalog '{catalog_name}' already exists"
+            ))),
+        }
+    }
+
+    async fn drop_table(&self, cmd: DropTable) -> Result<DataFrame> {
+        let DropTable {
+            name, if_exists, ..
+        } = cmd;
+        let result = self.find_and_deregister(&name, TableType::Base).await;
+        match (result, if_exists) {
+            (Ok(true), _) => self.return_empty_dataframe(),
+            (_, true) => self.return_empty_dataframe(),
+            (_, _) => Err(DataFusionError::Execution(format!(
+                "Table '{name}' doesn't exist."
+            ))),
+        }
+    }
+
+    async fn drop_view(&self, cmd: DropView) -> Result<DataFrame> {
+        let DropView {
+            name, if_exists, ..
+        } = cmd;
+        let result = self.find_and_deregister(&name, TableType::View).await;
+        match (result, if_exists) {
+            (Ok(true), _) => self.return_empty_dataframe(),
+            (_, true) => self.return_empty_dataframe(),
+            (_, _) => Err(DataFusionError::Execution(format!(
+                "View '{name}' doesn't exist."
+            ))),
+        }
+    }
+
+    async fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
+        let DropCatalogSchema {
+            name,
+            if_exists: allow_missing,
+            cascade,
+            schema: _,
+        } = cmd;
+        let catalog = {
+            let state = self.state.read();
+            let catalog_name = match &name {
+                SchemaReference::Full { catalog, .. } => catalog.to_string(),
+                SchemaReference::Bare { .. } => {
+                    state.config_options().catalog.default_catalog.to_string()
+                }
+            };
+            if let Some(catalog) = state.catalog_list.catalog(&catalog_name) {
+                catalog
+            } else if allow_missing {
+                return self.return_empty_dataframe();
+            } else {
+                return self.schema_doesnt_exist_err(name);
+            }
+        };
+        let dereg = catalog.deregister_schema(name.schema_name(), cascade)?;
+        match (dereg, allow_missing) {
+            (None, true) => self.return_empty_dataframe(),
+            (None, false) => self.schema_doesnt_exist_err(name),
+            (Some(_), _) => self.return_empty_dataframe(),
+        }
+    }
+
+    fn schema_doesnt_exist_err(
+        &self,
+        schemaref: SchemaReference<'_>,
+    ) -> Result<DataFrame> {
+        Err(DataFusionError::Execution(format!(
+            "Schema '{schemaref}' doesn't exist."
+        )))
+    }
+
+    async fn set_variable(&self, stmt: SetVariable) -> Result<DataFrame> {
+        let SetVariable {
+            variable, value, ..
+        } = stmt;
+
+        let mut state = self.state.write();
+        state.config.options_mut().set(&variable, &value)?;
+        drop(state);
+
         self.return_empty_dataframe()
     }
 
@@ -1108,6 +1152,7 @@ impl SessionContext {
     ///
     /// [`table`]: SessionContext::table
     #[deprecated(
+        since = "23.0.0",
         note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
     )]
     pub fn tables(&self) -> Result<HashSet<String>> {
@@ -1124,6 +1169,7 @@ impl SessionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     #[deprecated(
+        since = "23.0.0",
         note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
     )]
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
@@ -1132,6 +1178,7 @@ impl SessionContext {
 
     /// Creates a physical plan from a logical plan.
     #[deprecated(
+        since = "23.0.0",
         note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
     )]
     pub async fn create_physical_plan(
@@ -1281,6 +1328,10 @@ impl Debug for SessionState {
 }
 
 /// Default session builder using the provided configuration
+#[deprecated(
+    since = "23.0.0",
+    note = "See SessionContext::with_config() or SessionState::with_config_rt"
+)]
 pub fn default_session_builder(config: SessionConfig) -> SessionState {
     SessionState::with_config_rt(config, Arc::new(RuntimeEnv::default()))
 }
@@ -1455,7 +1506,7 @@ impl SessionState {
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    fn schema_for_ref<'a>(
+    pub(crate) fn schema_for_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {

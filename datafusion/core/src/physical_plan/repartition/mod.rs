@@ -33,7 +33,7 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use log::debug;
+use log::trace;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
@@ -318,8 +318,8 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
     }
@@ -350,7 +350,7 @@ impl ExecutionPlan for RepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!(
+        trace!(
             "Start RepartitionExec::execute for partition: {}",
             partition
         );
@@ -411,7 +411,7 @@ impl ExecutionPlan for RepartitionExec {
             state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
         }
 
-        debug!(
+        trace!(
             "Before returning stream in RepartitionExec::execute for partition: {}",
             partition
         );

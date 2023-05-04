@@ -67,7 +67,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{logical_plan, StringifiedPlan};
+use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -466,6 +466,51 @@ impl DefaultPhysicalPlanner {
         Self { extension_planners }
     }
 
+    /// Create a physical plans for multiple logical plans.
+    ///
+    /// This is the same as [`create_initial_plan`](Self::create_initial_plan) but runs the planning concurrently.
+    ///
+    /// The result order is the same as the input order.
+    fn create_initial_plan_multi<'a>(
+        &'a self,
+        logical_plans: impl IntoIterator<Item = &'a LogicalPlan> + Send + 'a,
+        session_state: &'a SessionState,
+    ) -> BoxFuture<'a, Result<Vec<Arc<dyn ExecutionPlan>>>> {
+        async move {
+            // First build futures with as little references as possible, then performing some stream magic.
+            // Otherwise rustc bails out w/:
+            //
+            //   error: higher-ranked lifetime error
+            //   ...
+            //   note: could not prove `[async block@...]: std::marker::Send`
+            let futures = logical_plans
+                .into_iter()
+                .enumerate()
+                .map(|(idx, lp)| async move {
+                    let plan = self.create_initial_plan(lp, session_state).await?;
+                    Ok((idx, plan)) as Result<_>
+                })
+                .collect::<Vec<_>>();
+
+            let mut physical_plans = futures::stream::iter(futures)
+                .buffer_unordered(
+                    session_state
+                        .config_options()
+                        .execution
+                        .planning_concurrency,
+                )
+                .try_collect::<Vec<(usize, Arc<dyn ExecutionPlan>)>>()
+                .await?;
+            physical_plans.sort_by_key(|(idx, _plan)| *idx);
+            let physical_plans = physical_plans
+                .into_iter()
+                .map(|(_idx, plan)| plan)
+                .collect::<Vec<_>>();
+            Ok(physical_plans)
+        }
+        .boxed()
+    }
+
     /// Create a physical plan from a logical plan
     fn create_initial_plan<'a>(
         &'a self,
@@ -488,6 +533,23 @@ impl DefaultPhysicalPlanner {
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                     source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
+                }
+                LogicalPlan::Dml(DmlStatement {
+                    table_name,
+                    op: WriteOp::Insert,
+                    input,
+                    ..
+                }) => {
+                    let name = table_name.table();
+                    let schema = session_state.schema_for_ref(table_name)?;
+                    if let Some(provider) = schema.table(name).await {
+                        let input_exec = self.create_initial_plan(input, session_state).await?;
+                        provider.insert_into(session_state, input_exec).await
+                    } else {
+                        return Err(DataFusionError::Execution(format!(
+                            "Table '{table_name}' does not exist"
+                        )));
+                    }
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -754,10 +816,8 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
                 }
                 LogicalPlan::Union(Union { inputs, schema }) => {
-                    let physical_plans = futures::stream::iter(inputs)
-                        .then(|lp| self.create_initial_plan(lp, session_state))
-                        .try_collect::<Vec<_>>()
-                        .await?;
+                    let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
+
                     if schema.fields().len() < physical_plans[0].schema().fields().len() {
                         // `schema` could be a subset of the child schema. For example
                         // for query "select count(*) from (select a from t union all select a from t)"
@@ -912,10 +972,10 @@ impl DefaultPhysicalPlanner {
                     }
 
                     // All equi-join keys are columns now, create physical join plan
+                    let left_right = self.create_initial_plan_multi([left.as_ref(), right.as_ref()], session_state).await?;
+                    let [physical_left, physical_right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     let left_df_schema = left.schema();
-                    let physical_left = self.create_initial_plan(left, session_state).await?;
                     let right_df_schema = right.schema();
-                    let physical_right = self.create_initial_plan(right, session_state).await?;
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
@@ -1047,8 +1107,8 @@ impl DefaultPhysicalPlanner {
                     }
                 }
                 LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                    let left = self.create_initial_plan(left, session_state).await?;
-                    let right = self.create_initial_plan(right, session_state).await?;
+                    let left_right = self.create_initial_plan_multi([left.as_ref(), right.as_ref()], session_state).await?;
+                    let [left, right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     Ok(Arc::new(CrossJoinExec::new(left, right)))
                 }
                 LogicalPlan::Subquery(_) => todo!(),
@@ -1087,13 +1147,14 @@ impl DefaultPhysicalPlanner {
                     let schema = SchemaRef::new(schema.as_ref().to_owned().into());
                     Ok(Arc::new(UnnestExec::new(input, column_exec, schema)))
                 }
-                LogicalPlan::CreateExternalTable(_) => {
-                    // There is no default plan for "CREATE EXTERNAL
-                    // TABLE" -- it must be handled at a higher level (so
-                    // that the appropriate table can be registered with
+                LogicalPlan::Ddl(ddl) => {
+                    // There is no default plan for DDl statements --
+                    // it must be handled at a higher level (so that
+                    // the appropriate table can be registered with
                     // the context)
+                    let name = ddl.name();
                     Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateExternalTable".to_string(),
+                        format!("Unsupported logical plan: {name}")
                     ))
                 }
                 LogicalPlan::Prepare(_) => {
@@ -1102,60 +1163,6 @@ impl DefaultPhysicalPlanner {
                     // statement can be prepared)
                     Err(DataFusionError::NotImplemented(
                         "Unsupported logical plan: Prepare".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateCatalogSchema(_) => {
-                    // There is no default plan for "CREATE SCHEMA".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateCatalogSchema".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateCatalog(_) => {
-                    // There is no default plan for "CREATE DATABASE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateCatalog".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateMemoryTable(_) => {
-                    // There is no default plan for "CREATE MEMORY TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateMemoryTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropTable(_) => {
-                    // There is no default plan for "DROP TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropView(_) => {
-                    // There is no default plan for "DROP VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropView".to_string(),
-                    ))
-                }
-                LogicalPlan::CreateView(_) => {
-                    // There is no default plan for "CREATE VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
                 LogicalPlan::Dml(_) => {
@@ -1190,10 +1197,7 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
                 }
                 LogicalPlan::Extension(e) => {
-                    let physical_inputs = futures::stream::iter(e.node.inputs())
-                        .then(|lp| self.create_initial_plan(lp, session_state))
-                        .try_collect::<Vec<_>>()
-                        .await?;
+                    let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
                     let mut maybe_plan = None;
                     for planner in &self.extension_planners {

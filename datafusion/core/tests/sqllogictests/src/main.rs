@@ -168,7 +168,7 @@ async fn context_for_test_file(relative_path: &Path) -> SessionContext {
     let ctx = SessionContext::with_config(config);
 
     match relative_path.file_name().unwrap().to_str().unwrap() {
-        "aggregate.slt" | "select.slt" => {
+        "aggregate.slt" => {
             info!("Registering aggregate tables");
             setup::register_aggregate_tables(&ctx).await;
         }

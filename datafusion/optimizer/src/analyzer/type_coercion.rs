@@ -34,9 +34,7 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{
-    is_date, is_numeric, is_timestamp, is_utf8_or_large_utf8,
-};
+use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
@@ -549,7 +547,7 @@ fn coerce_window_frame(
             if let Some(col_type) = current_types.first() {
                 if is_numeric(col_type) || is_utf8_or_large_utf8(col_type) {
                     col_type
-                } else if is_timestamp(col_type) || is_date(col_type) {
+                } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
                     return Err(DataFusionError::Internal(format!(
@@ -1269,7 +1267,7 @@ mod test {
     fn binary_op_date32_eq_ts() -> Result<()> {
         let expr = cast(
             lit("1998-03-18"),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
@@ -1435,7 +1433,7 @@ mod test {
             Operator::Plus,
             Box::new(cast(
                 lit("2000-01-01T00:00:00"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();
@@ -1450,12 +1448,12 @@ mod test {
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
             Operator::Minus,
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();

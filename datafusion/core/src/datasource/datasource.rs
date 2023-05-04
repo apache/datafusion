@@ -102,8 +102,8 @@ pub trait TableProvider: Sync + Send {
     async fn insert_into(
         &self,
         _state: &SessionState,
-        _input: &LogicalPlan,
-    ) -> Result<()> {
+        _input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let msg = "Insertion not implemented for this table".to_owned();
         Err(DataFusionError::NotImplemented(msg))
     }
