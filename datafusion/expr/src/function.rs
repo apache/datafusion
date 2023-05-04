@@ -257,7 +257,7 @@ pub fn return_type(
             }
         }),
 
-        BuiltinScalarFunction::Factorial => Ok(DataType::UInt64),
+        BuiltinScalarFunction::Factorial => Ok(DataType::UInt32),
 
         BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => Ok(DataType::Int64),
 
@@ -678,7 +678,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             fun.volatility(),
         ),
         BuiltinScalarFunction::Factorial => {
-            Signature::uniform(1, vec![DataType::UInt64], fun.volatility())
+            Signature::uniform(1, vec![DataType::UInt32], fun.volatility())
         }
         BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
             Signature::uniform(2, vec![DataType::Int64], fun.volatility())
