@@ -330,13 +330,18 @@ impl ExecutionPlan for MemoryWriteExec {
         let state = (data, self.batches[partition % batch_count].clone());
 
         let stream = futures::stream::unfold(state, |mut state| async move {
+            // hold lock during the entire write
+            let mut locked = state.1.write().await;
             loop {
                 let batch = match state.0.next().await {
                     Some(Ok(batch)) => batch,
-                    Some(Err(e)) => return Some((Err(e), state)),
+                    Some(Err(e)) => {
+                        drop(locked);
+                        return Some((Err(e), state));
+                    }
                     None => return None,
                 };
-                state.1.write().await.push(batch)
+                locked.push(batch)
             }
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
