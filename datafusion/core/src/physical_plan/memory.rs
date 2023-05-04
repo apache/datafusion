@@ -329,7 +329,7 @@ impl ExecutionPlan for MemoryWriteExec {
         let schema = self.schema.clone();
         let state = (data, self.batches[partition % batch_count].clone());
 
-       let adapter = if batch_count >= self.input.output_partitioning().partition_count()
+        let adapter = if batch_count >= self.input.output_partitioning().partition_count()
         {
             // If the number of input partitions matches the number of MemTable partitions,
             // use a lightweight implementation that doesn't utilize as many locks.
