@@ -240,7 +240,7 @@ impl Display for FileScanConfig {
 
         write!(f, "file_groups={}", FileGroupsDisplay(&self.file_groups))?;
 
-        if schema.fields().len() > 0 {
+        if !schema.fields().is_empty() {
             write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
         }
 
@@ -249,7 +249,7 @@ impl Display for FileScanConfig {
         }
 
         if let Some(orders) = ordering {
-            if orders.len() > 0 {
+            if !orders.is_empty() {
                 write!(f, ", output_ordering={}", OutputOrderingDisplay(&orders))?;
             }
         }
