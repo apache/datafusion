@@ -25,4 +25,4 @@
 
 The DataFusion CLI is a command line utility that runs SQL queries using the DataFusion engine.
 
-See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for more information.
+See the [`datafusion-cli` documentation](https://arrow.apache.org/datafusion/user-guide/cli.html) for further information.
