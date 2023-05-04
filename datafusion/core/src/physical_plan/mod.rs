@@ -322,7 +322,7 @@ pub fn with_new_children_if_necessary(
 ///   assert_eq!("CoalesceBatchesExec: target_batch_size=8192\
 ///              \n  FilterExec: a@0 < 5\
 ///              \n    RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1\
-///              \n      CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///              \n      CsvExec: file_groups={1 group: [[WORKING_DIR/tests/data/example.csv]]}, projection=[a], has_header=true",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());

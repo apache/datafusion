@@ -474,9 +474,7 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(formatted.contains("ParquetExec: "));
-        assert!(formatted.contains(
-            "projection=[bool_col, int_col], limit=Some(10), output_ordering=[]"
-        ));
+        assert!(formatted.contains("projection=[bool_col, int_col], limit=10"));
         Ok(())
     }
 

@@ -238,33 +238,23 @@ impl Display for FileScanConfig {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         let (schema, _, ordering) = self.project();
 
-        let output_ordering_str = ordering
-            .map(|v| make_output_ordering_string(&v))
-            .unwrap_or(String::from("[]"));
+        write!(f, "file_groups={}", FileGroupsDisplay(&self.file_groups))?;
 
-        write!(
-            f,
-            "file_groups={}, projection={}, limit={:?}, output_ordering={}",
-            FileGroupsDisplay(&self.file_groups),
-            ProjectSchemaDisplay(&schema),
-            self.limit,
-            output_ordering_str
-        )
-    }
-}
-
-fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
-    use std::fmt::Write;
-    let mut w: String = "[".into();
-
-    for (i, e) in ordering.iter().enumerate() {
-        if i > 0 {
-            write!(&mut w, ", ").unwrap()
+        if schema.fields().len() > 0 {
+            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
         }
-        write!(&mut w, "{e}").unwrap()
+
+        if let Some(limit) = self.limit {
+            write!(f, ", limit={}", limit)?;
+        }
+
+        if let Some(orders) = ordering {
+            if orders.len() > 0 {
+                write!(f, ", output_ordering={}", OutputOrderingDisplay(&orders))?;
+            }
+        }
+        Ok(())
     }
-    write!(&mut w, "]").unwrap();
-    w
 }
 
 /// A wrapper to customize partitioned file display
@@ -321,6 +311,23 @@ impl<'a> Display for ProjectSchemaDisplay<'a> {
             .map(|x| x.name().to_owned())
             .collect::<Vec<String>>();
         write!(f, "[{}]", parts.join(", "))
+    }
+}
+
+/// A wrapper to customize output ordering display.
+#[derive(Debug)]
+struct OutputOrderingDisplay<'a>(&'a [PhysicalSortExpr]);
+
+impl<'a> Display for OutputOrderingDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        write!(f, "[")?;
+        for (i, e) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?
+            }
+            write!(f, "{e}")?;
+        }
+        write!(f, "]")
     }
 }
 

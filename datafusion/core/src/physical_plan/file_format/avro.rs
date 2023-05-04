@@ -136,7 +136,7 @@ impl ExecutionPlan for AvroExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "AvroExec: {}", self.base_config())
+                write!(f, "AvroExec: {}", self.base_config)
             }
         }
     }

@@ -86,7 +86,7 @@ pub struct ParquetExec {
     /// Override for `Self::with_enable_page_index`. If None, uses
     /// values from base_config
     enable_page_index: Option<bool>,
-    /// Base configuraton for this scan
+    /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
@@ -422,9 +422,7 @@ impl ExecutionPlan for ParquetExec {
                 write!(
                     f,
                     "ParquetExec: {}{}{}",
-                    self.base_config(),
-                    predicate_string,
-                    pruning_predicate_string,
+                    self.base_config, predicate_string, pruning_predicate_string,
                 )
             }
         }

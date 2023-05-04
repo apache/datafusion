@@ -146,7 +146,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "JsonExec: {}", self.base_config())
+                write!(f, "JsonExec: {}", self.base_config)
             }
         }
     }

@@ -173,8 +173,7 @@ impl ExecutionPlan for CsvExec {
                 write!(
                     f,
                     "CsvExec: {}, has_header={}",
-                    self.base_config(),
-                    self.has_header,
+                    self.base_config, self.has_header,
                 )
             }
         }
