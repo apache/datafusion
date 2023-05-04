@@ -530,7 +530,7 @@ impl StatisticsCache {
 ///   .with_listing_options(listing_options)
 ///   .with_schema(resolved_schema);
 ///
-/// // Create a a new TableProvider
+/// // Create a new TableProvider
 /// let provider = Arc::new(ListingTable::try_new(config)?);
 ///
 /// // This provider can now be read as a dataframe:

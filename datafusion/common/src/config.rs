@@ -212,7 +212,9 @@ config_namespace! {
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of CPU cores on the system
+        /// concurrency.
+        ///
+        /// Defaults to the number of CPU cores on the system
         pub target_partitions: usize, default = num_cpus::get()
 
         /// The default time zone
@@ -226,6 +228,13 @@ config_namespace! {
 
         /// Aggregate options
         pub aggregate: AggregateOptions, default = Default::default()
+
+        /// Fan-out during initial physical planning.
+        ///
+        /// This is mostly use to plan `UNION` children in parallel.
+        ///
+        /// Defaults to the number of CPU cores on the system
+        pub planning_concurrency: usize, default = num_cpus::get()
     }
 }
 
@@ -569,7 +578,10 @@ impl ConfigOptions {
         use std::fmt::Write as _;
 
         let mut s = Self::default();
-        s.execution.target_partitions = 0; // Normalize for display
+
+        // Normalize for display
+        s.execution.target_partitions = 0;
+        s.execution.planning_concurrency = 0;
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";
