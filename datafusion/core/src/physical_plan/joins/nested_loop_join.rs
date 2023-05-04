@@ -374,21 +374,21 @@ struct NestedLoopJoinStream {
 }
 
 fn build_join_indices(
-    left_index: usize,
+    left_row_index: usize,
     right_batch: &RecordBatch,
-    left_data: &RecordBatch,
+    left_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     // left indices: [left_index, left_index, ...., left_index]
     // right indices: [0, 1, 2, 3, 4,....,right_row_count]
 
     let right_row_count = right_batch.num_rows();
-    let left_indices = UInt64Array::from(vec![left_index as u64; right_row_count]);
+    let left_indices = UInt64Array::from(vec![left_row_index as u64; right_row_count]);
     let right_indices = UInt32Array::from_iter_values(0..(right_row_count as u32));
     // in the nested loop join, the filter can contain non-equal and equal condition.
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
-            left_data,
+            left_batch,
             right_batch,
             left_indices,
             right_indices,
