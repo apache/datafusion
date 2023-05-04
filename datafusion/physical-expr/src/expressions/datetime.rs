@@ -232,7 +232,6 @@ mod tests {
     use crate::execution_props::ExecutionProps;
     use arrow::array::{ArrayRef, Date32Builder};
     use arrow::datatypes::*;
-    use arrow_array::builder::{IntervalDayTimeBuilder, TimestampSecondBuilder};
     use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
     use datafusion_common::{Column, Result, ScalarValue, ToDFSchema};
