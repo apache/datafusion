@@ -80,7 +80,7 @@ pub enum AggregateMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
     /// Some of the expressions in the GROUP BY clause have an ordering.
-    // For example, if the input is ordered by a, b, c, d and we group by b, a, d;
+    // For example, if the input is ordered by a, b, c and we group by b, a, d;
     // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
     // defines a preset for the existing ordering, e.g a, b defines a preset.
     PartiallyOrdered,
@@ -424,6 +424,7 @@ impl AggregateExec {
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
         let batch_size = context.session_config().batch_size();
+        let scalar_update_factor = context.session_config().agg_scalar_update_factor();
         let input = self.input.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
@@ -448,6 +449,7 @@ impl AggregateExec {
                 input,
                 baseline_metrics,
                 batch_size,
+                scalar_update_factor,
                 context,
                 partition,
                 aggregation_ordering.clone(),
@@ -463,6 +465,7 @@ impl AggregateExec {
                     input,
                     baseline_metrics,
                     batch_size,
+                    scalar_update_factor,
                     context,
                     partition,
                 )?,
@@ -510,7 +513,7 @@ impl ExecutionPlan for AggregateExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             if self.aggregation_ordering.is_none() {

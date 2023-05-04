@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use log::debug;
+use log::{debug, trace};
 use tokio::sync::mpsc;
 
 use crate::error::{DataFusionError, Result};
@@ -149,7 +149,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!(
+        trace!(
             "Start SortPreservingMergeExec::execute for partition: {}",
             partition
         );
@@ -163,7 +163,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
-        debug!(
+        trace!(
             "Number of input partitions of  SortPreservingMergeExec::execute: {}",
             input_partitions
         );
