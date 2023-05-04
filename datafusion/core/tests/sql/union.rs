@@ -123,21 +123,6 @@ async fn test_union_upcast_types() -> Result<()> {
     let actual_logical_plan: Vec<&str> = formatted_logical_plan.trim().lines().collect();
     assert_eq!(expected_logical_plan, actual_logical_plan, "\n\nexpected:\n\n{expected_logical_plan:#?}\nactual:\n\n{actual_logical_plan:#?}\n\n");
 
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+----+------------+",
-        "| c1 | c9         |",
-        "+----+------------+",
-        "| c  | 4268716378 |",
-        "| e  | 4229654142 |",
-        "| d  | 4216440507 |",
-        "| e  | 4144173353 |",
-        "| b  | 4076864659 |",
-        "+----+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
     Ok(())
 }
 

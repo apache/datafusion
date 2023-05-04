@@ -191,6 +191,16 @@ UNION ALL
 3 Alice
 3 John
 
+# union_upcast_types
+query TI
+SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
+----
+c 4268716378
+e 4229654142
+d 4216440507
+e 4144173353
+b 4076864659
+
 ########
 # Clean up after the test
 ########
