@@ -1014,7 +1014,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-statement error DataFusion error: Error during planning: there isn't result type for Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\)
+statement error DataFusion error: Error during planning: Unsupported argument types\. Can not evaluate Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\)
 SELECT ts1 + ts2
 FROM foo;
 

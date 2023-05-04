@@ -90,7 +90,7 @@ select i_item_desc from test
 where d3_date > now() + '5 days';
 
 # DATE minus DATE
-query error DataFusion error: Error during planning: there isn't result type for Date32 \- Date32
+query error DataFusion error: Error during planning: Unsupported argument types\. Can not evaluate Date32 \- Date32
 SELECT DATE '2023-04-09' - DATE '2023-04-02';
 
 # DATE minus Timestamp
