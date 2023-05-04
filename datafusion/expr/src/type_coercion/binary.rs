@@ -106,7 +106,7 @@ pub fn binary_operator_data_type(
     }
 }
 
-
+/// returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
 pub fn get_result_type(
     lhs_type: &DataType,
     op: &Operator,
@@ -150,7 +150,7 @@ pub fn get_result_type(
 
     match result {
         None => Err(DataFusionError::Plan(format!(
-            "there isn't result type for {lhs_type:?} {op} {rhs_type:?}"
+            "Unsupported argument types. Can not evaluate {lhs_type:?} {op} {rhs_type:?}"
         ))),
         Some(t) => Ok(t),
     }
