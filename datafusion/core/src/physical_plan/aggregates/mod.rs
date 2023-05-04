@@ -398,22 +398,7 @@ impl AggregateExec {
             )?;
             if let Some(req) = requirement {
                 if group_by.groups.len() == 1 {
-                    let requirement_prefix = output_group_expr_helper(&group_by);
-                    let mut requirement = requirement_prefix
-                        .into_iter()
-                        .map(|expr| PhysicalSortRequirement::new(expr, None))
-                        .collect::<Vec<_>>();
-                    let mut found = false;
-                    for elem in &requirement {
-                        if req.expr.eq(elem.expr()) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        requirement.push(PhysicalSortRequirement::from(req));
-                    }
-                    required_input_ordering = Some(requirement);
+                    required_input_ordering = Some(vec![PhysicalSortRequirement::from(req)]);
                 } else {
                     return Err(DataFusionError::Plan(
                         "Cannot run order sensitive aggregation in grouping set queries"

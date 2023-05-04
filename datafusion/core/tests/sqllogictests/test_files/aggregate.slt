@@ -1676,8 +1676,8 @@ physical_plan
 ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST)@1 as amounts]
   AggregateExec: mode=Final, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)]
     CoalescePartitionsExec
-      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)], ordering_mode=FullyOrdered
-        SortExec: expr=[group_key@0 ASC NULLS LAST,amount@1 ASC NULLS LAST]
+      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)]
+        SortExec: expr=[amount@1 ASC NULLS LAST]
           MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query ?
@@ -1704,7 +1704,7 @@ ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.group_key DESC NULLS
   AggregateExec: mode=Final, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)]
     CoalescePartitionsExec
       AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)], ordering_mode=FullyOrdered
-        SortExec: expr=[group_key@0 ASC NULLS LAST]
+        SortExec: expr=[group_key@0 DESC]
           MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query ?
@@ -1712,8 +1712,8 @@ SELECT (ARRAY_AGG(s.amount ORDER BY s.group_key DESC)) AS amounts
         FROM sales_global AS s
         GROUP BY s.group_key
 ----
-[50, 200]
 [75, 100, 80]
+[50, 200]
 
 # test_ordering_sensitive_aggregation3
 query TT
@@ -1731,8 +1731,8 @@ physical_plan
 ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
   AggregateExec: mode=Final, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
     CoalescePartitionsExec
-      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
-        SortExec: expr=[group_key@0 ASC NULLS LAST,amount@1 DESC]
+      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
+        SortExec: expr=[amount@1 DESC]
           MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 query ?I
@@ -1750,4 +1750,3 @@ SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2
         FROM sales_global AS s
         GROUP BY s.group_key
-
