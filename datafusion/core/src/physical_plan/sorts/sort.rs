@@ -44,7 +44,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::EquivalenceProperties;
 use futures::{StreamExt, TryStreamExt};
-use log::{debug, error};
+use log::{debug, error, trace};
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -582,16 +582,11 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-
-        debug!(
-            "Start invoking SortExec's input.execute for partition: {}",
-            partition
-        );
+        trace!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         let input = self.input.execute(partition, context.clone())?;
 
-        debug!("End SortExec's input.execute for partition: {}", partition);
+        trace!("End SortExec's input.execute for partition: {}", partition);
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
@@ -642,7 +637,7 @@ async fn do_sort(
     context: Arc<TaskContext>,
     fetch: Option<usize>,
 ) -> Result<SendableRecordBatchStream> {
-    debug!(
+    trace!(
         "Start do_sort for partition {} of context session_id {} and task_id {:?}",
         partition_id,
         context.session_id(),
@@ -663,7 +658,7 @@ async fn do_sort(
         sorter.insert_batch(batch).await?;
     }
     let result = sorter.sort();
-    debug!(
+    trace!(
         "End do_sort for partition {} of context session_id {} and task_id {:?}",
         partition_id,
         context.session_id(),
