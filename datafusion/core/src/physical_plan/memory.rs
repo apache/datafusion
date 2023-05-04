@@ -329,22 +329,42 @@ impl ExecutionPlan for MemoryWriteExec {
         let schema = self.schema.clone();
         let state = (data, self.batches[partition % batch_count].clone());
 
-        let stream = futures::stream::unfold(state, |mut state| async move {
-            // hold lock during the entire write
-            let mut locked = state.1.write().await;
-            loop {
-                let batch = match state.0.next().await {
-                    Some(Ok(batch)) => batch,
-                    Some(Err(e)) => {
-                        drop(locked);
-                        return Some((Err(e), state));
-                    }
-                    None => return None,
-                };
-                locked.push(batch)
-            }
-        });
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+       let adapter = if batch_count >= self.input.output_partitioning().partition_count()
+        {
+            // If the number of input partitions matches the number of MemTable partitions,
+            // use a lightweight implementation that doesn't utilize as many locks.
+            let stream = futures::stream::unfold(state, |mut state| async move {
+                // hold lock during the entire write
+                let mut locked = state.1.write().await;
+                loop {
+                    let batch = match state.0.next().await {
+                        Some(Ok(batch)) => batch,
+                        Some(Err(e)) => {
+                            drop(locked);
+                            return Some((Err(e), state));
+                        }
+                        None => return None,
+                    };
+                    locked.push(batch)
+                }
+            });
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream))
+                as SendableRecordBatchStream
+        } else {
+            let stream = futures::stream::unfold(state, |mut state| async move {
+                loop {
+                    let batch = match state.0.next().await {
+                        Some(Ok(batch)) => batch,
+                        Some(Err(e)) => return Some((Err(e), state)),
+                        None => return None,
+                    };
+                    state.1.write().await.push(batch)
+                }
+            });
+            Box::pin(RecordBatchStreamAdapter::new(schema, stream))
+                as SendableRecordBatchStream
+        };
+        Ok(adapter)
     }
 
     fn fmt_as(
