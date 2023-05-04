@@ -26,7 +26,6 @@ use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::{SharedOptionalMemoryReservation, TryGrow};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
@@ -37,6 +36,7 @@ use crate::physical_plan::{
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 
 use super::utils::{
     adjust_right_output_partitioning, cross_join_equivalence_properties,
@@ -44,7 +44,7 @@ use super::utils::{
 };
 
 /// Data of the left side
-type JoinLeftData = RecordBatch;
+type JoinLeftData = (RecordBatch, MemoryReservation);
 
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
@@ -58,8 +58,6 @@ pub struct CrossJoinExec {
     schema: SchemaRef,
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
-    /// Memory reservation for build-side data
-    reservation: SharedOptionalMemoryReservation,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -83,7 +81,6 @@ impl CrossJoinExec {
             right,
             schema,
             left_fut: Default::default(),
-            reservation: Default::default(),
             metrics: ExecutionPlanMetricsSet::default(),
         }
     }
@@ -104,7 +101,7 @@ async fn load_left_input(
     left: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
-    reservation: SharedOptionalMemoryReservation,
+    reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     // merge all left parts into a single stream
     let merge = {
@@ -117,7 +114,7 @@ async fn load_left_input(
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, _, _) = stream
+    let (batches, num_rows, _, reservation) = stream
         .try_fold(
             (Vec::new(), 0usize, metrics, reservation),
             |mut acc, batch| async {
@@ -139,7 +136,7 @@ async fn load_left_input(
 
     let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
 
-    Ok(merged_batch)
+    Ok((merged_batch, reservation))
 }
 
 impl ExecutionPlan for CrossJoinExec {
@@ -224,15 +221,15 @@ impl ExecutionPlan for CrossJoinExec {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
         // Initialization of operator-level reservation
-        self.reservation
-            .initialize("CrossJoinExec", context.memory_pool());
+        let reservation =
+            MemoryConsumer::new("CrossJoinExec").register(context.memory_pool());
 
         let left_fut = self.left_fut.once(|| {
             load_left_input(
                 self.left.clone(),
                 context,
                 join_metrics.clone(),
-                self.reservation.clone(),
+                reservation,
             )
         });
 
@@ -401,7 +398,7 @@ impl CrossJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Result<RecordBatch>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        let left_data = match ready!(self.left_fut.get(cx)) {
+        let (left_data, _) = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };

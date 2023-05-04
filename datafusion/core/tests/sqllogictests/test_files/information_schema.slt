@@ -125,6 +125,12 @@ drop table t2
 statement ok
 SET datafusion.execution.target_partitions=7
 
+# planning_concurrency defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.planning_concurrency=13
+
 # show all variables
 query TT rowsort
 SHOW ALL
@@ -146,6 +152,7 @@ datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
+datafusion.execution.planning_concurrency 13
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
