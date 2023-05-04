@@ -181,6 +181,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
+            Expr::IsUnknown(expr) => {
+                let expr = is_unknown(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr =
+                    is_not_unknown(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
             Expr::Like(Like {
                 negated,
                 expr,
@@ -215,24 +224,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
-                Ok(expr)
-            }
-            Expr::IsUnknown(expr) => {
-                // will convert the binary(expr,IsNotDistinctFrom,lit(Boolean(None));
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = DataType::Boolean;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::IsNotDistinctFrom, &right_type)?;
-                let expr = is_unknown(expr.cast_to(&coerced_type, &self.schema)?);
-                Ok(expr)
-            }
-            Expr::IsNotUnknown(expr) => {
-                // will convert the binary(expr,IsDistinctFrom,lit(Boolean(None));
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = DataType::Boolean;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
-                let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
                 Ok(expr)
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -292,11 +283,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         Ok(expr)
                     }
                     _ => {
-                        let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                        let common_type = coerce_types(&left_type, &op, &right_type)?;
                         let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
+                            Box::new(left.clone().cast_to(&common_type, &self.schema)?),
                             op,
-                            Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+                            Box::new(right.clone().cast_to(&common_type, &self.schema)?),
                         ));
                         Ok(expr)
                     }
@@ -1184,7 +1175,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Utf8 IS NOT DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
+        assert!(err.unwrap_err().to_string().contains("Utf8 IS DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
 
         // is not unknown
         let expr = col("a").is_not_unknown();
