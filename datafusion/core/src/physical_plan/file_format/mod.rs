@@ -248,6 +248,10 @@ impl Display for FileScanConfig {
             write!(f, ", limit={}", limit)?;
         }
 
+        if self.infinite_source {
+            write!(f, ", infinite_source=true")?;
+        }
+
         if let Some(orders) = ordering {
             if !orders.is_empty() {
                 write!(f, ", output_ordering={}", OutputOrderingDisplay(&orders))?;
