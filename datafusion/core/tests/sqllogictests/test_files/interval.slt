@@ -252,18 +252,34 @@ select ts - interval '1 day' from t;
 2000-01-31T00:00:00
 
 ### date / timestamp (scalar) + interval (array)
-query error DataFusion error: Internal error: If RHS of the operation is an array, then LHS also must be\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query D
 select '1980-01-01'::date + i from t;
+----
+1980-02-01
+1980-01-02
+1980-01-01
 
-query error DataFusion error: Internal error: If RHS of the operation is an array, then LHS also must be\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query P
 select '1980-01-01T12:00:00'::timestamp + i from t;
+----
+1980-02-01T12:00:00
+1980-01-02T12:00:00
+1980-01-01T12:01:00
 
 
-query error DataFusion error: Internal error: If RHS of the operation is an array, then LHS also must be\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query D
 select '1980-01-01'::date - i from t;
+----
+1979-12-01
+1979-12-31
+1980-01-01
 
-query error DataFusion error: Internal error: If RHS of the operation is an array, then LHS also must be\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query P
 select '1980-01-01T12:00:00'::timestamp - i from t;
+----
+1979-12-01T12:00:00
+1979-12-31T12:00:00
+1980-01-01T11:59:00
 
 ### date / timestamp (array) + interval (array)
 query D
@@ -361,14 +377,6 @@ select '1 month'::interval - d from t;
 
 query error DataFusion error: Error during planning: interval can't subtract timestamp/date
 select '1 month'::interval - ts from t;
-
-
-
-
-
-
-
-
 
 statement ok
 drop table t
