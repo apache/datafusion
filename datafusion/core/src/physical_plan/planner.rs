@@ -1552,7 +1552,7 @@ pub fn create_window_expr_with_name(
                 physical_input_schema,
             )
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => Err(DataFusionError::Plan(format!(
             "Invalid window expression '{other:?}'"
         ))),
     }
