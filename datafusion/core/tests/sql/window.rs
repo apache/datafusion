@@ -62,7 +62,6 @@ async fn window_frame_creation_type_checking() -> Result<()> {
 
 mod tests {
     use super::*;
-    use arrow::util::pretty::print_batches;
     use datafusion::test_util::{get_test_context, get_test_context2};
 
     #[tokio::test]
@@ -519,89 +518,6 @@ mod tests {
             "| 0 | 0 | 3 | 11   | 96   | 11   | 2    | 10   | 36   | 10   | 36   | 11   | 5     | 11    | 9     |",
             "| 0 | 0 | 4 | 9    | 72   | 9    |      | 14   | 45   | 14   | 45   | 9    | 4     | 9     | 9     |",
             "+---+---+---+------+------+------+------+------+------+------+------+------+-------+-------+-------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_ordering_sensitive_aggregation() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
-        ctx.sql(
-            "CREATE TABLE sales_global (zip_code INT,
-          country VARCHAR(3),
-          sn INT,
-          ts TIMESTAMP,
-          currency VARCHAR(3),
-          amount INT
-        ) as VALUES
-          (0, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
-          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.00),
-          (0, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
-          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.00),
-          (1, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
-          ",
-        )
-        .await?;
-
-        // let sql = "SELECT
-        // ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
-        // SUM(s.amount) AS sum1
-        //  FROM (SELECT *
-        //    FROM sales_global
-        //    ORDER BY group_key) AS s
-        // GROUP BY s.group_key";
-
-        // let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
-        //         FROM sales_global AS s
-        //         GROUP BY s.group_key";
-
-        let sql = "SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
-        SUM(s.amount) AS sum1
-          FROM (SELECT *
-            FROM sales_global
-            ORDER BY country) AS s
-          GROUP BY s.country, s.zip_code";
-
-        // let sql = "SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
-        // SUM(s.amount) AS sum1
-        //   FROM (SELECT *
-        //     FROM sales_global
-        //     ORDER BY country, zip_code) AS s
-        //   GROUP BY zip_code, s.country";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-        // We should produce `BoundedWindowAggExec`s that only works in Sorted mode, since source is finite.
-        // To satisfy, requirements for Sorted mode. We should introduce `SortExec`s through physical plan.
-        let expected = {
-            vec![
-                "ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]",
-                "  AggregateExec: mode=Single, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered",
-                "    SortExec: expr=[group_key@0 ASC NULLS LAST,amount@1 DESC]",
-            ]
-        };
-
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        let actual_len = actual.len();
-        let actual_trim_last = &actual[..actual_len - 1];
-        assert_eq!(
-            expected, actual_trim_last,
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-        let actual = execute_to_batches(&ctx, sql).await;
-
-        let expected = vec![
-            "+---------------+------+",
-            "| amounts       | sum1 |",
-            "+---------------+------+",
-            "| [200, 50]     | 250  |",
-            "| [100, 80, 75] | 255  |",
-            "+---------------+------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())

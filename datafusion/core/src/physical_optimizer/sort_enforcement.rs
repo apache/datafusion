@@ -49,7 +49,7 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan, displayable};
+use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
@@ -444,13 +444,6 @@ fn parallelize_sorts(
     }))
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()>{
-    let formatted = displayable(plan.as_ref()).indent().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    println!("{:#?}", actual);
-    Ok(())
-}
-
 /// This function enforces sorting requirements and makes optimizations without
 /// violating these requirements whenever possible.
 fn ensure_sorting(
@@ -461,8 +454,6 @@ fn ensure_sorting(
         return Ok(Transformed::No(requirements));
     }
     let plan = requirements.plan;
-    println!("at the start");
-    print_plan(&plan)?;
     let mut children = plan.children();
     let mut sort_onwards = requirements.sort_onwards;
     if let Some(result) = analyze_immediate_sort_removal(&plan, &sort_onwards) {
@@ -529,8 +520,6 @@ fn ensure_sorting(
             sort_onwards: vec![sort_onwards[0].clone()],
         }));
     }
-    print_plan(&plan)?;
-    println!("at the end");
     Ok(Transformed::Yes(PlanWithCorrespondingSort {
         plan: plan.with_new_children(children)?,
         sort_onwards,

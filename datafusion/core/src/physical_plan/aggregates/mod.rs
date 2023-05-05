@@ -398,7 +398,8 @@ impl AggregateExec {
             )?;
             if let Some(req) = requirement {
                 if group_by.groups.len() == 1 {
-                    aggregator_requirement = Some(vec![PhysicalSortRequirement::from(req)]);
+                    aggregator_requirement =
+                        Some(vec![PhysicalSortRequirement::from(req)]);
                 } else {
                     return Err(DataFusionError::Plan(
                         "Cannot run order sensitive aggregation in grouping set queries"
@@ -421,9 +422,15 @@ impl AggregateExec {
         let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
 
         let mut required_input_ordering = None;
-        if let Some(AggregationOrdering{ordering, mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered, ..}) = &aggregation_ordering{
+        if let Some(AggregationOrdering {
+            ordering,
+            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
+            ..
+        }) = &aggregation_ordering
+        {
             if let Some(aggregator_requirement) = aggregator_requirement {
-                let requirement_prefix = input.output_ordering().unwrap()[0..ordering.len()].to_vec();
+                let requirement_prefix =
+                    input.output_ordering().unwrap()[0..ordering.len()].to_vec();
                 let mut requirement = requirement_prefix
                     .iter()
                     .map(|sort_expr| PhysicalSortRequirement::from(sort_expr.clone()))

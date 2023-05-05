@@ -369,6 +369,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reorder_aggregate_keys(
     agg_plan: Arc<dyn ExecutionPlan>,
     parent_required: &[Arc<dyn PhysicalExpr>],
