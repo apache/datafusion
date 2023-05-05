@@ -463,8 +463,6 @@ impl<S: BatchSerializer, O: FileWriterFactory> FileSinkState<S, O> {
     }
 }
 
-/// Metrics for [`FileSinkStream`]
-///
 /// Note that all of these metrics are in terms of wall clock time
 /// (not cpu time) so they include time spent waiting on I/O as well
 /// as other operators.

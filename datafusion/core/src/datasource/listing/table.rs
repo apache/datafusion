@@ -793,6 +793,13 @@ impl TableProvider for ListingTable {
 
         let file_groups = file_list_future.try_collect::<Vec<_>>().await?;
 
+        if file_groups.len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Datafusion currently supports tables from single partition and/or file."
+                    .to_owned(),
+            ));
+        }
+
         // Sink related option, apart from format
         let config = FileSinkConfig {
             object_store_url: self.table_paths()[0].object_store(),

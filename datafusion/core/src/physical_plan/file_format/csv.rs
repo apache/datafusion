@@ -448,7 +448,6 @@ pub struct CsvWriterExec {
     has_header: bool,
     delimiter: u8,
     file_compression_type: FileCompressionType,
-    table_partition: Vec<Arc<dyn PhysicalExpr>>,
     base_config: FileSinkConfig,
 }
 
@@ -462,20 +461,11 @@ impl CsvWriterExec {
         file_compression_type: FileCompressionType,
     ) -> Result<Self> {
         let schema = base_config.output_schema().clone();
-        let hash_exprs = base_config
-            .table_partition_cols
-            .iter()
-            .map(|(col_name, _)| col(col_name, &schema))
-            .collect::<Vec<Result<Arc<dyn PhysicalExpr>>>>();
-
-        let table_partition = hash_exprs.into_iter().collect::<Result<Vec<_>>>()?;
-
         Ok(Self {
             input,
             base_config,
             schema,
             has_header,
-            table_partition,
             delimiter,
             file_compression_type,
         })
@@ -505,7 +495,8 @@ impl ExecutionPlan for CsvWriterExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+        // TODO: Table partition col implementation will change here.
+        Partitioning::UnknownPartitioning(1)
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -513,11 +504,8 @@ impl ExecutionPlan for CsvWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.base_config.file_groups.len() > 1 {
-            vec![Distribution::HashPartitioned(self.table_partition.clone())]
-        } else {
-            vec![Distribution::SinglePartition]
-        }
+        // TODO: Table partition col implementation will add here a hash partitioning.
+        vec![Distribution::SinglePartition]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

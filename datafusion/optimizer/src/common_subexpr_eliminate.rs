@@ -114,7 +114,6 @@ impl OptimizerRule for CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let mut expr_set = ExprSet::new();
-
         let original_schema = plan.schema().clone();
         let optimized_plan = match plan {
             LogicalPlan::Projection(Projection {
