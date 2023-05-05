@@ -749,29 +749,6 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-fn create_union_context() -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new()
-            .with_target_partitions(4)
-            .with_batch_size(4096),
-    );
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("name", DataType::UInt8, true),
-    ]));
-    let t1_data = RecordBatch::new_empty(t1_schema);
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt8, true),
-        Field::new("name", DataType::UInt8, true),
-    ]));
-    let t2_data = RecordBatch::new_empty(t2_schema);
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
 fn create_nested_loop_join_context() -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
         SessionConfig::new()

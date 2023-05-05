@@ -313,11 +313,11 @@ GlobalLimitExec: skip=0, fetch=5
       SortExec: expr=[c9@1 DESC]
         ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c9]
+            CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
       SortExec: expr=[c9@1 DESC]
         ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c3]
+            CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 query TI
 SELECT c1, c9 FROM aggregate_test_100 UNION ALL SELECT c1, c3 FROM aggregate_test_100 ORDER BY c9 DESC LIMIT 5
