@@ -38,7 +38,7 @@ impl DecorrelateWhereExists {
         Self {}
     }
 
-    /// Finds expressions that have a where in subquery (and recurses when found)
+    /// Finds expressions that have a where in subquery (and recurse when found)
     ///
     /// # Arguments
     ///
@@ -534,7 +534,7 @@ mod tests {
         assert_plan_eq(&plan, expected)
     }
 
-    /// Test for correlated exists subquery filter with disjustions
+    /// Test for correlated exists subquery filter with disjunctions
     #[test]
     fn exists_subquery_disjunction() -> Result<()> {
         let sq = Arc::new(

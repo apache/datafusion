@@ -40,10 +40,10 @@ use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
-    normalize_out_expr_with_columns_map, normalize_sort_expr_with_equivalence_properties,
+    normalize_out_expr_with_columns_map,
     utils::{convert_to_expr, get_indices_of_matching_exprs},
-    AggregateExpr, EquivalentClass, PhysicalExpr, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    AggregateExpr, EquivalentClass, OrderingEquivalentClass, PhysicalExpr,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -56,6 +56,7 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::utils::normalize_sort_expr;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -344,18 +345,15 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
 fn get_finest_requirement(
     order_by_expr: &[Option<PhysicalSortExpr>],
     eq_properties: &[EquivalentClass],
+    ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Result<Option<PhysicalSortExpr>> {
     let mut res: Option<PhysicalSortExpr> = None;
     for elem in order_by_expr.iter().flatten() {
         if let Some(res) = &res {
-            let res_normalized = normalize_sort_expr_with_equivalence_properties(
-                res.clone(),
-                eq_properties,
-            );
-            let elem_normalized = normalize_sort_expr_with_equivalence_properties(
-                elem.clone(),
-                eq_properties,
-            );
+            let res_normalized =
+                normalize_sort_expr(res.clone(), eq_properties, ordering_eq_properties);
+            let elem_normalized =
+                normalize_sort_expr(elem.clone(), eq_properties, ordering_eq_properties);
             if !res_normalized.eq(&elem_normalized) {
                 println!("Conflicting requirements");
                 return Err(DataFusionError::Plan(
@@ -395,6 +393,7 @@ impl AggregateExec {
             let requirement = get_finest_requirement(
                 &order_by_expr,
                 input.equivalence_properties().classes(),
+                input.ordering_equivalence_properties().classes(),
             )?;
             if let Some(req) = requirement {
                 if group_by.groups.len() == 1 {
@@ -1158,8 +1157,7 @@ mod tests {
             let res = get_working_mode(&input, &group_bys);
             assert_eq!(
                 res, *expected,
-                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
-                case_idx, test_case
+                "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
         }
 

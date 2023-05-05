@@ -32,6 +32,7 @@ use arrow::record_batch::RecordBatch;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::DisplayFormatType;
 use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
@@ -187,6 +188,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         EquivalenceProperties::new(self.schema())
     }
 
+    /// Get the OrderingEquivalenceProperties within the plan
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        OrderingEquivalenceProperties::new(self.schema())
+    }
+
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).
@@ -322,7 +328,7 @@ pub fn with_new_children_if_necessary(
 ///   assert_eq!("CoalesceBatchesExec: target_batch_size=8192\
 ///              \n  FilterExec: a@0 < 5\
 ///              \n    RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1\
-///              \n      CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///              \n      CsvExec: file_groups={1 group: [[WORKING_DIR/tests/data/example.csv]]}, projection=[a], has_header=true",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());

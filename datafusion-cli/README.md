@@ -73,6 +73,8 @@ The CLI can query data in S3 if the following environment variables are defined:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 
+Alternatively, you can supply a profile name via the `AWS_PROFILE` environment variable. When using a [named profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html), the CLI obtains credentials from the profile configuration and thus does not require `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` environment variables to be set.
+
 Note that the region must be set to the region where the bucket exists until the following issue is resolved:
 
 - https://github.com/apache/arrow-rs/issues/2795

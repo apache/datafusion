@@ -338,7 +338,7 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
         assert_optimized!(expected, plan);
 
@@ -366,7 +366,7 @@ mod tests {
         let expected = &[
             "AggregateExec: mode=Final, gby=[], aggr=[COUNT(2)]",
             "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
 
         assert_optimized!(expected, plan);
@@ -395,7 +395,7 @@ mod tests {
         // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
 
         assert_optimized!(expected, plan);
@@ -429,7 +429,7 @@ mod tests {
         // should combine the Partial/Final AggregateExecs to tne Single AggregateExec
         let expected = &[
             "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
         ];
 
         assert_optimized!(expected, plan);

@@ -149,7 +149,7 @@ async fn avro_explain() {
             \n  CoalescePartitionsExec\
             \n    AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-            \n        AvroExec: files={1 group: [[ARROW_TEST_DATA/avro/alltypes_plain.avro]]}, limit=None\
+            \n        AvroExec: file_groups={1 group: [[ARROW_TEST_DATA/avro/alltypes_plain.avro]]}, projection=[id]\
             \n",
         ],
     ];

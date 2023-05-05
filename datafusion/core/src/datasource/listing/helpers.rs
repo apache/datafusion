@@ -377,7 +377,16 @@ fn parse_partitions_for_path<'a>(
     for (part, pn) in subpath.zip(table_partition_cols) {
         match part.split_once('=') {
             Some((name, val)) if name == pn => part_values.push(val),
-            _ => return None,
+            _ => {
+                debug!(
+                    "Ignoring file: file_path='{}', table_path='{}', part='{}', partition_col='{}'",
+                    file_path,
+                    table_path,
+                    part,
+                    pn,
+                );
+                return None;
+            }
         }
     }
     Some(part_values)
