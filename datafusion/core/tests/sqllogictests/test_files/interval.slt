@@ -327,10 +327,10 @@ select '1 month'::interval + '1980-01-01T12:00:00'::timestamp;
 
 # Exected error: interval (scalar) - date / timestamp (scalar)
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Date32 can't be evaluated because there isn't a common type to coerce the types to
 select '1 month'::interval - '1980-01-01'::date;
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
 select '1 month'::interval - '1980-01-01T12:00:00'::timestamp;
 
 # interval (array) + date / timestamp (array)
@@ -349,10 +349,10 @@ select i + ts from t;
 2000-02-01T00:01:00
 
 # expected error interval (array) - date / timestamp (array)
-query error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Date32 can't be evaluated because there isn't a common type to coerce the types to
 select i - d from t;
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
 select i - ts from t;
 
 
@@ -372,10 +372,10 @@ select '1 month'::interval + ts from t;
 2000-03-01T00:00:00
 
 # expected error interval (scalar) - date / timestamp (array)
-query error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Date32 can't be evaluated because there isn't a common type to coerce the types to
 select '1 month'::interval - d from t;
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
 select '1 month'::interval - ts from t;
 
 statement ok
