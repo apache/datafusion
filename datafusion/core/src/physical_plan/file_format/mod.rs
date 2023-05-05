@@ -245,7 +245,7 @@ impl Display for FileScanConfig {
         }
 
         if let Some(limit) = self.limit {
-            write!(f, ", limit={}", limit)?;
+            write!(f, ", limit={limit}")?;
         }
 
         if let Some(orders) = ordering {

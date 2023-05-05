@@ -1152,7 +1152,7 @@ mod tests {
             (vec![(col_e, option1)], false),
         ];
         for (cols, expected) in requirements {
-            let err_msg = format!("Error in test case:{:?}", cols);
+            let err_msg = format!("Error in test case:{cols:?}");
             let required = cols
                 .into_iter()
                 .map(|(col, options)| PhysicalSortExpr {
@@ -1170,8 +1170,7 @@ mod tests {
                     || ordering_eq_properties.clone(),
                 ),
                 expected,
-                "{}",
-                err_msg
+                "{err_msg}"
             );
         }
         Ok(())
@@ -1247,8 +1246,7 @@ mod tests {
                     expr.clone(),
                     eq_properties.classes()
                 )),
-                "error in test: expr: {:?}",
-                expr
+                "error in test: expr: {expr:?}"
             );
         }
 
@@ -1269,9 +1267,7 @@ mod tests {
                         ordering_eq_properties.classes()
                     )
                 ),
-                "error in test: expr: {:?}, sort_options: {:?}",
-                expr,
-                sort_options
+                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
         Ok(())
@@ -1321,9 +1317,7 @@ mod tests {
                     arg.clone(),
                     eq_properties.classes()
                 )),
-                "error in test: expr: {:?}, sort_options: {:?}",
-                expr,
-                sort_options
+                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
 
@@ -1349,9 +1343,7 @@ mod tests {
                     arg.clone(),
                     ordering_eq_properties.classes()
                 )),
-                "error in test: expr: {:?}, sort_options: {:?}",
-                expr,
-                sort_options
+                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
         Ok(())
@@ -1402,9 +1394,7 @@ mod tests {
                     arg.clone(),
                     eq_properties.classes()
                 )),
-                "error in test: expr: {:?}, sort_options: {:?}",
-                expr,
-                sort_options
+                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
 
@@ -1432,9 +1422,7 @@ mod tests {
                         ordering_eq_properties.classes()
                     )
                 ),
-                "error in test: expr: {:?}, sort_options: {:?}",
-                expr,
-                sort_options
+                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
         Ok(())

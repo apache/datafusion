@@ -1058,8 +1058,7 @@ mod tests {
             let res = get_working_mode(&input, &group_bys);
             assert_eq!(
                 res, *expected,
-                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
-                case_idx, test_case
+                "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
         }
 

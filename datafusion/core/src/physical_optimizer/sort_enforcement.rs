@@ -1381,9 +1381,7 @@ mod tests {
             assert_eq!(
                 can_skip_sort(&partition_by_exprs, &order_by_exprs, &exec_unbounded)?,
                 *expected,
-                "Unexpected result for in unbounded test case#: {:?}, case: {:?}",
-                case_idx,
-                test_case
+                "Unexpected result for in unbounded test case#: {case_idx:?}, case: {test_case:?}"
             );
         }
 
