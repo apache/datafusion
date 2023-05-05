@@ -128,6 +128,7 @@ impl ExprPrunabilityGraph {
         left_sort_expr: &Option<PhysicalSortExpr>,
         right_sort_expr: &Option<PhysicalSortExpr>,
     ) -> Result<(TableSide, SortInfo)> {
+        let mut includes_filter = false;
         // Dfs Post Order traversal is used, since the children nodes determine the parent's order.
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
@@ -170,6 +171,7 @@ impl ExprPrunabilityGraph {
                             right_sort_expr,
                         );
                 } else if binary_expr.op().is_comparison_operator() {
+                    includes_filter = true;
                     (self.graph[node].table_side, self.graph[node].sort_info) =
                         comparison_node_order(&children_prunability, binary_expr.op());
                 } else if *binary_expr.op() == Operator::And {
@@ -183,10 +185,14 @@ impl ExprPrunabilityGraph {
                 }
             }
         }
-        Ok((
-            self.graph[self.root].table_side,
-            self.graph[self.root].sort_info,
-        ))
+        if includes_filter {
+            Ok((
+                self.graph[self.root].table_side,
+                self.graph[self.root].sort_info,
+            ))
+        } else {
+            Ok((TableSide::None, self.graph[self.root].sort_info))
+        }
     }
 
     /// This function takes a node index, possibly there is a column at that node.
