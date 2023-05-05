@@ -1330,7 +1330,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 name = format!("{name} FILTER (WHERE {fe})");
             };
             if let Some(order_by) = order_by {
-                name = format!("{name} (ORDER BY {order_by})");
+                name = format!("{name} ORDER BY {order_by:?}");
             };
             Ok(name)
         }
