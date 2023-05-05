@@ -102,7 +102,6 @@ pub mod wildcard;
 pub mod window;
 
 pub mod explain;
-pub mod idenfifers;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
