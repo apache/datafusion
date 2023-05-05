@@ -17,7 +17,7 @@
 
 use super::*;
 
-const TEST_DATA_BASE: &str = "tests/jsons";
+const TEST_DATA_BASE: &str = "tests/data";
 
 #[tokio::test]
 async fn json_query() {
@@ -92,7 +92,7 @@ async fn json_explain() {
             \n  CoalescePartitionsExec\
             \n    AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-            \n        JsonExec: file_groups={1 group: [[WORKING_DIR/tests/jsons/2.json]]}, projection=[a]\n",
+            \n        JsonExec: file_groups={1 group: [[WORKING_DIR/tests/data/2.json]]}, projection=[a]\n",
         ],
     ];
     assert_eq!(expected, actual);
