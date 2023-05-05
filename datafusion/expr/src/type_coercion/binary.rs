@@ -17,64 +17,45 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::{is_date, is_decimal, is_interval, is_numeric, is_timestamp};
-use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
     DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
+
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
-/// Returns the return type of a binary operator or an error when the binary operator cannot
-/// perform the computation between the argument's types, even after type coercion.
-///
-/// This function makes some assumptions about the underlying available computations.
-pub fn binary_operator_data_type(
+use crate::type_coercion::{
+    is_datetime, is_decimal, is_interval, is_numeric, is_timestamp,
+};
+use crate::Operator;
+
+/// returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
+pub fn get_result_type(
     lhs_type: &DataType,
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
-    let result_type = if !any_decimal(lhs_type, rhs_type) {
-        // validate that it is possible to perform the operation on incoming types.
-        // (or the return datatype cannot be inferred)
-        coerce_types(lhs_type, op, rhs_type)?
-    } else {
+    if op.is_numerical_operators() && any_decimal(lhs_type, rhs_type) {
         let (coerced_lhs_type, coerced_rhs_type) =
             math_decimal_coercion(lhs_type, rhs_type);
-        let lhs_type = if let Some(lhs_type) = coerced_lhs_type {
-            lhs_type
-        } else {
-            lhs_type.clone()
-        };
-        let rhs_type = if let Some(rhs_type) = coerced_rhs_type {
-            rhs_type
-        } else {
-            rhs_type.clone()
-        };
 
-        match op {
-            Operator::Plus
-            | Operator::Minus
-            | Operator::Divide
-            | Operator::Multiply
-            | Operator::Modulo => decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
-                .or_else(|| coerce_types(&lhs_type, op, &rhs_type).ok())
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Could not get return type for {op:?} between {lhs_type:?} and {rhs_type:?}"
-                    ))
-                })?,
-            _ => coerce_types(&lhs_type, op, &rhs_type)?,
+        let lhs_type = coerced_lhs_type.unwrap_or(lhs_type.clone());
+        let rhs_type = coerced_rhs_type.unwrap_or(rhs_type.clone());
+
+        if op.is_numerical_operators() {
+            if let Some(result_type) =
+                decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
+            {
+                return Ok(result_type);
+            }
         }
-    };
-
-    match op {
-        // operators that return a boolean
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::And
+    }
+    let result = match op {
+        Operator::And
         | Operator::Or
+        | Operator::Eq
+        | Operator::NotEq
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
@@ -84,37 +65,38 @@ pub fn binary_operator_data_type(
         | Operator::RegexNotMatch
         | Operator::RegexNotIMatch
         | Operator::IsDistinctFrom
-        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
-        // bitwise operations return the common coerced type
+        | Operator::IsNotDistinctFrom => Some(DataType::Boolean),
+        Operator::Plus | Operator::Minus
+            if is_datetime(lhs_type)
+                || is_datetime(rhs_type)
+                || is_interval(lhs_type)
+                || is_interval(rhs_type) =>
+        {
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)
+        }
+        // following same with `coerce_types`
         Operator::BitwiseAnd
         | Operator::BitwiseOr
         | Operator::BitwiseXor
-        | Operator::BitwiseShiftLeft
-        | Operator::BitwiseShiftRight => Ok(result_type),
-        // math operations return the same value as the common coerced type
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::Plus
         | Operator::Minus
+        | Operator::Modulo
         | Operator::Divide
-        | Operator::Multiply
-        | Operator::Modulo => Ok(result_type),
-        // string operations return the same values as the common coerced type
-        Operator::StringConcat => Ok(result_type),
-    }
+        | Operator::Multiply => mathematics_numerical_coercion(lhs_type, rhs_type),
+        Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
+    };
+
+    result.ok_or(DataFusionError::Plan(format!(
+        "Unsupported argument types. Can not evaluate {lhs_type:?} {op} {rhs_type:?}"
+    )))
 }
 
-/// Coercion rules for all binary operators. Returns the output type
-/// of applying `op` to an argument of `lhs_type` and `rhs_type`.
+/// Coercion rules for all binary operators. Returns the 'coerce_types'
+/// is returns the type the arguments should be coerced to
 ///
 /// Returns None if no suitable type can be found.
-///
-/// TODO this function is trying to serve two purposes at once; it
-/// determines the result type of the binary operation and also
-/// determines how the inputs can be coerced but this results in
-/// inconsistencies in some cases (particular around date + interval)
-/// when the input argument types do not match the output argument
-/// types
-///
-/// Tracking issue is <https://github.com/apache/arrow-datafusion/issues/3419>
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
@@ -129,11 +111,10 @@ pub fn coerce_types(
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools or nulls
-            (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            (DataType::Null, DataType::Null) => Some(DataType::Boolean),
-            (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
-                Some(DataType::Boolean)
-            }
+            (DataType::Boolean, DataType::Boolean)
+            | (DataType::Null, DataType::Null)
+            | (DataType::Boolean, DataType::Null)
+            | (DataType::Null, DataType::Boolean) => Some(DataType::Boolean),
             _ => None,
         },
         // logical comparison operators have their own rules, and always return a boolean
@@ -147,16 +128,16 @@ pub fn coerce_types(
         | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
         // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
-            if (is_date(lhs_type)
-                || is_date(rhs_type)
-                || is_timestamp(lhs_type)
-                || is_timestamp(rhs_type)
+            if is_datetime(lhs_type)
+                || is_datetime(rhs_type)
                 || is_interval(lhs_type)
-                || is_interval(rhs_type))
-                && (!is_interval(lhs_type)
-                    || !is_timestamp(rhs_type)
-                    || *op != Operator::Minus) =>
+                || is_interval(rhs_type) =>
         {
+            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
+                return Err(DataFusionError::Plan(
+                    "interval can't subtract timestamp/date".to_string(),
+                ));
+            }
             temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
         // for math expressions, the final value of the coercion is also the return type
@@ -289,12 +270,8 @@ pub fn temporal_add_sub_coercion(
 ) -> Option<DataType> {
     match (lhs_type, rhs_type, op) {
         // if an interval is being added/subtracted from a date/timestamp, return the date/timestamp data type
-        (lhs, rhs, _) if is_interval(lhs) && (is_date(rhs) || is_timestamp(rhs)) => {
-            Some(rhs.clone())
-        }
-        (lhs, rhs, _) if is_interval(rhs) && (is_date(lhs) || is_timestamp(lhs)) => {
-            Some(lhs.clone())
-        }
+        (lhs, rhs, _) if is_interval(lhs) && is_datetime(rhs) => Some(rhs.clone()),
+        (lhs, rhs, _) if is_interval(rhs) && is_datetime(lhs) => Some(lhs.clone()),
         // if two timestamps are being subtracted, check their time units and return the corresponding interval data type
         (lhs, rhs, Operator::Minus) if is_timestamp(lhs) && is_timestamp(rhs) => {
             handle_timestamp_minus(lhs, rhs)
@@ -303,10 +280,7 @@ pub fn temporal_add_sub_coercion(
         (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
             handle_interval_addition(lhs, rhs)
         }
-        (lhs, rhs, Operator::Minus)
-            if (is_date(lhs) || is_timestamp(lhs))
-                && (is_date(rhs) || is_timestamp(rhs)) =>
-        {
+        (lhs, rhs, Operator::Minus) if is_datetime(lhs) && is_datetime(rhs) => {
             temporal_coercion(lhs, rhs)
         }
         // return None if no coercion is possible
@@ -887,12 +861,15 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::Operator;
     use arrow::datatypes::DataType;
+
     use datafusion_common::assert_contains;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
+
+    use crate::Operator;
+
+    use super::*;
 
     #[test]
     fn test_coercion_error() -> Result<()> {

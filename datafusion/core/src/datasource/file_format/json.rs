@@ -256,7 +256,7 @@ mod tests {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let filename = "tests/jsons/2.json";
+        let filename = "tests/data/2.json";
         let format = JsonFormat::default();
         scan_format(state, &format, ".", filename, projection, limit).await
     }
@@ -266,7 +266,7 @@ mod tests {
         let session = SessionContext::new();
         let ctx = session.state();
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let filename = "tests/jsons/schema_infer_limit.json";
+        let filename = "tests/data/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
 
         let file_schema = format

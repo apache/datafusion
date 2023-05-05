@@ -34,9 +34,7 @@ use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{
-    is_date, is_numeric, is_timestamp, is_utf8_or_large_utf8,
-};
+use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
@@ -183,6 +181,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
+            Expr::IsUnknown(expr) => {
+                let expr = is_unknown(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr =
+                    is_not_unknown(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
             Expr::Like(Like {
                 negated,
                 expr,
@@ -217,24 +224,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
-                Ok(expr)
-            }
-            Expr::IsUnknown(expr) => {
-                // will convert the binary(expr,IsNotDistinctFrom,lit(Boolean(None));
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = DataType::Boolean;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::IsNotDistinctFrom, &right_type)?;
-                let expr = is_unknown(expr.cast_to(&coerced_type, &self.schema)?);
-                Ok(expr)
-            }
-            Expr::IsNotUnknown(expr) => {
-                // will convert the binary(expr,IsDistinctFrom,lit(Boolean(None));
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = DataType::Boolean;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
-                let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
                 Ok(expr)
             }
             Expr::BinaryExpr(BinaryExpr {
@@ -294,11 +283,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                         Ok(expr)
                     }
                     _ => {
-                        let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                        let common_type = coerce_types(&left_type, &op, &right_type)?;
                         let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
+                            Box::new(left.clone().cast_to(&common_type, &self.schema)?),
                             op,
-                            Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+                            Box::new(right.clone().cast_to(&common_type, &self.schema)?),
                         ));
                         Ok(expr)
                     }
@@ -549,7 +538,7 @@ fn coerce_window_frame(
             if let Some(col_type) = current_types.first() {
                 if is_numeric(col_type) || is_utf8_or_large_utf8(col_type) {
                     col_type
-                } else if is_timestamp(col_type) || is_date(col_type) {
+                } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
                     return Err(DataFusionError::Internal(format!(
@@ -1186,7 +1175,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Utf8 IS NOT DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
+        assert!(err.unwrap_err().to_string().contains("Utf8 IS DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
 
         // is not unknown
         let expr = col("a").is_not_unknown();
@@ -1269,7 +1258,7 @@ mod test {
     fn binary_op_date32_eq_ts() -> Result<()> {
         let expr = cast(
             lit("1998-03-18"),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
@@ -1435,7 +1424,7 @@ mod test {
             Operator::Plus,
             Box::new(cast(
                 lit("2000-01-01T00:00:00"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();
@@ -1450,12 +1439,12 @@ mod test {
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
             Operator::Minus,
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();

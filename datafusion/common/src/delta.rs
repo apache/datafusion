@@ -290,4 +290,46 @@ mod tests {
         assert_eq!(shift_months(base, 1).time(), o_clock);
         assert_eq!(shift_months(base, 2).time(), o_clock);
     }
+
+    #[test]
+    fn add_11_months() {
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let actual = shift_months(prior, 11);
+        assert_eq!(format!("{actual:?}").as_str(), "2000-12-01");
+    }
+
+    #[test]
+    fn add_12_months() {
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let actual = shift_months(prior, 12);
+        assert_eq!(format!("{actual:?}").as_str(), "2001-01-01");
+    }
+
+    #[test]
+    fn add_13_months() {
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let actual = shift_months(prior, 13);
+        assert_eq!(format!("{actual:?}").as_str(), "2001-02-01");
+    }
+
+    #[test]
+    fn sub_11_months() {
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let actual = shift_months(prior, -11);
+        assert_eq!(format!("{actual:?}").as_str(), "1999-02-01");
+    }
+
+    #[test]
+    fn sub_12_months() {
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let actual = shift_months(prior, -12);
+        assert_eq!(format!("{actual:?}").as_str(), "1999-01-01");
+    }
+
+    #[test]
+    fn sub_13_months() {
+        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        let actual = shift_months(prior, -13);
+        assert_eq!(format!("{actual:?}").as_str(), "1998-12-01");
+    }
 }

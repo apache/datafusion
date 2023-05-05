@@ -132,19 +132,24 @@ impl TableProviderFactory for ListingTableFactory {
             Some(cmd.order_exprs.clone())
         };
 
-        let infinity_source = cmd
-            .options
-            .get("UNBOUNDED")
-            .unwrap_or(&"false".to_owned())
-            .to_lowercase()
-            == "true";
+        // look for 'infinite' as an option
+        let infinite_source = match cmd.options.get("infinite_source").map(|s| s.as_str())
+        {
+            None => false,
+            Some("true") => true,
+            Some("false") => false,
+            Some(value) => {
+                return Err(DataFusionError::Plan(format!("Unknown value for infinite_source: {value}. Expected 'true' or 'false'")));
+            }
+        };
+
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
-            .with_file_sort_order(file_sort_order)
-            .with_infinite_source(infinity_source);
+            .with_infinite_source(infinite_source)
+            .with_file_sort_order(file_sort_order);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {

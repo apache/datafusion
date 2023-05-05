@@ -39,7 +39,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{split_conjunction, AnalysisContext};
 
-use log::debug;
+use log::trace;
 
 use crate::execution::context::TaskContext;
 use futures::stream::{Stream, StreamExt};
@@ -147,7 +147,7 @@ impl ExecutionPlan for FilterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema(),
