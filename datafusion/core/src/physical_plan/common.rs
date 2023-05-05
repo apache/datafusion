@@ -304,18 +304,20 @@ fn get_meet_of_orderings_helper(
             if idx >= ordering.len() {
                 return Some(ordering);
             } else {
-                let condition = match (
+                let schema_and_ordering_aligned = match (
                     ordering[idx].expr.as_any().downcast_ref::<Column>(),
                     first[idx].expr.as_any().downcast_ref::<Column>(),
                 ) {
                     (Some(column), Some(column_first)) => {
-                        column.index() != column_first.index()
-                            || ordering[idx].options != first[idx].options
+                        column.index() == column_first.index()
+                            && ordering[idx].options == first[idx].options
                     }
-                    (_, _) => ordering[idx] != first[idx],
+                    (_, _) => ordering[idx] == first[idx],
                 };
-                if condition {
-                    // We must return the first schema parrameters by convention.
+                if !schema_and_ordering_aligned {
+                    // In Union schema of the first child is the output schema by convention.
+                    // Make sure that result is generated from the first schema, to make it compatible with
+                    // union output ordering.
                     return if idx > 0 { Some(&first[..idx]) } else { None };
                 }
             }
@@ -398,8 +400,10 @@ mod tests {
                 options: SortOptions::default(),
             },
             PhysicalSortExpr {
-                expr: Arc::new(Column::new("i", 2)),
-                options: SortOptions::default().not(),
+                // Note that index of this column is not 2. Hence this 3rd entry shouldn't be
+                // in the output ordering.
+                expr: Arc::new(Column::new("i", 3)),
+                options: SortOptions::default(),
             },
         ];
 
@@ -488,6 +492,8 @@ mod tests {
         let input1: Vec<PhysicalSortExpr> = vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
+                // Since ordering is conflicting with other inputs
+                // output ordering should be empty
                 options: SortOptions::default().not(),
             },
             PhysicalSortExpr {
