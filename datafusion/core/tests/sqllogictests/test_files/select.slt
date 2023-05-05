@@ -661,9 +661,8 @@ select * from largeutf8_data where large_str != '1'
 statement ok
 CREATE TABLE empty_table;
 
-query
+statement ok
 SELECT * FROM empty_table
-----
 
 
 # TODO: boolean_literal

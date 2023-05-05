@@ -136,12 +136,7 @@ impl ExecutionPlan for AvroExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "AvroExec: files={}, limit={:?}",
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                    self.base_config.limit,
-                )
+                write!(f, "AvroExec: {}", self.base_config)
             }
         }
     }

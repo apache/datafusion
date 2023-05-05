@@ -146,12 +146,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "JsonExec: limit={:?}, files={}",
-                    self.base_config.limit,
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                )
+                write!(f, "JsonExec: {}", self.base_config)
             }
         }
     }

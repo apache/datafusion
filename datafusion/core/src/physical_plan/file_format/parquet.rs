@@ -86,7 +86,7 @@ pub struct ParquetExec {
     /// Override for `Self::with_enable_page_index`. If None, uses
     /// values from base_config
     enable_page_index: Option<bool>,
-    /// Base configuraton for this scan
+    /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
@@ -419,20 +419,10 @@ impl ExecutionPlan for ParquetExec {
                     .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
                     .unwrap_or_default();
 
-                let output_ordering_string = self
-                    .output_ordering()
-                    .map(make_output_ordering_string)
-                    .unwrap_or_default();
-
                 write!(
                     f,
-                    "ParquetExec: limit={:?}, partitions={}{}{}{}, projection={}",
-                    self.base_config.limit,
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                    predicate_string,
-                    pruning_predicate_string,
-                    output_ordering_string,
-                    super::ProjectSchemaDisplay(&self.projected_schema),
+                    "ParquetExec: {}{}{}",
+                    self.base_config, predicate_string, pruning_predicate_string,
                 )
             }
         }
@@ -445,20 +435,6 @@ impl ExecutionPlan for ParquetExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
-}
-
-fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
-    use std::fmt::Write;
-    let mut w: String = ", output_ordering=[".into();
-
-    for (i, e) in ordering.iter().enumerate() {
-        if i > 0 {
-            write!(&mut w, ", ").unwrap()
-        }
-        write!(&mut w, "{e}").unwrap()
-    }
-    write!(&mut w, "]").unwrap();
-    w
 }
 
 /// Implements [`FileOpener`] for a parquet file

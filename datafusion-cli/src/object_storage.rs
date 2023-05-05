@@ -112,7 +112,8 @@ fn get_bucket_name(url: &Url) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use datafusion::{
-        datasource::listing::ListingTableUrl, logical_expr::{LogicalPlan, DdlStatement},
+        datasource::listing::ListingTableUrl,
+        logical_expr::{DdlStatement, LogicalPlan},
         prelude::SessionContext,
     };
 

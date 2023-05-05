@@ -130,7 +130,7 @@ async fn join_by_expression() {
         "select t1.* from t t1 JOIN t t2 ON t1.service != t2.service",
         vec![
             "Resources exhausted: Failed to allocate additional",
-            "NestedLoopJoinExec",
+            "NestedLoopJoinStream[0]",
         ],
         1_000,
     )
