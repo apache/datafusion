@@ -692,8 +692,6 @@ pub struct AggregateExprNode {
     pub distinct: bool,
     #[prost(message, optional, boxed, tag = "4")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "5")]
-    pub order_by: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -704,8 +702,6 @@ pub struct AggregateUdfExprNode {
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "4")]
-    pub order_by: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1824,12 +1820,6 @@ pub struct MaybeFilter {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MaybePhysicalSortExpr {
-    #[prost(message, optional, tag = "1")]
-    pub expr: ::core::option::Option<PhysicalSortExprNode>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "1")]
     pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
@@ -1852,8 +1842,6 @@ pub struct AggregateExecNode {
     pub groups: ::prost::alloc::vec::Vec<bool>,
     #[prost(message, repeated, tag = "10")]
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
-    #[prost(message, repeated, tag = "11")]
-    pub order_by_expr: ::prost::alloc::vec::Vec<MaybePhysicalSortExpr>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
