@@ -98,7 +98,7 @@ use datafusion_common::scalar::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::{
-    binary_operator_data_type, coercion_decimal_mathematics_type,
+    coercion_decimal_mathematics_type, get_result_type,
 };
 use datafusion_expr::{ColumnarValue, Operator};
 
@@ -651,7 +651,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        binary_operator_data_type(
+        get_result_type(
             &self.left.data_type(input_schema)?,
             &self.op,
             &self.right.data_type(input_schema)?,
