@@ -371,11 +371,28 @@ select host, median(usage) from cpu group by host;
 host0 90.1
 host1 90.3
 
+statement ok
+drop table cpu;
+
+# this test is to show create table as and select into works in the same way
+statement ok
+SELECT * INTO cpu 
+FROM (VALUES
+    ('host0', 90.1),
+    ('host1', 90.2),
+    ('host1', 90.4)
+  ) AS cpu (host, usage);
+
+query TR rowsort
+select host, median(usage) from cpu group by host;
+----
+host0 90.1
+host1 90.3
+
 query R
 select median(usage) from cpu;
 ----
 90.2
-
 
 statement ok
 drop table cpu;
@@ -1388,7 +1405,6 @@ as values
  ('2011-12-13T11:13:10.12345', 'Row 1'),
  (null, 'Row 2'),
  ('2021-01-01T05:11:10.432', 'Row 3');
-
 
 statement ok
 create table t as

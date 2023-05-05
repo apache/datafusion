@@ -29,6 +29,22 @@ select * from users;
 2 3
 
 statement ok
+drop table users
+
+statement ok
+SELECT * INTO users FROM (VALUES(1,2),(2,3));
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+
+# Error if the table already exists
+statement error DataFusion error: Execution error: Table 'users' already exists
+SELECT * INTO users FROM (VALUES(1,2),(2,3));
+
+statement ok
 insert into users values(2, 4);
 
 query II rowsort
@@ -252,6 +268,18 @@ SELECT * FROM my_table order by c1 LIMIT 1
 0.00001 0.000000000001 true
 
 statement ok
+drop table my_table
+
+# select_into
+statement ok
+SELECT* INTO my_table FROM (SELECT * FROM aggregate_simple)
+
+query RRB rowsort
+SELECT * FROM my_table order by c1 LIMIT 1
+----
+0.00001 0.000000000001 true
+
+statement ok
 DROP TABLE my_table;
 
 # not ok to drop after already dropped
@@ -296,9 +324,20 @@ SELECT * FROM my_table;
 ----
 1 2 hello
 
+# Preserving data types with select into
+statement ok
+SELECT * INTO new_table FROM my_table
+
+query IRT rowsort
+SELECT * FROM new_table;
+----
+1 2 hello
+
 statement ok
 DROP TABLE my_table;
 
+statement ok
+DROP TABLE new_table;
 
 # TODO enable information schema
 
