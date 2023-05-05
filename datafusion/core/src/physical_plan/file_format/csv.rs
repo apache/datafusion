@@ -22,9 +22,12 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
-    FileOpenFuture, FileOpener, FileStream,
+    FileOpenFuture, FileOpener, FileSinkState, FileSinkStreamMetrics, FileStream,
+    FileWriterFactory,
 };
-use crate::physical_plan::file_format::{FileMeta, FileSinkConfig};
+use crate::physical_plan::file_format::{
+    build_file_sink_stream, FileMeta, FileSinkConfig,
+};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -35,11 +38,15 @@ use arrow::datatypes::SchemaRef;
 
 use bytes::Buf;
 
+use super::FileScanConfig;
 use crate::datasource::file_format::csv::CsvSerializer;
-use crate::datasource::file_format::FileWriterMode;
+use crate::datasource::file_format::{
+    AsyncAppend, AsyncPut, AsyncPutMultipart, AsyncPutWriter, FileWriterExt,
+    FileWriterMode,
+};
 use crate::physical_plan::common::AbortOnDropSingle;
-use crate::physical_plan::file_format::file_writer_stream::FileSinkStream;
 use arrow::csv::WriterBuilder;
+use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalExpr;
@@ -52,8 +59,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
-
-use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
@@ -326,6 +331,76 @@ impl FileOpener for CsvOpener {
     }
 }
 
+/// A [`FileWriter`] that opens a CSV file and yields a [`Box<dyn AsyncWrite + Unpin + Send>`]
+pub struct CsvWriterOpener {
+    writer_mode: FileWriterMode,
+    object_store: Arc<dyn ObjectStore>,
+    file_compression_type: FileCompressionType,
+}
+
+impl CsvWriterOpener {
+    pub fn new(
+        writer_mode: FileWriterMode,
+        object_store: Arc<dyn ObjectStore>,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        Self {
+            writer_mode,
+            object_store,
+            file_compression_type,
+        }
+    }
+}
+
+#[async_trait]
+impl FileWriterFactory for CsvWriterOpener {
+    async fn create_writer(&self, file_meta: FileMeta) -> Result<Box<dyn FileWriterExt>> {
+        // Clone the object and store references
+        let object = &file_meta.object_meta;
+        match self.writer_mode {
+            // If the mode is append, call the store's append method and return a ready poll
+            // with the result wrapped in a custom error type if it fails
+            FileWriterMode::Append => {
+                let writer = self
+                    .object_store
+                    .append(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                let writer = Box::new(AsyncAppend::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                )) as Box<dyn FileWriterExt>;
+                Ok(writer)
+            }
+            // If the mode is put, create a new AsyncPut writer and return it wrapped in
+            // a boxed trait object
+            FileWriterMode::Put => {
+                let writer = Box::new(AsyncPutWriter::new(
+                    object.clone(),
+                    self.object_store.clone(),
+                ));
+                let converted =
+                    self.file_compression_type.convert_async_writer(writer)?;
+                let sa = Box::new(AsyncPut::new(converted));
+                Ok(sa)
+            }
+            // If the mode is put multipart, call the store's put_multipart method and
+            // return the writer wrapped in a ready poll or return an error wrapped
+            // in a custom error type if it fails
+            FileWriterMode::PutMultipart => {
+                match self.object_store.put_multipart(&object.location).await {
+                    Ok((multipart_id, writer)) => Ok(Box::new(AsyncPutMultipart::new(
+                        self.file_compression_type.convert_async_writer(writer)?,
+                        self.object_store.clone(),
+                        multipart_id,
+                        object.location.clone(),
+                    ))),
+                    Err(e) => Err(DataFusionError::ObjectStore(e)),
+                }
+            }
+        }
+    }
+}
+
 pub async fn plan_to_csv(
     task_ctx: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
@@ -490,18 +565,25 @@ impl ExecutionPlan for CsvWriterExec {
             .with_builder(builder)
             .with_header(header);
 
-        let metrics_set = ExecutionPlanMetricsSet::new();
-        let inner_stream = self.input.execute(partition, context)?;
-        let stream = FileSinkStream::try_new(
-            &self.base_config,
-            partition,
-            object_store,
+        let opener = CsvWriterOpener::new(
+            self.base_config.writer_mode,
+            object_store.clone(),
+            self.file_compression_type.to_owned(),
+        );
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let input = self.input.execute(partition, context)?;
+
+        let state = FileSinkState {
+            input,
             serializer,
-            inner_stream,
-            self.file_compression_type.clone(),
-            &metrics_set,
-        )?;
-        Ok(Box::pin(stream) as SendableRecordBatchStream)
+            opener,
+            schema: self.base_config.output_schema.clone(),
+            file_stream_metrics: FileSinkStreamMetrics::new(&metrics, partition),
+            file: self.base_config.file_groups[partition].clone(),
+        };
+
+        build_file_sink_stream(state)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

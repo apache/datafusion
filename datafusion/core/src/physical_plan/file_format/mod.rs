@@ -22,7 +22,6 @@ mod avro;
 mod chunked_store;
 mod csv;
 mod file_stream;
-mod file_writer_stream;
 mod json;
 mod parquet;
 
@@ -39,16 +38,17 @@ use arrow::{
 pub use avro::AvroExec;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
-pub use file_writer_stream::WriterOpenFuture;
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
-use crate::datasource::file_format::FileWriterMode;
+use crate::datasource::file_format::{BatchSerializer, FileWriterMode};
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::file_format::file_stream::FileWriterFactory;
+use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -57,6 +57,8 @@ use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
+use file_stream::FileSinkState;
+use futures::StreamExt;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -68,6 +70,7 @@ use std::{
     sync::Arc,
     vec,
 };
+use tokio::io::AsyncWriteExt;
 
 use super::{ColumnStatistics, Statistics};
 
@@ -259,6 +262,65 @@ impl FileSinkConfig {
     pub fn output_schema(&self) -> &SchemaRef {
         &self.output_schema
     }
+}
+
+use std::convert::TryInto;
+
+macro_rules! handle_err_or_continue {
+    ($result:expr, $state:expr, $writer:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(e) => {
+                let abort_future = $writer.abort_writer().unwrap();
+                let _ = abort_future.await;
+                let err: Result<DataFusionError, _> = e.try_into();
+                match err {
+                    Ok(data_fusion_err) => return Some((Err(data_fusion_err), $state)),
+                    Err(_) => {
+                        return Some((
+                            Err(DataFusionError::Internal("File sink error.".to_owned())),
+                            $state,
+                        ))
+                    }
+                }
+            }
+        }
+    };
+}
+
+/// Builds a file sink stream that writes record batches to a file using the provided serializer and file writer factory.
+pub fn build_file_sink_stream<
+    S: BatchSerializer + 'static,
+    O: FileWriterFactory + 'static,
+>(
+    state: FileSinkState<S, O>,
+) -> Result<SendableRecordBatchStream> {
+    let schema = state.schema.clone();
+    let stream = futures::stream::unfold(state, |mut this| async move {
+        let mut writer = match this
+            .opener
+            .create_writer(this.file.object_meta.clone().into())
+            .await
+        {
+            Ok(w) => w,
+            Err(e) => return Some((Err(e), this)),
+        };
+        while let Some(maybe_batch) = this.input.next().await {
+            this.file_stream_metrics.time_processing.stop();
+            let batch = handle_err_or_continue!(maybe_batch, this, writer);
+            let bytes = handle_err_or_continue!(
+                this.serializer.serialize(batch).await,
+                this,
+                writer
+            );
+
+            handle_err_or_continue!(writer.write_all(&bytes).await, this, writer);
+            this.file_stream_metrics.time_processing.start();
+        }
+        handle_err_or_continue!(writer.shutdown().await, this, writer);
+        None
+    });
+    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
 }
 
 /// A wrapper to customize partitioned file display

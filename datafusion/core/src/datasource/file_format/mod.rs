@@ -37,9 +37,7 @@ use std::{fmt, mem};
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::physical_plan::file_format::{
-    FileScanConfig, FileSinkConfig, WriterOpenFuture,
-};
+use crate::physical_plan::file_format::{FileScanConfig, FileSinkConfig};
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use crate::execution::context::SessionState;
@@ -47,9 +45,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalExpr;
+use futures::future::BoxFuture;
 use futures::ready;
 use futures::FutureExt;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::path::Path;
+use object_store::{MultipartId, ObjectMeta, ObjectStore};
 use tokio::io::AsyncWrite;
 /// This trait abstracts all the file format specific implementations
 /// from the [`TableProvider`]. This helps code re-utilization across
@@ -110,10 +110,10 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 }
 
-/// `AsyncPut` is a struct that implements asynchronous writing to an object store.
+/// `AsyncPutWriter` is a struct that implements asynchronous writing to an object store.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
 /// the whole bytes at once when the buffer is flushed.
-pub struct AsyncPut {
+pub struct AsyncPutWriter {
     /// Object metadata
     object_meta: ObjectMeta,
     /// A shared reference to the object store
@@ -124,7 +124,7 @@ pub struct AsyncPut {
     inner_state: AsyncPutState,
 }
 
-impl AsyncPut {
+impl AsyncPutWriter {
     /// Define a constructor for the AsyncPut struct
     pub fn new(object_meta: ObjectMeta, store: Arc<dyn ObjectStore>) -> Self {
         Self {
@@ -138,7 +138,7 @@ impl AsyncPut {
 
     /// Separate implementation function that unpins the [`AsyncPut`] so
     /// that partial borrows work correctly
-    fn poll_flush_inner(
+    fn poll_shutdown_inner(
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), Error>> {
@@ -176,7 +176,7 @@ enum AsyncPutState {
     Put { bytes: Bytes },
 }
 
-impl AsyncWrite for AsyncPut {
+impl AsyncWrite for AsyncPutWriter {
     // Define the implementation of the AsyncWrite trait for the AsyncPut struct
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -192,21 +192,171 @@ impl AsyncWrite for AsyncPut {
     }
 
     fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        // Call the poll_flush_inner method to handle the actual sending of data to the object store
-        self.poll_flush_inner(cx)
-    }
-
-    fn poll_shutdown(
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), Error>> {
         // Return a ready poll with an empty result
         Poll::Ready(Ok(()))
     }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        // Call the poll_shutdown_inner method to handle the actual sending of data to the object store
+        self.poll_shutdown_inner(cx)
+    }
 }
+
+/// A simple wrapper around an `AsyncWrite` type.
+pub struct AsyncPut<W: AsyncWrite + Unpin + Send> {
+    writer: W,
+}
+
+impl<W: AsyncWrite + Unpin + Send> AsyncPut<W> {
+    /// Create a new `AsyncPut` instance with the given writer.
+    pub fn new(writer: W) -> Self {
+        Self { writer }
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncPut<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncPut<W> {}
+
+/// An extension trait for `AsyncWrite` types that adds an `abort_writer` method.
+pub trait FileWriterExt: AsyncWrite + Unpin + Send {
+    /// Aborts the writer and returns a boxed future with the result.
+    /// The default implementation returns an immediately resolved future with `Ok(())`.
+    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
+        Ok(async { Ok(()) }.boxed())
+    }
+}
+
+/// A wrapper around an `AsyncWrite` type that provides multipart upload functionality.
+pub struct AsyncPutMultipart<W: AsyncWrite + Unpin + Send> {
+    writer: W,
+    /// A shared reference to the object store
+    store: Arc<dyn ObjectStore>,
+    multipart_id: MultipartId,
+    location: Path,
+}
+
+impl<W: AsyncWrite + Unpin + Send> AsyncPutMultipart<W> {
+    /// Create a new `AsyncPutMultipart` instance with the given writer, object store, multipart ID, and location.
+    pub fn new(
+        writer: W,
+        store: Arc<dyn ObjectStore>,
+        multipart_id: MultipartId,
+        location: Path,
+    ) -> Self {
+        Self {
+            writer,
+            store,
+            multipart_id,
+            location,
+        }
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncPutMultipart<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncPutMultipart<W> {
+    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
+        let location = self.location.clone();
+        let multipart_id = self.multipart_id.clone();
+        let store = self.store.clone();
+        Ok(Box::pin(async move {
+            store
+                .abort_multipart(&location, &multipart_id)
+                .await
+                .map_err(DataFusionError::ObjectStore)
+        }))
+    }
+}
+
+/// A wrapper around an `AsyncWrite` type that provides append functionality.
+pub struct AsyncAppend<W: AsyncWrite + Unpin + Send> {
+    writer: W,
+}
+
+impl<W: AsyncWrite + Unpin + Send> AsyncAppend<W> {
+    /// Create a new `AsyncAppend` instance with the given writer.
+    pub fn new(writer: W) -> Self {
+        Self { writer }
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncAppend<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::result::Result<usize, Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Error>> {
+        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncAppend<W> {}
+
 /// An enum that defines different file writer modes.
 #[derive(Debug, Clone, Copy)]
 pub enum FileWriterMode {
@@ -217,54 +367,9 @@ pub enum FileWriterMode {
     /// Data is written to a new file in multiple parts.
     PutMultipart,
 }
-
-impl FileWriterMode {
-    /// Define a method that creates a future for opening a writer for a file depending on the writer mode
-    pub fn build_async_writer(
-        &self,
-        object: &ObjectMeta,
-        store: &Arc<dyn ObjectStore>,
-    ) -> Result<WriterOpenFuture> {
-        // Clone the object and store references
-        let object = object.clone();
-        let store = Arc::clone(store);
-        // Clone the writer mode as an enum
-        let self_enum = *self;
-        // Return a result of a boxed future that matches the writer mode and returns the appropriate writer
-        Ok(Box::pin(async move {
-            match self_enum {
-                // If the mode is append, call the store's append method and return a ready poll
-                // with the result wrapped in a custom error type if it fails
-                FileWriterMode::Append => store
-                    .append(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore),
-                // If the mode is put, create a new AsyncPut writer and return it wrapped in
-                // a boxed trait object
-                FileWriterMode::Put => {
-                    let writer = Box::new(AsyncPut::new(object, store))
-                        as Box<dyn AsyncWrite + Send + Unpin>;
-                    Ok(writer)
-                }
-                // If the mode is put multipart, call the store's put_multipart method and
-                // return the writer wrapped in a ready poll or return an error wrapped
-                // in a custom error type if it fails
-
-                // TODO: Handle multipart id.
-                FileWriterMode::PutMultipart => {
-                    match store.put_multipart(&object.location).await {
-                        Ok((_, writer)) => Ok(writer),
-                        Err(e) => Err(DataFusionError::ObjectStore(e)),
-                    }
-                }
-            }
-        }))
-    }
-}
-
 /// A trait that defines the methods required for a RecordBatch serializer.
 #[async_trait]
-pub trait BatchSerializer: Unpin {
+pub trait BatchSerializer: Unpin + Send {
     /// Asynchronously serializes a `RecordBatch` and returns the serialized bytes.
     async fn serialize(&mut self, batch: RecordBatch) -> Result<Bytes>;
 }
