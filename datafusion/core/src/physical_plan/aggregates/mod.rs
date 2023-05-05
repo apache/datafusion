@@ -342,6 +342,8 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .collect()
 }
 
+/// This function get the finest requirement among all aggregators functions.
+/// If requirements are conflicting (None of the requirements satisfy all of the requirement) Plan error is raised.
 fn get_finest_requirement(
     order_by_expr: &[Option<PhysicalSortExpr>],
     eq_properties: &[EquivalentClass],
@@ -389,6 +391,9 @@ impl AggregateExec {
 
         let schema = Arc::new(schema);
         let mut aggregator_requirement = None;
+        // Ordering sensitive requirement makes sense only in Partial and Single mode.
+        // Because in other modes, all groups are collapsed. Hence their input schema may not contain
+        // expressions in the requirement.
         if mode == AggregateMode::Partial || mode == AggregateMode::Single {
             let requirement = get_finest_requirement(
                 &order_by_expr,
@@ -396,15 +401,7 @@ impl AggregateExec {
                 input.ordering_equivalence_properties().classes(),
             )?;
             if let Some(req) = requirement {
-                if group_by.groups.len() == 1 {
-                    aggregator_requirement =
-                        Some(vec![PhysicalSortRequirement::from(req)]);
-                } else {
-                    return Err(DataFusionError::Plan(
-                        "Cannot run order sensitive aggregation in grouping set queries"
-                            .to_string(),
-                    ));
-                }
+                aggregator_requirement = Some(vec![PhysicalSortRequirement::from(req)]);
             }
         }
 
@@ -423,13 +420,25 @@ impl AggregateExec {
         let mut required_input_ordering = None;
         if let Some(AggregationOrdering {
             ordering,
+            // If the mode of the AggregateExec is FullyOrdered or PartiallyOrdered
+            // (e.g AggregateExec runs with bounded memory without breaking pipeline)
+            // We append aggregator ordering requirement to the existing ordering that enables
+            // to run executor with bounded memory.
+            // In this way, we can still run executor in the same mode,
+            // and can satisfy required ordering for the aggregators.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
             ..
         }) = &aggregation_ordering
         {
             if let Some(aggregator_requirement) = aggregator_requirement {
+                // Get the section of the input ordering that enables us to run executor in the
+                // GroupByOrderMode::FullyOrdered or GroupByOrderMode::PartiallyOrdered.
                 let requirement_prefix =
-                    input.output_ordering().unwrap()[0..ordering.len()].to_vec();
+                    if let Some(existing_ordering) = input.output_ordering() {
+                        existing_ordering[0..ordering.len()].to_vec()
+                    } else {
+                        vec![]
+                    };
                 let mut requirement = requirement_prefix
                     .iter()
                     .map(|sort_expr| PhysicalSortRequirement::from(sort_expr.clone()))
@@ -450,10 +459,6 @@ impl AggregateExec {
             }
         } else {
             required_input_ordering = aggregator_requirement;
-        }
-        if mode == AggregateMode::Partial || mode == AggregateMode::Single {
-            println!("aggregation_ordering:{:?}", aggregation_ordering);
-            println!("required_input_ordering:{:?}", required_input_ordering);
         }
 
         Ok(AggregateExec {

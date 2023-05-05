@@ -1743,12 +1743,12 @@ EXPLAIN SELECT s.country, (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
         GROUP BY s.country
 ----
 logical_plan
-Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST) AS amounts
+Projection: s.country, ARRAYAGG(s.amount) (ORDER BY s.amount ASC NULLS LAST) AS amounts
   Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount ASC NULLS LAST]]
     SubqueryAlias: s
       TableScan: sales_global projection=[country, amount]
 physical_plan
-ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST)@1 as amounts]
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) (ORDER BY s.amount ASC NULLS LAST)@1 as amounts]
   AggregateExec: mode=Final, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount)]
     CoalescePartitionsExec
       AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount)]
@@ -1774,12 +1774,12 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         GROUP BY s.country
 ----
 logical_plan
-Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
+Projection: s.country, ARRAYAGG(s.amount) (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
   Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount DESC NULLS FIRST, SUM(s.amount)]]
     SubqueryAlias: s
       TableScan: sales_global projection=[country, amount]
 physical_plan
-ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
   AggregateExec: mode=Final, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
     CoalescePartitionsExec
       AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
@@ -1819,13 +1819,13 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
           GROUP BY s.country
 ----
 logical_plan
-Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
+Projection: s.country, ARRAYAGG(s.amount) (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
   Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount DESC NULLS FIRST, SUM(s.amount)]]
     SubqueryAlias: s
       Sort: sales_global.country ASC NULLS LAST
         TableScan: sales_global projection=[country, amount]
 physical_plan
-ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
   AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
     SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
       MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
@@ -1855,13 +1855,13 @@ EXPLAIN SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC)
           GROUP BY s.country, s.zip_code
 ----
 logical_plan
-Projection: s.country, s.zip_code, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
+Projection: s.country, s.zip_code, ARRAYAGG(s.amount) (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
   Aggregate: groupBy=[[s.country, s.zip_code]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount DESC NULLS FIRST, SUM(s.amount)]]
     SubqueryAlias: s
       Sort: sales_global.country ASC NULLS LAST
         TableScan: sales_global projection=[zip_code, country, amount]
 physical_plan
-ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@2 as amounts, SUM(s.amount)@3 as sum1]
+ProjectionExec: expr=[country@0 as country, zip_code@1 as zip_code, ARRAYAGG(s.amount) (ORDER BY s.amount DESC NULLS FIRST)@2 as amounts, SUM(s.amount)@3 as sum1]
   AggregateExec: mode=Single, gby=[country@1 as country, zip_code@0 as zip_code], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=PartiallyOrdered
     SortExec: expr=[country@1 ASC NULLS LAST,amount@2 DESC]
       MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
@@ -1891,13 +1891,13 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC) AS amounts
           GROUP BY s.country
 ----
 logical_plan
-Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.country DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
+Projection: s.country, ARRAYAGG(s.amount) (ORDER BY s.country DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
   Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.country DESC NULLS FIRST, SUM(s.amount)]]
     SubqueryAlias: s
       Sort: sales_global.country ASC NULLS LAST
         TableScan: sales_global projection=[country, amount]
 physical_plan
-ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.country DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) (ORDER BY s.country DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
   AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
     SortPreservingMergeExec: [country@0 ASC NULLS LAST]
       SortExec: expr=[country@0 ASC NULLS LAST]

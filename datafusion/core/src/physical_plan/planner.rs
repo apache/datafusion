@@ -701,6 +701,7 @@ impl DefaultPhysicalPlanner {
                         logical_input_schema,
                         &physical_input_schema,
                         session_state)?;
+
                     let agg_filter = aggr_expr
                         .iter()
                         .map(|e| {
@@ -1611,9 +1612,11 @@ pub fn create_window_expr(
     )
 }
 
-type AggregateExprWithOptionalFilter = (
+type AggregateExprWithOptionalArgs = (
     Arc<dyn AggregateExpr>,
+    // Keeps Filter clause if any
     Option<Arc<dyn PhysicalExpr>>,
+    // Keeps ordering requirement if any
     Option<PhysicalSortExpr>,
 );
 
@@ -1624,7 +1627,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<AggregateExprWithOptionalFilter> {
+) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
             fun,
@@ -1724,7 +1727,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<AggregateExprWithOptionalFilter> {
+) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
