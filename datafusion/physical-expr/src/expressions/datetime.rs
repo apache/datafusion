@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::coerce_types;
+use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
@@ -77,7 +77,7 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        coerce_types(
+        get_result_type(
             &self.lhs.data_type(input_schema)?,
             &Operator::Minus,
             &self.rhs.data_type(input_schema)?,
@@ -120,16 +120,21 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(array_rhs)) => {
                 resolve_temporal_op_scalar(&array_lhs, sign, &array_rhs)
             }
+            // This function evaluates operations between a scalar value and an array of temporal
+            // values. One example is calculating the duration between a scalar timestamp and an
+            // array of timestamps (i.e. `now() - some_column`).
+            (ColumnarValue::Scalar(scalar_lhs), ColumnarValue::Array(array_rhs)) => {
+                let array_lhs = scalar_lhs.to_array_of_size(array_rhs.len());
+                Ok(ColumnarValue::Array(resolve_temporal_op(
+                    &array_lhs, sign, &array_rhs,
+                )?))
+            }
             // This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
             // timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
             // the operation (+1 for addition and -1 for subtraction).
             (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => Ok(
                 ColumnarValue::Array(resolve_temporal_op(&array_lhs, sign, &array_rhs)?),
             ),
-            (_, _) => {
-                let msg = "If RHS of the operation is an array, then LHS also must be";
-                Err(DataFusionError::Internal(msg.to_string()))
-            }
         }
     }
 
@@ -229,52 +234,9 @@ mod tests {
     use arrow::datatypes::*;
     use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
-    use datafusion_common::delta::shift_months;
     use datafusion_common::{Column, Result, ScalarValue, ToDFSchema};
     use datafusion_expr::Expr;
     use std::ops::Add;
-
-    #[test]
-    fn add_11_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 11);
-        assert_eq!(format!("{actual:?}").as_str(), "2000-12-01");
-    }
-
-    #[test]
-    fn add_12_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 12);
-        assert_eq!(format!("{actual:?}").as_str(), "2001-01-01");
-    }
-
-    #[test]
-    fn add_13_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 13);
-        assert_eq!(format!("{actual:?}").as_str(), "2001-02-01");
-    }
-
-    #[test]
-    fn sub_11_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -11);
-        assert_eq!(format!("{actual:?}").as_str(), "1999-02-01");
-    }
-
-    #[test]
-    fn sub_12_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -12);
-        assert_eq!(format!("{actual:?}").as_str(), "1999-01-01");
-    }
-
-    #[test]
-    fn sub_13_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -13);
-        assert_eq!(format!("{actual:?}").as_str(), "1998-12-01");
-    }
 
     #[test]
     fn add_32_day_time() -> Result<()> {
