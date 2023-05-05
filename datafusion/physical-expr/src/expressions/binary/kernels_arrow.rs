@@ -612,8 +612,7 @@ fn multiply_fixed_point_dyn(
 
                         if required_scale > product_scale {
                             return Err(DataFusionError::Internal(format!(
-                                "Required scale {} is greater than product scale {}",
-                                required_scale, product_scale
+                                "Required scale {required_scale} is greater than product scale {product_scale}"
                             )));
                         }
 
