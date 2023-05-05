@@ -1063,41 +1063,6 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     );
 }
 
-/// Create table "t1" with two boolean columns "a" and "b"
-async fn register_boolean(ctx: &SessionContext) -> Result<()> {
-    let a: BooleanArray = [
-        Some(true),
-        Some(true),
-        Some(true),
-        None,
-        None,
-        None,
-        Some(false),
-        Some(false),
-        Some(false),
-    ]
-    .iter()
-    .collect();
-    let b: BooleanArray = [
-        Some(true),
-        None,
-        Some(false),
-        Some(true),
-        None,
-        Some(false),
-        Some(true),
-        None,
-        Some(false),
-    ]
-    .iter()
-    .collect();
-
-    let data =
-        RecordBatch::try_from_iter([("a", Arc::new(a) as _), ("b", Arc::new(b) as _)])?;
-    ctx.register_batch("t1", data)?;
-    Ok(())
-}
-
 async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
     // It's not possible to use aggregate_test_100 as it doesn't have enough similar values to test grouping on floats.
     let schema = Arc::new(Schema::new(vec![

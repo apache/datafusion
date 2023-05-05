@@ -837,7 +837,6 @@ async fn nested_subquery() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn comparisons_with_null_lt() {
     let ctx = SessionContext::new();
