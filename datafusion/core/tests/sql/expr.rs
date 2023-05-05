@@ -546,51 +546,6 @@ async fn test_uuid_expression() -> Result<()> {
 }
 
 #[tokio::test]
-async fn case_with_bool_type_result() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "select case when 'cpu' != 'cpu' then true else false end";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------------------------------------------------------+",
-        "| CASE WHEN Utf8(\"cpu\") != Utf8(\"cpu\") THEN Boolean(true) ELSE Boolean(false) END |",
-        "+---------------------------------------------------------------------------------+",
-        "| false                                                                           |",
-        "+---------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn in_list_array() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "SELECT
-            c1 IN ('a', 'c') AS utf8_in_true
-            ,c1 IN ('x', 'y') AS utf8_in_false
-            ,c1 NOT IN ('x', 'y') AS utf8_not_in_true
-            ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
-            ,NULL IN ('a', 'c') AS utf8_in_null
-        FROM aggregate_test_100 WHERE c12 < 0.05";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------+---------------+------------------+-------------------+--------------+",
-        "| utf8_in_true | utf8_in_false | utf8_not_in_true | utf8_not_in_false | utf8_in_null |",
-        "+--------------+---------------+------------------+-------------------+--------------+",
-        "| true         | false         | true             | false             |              |",
-        "| true         | false         | true             | false             |              |",
-        "| true         | false         | true             | false             |              |",
-        "| false        | false         | true             | true              |              |",
-        "| false        | false         | true             | true              |              |",
-        "| false        | false         | true             | true              |              |",
-        "| false        | false         | true             | true              |              |",
-        "+--------------+---------------+------------------+-------------------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_extract_date_part() -> Result<()> {
     test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000.0");
     test_expression!(
@@ -819,115 +774,6 @@ async fn test_in_list_scalar() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_boolean_eq_neq() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for eq and neq
-    let sql = "SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| a     | b     | eq    | eq_scalar | neq   | neq_scalar |",
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| true  | true  | true  | true      | false | false      |",
-        "| true  |       |       |           |       | false      |",
-        "| true  | false | false | false     | true  | false      |",
-        "|       | true  |       | true      |       |            |",
-        "|       |       |       |           |       |            |",
-        "|       | false |       | false     |       |            |",
-        "| false | true  | false | true      | true  | true       |",
-        "| false |       |       |           |       | true       |",
-        "| false | false | true  | false     | false | true       |",
-        "+-------+-------+-------+-----------+-------+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn csv_query_boolean_lt_lt_eq() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for < and <=
-    let sql = "SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| a     | b     | lt    | lt_scalar | lt_eq | lt_eq_scalar |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| true  | true  | false | true      | true  | true         |",
-        "| true  |       |       |           |       | true         |",
-        "| true  | false | false | false     | false | true         |",
-        "|       | true  |       | true      |       |              |",
-        "|       |       |       |           |       |              |",
-        "|       | false |       | false     |       |              |",
-        "| false | true  | true  | true      | true  | true         |",
-        "| false |       |       |           |       | true         |",
-        "| false | false | false | false     | true  | true         |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn csv_query_boolean_gt_gt_eq() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for > and >=
-    let sql = "SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| a     | b     | gt    | gt_scalar | gt_eq | gt_eq_scalar |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| true  | true  | false | true      | true  | true         |",
-        "| true  |       |       |           |       | true         |",
-        "| true  | false | true  | false     | true  | true         |",
-        "|       | true  |       | true      |       |              |",
-        "|       |       |       |           |       |              |",
-        "|       | false |       | false     |       |              |",
-        "| false | true  | false | true      | false | false        |",
-        "| false |       |       |           |       | false        |",
-        "| false | false | false | false     | true  | false        |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn csv_query_boolean_distinct_from() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for is distinct from and is not distinct from
-    let sql = "SELECT a, b, \
-               a is distinct from b as df, \
-               b is distinct from true as df_scalar, \
-               a is not distinct from b as ndf, \
-               a is not distinct from true as ndf_scalar \
-               FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| a     | b     | df    | df_scalar | ndf   | ndf_scalar |",
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| true  | true  | false | false     | true  | true       |",
-        "| true  |       | true  | true      | false | true       |",
-        "| true  | false | true  | true      | false | true       |",
-        "|       | true  | true  | false     | false | false      |",
-        "|       |       | false | true      | true  | false      |",
-        "|       | false | true  | true      | false | false      |",
-        "| false | true  | true  | false     | false | false      |",
-        "| false |       | true  | true      | false | false      |",
-        "| false | false | false | true      | true  | false      |",
-        "+-------+-------+-------+-----------+-------+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
 async fn csv_query_nullif_divide_by_0() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -949,22 +795,6 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
     assert_eq!(expected, actual);
     Ok(())
 }
-#[tokio::test]
-async fn csv_count_star() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------+-----+------------------------------+",
-        "| COUNT(UInt8(1)) | c   | COUNT(aggregate_test_100.c1) |",
-        "+-----------------+-----+------------------------------+",
-        "| 100             | 100 | 100                          |",
-        "+-----------------+-----+------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
 
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
@@ -974,31 +804,6 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.6706002946036462"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-// this query used to deadlock due to the call udf(udf())
-#[tokio::test]
-async fn csv_query_sqrt_sqrt() -> Result<()> {
-    let ctx = create_ctx();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
-    let actual = execute(&ctx, sql).await;
-    // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
-    let expected = vec![vec!["0.9818650561397431"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_cbrt_cbrt() -> Result<()> {
-    let ctx = create_ctx();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1";
-    let actual = execute(&ctx, sql).await;
-    // cbrt(cbrt(c12=0.9294097332465232)) = 0.9918990366780552
-    let expected = vec![vec!["0.9918990366780552"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }
@@ -1030,36 +835,6 @@ async fn nested_subquery() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
-}
-
-#[tokio::test]
-async fn like_nlike_with_null_lt() {
-    let ctx = SessionContext::new();
-    let sql = "SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+----------+",
-        "| col_null | null_col |",
-        "+----------+----------+",
-        "|          |          |",
-        "|          |          |",
-        "|          |          |",
-        "+----------+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT column1 not like NULL as col_null, NULL not like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+----------+",
-        "| col_null | null_col |",
-        "+----------+----------+",
-        "|          |          |",
-        "|          |          |",
-        "|          |          |",
-        "+----------+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]

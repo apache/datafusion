@@ -3392,10 +3392,6 @@ fn test_select_distinct_order_by() {
     "SELECT * FROM person SORT BY id",
     "This feature is not implemented: SORT BY"
 )]
-#[case::select_into_unsupported(
-    "SELECT * INTO test FROM person",
-    "This feature is not implemented: INTO"
-)]
 #[test]
 fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {
     let err = logical_plan(sql).unwrap_err();

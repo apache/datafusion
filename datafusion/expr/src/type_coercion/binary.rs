@@ -30,88 +30,27 @@ use crate::type_coercion::{
 };
 use crate::Operator;
 
-/// Returns the return type of a binary operator or an error when the binary operator cannot
-/// perform the computation between the argument's types, even after type coercion.
-///
-/// This function makes some assumptions about the underlying available computations.
-pub fn binary_operator_data_type(
-    lhs_type: &DataType,
-    op: &Operator,
-    rhs_type: &DataType,
-) -> Result<DataType> {
-    let result_type = if !any_decimal(lhs_type, rhs_type) {
-        // validate that it is possible to perform the operation on incoming types.
-        // (or the return datatype cannot be inferred)
-        get_result_type(lhs_type, op, rhs_type)?
-    } else {
-        let (coerced_lhs_type, coerced_rhs_type) =
-            math_decimal_coercion(lhs_type, rhs_type);
-        let lhs_type = if let Some(lhs_type) = coerced_lhs_type {
-            lhs_type
-        } else {
-            lhs_type.clone()
-        };
-        let rhs_type = if let Some(rhs_type) = coerced_rhs_type {
-            rhs_type
-        } else {
-            rhs_type.clone()
-        };
-
-        match op {
-            Operator::Plus
-            | Operator::Minus
-            | Operator::Divide
-            | Operator::Multiply
-            | Operator::Modulo => decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
-                .or_else(|| coerce_types(&lhs_type, op, &rhs_type).ok())
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Could not get return type for {op:?} between {lhs_type:?} and {rhs_type:?}"
-                    ))
-                })?,
-            _ => coerce_types(&lhs_type, op, &rhs_type)?,
-        }
-    };
-
-    match op {
-        // operators that return a boolean
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::And
-        | Operator::Or
-        | Operator::Lt
-        | Operator::Gt
-        | Operator::GtEq
-        | Operator::LtEq
-        | Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::IsDistinctFrom
-        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
-        // bitwise operations return the common coerced type
-        Operator::BitwiseAnd
-        | Operator::BitwiseOr
-        | Operator::BitwiseXor
-        | Operator::BitwiseShiftLeft
-        | Operator::BitwiseShiftRight => Ok(result_type),
-        // math operations return the same value as the common coerced type
-        Operator::Plus
-        | Operator::Minus
-        | Operator::Divide
-        | Operator::Multiply
-        | Operator::Modulo => Ok(result_type),
-        // string operations return the same values as the common coerced type
-        Operator::StringConcat => Ok(result_type),
-    }
-}
-
 /// returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
 pub fn get_result_type(
     lhs_type: &DataType,
     op: &Operator,
     rhs_type: &DataType,
 ) -> Result<DataType> {
+    if op.is_numerical_operators() && any_decimal(lhs_type, rhs_type) {
+        let (coerced_lhs_type, coerced_rhs_type) =
+            math_decimal_coercion(lhs_type, rhs_type);
+
+        let lhs_type = coerced_lhs_type.unwrap_or(lhs_type.clone());
+        let rhs_type = coerced_rhs_type.unwrap_or(rhs_type.clone());
+
+        if op.is_numerical_operators() {
+            if let Some(result_type) =
+                decimal_op_mathematics_type(op, &lhs_type, &rhs_type)
+            {
+                return Ok(result_type);
+            }
+        }
+    }
     let result = match op {
         Operator::And
         | Operator::Or
@@ -121,6 +60,10 @@ pub fn get_result_type(
         | Operator::Gt
         | Operator::GtEq
         | Operator::LtEq
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => Some(DataType::Boolean),
         Operator::Plus | Operator::Minus
@@ -131,29 +74,23 @@ pub fn get_result_type(
         {
             temporal_add_sub_coercion(lhs_type, rhs_type, op)
         }
+        // following same with `coerce_types`
         Operator::BitwiseAnd
         | Operator::BitwiseOr
         | Operator::BitwiseXor
         | Operator::BitwiseShiftRight
-        | Operator::BitwiseShiftLeft
-        | Operator::Plus
+        | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
+        Operator::Plus
         | Operator::Minus
         | Operator::Modulo
         | Operator::Divide
-        | Operator::Multiply
-        | Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::StringConcat => coerce_types(lhs_type, op, rhs_type).ok(),
+        | Operator::Multiply => mathematics_numerical_coercion(lhs_type, rhs_type),
+        Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
     };
 
-    match result {
-        None => Err(DataFusionError::Plan(format!(
-            "Unsupported argument types. Can not evaluate {lhs_type:?} {op} {rhs_type:?}"
-        ))),
-        Some(t) => Ok(t),
-    }
+    result.ok_or(DataFusionError::Plan(format!(
+        "Unsupported argument types. Can not evaluate {lhs_type:?} {op} {rhs_type:?}"
+    )))
 }
 
 /// Coercion rules for all binary operators. Returns the 'coerce_types'
