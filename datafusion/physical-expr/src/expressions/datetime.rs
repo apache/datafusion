@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::coerce_types;
+use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
@@ -77,7 +77,7 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        coerce_types(
+        get_result_type(
             &self.lhs.data_type(input_schema)?,
             &Operator::Minus,
             &self.rhs.data_type(input_schema)?,

@@ -42,7 +42,7 @@ pub fn binary_operator_data_type(
     let result_type = if !any_decimal(lhs_type, rhs_type) {
         // validate that it is possible to perform the operation on incoming types.
         // (or the return datatype cannot be inferred)
-        coerce_types(lhs_type, op, rhs_type)?
+        get_result_type(lhs_type, op, rhs_type)?
     } else {
         let (coerced_lhs_type, coerced_rhs_type) =
             math_decimal_coercion(lhs_type, rhs_type);
@@ -106,19 +106,60 @@ pub fn binary_operator_data_type(
     }
 }
 
-/// Coercion rules for all binary operators. Returns the output type
-/// of applying `op` to an argument of `lhs_type` and `rhs_type`.
+/// returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
+pub fn get_result_type(
+    lhs_type: &DataType,
+    op: &Operator,
+    rhs_type: &DataType,
+) -> Result<DataType> {
+    let result = match op {
+        Operator::And
+        | Operator::Or
+        | Operator::Eq
+        | Operator::NotEq
+        | Operator::Lt
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::LtEq
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => Some(DataType::Boolean),
+        Operator::Plus | Operator::Minus
+            if is_datetime(lhs_type)
+                || is_datetime(rhs_type)
+                || is_interval(lhs_type)
+                || is_interval(rhs_type) =>
+        {
+            temporal_add_sub_coercion(lhs_type, rhs_type, op)
+        }
+        Operator::BitwiseAnd
+        | Operator::BitwiseOr
+        | Operator::BitwiseXor
+        | Operator::BitwiseShiftRight
+        | Operator::BitwiseShiftLeft
+        | Operator::Plus
+        | Operator::Minus
+        | Operator::Modulo
+        | Operator::Divide
+        | Operator::Multiply
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
+        | Operator::StringConcat => coerce_types(lhs_type, op, rhs_type).ok(),
+    };
+
+    match result {
+        None => Err(DataFusionError::Plan(format!(
+            "Unsupported argument types. Can not evaluate {lhs_type:?} {op} {rhs_type:?}"
+        ))),
+        Some(t) => Ok(t),
+    }
+}
+
+/// Coercion rules for all binary operators. Returns the 'coerce_types'
+/// is returns the type the arguments should be coerced to
 ///
 /// Returns None if no suitable type can be found.
-///
-/// TODO this function is trying to serve two purposes at once; it
-/// determines the result type of the binary operation and also
-/// determines how the inputs can be coerced but this results in
-/// inconsistencies in some cases (particular around date + interval)
-/// when the input argument types do not match the output argument
-/// types
-///
-/// Tracking issue is <https://github.com/apache/arrow-datafusion/issues/3419>
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
