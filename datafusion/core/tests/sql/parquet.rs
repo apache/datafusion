@@ -151,7 +151,7 @@ async fn fixed_size_binary_columns() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/data/test_binary.parquet",
+        "tests/data/test_binary.parquet",
         ParquetReadOptions::default(),
     )
     .await
@@ -170,7 +170,7 @@ async fn window_fn_timestamp_tz() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/data/timestamp_with_tz.parquet",
+        "tests/data/timestamp_with_tz.parquet",
         ParquetReadOptions::default(),
     )
     .await
