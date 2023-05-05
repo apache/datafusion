@@ -43,6 +43,30 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
 }
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
+///
+/// Syntax:
+///
+/// ```text
+/// CREATE EXTERNAL TABLE
+/// [ IF NOT EXISTS ]
+/// <TABLE_NAME>[ (<column_definition>) ]
+/// STORED AS <file_type>
+/// [ WITH HEADER ROW ]
+/// [ DELIMITER <char> ]
+/// [ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
+/// [ PARTITIONED BY (<column list>) ]
+/// [ WITH ORDER (<ordered column list>)
+/// [ OPTIONS (<key_value_list>)
+/// LOCATION <literal>
+///
+/// <column_definition> := (<column_name> <data_type>, ...)
+///
+/// <column_list> := (<column_name>, ...)
+///
+/// <ordered_column_list> := (<column_name> <sort_clause>, ...)
+///
+/// <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateExternalTable {
     /// Table name
