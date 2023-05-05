@@ -145,8 +145,8 @@ impl PagePruningPredicate {
             return Ok(None);
         }
 
-        let file_offset_indexes = file_metadata.offset_indexes();
-        let file_page_indexes = file_metadata.page_indexes();
+        let file_offset_indexes = file_metadata.offset_index();
+        let file_page_indexes = file_metadata.column_index();
         let (file_offset_indexes, file_page_indexes) =
             match (file_offset_indexes, file_page_indexes) {
                 (Some(o), Some(i)) => (o, i),
