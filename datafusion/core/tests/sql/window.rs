@@ -546,10 +546,17 @@ mod tests {
         )
         .await?;
 
-        let sql = "SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+        let sql = "SELECT
+        ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         SUM(s.amount) AS sum1
-        FROM sales_global AS s
+         FROM (SELECT *
+           FROM sales_global
+           ORDER BY group_key) AS s
         GROUP BY s.group_key";
+
+        // let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
+        //         FROM sales_global AS s
+        //         GROUP BY s.group_key";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -560,8 +567,8 @@ mod tests {
         let expected = {
             vec![
                 "ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]",
-                "  AggregateExec: mode=Single, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]",
-                "    SortExec: expr=[amount@1 DESC]",
+                "  AggregateExec: mode=Single, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered",
+                "    SortExec: expr=[group_key@0 ASC NULLS LAST,amount@1 DESC]",
             ]
         };
 

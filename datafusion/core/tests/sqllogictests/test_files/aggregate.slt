@@ -1646,107 +1646,124 @@ set datafusion.sql_parser.dialect = 'Generic';
 
 # create a table for testing
 statement ok
-CREATE TABLE sales_global (group_key INT,
-          sn INT PRIMARY KEY,
+CREATE TABLE sales_global (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
           ts TIMESTAMP,
           currency VARCHAR(3),
           amount INT
         ) as VALUES
-          (0, 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
-          (1, 2, '2022-01-01 11:30:00'::timestamp, 'EUR', 75.00),
-          (0, 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
-          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 100.00),
-          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
+          (0, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.00),
+          (0, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.00),
+          (1, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
 
 # test_ordering_sensitive_aggregation
+# ordering sensitive requirement should add a SortExec in the final plan. To satisfy amount ASC
+# in the aggregation
 statement ok
 set datafusion.execution.target_partitions = 1;
 
 query TT
-EXPLAIN SELECT (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
-                FROM sales_global AS s
-                GROUP BY s.group_key
+EXPLAIN SELECT s.country, (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
+        FROM sales_global AS s
+        GROUP BY s.country
 ----
 logical_plan
-Projection: ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST) AS amounts
-  Aggregate: groupBy=[[s.group_key]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount ASC NULLS LAST]]
+Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST) AS amounts
+  Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount ASC NULLS LAST]]
     SubqueryAlias: s
-      TableScan: sales_global projection=[group_key, amount]
+      TableScan: sales_global projection=[country, amount]
 physical_plan
-ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST)@1 as amounts]
-  AggregateExec: mode=Final, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)]
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount ASC NULLS LAST)@1 as amounts]
+  AggregateExec: mode=Final, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount)]
     CoalescePartitionsExec
-      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)]
+      AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount)]
         SortExec: expr=[amount@1 ASC NULLS LAST]
           MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
-query ?
-SELECT (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
-        FROM sales_global AS s
-        GROUP BY s.group_key
+query T?
+SELECT s.country, (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
+  FROM sales_global AS s
+  GROUP BY s.country
 ----
-[50, 200]
-[75, 80, 100]
+FRA [50, 200]
+TUR [75, 100]
+GRC [80]
 
 # test_ordering_sensitive_aggregation2
+# We should be able to satisfy the finest requirement among all aggregators, when we have multiple aggregators.
+# Hence final plan should have SortExec: expr=[amount@1 DESC] to satisfy array_agg requirement.
 query TT
-EXPLAIN SELECT (ARRAY_AGG(s.amount ORDER BY s.group_key DESC)) AS amounts
-                FROM sales_global AS s
-                GROUP BY s.group_key
-----
-logical_plan
-Projection: ARRAYAGG(s.amount) FILTER (ORDER BY s.group_key DESC NULLS FIRST) AS amounts
-  Aggregate: groupBy=[[s.group_key]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.group_key DESC NULLS FIRST]]
-    SubqueryAlias: s
-      TableScan: sales_global projection=[group_key, amount]
-physical_plan
-ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.group_key DESC NULLS FIRST)@1 as amounts]
-  AggregateExec: mode=Final, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)]
-    CoalescePartitionsExec
-      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount)], ordering_mode=FullyOrdered
-        SortExec: expr=[group_key@0 DESC]
-          MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
-
-query ?
-SELECT (ARRAY_AGG(s.amount ORDER BY s.group_key DESC)) AS amounts
+EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+          SUM(s.amount) AS sum1
         FROM sales_global AS s
-        GROUP BY s.group_key
-----
-[75, 100, 80]
-[50, 200]
-
-# test_ordering_sensitive_aggregation3
-query TT
-EXPLAIN SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
-                SUM(s.amount) AS sum1
-                FROM sales_global AS s
-                GROUP BY s.group_key
+        GROUP BY s.country
 ----
 logical_plan
-Projection: ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
-  Aggregate: groupBy=[[s.group_key]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount DESC NULLS FIRST, SUM(s.amount)]]
+Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
+  Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount DESC NULLS FIRST, SUM(s.amount)]]
     SubqueryAlias: s
-      TableScan: sales_global projection=[group_key, amount]
+      TableScan: sales_global projection=[country, amount]
 physical_plan
-ProjectionExec: expr=[ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
-  AggregateExec: mode=Final, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
+  AggregateExec: mode=Final, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
     CoalescePartitionsExec
-      AggregateExec: mode=Partial, gby=[group_key@0 as group_key], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
+      AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)]
         SortExec: expr=[amount@1 DESC]
           MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
-query ?I
+query T?I
+SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+    SUM(s.amount) AS sum1
+  FROM sales_global AS s
+  GROUP BY s.country
+----
+FRA [200, 50] 250
+TUR [100, 75] 175
+GRC [80] 80
+
+# test_ordering_sensitive_aggregation3
+# When different aggregators have conflicting requirements, we cannot satisfy all of them in current implementation.
+# test below should raise Plan Error.
+statement error DataFusion error: Error during planning: Conflicting ordering requirements in aggregate functions
 SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+    ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2,
+    ARRAY_AGG(s.amount ORDER BY s.sn ASC) AS amounts3
+  FROM sales_global AS s
+  GROUP BY s.country
+
+# test_ordering_sensitive_aggregation4
+# If aggregators can work with bounded memory (FullyOrdered or PartiallyOrdered mode), we should be append requirement to
+# the existing ordering. This enables us to still work with bounded memory, and also satisfy aggregation requirement.
+query TT
+EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         SUM(s.amount) AS sum1
-        FROM sales_global AS s
-        GROUP BY s.group_key
+          FROM (SELECT *
+            FROM sales_global
+            ORDER BY country) AS s
+          GROUP BY s.country
+----
+logical_plan
+Projection: s.country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST) AS amounts, SUM(s.amount) AS sum1
+  Aggregate: groupBy=[[s.country]], aggr=[[ARRAYAGG(s.amount) ORDER BY s.amount DESC NULLS FIRST, SUM(s.amount)]]
+    SubqueryAlias: s
+      Sort: sales_global.country ASC NULLS LAST
+        TableScan: sales_global projection=[country, amount]
+physical_plan
+ProjectionExec: expr=[country@0 as country, ARRAYAGG(s.amount) FILTER (ORDER BY s.amount DESC NULLS FIRST)@1 as amounts, SUM(s.amount)@2 as sum1]
+  AggregateExec: mode=Single, gby=[country@0 as country], aggr=[ARRAYAGG(s.amount), SUM(s.amount)], ordering_mode=FullyOrdered
+    SortExec: expr=[country@0 ASC NULLS LAST,amount@1 DESC]
+      MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+query T?I
+SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+  SUM(s.amount) AS sum1
+    FROM (SELECT *
+      FROM sales_global
+      ORDER BY country) AS s
+    GROUP BY s.country
 ----
 [200, 50] 250
 [100, 80, 75] 255
-
-# test_ordering_sensitive_aggregation4
-statement error DataFusion error: Error during planning: Conflicting ordering requirements in aggregate functions
-SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
-        ARRAY_AGG(s.amount ORDER BY s.amount ASC) AS amounts2
-        FROM sales_global AS s
-        GROUP BY s.group_key
