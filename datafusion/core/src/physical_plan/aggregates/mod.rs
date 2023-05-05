@@ -423,7 +423,8 @@ impl AggregateExec {
         let mut required_input_ordering = None;
         if let Some(AggregationOrdering{ordering, mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered, ..}) = &aggregation_ordering{
             if let Some(aggregator_requirement) = aggregator_requirement {
-                let mut requirement = ordering
+                let requirement_prefix = input.output_ordering().unwrap()[0..ordering.len()].to_vec();
+                let mut requirement = requirement_prefix
                     .iter()
                     .map(|sort_expr| PhysicalSortRequirement::from(sort_expr.clone()))
                     .collect::<Vec<_>>();
@@ -443,6 +444,10 @@ impl AggregateExec {
             }
         } else {
             required_input_ordering = aggregator_requirement;
+        }
+        if mode == AggregateMode::Partial || mode == AggregateMode::Single {
+            println!("aggregation_ordering:{:?}", aggregation_ordering);
+            println!("required_input_ordering:{:?}", required_input_ordering);
         }
 
         Ok(AggregateExec {

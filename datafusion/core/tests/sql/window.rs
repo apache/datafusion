@@ -530,33 +530,47 @@ mod tests {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
         ctx.sql(
-            "CREATE TABLE sales_global (
-          group_key INT,
-          sn INT PRIMARY KEY,
+            "CREATE TABLE sales_global (zip_code INT,
+          country VARCHAR(3),
+          sn INT,
           ts TIMESTAMP,
           currency VARCHAR(3),
           amount INT
         ) as VALUES
-          (0, 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
-          (1, 2, '2022-01-01 11:30:00'::timestamp, 'EUR', 75.00),
-          (0, 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
-          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 100.00),
-          (1, 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
+          (0, 'FRA', 1, '2022-01-01 08:00:00'::timestamp, 'EUR', 50.00),
+          (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.00),
+          (0, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.00),
+          (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.00),
+          (1, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.00)
           ",
         )
         .await?;
 
-        let sql = "SELECT
-        ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
-        SUM(s.amount) AS sum1
-         FROM (SELECT *
-           FROM sales_global
-           ORDER BY group_key) AS s
-        GROUP BY s.group_key";
+        // let sql = "SELECT
+        // ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+        // SUM(s.amount) AS sum1
+        //  FROM (SELECT *
+        //    FROM sales_global
+        //    ORDER BY group_key) AS s
+        // GROUP BY s.group_key";
 
         // let sql = "SELECT (ARRAY_AGG(s.amount ORDER BY s.amount ASC)) AS amounts
         //         FROM sales_global AS s
         //         GROUP BY s.group_key";
+
+        let sql = "SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+        SUM(s.amount) AS sum1
+          FROM (SELECT *
+            FROM sales_global
+            ORDER BY country) AS s
+          GROUP BY s.country, s.zip_code";
+
+        // let sql = "SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
+        // SUM(s.amount) AS sum1
+        //   FROM (SELECT *
+        //     FROM sales_global
+        //     ORDER BY country, zip_code) AS s
+        //   GROUP BY zip_code, s.country";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
