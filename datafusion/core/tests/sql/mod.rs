@@ -81,7 +81,6 @@ macro_rules! test_expression {
 pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
-pub mod cast;
 pub mod create_drop;
 pub mod errors;
 pub mod explain_analyze;
