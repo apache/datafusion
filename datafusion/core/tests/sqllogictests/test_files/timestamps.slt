@@ -1031,7 +1031,7 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 0 years 0 mons -3653 days 0 hours 0 mins 0.000000000 secs
 
 # Interval - Timestamp => error
-statement error DataFusion error: type_coercion\ncaused by\nError during planning: interval can't subtract timestamp/date
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Invalid interval subtraction: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\)
 SELECT i - ts1 from FOO;
 
 statement ok
