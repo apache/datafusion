@@ -31,3 +31,7 @@ CREATE EXTERNAL TABLE t LOCATION 'foo.csv'
 # Missing `LOCATION` clause
 statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clause in CREATE EXTERNAL TABLE statement"\)
 CREATE EXTERNAL TABLE t STORED AS CSV
+
+# Duplicate `LOCATION` clause
+statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
