@@ -19,12 +19,13 @@ use super::*;
 use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
+use datafusion_expr::logical_plan::DdlStatement;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 async fn sort_with_lots_of_repetition_values() -> Result<()> {
     let ctx = SessionContext::new();
-    let filename = "tests/parquet/data/repeat_much.snappy.parquet";
+    let filename = "tests/data/repeat_much.snappy.parquet";
 
     ctx.register_parquet("rep", filename, ParquetReadOptions::default())
         .await?;
@@ -47,20 +48,18 @@ async fn sort_with_lots_of_repetition_values() -> Result<()> {
 async fn create_external_table_with_order() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS CSV WITH ORDER (a_id ASC) LOCATION 'file://path/to/table';";
-    if let LogicalPlan::CreateExternalTable(cmd) =
-        ctx.state().create_logical_plan(sql).await?
-    {
-        let listing_table_factory = Arc::new(ListingTableFactory::new());
-        let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
-        let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
-        assert_eq!(cmd.order_exprs.len(), 1);
-        assert_eq!(
-            &cmd.order_exprs,
-            table.options().file_sort_order.as_ref().unwrap()
-        )
-    } else {
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = ctx.state().create_logical_plan(sql).await? else {
         panic!("Wrong command")
-    }
+    };
+
+    let listing_table_factory = Arc::new(ListingTableFactory::new());
+    let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
+    let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
+    assert_eq!(cmd.order_exprs.len(), 1);
+    assert_eq!(
+        &cmd.order_exprs,
+        table.options().file_sort_order.as_ref().unwrap()
+    );
     Ok(())
 }
 
@@ -190,7 +189,7 @@ WITH
     m1(t) AS (
         VALUES (0), (1)),
     u AS (
-        SELECT 0 as m, t FROM m0 GROUP BY 1, 2), 
+        SELECT 0 as m, t FROM m0 GROUP BY 1, 2),
     v AS (
         SELECT 1 as m, t FROM m1 GROUP BY 1, 2)
 SELECT * FROM u

@@ -35,7 +35,6 @@ path = "src/lib.rs"
 [features]
 avro = ["apache-avro"]
 default = []
-jit = ["cranelift-module"]
 pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]

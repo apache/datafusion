@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow::row::{RowConverter, SortField};
 use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
@@ -32,25 +32,26 @@ use futures::stream::{Stream, StreamExt};
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use crate::physical_plan::aggregates::utils::{
+    aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
+    read_as_batch, slice_and_maybe_filter, ExecutionState, GroupState,
+};
 use crate::physical_plan::aggregates::{
-    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AccumulatorItem,
-    AggregateMode, PhysicalGroupBy, RowAccumulatorItem,
+    evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
+    PhysicalGroupBy, RowAccumulatorItem,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::*;
-use arrow::compute::{cast, filter};
-use arrow::datatypes::{DataType, Schema, UInt32Type};
-use arrow::{compute, datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::compute::cast;
+use arrow::datatypes::DataType;
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::utils::get_arrayref_at_indices;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
-use datafusion_row::reader::{read_row, RowReader};
-use datafusion_row::MutableRecordBatch;
 use hashbrown::raw::RawTable;
 use itertools::izip;
 
@@ -68,7 +69,6 @@ use itertools::izip;
 /// 4. The state's RecordBatch is `merge`d to a new state
 /// 5. The state is mapped to the final value
 ///
-/// [Arrow-row]: OwnedRow
 /// [WordAligned]: datafusion_row::layout
 pub(crate) struct GroupedHashAggregateStream {
     schema: SchemaRef,
@@ -98,6 +98,9 @@ pub(crate) struct GroupedHashAggregateStream {
     random_state: RandomState,
     /// size to be used for resulting RecordBatches
     batch_size: usize,
+    /// threshold for using `ScalarValue`s to update
+    /// accumulators during high-cardinality aggregations for each input batch.
+    scalar_update_factor: usize,
     /// if the result is chunked into batches,
     /// last offset is preserved for continuation.
     row_group_skip_position: usize,
@@ -105,22 +108,6 @@ pub(crate) struct GroupedHashAggregateStream {
     /// first element in the array corresponds to normal accumulators
     /// second element in the array corresponds to row accumulators
     indices: [Vec<Range<usize>>; 2],
-}
-
-#[derive(Debug)]
-/// tracks what phase the aggregation is in
-enum ExecutionState {
-    ReadingInput,
-    ProducingOutput,
-    Done,
-}
-
-fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> {
-    let fields = aggr_expr
-        .iter()
-        .flat_map(|expr| expr.state_fields().unwrap().into_iter())
-        .collect::<Vec<_>>();
-    Ok(Arc::new(Schema::new(fields)))
 }
 
 impl GroupedHashAggregateStream {
@@ -135,6 +122,7 @@ impl GroupedHashAggregateStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         batch_size: usize,
+        scalar_update_factor: usize,
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
@@ -192,7 +180,7 @@ impl GroupedHashAggregateStream {
 
         let row_accumulators = aggregates::create_row_accumulators(&row_aggr_expr)?;
 
-        let row_aggr_schema = aggr_state_schema(&row_aggr_expr)?;
+        let row_aggr_schema = aggr_state_schema(&row_aggr_expr);
 
         let group_schema = group_schema(&schema, group_by.expr.len());
         let row_converter = RowConverter::new(
@@ -235,6 +223,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             random_state: Default::default(),
             batch_size,
+            scalar_update_factor,
             row_group_skip_position: 0,
             indices: [normal_agg_indices, row_agg_indices],
         })
@@ -571,7 +560,7 @@ impl GroupedHashAggregateStream {
             if matches!(self.mode, AggregateMode::Partial | AggregateMode::Single)
                 && normal_aggr_input_values.is_empty()
                 && normal_filter_values.is_empty()
-                && groups_with_rows.len() >= batch.num_rows() / 10
+                && groups_with_rows.len() >= batch.num_rows() / self.scalar_update_factor
             {
                 self.update_accumulators_using_scalar(
                     &groups_with_rows,
@@ -617,25 +606,8 @@ impl GroupedHashAggregateStream {
     }
 }
 
-/// The state that is built for each output group.
-#[derive(Debug)]
-pub struct GroupState {
-    /// The actual group by values, stored sequentially
-    group_by_values: OwnedRow,
-
-    // Accumulator state, stored sequentially
-    pub aggregation_buffer: Vec<u8>,
-
-    // Accumulator state, one for each aggregate that doesn't support row accumulation
-    pub accumulator_set: Vec<AccumulatorItem>,
-
-    /// scratch space used to collect indices for input rows in a
-    /// bach that have values to aggregate. Reset on each batch
-    pub indices: Vec<u32>,
-}
-
 /// The state of all the groups
-pub struct AggregationState {
+pub(crate) struct AggregationState {
     pub reservation: MemoryReservation,
 
     /// Logically maps group values to an index in `group_states`
@@ -787,89 +759,4 @@ impl GroupedHashAggregateStream {
         }
         Ok(Some(RecordBatch::try_new(self.schema.clone(), output)?))
     }
-}
-
-fn read_as_batch(rows: &[Vec<u8>], schema: &Schema) -> Vec<ArrayRef> {
-    let row_num = rows.len();
-    let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
-    let mut row = RowReader::new(schema);
-
-    for data in rows {
-        row.point_to(0, data);
-        read_row(&row, &mut output, schema);
-    }
-
-    output.output_as_columns()
-}
-
-fn get_at_indices(
-    input_values: &[Vec<ArrayRef>],
-    batch_indices: &PrimitiveArray<UInt32Type>,
-) -> Result<Vec<Vec<ArrayRef>>> {
-    input_values
-        .iter()
-        .map(|array| get_arrayref_at_indices(array, batch_indices))
-        .collect()
-}
-
-fn get_optional_filters(
-    original_values: &[Option<Arc<dyn Array>>],
-    batch_indices: &PrimitiveArray<UInt32Type>,
-) -> Vec<Option<Arc<dyn Array>>> {
-    original_values
-        .iter()
-        .map(|array| {
-            array.as_ref().map(|array| {
-                compute::take(
-                    array.as_ref(),
-                    batch_indices,
-                    None, // None: no index check
-                )
-                .unwrap()
-            })
-        })
-        .collect()
-}
-
-fn slice_and_maybe_filter(
-    aggr_array: &[ArrayRef],
-    filter_opt: Option<&Arc<dyn Array>>,
-    offsets: &[usize],
-) -> Result<Vec<ArrayRef>> {
-    let sliced_arrays: Vec<ArrayRef> = aggr_array
-        .iter()
-        .map(|array| array.slice(offsets[0], offsets[1] - offsets[0]))
-        .collect();
-
-    let filtered_arrays = match filter_opt.as_ref() {
-        Some(f) => {
-            let sliced = f.slice(offsets[0], offsets[1] - offsets[0]);
-            let filter_array = as_boolean_array(&sliced)?;
-
-            sliced_arrays
-                .iter()
-                .map(|array| filter(array, filter_array).unwrap())
-                .collect::<Vec<ArrayRef>>()
-        }
-        None => sliced_arrays,
-    };
-    Ok(filtered_arrays)
-}
-
-/// This method is similar to Scalar::try_from_array except for the Null handling.
-/// This method returns [ScalarValue::Null] instead of [ScalarValue::Type(None)]
-fn col_to_scalar(
-    array: &ArrayRef,
-    filter: &Option<&BooleanArray>,
-    row_index: usize,
-) -> Result<ScalarValue> {
-    if array.is_null(row_index) {
-        return Ok(ScalarValue::Null);
-    }
-    if let Some(filter) = filter {
-        if !filter.value(row_index) {
-            return Ok(ScalarValue::Null);
-        }
-    }
-    ScalarValue::try_from_array(array, row_index)
 }

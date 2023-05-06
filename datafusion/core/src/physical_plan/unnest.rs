@@ -26,7 +26,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt;
-use log::debug;
+use log::trace;
 use std::time::Instant;
 use std::{any::Any, sync::Arc};
 
@@ -77,8 +77,8 @@ impl ExecutionPlan for UnnestExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
     }
@@ -208,7 +208,7 @@ impl UnnestStream {
                     Some(result)
                 }
                 other => {
-                    debug!(
+                    trace!(
                         "Processed {} probe-side input batches containing {} rows and \
                         produced {} output batches containing {} rows in {} ms",
                         self.num_input_batches,

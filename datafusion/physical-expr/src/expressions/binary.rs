@@ -98,7 +98,7 @@ use datafusion_common::scalar::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::{
-    binary_operator_data_type, coercion_decimal_mathematics_type,
+    coercion_decimal_mathematics_type, get_result_type,
 };
 use datafusion_expr::{ColumnarValue, Operator};
 
@@ -651,7 +651,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        binary_operator_data_type(
+        get_result_type(
             &self.left.data_type(input_schema)?,
             &self.op,
             &self.right.data_type(input_schema)?,
@@ -670,32 +670,6 @@ impl PhysicalExpr for BinaryExpr {
 
         let schema = batch.schema();
         let input_schema = schema.as_ref();
-
-        match (&left_value, &left_data_type, &right_value, &right_data_type) {
-            // Types are equal => valid
-            // Decimal types can be different but still valid as we coerce them to the same type later
-            (_, l, _, r) if l == r || (is_decimal(l) && is_decimal(r)) => {}
-            // Allow comparing a dictionary value with its corresponding scalar value
-            (
-                ColumnarValue::Array(_),
-                DataType::Dictionary(_, dict_t),
-                ColumnarValue::Scalar(_),
-                scalar_t,
-            )
-            | (
-                ColumnarValue::Scalar(_),
-                scalar_t,
-                ColumnarValue::Array(_),
-                DataType::Dictionary(_, dict_t),
-            ) if dict_t.as_ref() == scalar_t
-                || (is_decimal(dict_t.as_ref()) && is_decimal(scalar_t)) => {}
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                    self.op, left_data_type, right_data_type
-                )));
-            }
-        }
 
         // Coerce decimal types to the same scale and precision
         let coerced_type = coercion_decimal_mathematics_type(

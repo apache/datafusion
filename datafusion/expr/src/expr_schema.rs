@@ -20,7 +20,7 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
-use crate::type_coercion::binary::binary_operator_data_type;
+use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::{
     aggregate_function, function, window_function, LogicalPlan, Projection, Subquery,
@@ -149,11 +149,7 @@ impl ExprSchemable for Expr {
                 ref left,
                 ref right,
                 ref op,
-            }) => binary_operator_data_type(
-                &left.get_type(schema)?,
-                op,
-                &right.get_type(schema)?,
-            ),
+            }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }

@@ -641,6 +641,40 @@ SELECT arrow_typeof(c8), arrow_typeof(c6), arrow_typeof(c8 + c6) FROM aggregate_
 ----
 Int32 Int64 Int64
 
+# in list array
+query BBBBB rowsort
+SELECT c1 IN ('a', 'c') AS utf8_in_true
+      ,c1 IN ('x', 'y') AS utf8_in_false
+      ,c1 NOT IN ('x', 'y') AS utf8_not_in_true
+      ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
+      ,NULL IN ('a', 'c') AS utf8_in_null
+FROM aggregate_test_100 WHERE c12 < 0.05
+----
+false false true true NULL
+false false true true NULL
+false false true true NULL
+false false true true NULL
+true false true false NULL
+true false true false NULL
+true false true false NULL
+
+# csv count star
+query III
+SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100
+----
+100 100 100
+
+# csv query sqrt sqrt
+query R
+SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1
+----
+0.98186505614
+
+# csv query cbrt cbrt
+query R
+SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1
+----
+0.991899036678
 
 statement ok
 drop table aggregate_test_100
@@ -820,3 +854,142 @@ drop table test_boolean
 
 statement ok
 drop table test_int32
+
+# scientific notation (0s)
+query RRRR
+SELECT 0e0 AS c1, 0.e-0 AS c2, -.0e+0 AS c3, 00.00e-00 AS c4
+----
+0 0 0 0
+
+# scientific notation (integer)
+query RRRR
+SELECT -1e-1, 0e100, 10E-2, 1E+0;
+----
+-0.1 0 0.1 1
+
+# scientific notation (decimal)
+query RRRR
+SELECT -1.5e-1, 00.0e1, 150.0E-3, 0.015E+2;
+----
+-0.15 0 0.15 1.5
+
+# scientific notation (integer or decimal part only)
+query RRRR
+SELECT -2.e-1, 0.e0, .0002E+3, .02E+2;
+----
+-0.2 0 0.2 2
+
+# scientific notation (overflows)
+# FLOAT64 range: -1.79E+308 to -2.22E-308, or from 2.22E-308 to 1.79E+308
+query RRRR
+SELECT -1.79e309, -2.22e-309, 2.22E-309, 1.79E+309;
+----
+-Infinity 0 0 Infinity
+
+# scientific notation (other edgecases)
+query IRRR
+SELECT 1ea, 1e-2a, 1E-2-2, 1E-1e2;
+----
+1 0.01 -1.99 0.1
+
+# case with bool type result
+query B
+SELECT CASE WHEN 'cpu' != 'cpu' THEN true ELSE false END
+----
+false
+
+statement ok
+CREATE TABLE t1(
+  a boolean,
+  b boolean,
+) as VALUES
+  (true, true),
+  (true, null),
+  (true, false),
+  (null, true),
+  (null, null),
+  (null, false),
+  (false, true),
+  (false, null),
+  (false, null)
+;
+
+# csv query boolean eq neq
+query BBBBBB rowsort
+SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1
+----
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL true
+false NULL NULL NULL NULL true
+false true false true true true
+true NULL NULL NULL NULL false
+true false false false true false
+true true true true false false
+
+# csv query boolean lt lt eq
+query BBBBBB rowsort
+SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1
+----
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL true
+false NULL NULL NULL NULL true
+false true true true true true
+true NULL NULL NULL NULL true
+true false false false false true
+true true false true true true
+
+# csv query boolean gt gt eq
+query BBBBBB rowsort
+SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1
+---- 
+----
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL false
+false NULL NULL NULL NULL false
+false true false true false false
+true NULL NULL NULL NULL true
+true false true false true true
+true true false true true true
+
+# csv query boolean distinct from
+query BBBBBB rowsort
+SELECT a, b,
+      a is distinct from b as df, 
+      b is distinct from true as df_scalar, 
+      a is not distinct from b as ndf, 
+      a is not distinct from true as ndf_scalar 
+FROM t1
+----
+NULL NULL false true true false
+NULL false true true false false
+NULL true true false false false
+false NULL true true false false
+false NULL true true false false
+false true true false false false
+true NULL true true false true
+true false true true false true
+true true false false true true
+
+statement ok
+drop table t1
+
+# like nlike with null lt
+query BB rowsort
+SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t
+----
+NULL NULL
+NULL NULL
+NULL NULL
+
+query BB rowsort
+SELECT column1 not like NULL as col_null, NULL not like column1 as null_col from (values('a'), ('b'), (NULL)) as t
+----
+NULL NULL
+NULL NULL
+NULL NULL
