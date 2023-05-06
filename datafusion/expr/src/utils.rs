@@ -1065,7 +1065,7 @@ pub fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
         .collect()
 }
 
-pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+pub fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     let mut exprs = vec![];
     inspect_expr_pre(e, |expr| {
         if let Expr::Column(c) = expr {

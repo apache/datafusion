@@ -706,7 +706,8 @@ impl SessionContext {
         self.return_empty_dataframe()
     }
 
-    async fn create_custom_table(
+    /// todo zhong
+    pub async fn create_custom_table(
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -1506,7 +1507,8 @@ impl SessionState {
             .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
-    pub(crate) fn schema_for_ref<'a>(
+    /// todo zhong
+    pub fn schema_for_ref<'a>(
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {

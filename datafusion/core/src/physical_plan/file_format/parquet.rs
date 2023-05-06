@@ -668,10 +668,12 @@ pub async fn plan_to_parquet(
     let path = path.as_ref();
     // create directory to contain the Parquet files (one per partition)
     let fs_path = std::path::Path::new(path);
-    if let Err(e) = fs::create_dir(fs_path) {
-        return Err(DataFusionError::Execution(format!(
-            "Could not create directory {path}: {e:?}"
-        )));
+    if !fs_path.exists() {
+        if let Err(e) = fs::create_dir(fs_path) {
+            return Err(DataFusionError::Execution(format!(
+                "Could not create directory {path}: {e:?}"
+            )));
+        }
     }
 
     let mut tasks = vec![];

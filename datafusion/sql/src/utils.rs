@@ -31,7 +31,7 @@ use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
-pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
+pub fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     clone_with_replacement(expr, &|nested_expr| {
         match nested_expr {
             Expr::Column(col) => {
@@ -60,7 +60,7 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 /// where post-aggregation, `a + b` need not be a projection against the
 /// individual columns `a` and `b`, but rather it is a projection against the
 /// `a + b` found in the GROUP BY.
-pub(crate) fn rebase_expr(
+pub fn rebase_expr(
     expr: &Expr,
     base_exprs: &[Expr],
     plan: &LogicalPlan,
@@ -509,7 +509,7 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
 
 /// Returns a validated `DataType` for the specified precision and
 /// scale
-pub(crate) fn make_decimal_type(
+pub fn make_decimal_type(
     precision: Option<u64>,
     scale: Option<u64>,
 ) -> Result<DataType> {
