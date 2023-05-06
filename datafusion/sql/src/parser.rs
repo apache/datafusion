@@ -901,6 +901,53 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
+        // Most complete CREATE EXTERNAL TABLE statement possible
+        let sql = "
+            CREATE EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
+            STORED AS PARQUET
+            DELIMITER '*'
+            WITH HEADER ROW
+            WITH ORDER (c1 - c2 ASC)
+            COMPRESSION TYPE zstd
+            PARTITIONED BY (c1)
+            LOCATION 'foo.parquet'
+            OPTIONS (ROW_GROUP_SIZE '1024', 'TRUNCATE' 'NO')
+        ";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![
+                make_column_def("c1", DataType::Int(None)),
+                make_column_def("c2", DataType::Float(None)),
+            ],
+            file_type: "PARQUET".to_string(),
+            has_header: true,
+            delimiter: '*',
+            location: "foo.parquet".into(),
+            table_partition_cols: vec!["c1".into()],
+            order_exprs: vec![OrderByExpr {
+                expr: Expr::BinaryOp {
+                    left: Box::new(Identifier(Ident {
+                        value: "c1".to_owned(),
+                        quote_style: None,
+                    })),
+                    op: BinaryOperator::Minus,
+                    right: Box::new(Identifier(Ident {
+                        value: "c2".to_owned(),
+                        quote_style: None,
+                    })),
+                },
+                asc: Some(true),
+                nulls_first: None,
+            }],
+            if_not_exists: true,
+            file_compression_type: CompressionTypeVariant::ZSTD,
+            options: HashMap::from([
+                ("ROW_GROUP_SIZE".into(), "1024".into()),
+                ("TRUNCATE".into(), "NO".into()),
+            ])
+        });
+        expect_parse_ok(sql, expected)?;
+
         // For error cases, see: `create_external_table.slt`
 
         Ok(())
