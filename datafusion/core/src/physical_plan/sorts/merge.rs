@@ -261,6 +261,33 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     }
 
     /// Find the leaf node index in the loser tree for the given cursor index
+    ///
+    /// Note that this is not necessarily a leaf node in the tree, but it can
+    /// also be a half-node (a node with only one child). This happens when the
+    /// number of cursors/streams is not a power of two. Thus, the loser tree
+    /// will be unbalanced, but it will still work correctly.
+    ///
+    /// For example, with 5 streams, the loser tree will look like this:
+    ///
+    /// ```text
+    ///           0 (winner)
+    ///
+    ///           1
+    ///        /     \
+    ///       2       3
+    ///     /  \     / \
+    ///    4    |   |   |
+    ///   / \   |   |   |
+    /// -+---+--+---+---+---- Below is not a part of loser tree
+    ///  S3 S4 S0   S1  S2
+    /// ```
+    ///
+    /// S0, S1, ... S4 are the streams (read: stream at index 0, stream at
+    /// index 1, etc.)
+    ///
+    /// Zooming in at node 2 in the loser tree as an example, we can see that
+    /// it takes as input the next item at (S0) and the loser of (S3, S4).
+    ///
     #[inline]
     fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
         (self.cursors.len() + cursor_index) / 2
