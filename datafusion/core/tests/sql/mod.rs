@@ -104,7 +104,6 @@ pub mod explain;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
-pub mod set_variable;
 pub mod subqueries;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
