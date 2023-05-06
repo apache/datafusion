@@ -32,10 +32,6 @@ CREATE EXTERNAL TABLE t LOCATION 'foo.csv'
 statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clause in CREATE EXTERNAL TABLE statement"\)
 CREATE EXTERNAL TABLE t STORED AS CSV
 
-# Duplicate `LOCATION` clause
-statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
-CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
-
 # Option value is missing
 statement error DataFusion error: SQL error: ParserError\("Expected literal string, found: \)"\)
 CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
@@ -63,3 +59,35 @@ CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'
 # Invalid compression type
 statement error DataFusion error: SQL error: ParserError\("Unsupported file compression type ZZZ"\)
 CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'
+
+# Duplicate `STORED AS` clause
+statement error DataFusion error: SQL error: ParserError\("STORED AS specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'
+
+# Duplicate `LOCATION` clause
+statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
+
+# Duplicate `WITH HEADER ROW` clause
+statement error DataFusion error: SQL error: ParserError\("WITH HEADER ROW specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER ROW WITH HEADER ROW LOCATION 'foo.csv'
+
+# Duplicate `WITH ORDER` clause
+statement error DataFusion error: SQL error: ParserError\("WITH ORDER specified more than once"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) WITH ORDER (c1) LOCATION 'foo.csv'
+
+# Duplicate `DELIMITER` clause
+statement error DataFusion error: SQL error: ParserError\("DELIMITER specified more than once"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '-' DELIMITER '+' LOCATION 'foo.csv'
+
+# Duplicate `COMPRESSION TYPE` clause
+statement error DataFusion error: SQL error: ParserError\("COMPRESSION TYPE specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE BZIP2 COMPRESSION TYPE XZ COMPRESSION TYPE ZSTD COMPRESSION TYPE GZIP LOCATION 'foo.csv'
+
+# Duplicate `PARTITIONED BY` clause
+statement error DataFusion error: SQL error: ParserError\("PARTITIONED BY specified more than once"\)
+create EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV PARTITIONED BY (c1) partitioned by (c2) LOCATION 'foo.csv'
+
+# Duplicate `OPTIONS` clause
+statement error DataFusion error: SQL error: ParserError\("OPTIONS specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('k1' 'v1', 'k2' 'v2') OPTIONS ('k3' 'v3') LOCATION 'foo.csv'
