@@ -264,10 +264,10 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         (self.cursors.len() + cursor_index) / 2
     }
 
-    /// Find the parent node index for the given cursor index
+    /// Find the parent node index for the given node index
     #[inline]
-    fn lt_parent_node_index(&self, current_node_idx: usize) -> usize {
-        current_node_idx / 2
+    fn lt_parent_node_index(&self, node_idx: usize) -> usize {
+        node_idx / 2
     }
 
     /// Attempts to initialize the loser tree with one value from each
