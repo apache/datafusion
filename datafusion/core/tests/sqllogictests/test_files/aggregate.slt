@@ -1720,25 +1720,25 @@ select max(x_dict) from value_dict where x_dict > 3;
 5
 
 query I
-select sum(x_dict) from value_dict group by x_dict % 2;
+select sum(x_dict) from value_dict group by x_dict % 2 order by sum(x_dict);
 ----
-13
 8
+13
 
 query R
-select avg(x_dict) from value_dict group by x_dict % 2;
+select avg(x_dict) from value_dict group by x_dict % 2 order by avg(x_dict);
 ----
 2.6
 2.666666666667
 
 query I
-select min(x_dict) from value_dict group by x_dict % 2;
+select min(x_dict) from value_dict group by x_dict % 2 order by min(x_dict);
 ----
 1
 2
 
 query I
-select max(x_dict) from value_dict group by x_dict % 2;
+select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 ----
 4
 5
