@@ -506,6 +506,71 @@ mod tests {
         assert_batches_eq!(exp, collected.as_slice());
     }
 
+    #[tokio::test]
+    async fn test_merge_five_partitions() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 3, 7, 9]));
+        let b1 = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 3, 3, 4, 5]));
+        let b2 = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([2, 4, 7, 10, 13]));
+        let b3 = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([2, 3, 5, 7, 11]));
+        let b4 = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([3, 5, 9, 13, 17]));
+        let b5 = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+
+        let schema = b1.schema();
+        let partitions = &[vec![b1], vec![b2], vec![b3], vec![b4], vec![b5]];
+        let sort = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: Default::default(),
+        }];
+        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        #[rustfmt::skip]
+        let expected = &[
+            "+----+",
+            "| a  |",
+            "+----+",
+            "| 1  |",
+            "| 1  |",
+            "| 2  |",
+            "| 2  |",
+            "| 2  |",
+            "| 3  |",
+            "| 3  |",
+            "| 3  |",
+            "| 3  |",
+            "| 3  |",
+            "| 4  |",
+            "| 4  |",
+            "| 5  |",
+            "| 5  |",
+            "| 5  |",
+            "| 7  |",
+            "| 7  |",
+            "| 7  |",
+            "| 9  |",
+            "| 9  |",
+            "| 10 |",
+            "| 11 |",
+            "| 13 |",
+            "| 13 |",
+            "| 17 |",
+            "+----+",
+        ];
+        let collected = collect(merge, task_ctx).await.unwrap();
+        assert_batches_eq!(expected, collected.as_slice());
+    }
+
     async fn sorted_merge(
         input: Arc<dyn ExecutionPlan>,
         sort: Vec<PhysicalSortExpr>,
