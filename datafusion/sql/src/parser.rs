@@ -410,7 +410,10 @@ impl<'a> DFParser<'a> {
             } else if self.parser.parse_keyword(Keyword::LOCATION) {
                 ensure_not_set(&builder.location, "LOCATION")?;
                 builder.location = Some(self.parser.parse_literal_string()?);
-            } else if self.parser.parse_keywords(&[Keyword::WITH, Keyword::HEADER]) {
+            } else if self
+                .parser
+                .parse_keywords(&[Keyword::WITH, Keyword::HEADER])
+            {
                 self.parser.expect_keyword(Keyword::ROW)?;
                 ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
                 builder.has_header = Some(true);
@@ -439,12 +442,12 @@ impl<'a> DFParser<'a> {
         // Validations: location and file_type are required
         if builder.file_type.is_none() {
             return Err(ParserError::ParserError(
-                "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into()
+                "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into(),
             ));
         }
         if builder.location.is_none() {
             return Err(ParserError::ParserError(
-                "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into()
+                "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into(),
             ));
         }
 
@@ -458,7 +461,8 @@ impl<'a> DFParser<'a> {
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs.unwrap_or(vec![]),
             if_not_exists,
-            file_compression_type: builder.file_compression_type
+            file_compression_type: builder
+                .file_compression_type
                 .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
             options: builder.options.unwrap_or(HashMap::new()),
         };
@@ -944,7 +948,7 @@ mod tests {
             options: HashMap::from([
                 ("ROW_GROUP_SIZE".into(), "1024".into()),
                 ("TRUNCATE".into(), "NO".into()),
-            ])
+            ]),
         });
         expect_parse_ok(sql, expected)?;
 
