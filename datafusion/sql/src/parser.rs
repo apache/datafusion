@@ -379,59 +379,88 @@ impl<'a> DFParser<'a> {
                 .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name()?;
         let (columns, _) = self.parse_columns()?;
-        self.parser
-            .expect_keywords(&[Keyword::STORED, Keyword::AS])?;
 
-        // THIS is the main difference: we parse a different file format.
-        let file_type = self.parse_file_format()?;
+        #[derive(Default)]
+        struct Builder {
+            file_type: Option<String>,
+            location: Option<String>,
+            has_header: Option<bool>,
+            delimiter: Option<char>,
+            file_compression_type: Option<CompressionTypeVariant>,
+            table_partition_cols: Option<Vec<String>>,
+            order_exprs: Option<Vec<OrderByExpr>>,
+            options: Option<HashMap<String, String>>,
+        }
+        let mut builder = Builder::default();
 
-        let has_header = self.parse_csv_has_header();
+        fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
+            if field.is_some() {
+                return Err(ParserError::ParserError(format!(
+                    "{name} specified more than once",
+                )));
+            }
+            Ok(())
+        }
 
-        let has_delimiter = self.parse_has_delimiter();
-        let delimiter = match has_delimiter {
-            true => self.parse_delimiter()?,
-            false => ',',
-        };
+        loop {
+            if self.parser.parse_keyword(Keyword::STORED) {
+                self.parser.expect_keyword(Keyword::AS)?;
+                ensure_not_set(&builder.file_type, "STORED AS")?;
+                builder.file_type = Some(self.parse_file_format()?);
+            } else if self.parser.parse_keyword(Keyword::LOCATION) {
+                ensure_not_set(&builder.location, "LOCATION")?;
+                builder.location = Some(self.parser.parse_literal_string()?);
+            } else if self.parser.parse_keywords(&[Keyword::WITH, Keyword::HEADER]) {
+                self.parser.expect_keyword(Keyword::ROW)?;
+                ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                builder.has_header = Some(true);
+            } else if self.parser.parse_keywords(&[Keyword::WITH, Keyword::ORDER]) {
+                ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
+                builder.order_exprs = Some(self.parse_order_by_exprs()?);
+            } else if self.parser.parse_keyword(Keyword::DELIMITER) {
+                ensure_not_set(&builder.delimiter, "DELIMITER")?;
+                builder.delimiter = Some(self.parse_delimiter()?);
+            } else if self.parser.parse_keyword(Keyword::COMPRESSION) {
+                self.parser.expect_keyword(Keyword::TYPE)?;
+                ensure_not_set(&builder.file_compression_type, "COMPRESSION TYPE")?;
+                builder.file_compression_type = Some(self.parse_file_compression_type()?);
+            } else if self.parser.parse_keyword(Keyword::PARTITIONED) {
+                self.parser.expect_keyword(Keyword::BY)?;
+                ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                builder.table_partition_cols = Some(self.parse_partitions()?)
+            } else if self.parser.parse_keyword(Keyword::OPTIONS) {
+                ensure_not_set(&builder.options, "OPTIONS")?;
+                builder.options = Some(self.parse_options()?);
+            } else {
+                break;
+            }
+        }
 
-        let file_compression_type = if self.parse_has_file_compression_type() {
-            self.parse_file_compression_type()?
-        } else {
-            CompressionTypeVariant::UNCOMPRESSED
-        };
-
-        let table_partition_cols = if self.parse_has_partition() {
-            self.parse_partitions()?
-        } else {
-            vec![]
-        };
-
-        let order_exprs = if self.parse_has_order() {
-            self.parse_order_by_exprs()?
-        } else {
-            vec![]
-        };
-
-        let options = if self.parse_has_options() {
-            self.parse_options()?
-        } else {
-            HashMap::new()
-        };
-
-        self.parser.expect_keyword(Keyword::LOCATION)?;
-        let location = self.parser.parse_literal_string()?;
+        // Validations: location and file_type are required
+        if builder.file_type.is_none() {
+            return Err(ParserError::ParserError(
+                "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into()
+            ));
+        }
+        if builder.location.is_none() {
+            return Err(ParserError::ParserError(
+                "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into()
+            ));
+        }
 
         let create = CreateExternalTable {
             name: table_name.to_string(),
             columns,
-            file_type,
-            has_header,
-            delimiter,
-            location,
-            table_partition_cols,
-            order_exprs,
+            file_type: builder.file_type.unwrap(),
+            has_header: builder.has_header.unwrap_or(false),
+            delimiter: builder.delimiter.unwrap_or(','),
+            location: builder.location.unwrap(),
+            table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
+            order_exprs: builder.order_exprs.unwrap_or(vec![]),
             if_not_exists,
-            file_compression_type,
-            options,
+            file_compression_type: builder.file_compression_type
+                .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
+            options: builder.options.unwrap_or(HashMap::new()),
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -456,11 +485,6 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    fn parse_has_options(&mut self) -> bool {
-        self.parser.parse_keyword(Keyword::OPTIONS)
-    }
-
-    //
     fn parse_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
         let mut options: HashMap<String, String> = HashMap::new();
         self.parser.expect_token(&Token::LParen)?;
@@ -483,20 +507,6 @@ impl<'a> DFParser<'a> {
         Ok(options)
     }
 
-    fn parse_has_file_compression_type(&mut self) -> bool {
-        self.parser
-            .parse_keywords(&[Keyword::COMPRESSION, Keyword::TYPE])
-    }
-
-    fn parse_csv_has_header(&mut self) -> bool {
-        self.parser
-            .parse_keywords(&[Keyword::WITH, Keyword::HEADER, Keyword::ROW])
-    }
-
-    fn parse_has_delimiter(&mut self) -> bool {
-        self.parser.parse_keyword(Keyword::DELIMITER)
-    }
-
     fn parse_delimiter(&mut self) -> Result<char, ParserError> {
         let token = self.parser.parse_literal_string()?;
         match token.len() {
@@ -505,15 +515,6 @@ impl<'a> DFParser<'a> {
                 "Delimiter must be a single char".to_string(),
             )),
         }
-    }
-
-    fn parse_has_partition(&mut self) -> bool {
-        self.parser
-            .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
-    }
-
-    fn parse_has_order(&mut self) -> bool {
-        self.parser.parse_keywords(&[Keyword::WITH, Keyword::ORDER])
     }
 }
 
@@ -917,20 +918,20 @@ mod tests {
 
         // Error case: `with header` is an invalid syntax
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
-        expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
+        expect_parse_error(sql, "sql parser error: Expected ROW, found: LOCATION");
 
         // Error case: a single word `partitioned` is invalid
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
         expect_parse_error(
             sql,
-            "sql parser error: Expected LOCATION, found: PARTITIONED",
+            "sql parser error: Expected BY, found: LOCATION",
         );
 
         // Error case: a single word `compression` is invalid
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'";
         expect_parse_error(
             sql,
-            "sql parser error: Expected LOCATION, found: COMPRESSION",
+            "sql parser error: Expected TYPE, found: LOCATION",
         );
 
         Ok(())
