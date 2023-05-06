@@ -1412,6 +1412,7 @@ async fn left_semi_join() -> Result<()> {
         let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2) ORDER BY t1_id";
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
+
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![
@@ -1426,8 +1427,7 @@ async fn left_semi_join() -> Result<()> {
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
                 "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "              ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
             vec![
@@ -1435,8 +1435,7 @@ async fn left_semi_join() -> Result<()> {
                 "  CoalesceBatchesExec: target_batch_size=4096",
                 "    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
                 "      MemoryExec: partitions=1, partition_sizes=[1]",
-                "      ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "        MemoryExec: partitions=1, partition_sizes=[1]",
+                "      MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2442,11 +2441,10 @@ async fn subquery_to_join_with_both_side_expr() -> Result<()> {
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(__correlated_sq_1.t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
-        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
-        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2530,12 +2528,12 @@ async fn three_projection_exprs_subquery_to_join() -> Result<()> {
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int <= __correlated_sq_1.t2_int AND t1.t1_name != __correlated_sq_1.t2_name [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(__correlated_sq_1.t2_id AS Int64) + Int64(1) AND t1.t1_int <= __correlated_sq_1.t2_int AND t1.t1_name != __correlated_sq_1.t2_name [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
-        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), t2.t2_int, t2.t2_name [CAST(t2_id AS Int64) + Int64(1):Int64;N, t2_int:UInt32;N, t2_name:Utf8;N]",
-        "        Filter: t2.t2_int > UInt32(0) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [t2_int:UInt32;N, t2_name:Utf8;N]",
+        "      Projection: t2.t2_int, t2.t2_name [t2_int:UInt32;N, t2_name:Utf8;N]",
+        "        Filter: t2.t2_int > UInt32(0) [t2_name:Utf8;N, t2_int:UInt32;N]",
+        "          TableScan: t2 projection=[t2_name, t2_int] [t2_name:Utf8;N, t2_int:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2573,12 +2571,11 @@ async fn in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
     let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "  LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(__correlated_sq_1.t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "    Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
-        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
-        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2603,11 +2600,10 @@ async fn not_in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
     let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
-        "  LeftAnti Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "  LeftAnti Join: CAST(t1.t1_id AS Int64) + Int64(12) = CAST(__correlated_sq_1.t2_id AS Int64) + Int64(1) Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "    SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
-        "      Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
-        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
@@ -2827,9 +2823,10 @@ async fn exists_subquery_to_join_expr_filter() -> Result<()> {
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2869,11 +2866,12 @@ async fn exists_subquery_to_join_inner_filter() -> Result<()> {
         // `t2.t2_int < 3` will be kept in the subquery filter.
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    Projection: t2.t2_id [t2_id:UInt32;N]",
-            "      Filter: t2.t2_int < UInt32(3) [t2_id:UInt32;N, t2_int:UInt32;N]",
-            "        TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      Projection: t2.t2_id [t2_id:UInt32;N]",
+            "        Filter: t2.t2_int < UInt32(3) [t2_id:UInt32;N, t2_int:UInt32;N]",
+            "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2911,10 +2909,11 @@ async fn exists_subquery_to_join_outer_filter() -> Result<()> {
         // `t1.t1_int < 3` will be moved to the filter of t1.
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftSemi Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    Filter: t1.t1_int < UInt32(3) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2951,9 +2950,10 @@ async fn not_exists_subquery_to_join_expr_filter() -> Result<()> {
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2989,10 +2989,11 @@ async fn exists_distinct_subquery_to_join() -> Result<()> {
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    Aggregate: groupBy=[[t2.t2_id]], aggr=[[]] [t2_id:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      Aggregate: groupBy=[[t2.t2_id]], aggr=[[]] [t2_id:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -3029,10 +3030,11 @@ async fn exists_distinct_subquery_to_join_with_expr() -> Result<()> {
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    Aggregate: groupBy=[[t2.t2_id]], aggr=[[]] [t2_id:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      Aggregate: groupBy=[[t2.t2_id]], aggr=[[]] [t2_id:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -3069,10 +3071,11 @@ async fn exists_distinct_subquery_to_join_with_literal() -> Result<()> {
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
-            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(t2.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+            "  LeftAnti Join:  Filter: CAST(t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "    TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-            "    Aggregate: groupBy=[[t2.t2_id]], aggr=[[]] [t2_id:UInt32;N]",
-            "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+            "    SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+            "      Aggregate: groupBy=[[t2.t2_id]], aggr=[[]] [t2_id:UInt32;N]",
+            "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
         ];
         let formatted = plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();

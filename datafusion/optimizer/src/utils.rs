@@ -346,7 +346,7 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     }
 }
 
-/// Extract join predicates from the correclated subquery.
+/// Extract join predicates from the correlated subquery's [Filter] expressions.
 /// The join predicate means that the expression references columns
 /// from both the subquery and outer table or only from the outer table.
 ///
@@ -384,6 +384,19 @@ pub(crate) fn collect_subquery_cols(
         cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
+}
+
+pub(crate) fn collect_using_cols(
+    expr: &Expr,
+    subquery_schema: DFSchemaRef,
+) -> Result<BTreeSet<Column>> {
+    let mut using_cols = BTreeSet::new();
+    for col in expr.to_columns()?.into_iter() {
+        if subquery_schema.has_column(&col) {
+            using_cols.insert(col);
+        }
+    }
+    Result::<_>::Ok(using_cols)
 }
 
 pub(crate) fn replace_qualified_name(
