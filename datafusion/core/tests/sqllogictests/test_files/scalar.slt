@@ -223,7 +223,7 @@ select factorial(0), factorial(10), factorial(15);
 
 # factorial scalar nulls
 query I rowsort
-select floor(null);
+select factorial(null);
 ----
 NULL
 
