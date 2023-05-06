@@ -243,7 +243,7 @@ exp(numeric_expression)
 
 ### `factorial`
 
-Factorial
+Factorial. Returns 1 if value is less than 2.
 
 ```
 factorial(numeric_expression)

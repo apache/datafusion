@@ -18,7 +18,7 @@
 //! Math expressions
 
 use arrow::array::ArrayRef;
-use arrow::array::{Float32Array, Float64Array, Int64Array, UInt32Array};
+use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::Float32;
@@ -171,14 +171,14 @@ math_unary_function!("radians", to_radians);
 /// Factorial SQL function
 pub fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::UInt32 => Ok(Arc::new(make_function_scalar_inputs!(
+        DataType::Int64 => Ok(Arc::new(make_function_scalar_inputs!(
             &args[0],
             "value",
-            UInt32Array,
-            { |value: u32| { (1..=value).product() } }
+            Int64Array,
+            { |value: i64| { (1..=value).product() } }
         )) as ArrayRef),
         other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {other:?} for function factorial. Requires non negative bigint"
+            "Unsupported data type {other:?} for function factorial."
         ))),
     }
 }
@@ -502,9 +502,7 @@ mod tests {
 
     use super::*;
     use arrow::array::{Float64Array, NullArray};
-    use datafusion_common::cast::{
-        as_float32_array, as_float64_array, as_int64_array, as_uint32_array,
-    };
+    use datafusion_common::cast::{as_float32_array, as_float64_array, as_int64_array};
 
     #[test]
     fn test_random_expression() {
@@ -694,16 +692,16 @@ mod tests {
     }
 
     #[test]
-    fn test_factorial_u32() {
+    fn test_factorial_i64() {
         let args: Vec<ArrayRef> = vec![
-            Arc::new(UInt32Array::from(vec![0, 1, 2, 4])), // input
+            Arc::new(Int64Array::from(vec![0, 1, 2, 4])), // input
         ];
 
         let result = factorial(&args).expect("failed to initialize function factorial");
         let ints =
-            as_uint32_array(&result).expect("failed to initialize function factorial");
+            as_int64_array(&result).expect("failed to initialize function factorial");
 
-        let expected = UInt32Array::from(vec![1, 1, 2, 24]);
+        let expected = Int64Array::from(vec![1, 1, 2, 24]);
 
         assert_eq!(ints, &expected);
     }
