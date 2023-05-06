@@ -111,6 +111,7 @@ struct SortPreservingMergeStream<C> {
     /// The current implementation uses a vector to store the tree.
     /// Conceptually, it looks like this (assuming 8 streams):
     ///
+    /// ```text
     ///     0 (winner)
     ///
     ///     1
@@ -118,6 +119,7 @@ struct SortPreservingMergeStream<C> {
     ///   2   3
     ///  / \ / \
     /// 4  5 6  7
+    /// ```
     ///
     /// Where element at index 0 in the vector is the current winner. Element
     /// at index 1 is the root of the loser tree, element at index 2 is the
