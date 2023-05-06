@@ -28,9 +28,7 @@ use crate::AggregateUDF;
 use crate::Operator;
 use crate::ScalarUDF;
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_common::{plan_err, Column};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
@@ -177,7 +175,7 @@ pub enum Expr {
         args: Vec<Expr>,
         /// Optional filter applied prior to aggregating
         filter: Option<Box<Expr>>,
-        /// Optional order by applied prior to aggregating
+        /// Optional ORDER BY applied prior to aggregating
         order_by: Option<Box<Expr>>,
     },
     /// Returns whether the list contains the expr value.
@@ -436,7 +434,7 @@ pub struct AggregateFunction {
     pub distinct: bool,
     /// Optional filter
     pub filter: Option<Box<Expr>>,
-    /// Optional Ordering
+    /// Optional ordering
     pub order_by: Option<Box<Expr>>,
 }
 
@@ -1344,7 +1342,7 @@ fn create_name(e: &Expr) -> Result<String> {
             for e in args {
                 names.push(create_name(e)?);
             }
-            let mut info = "".to_string();
+            let mut info = String::new();
             if let Some(fe) = filter {
                 info += &format!(" FILTER (WHERE {fe})");
             }

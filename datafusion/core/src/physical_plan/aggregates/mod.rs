@@ -41,7 +41,7 @@ use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
+    utils::{convert_to_expr, get_indices_of_matching_exprs, normalize_sort_expr},
     AggregateExpr, EquivalentClass, OrderingEquivalentClass, PhysicalExpr,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -56,7 +56,6 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::utils::normalize_sort_expr;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -342,32 +341,37 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .collect()
 }
 
-/// This function get the finest requirement among all aggregators functions.
-/// If requirements are conflicting (None of the requirements satisfy all of the requirement) Plan error is raised.
+/// This function gets the finest ordering requirement among all the aggregation
+/// functions. If requirements are conflicting, (i.e. we can not compute the
+/// aggregations in a single [`AggregateExec`]), the function returns an error
+/// value. Note that handling of multiple requirement sets is left as future work.
 fn get_finest_requirement(
     order_by_expr: &[Option<PhysicalSortExpr>],
     eq_properties: &[EquivalentClass],
     ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Result<Option<PhysicalSortExpr>> {
-    let mut res: Option<PhysicalSortExpr> = None;
-    for elem in order_by_expr.iter().flatten() {
-        if let Some(res) = &res {
-            let res_normalized =
-                normalize_sort_expr(res.clone(), eq_properties, ordering_eq_properties);
-            let elem_normalized =
-                normalize_sort_expr(elem.clone(), eq_properties, ordering_eq_properties);
-            if !res_normalized.eq(&elem_normalized) {
-                println!("Conflicting requirements");
+    let mut result: Option<PhysicalSortExpr> = None;
+    let mut normalized_result: Option<PhysicalSortExpr> = None;
+    for item in order_by_expr.iter().flatten() {
+        if let Some(normalized_expr) = &normalized_result {
+            let normalized_item =
+                normalize_sort_expr(item.clone(), eq_properties, ordering_eq_properties);
+            if normalized_item.ne(normalized_expr) {
                 return Err(DataFusionError::Plan(
                     "Conflicting ordering requirements in aggregate functions"
                         .to_string(),
                 ));
             }
         } else {
-            res = Some(elem.clone())
+            result = Some(item.clone());
+            normalized_result = Some(normalize_sort_expr(
+                item.clone(),
+                eq_properties,
+                ordering_eq_properties,
+            ));
         }
     }
-    Ok(res)
+    Ok(result)
 }
 
 impl AggregateExec {
@@ -391,17 +395,17 @@ impl AggregateExec {
 
         let schema = Arc::new(schema);
         let mut aggregator_requirement = None;
-        // Ordering sensitive requirement makes sense only in Partial and Single mode.
-        // Because in other modes, all groups are collapsed. Hence their input schema may not contain
-        // expressions in the requirement.
+        // Ordering requirement makes sense only in Partial and Single modes.
+        // In other modes, all groups are collapsed, therefore their input schema
+        // can not contain expressions in the requirement.
         if mode == AggregateMode::Partial || mode == AggregateMode::Single {
             let requirement = get_finest_requirement(
                 &order_by_expr,
                 input.equivalence_properties().classes(),
                 input.ordering_equivalence_properties().classes(),
             )?;
-            if let Some(req) = requirement {
-                aggregator_requirement = Some(vec![PhysicalSortRequirement::from(req)]);
+            if let Some(expr) = requirement {
+                aggregator_requirement = Some(vec![PhysicalSortRequirement::from(expr)]);
             }
         }
 
@@ -420,19 +424,17 @@ impl AggregateExec {
         let mut required_input_ordering = None;
         if let Some(AggregationOrdering {
             ordering,
-            // If the mode of the AggregateExec is FullyOrdered or PartiallyOrdered
-            // (e.g AggregateExec runs with bounded memory without breaking pipeline)
-            // We append aggregator ordering requirement to the existing ordering that enables
-            // to run executor with bounded memory.
-            // In this way, we can still run executor in the same mode,
-            // and can satisfy required ordering for the aggregators.
+            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
+            // running with bounded memory, without breaking pipeline), then
+            // we append aggregator ordering requirement to the existing
+            // ordering. This way, we can still run with bounded memory.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
             ..
         }) = &aggregation_ordering
         {
             if let Some(aggregator_requirement) = aggregator_requirement {
-                // Get the section of the input ordering that enables us to run executor in the
-                // GroupByOrderMode::FullyOrdered or GroupByOrderMode::PartiallyOrdered.
+                // Get the section of the input ordering that enables us to run in the
+                // FullyOrdered or PartiallyOrdered mode:
                 let requirement_prefix =
                     if let Some(existing_ordering) = input.output_ordering() {
                         existing_ordering[0..ordering.len()].to_vec()
@@ -444,14 +446,7 @@ impl AggregateExec {
                     .map(|sort_expr| PhysicalSortRequirement::from(sort_expr.clone()))
                     .collect::<Vec<_>>();
                 for req in aggregator_requirement {
-                    let mut found = false;
-                    for elem in &requirement {
-                        if req.expr().eq(elem.expr()) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
+                    if requirement.iter().all(|item| req.expr().ne(item.expr())) {
                         requirement.push(req);
                     }
                 }

@@ -82,9 +82,7 @@ pub fn parse_physical_sort_expr(
         };
         Ok(PhysicalSortExpr { expr, options })
     } else {
-        Err(DataFusionError::Execution(
-            "Cannot parse proto to PhysicalSortExpr".to_string(),
-        ))
+        Err(proto_error("Unexpected empty physical expression"))
     }
 }
 

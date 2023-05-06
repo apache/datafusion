@@ -74,7 +74,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use itertools::Itertools;
+use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -713,12 +713,8 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    let (mut aggregates,mut filters, mut order_bys) = (vec![], vec![], vec![]);
-                    for (aggregate, filter, order_by) in agg_filter.into_iter(){
-                        aggregates.push(aggregate);
-                        filters.push(filter);
-                        order_bys.push(order_by);
-                    }
+
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
@@ -1614,9 +1610,9 @@ pub fn create_window_expr(
 
 type AggregateExprWithOptionalArgs = (
     Arc<dyn AggregateExpr>,
-    // Keeps Filter clause if any
+    // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
-    // Keeps ordering requirement if any
+    // Ordering requirement, if any
     Option<PhysicalSortExpr>,
 );
 
@@ -1662,7 +1658,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 &args,
                 physical_input_schema,
                 name,
-            );
+            )?;
             let order_by = match order_by {
                 Some(e) => Some(create_physical_sort_expr(
                     e,
@@ -1672,7 +1668,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            Ok((agg_expr?, filter, order_by))
+            Ok((agg_expr, filter, order_by))
         }
         Expr::AggregateUDF {
             fun,
@@ -1750,29 +1746,28 @@ pub fn create_physical_sort_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    match e {
-        Expr::Sort(expr::Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let options = SortOptions {
+    if let Expr::Sort(expr::Sort {
+        expr,
+        asc,
+        nulls_first,
+    }) = e
+    {
+        Ok(PhysicalSortExpr {
+            expr: create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?,
+            options: SortOptions {
                 descending: !asc,
                 nulls_first: *nulls_first,
-            };
-            Ok(PhysicalSortExpr {
-                expr: create_physical_expr(
-                    expr,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?,
-                options,
-            })
-        }
-        _ => Err(DataFusionError::Plan(
-            "Sort only accepts sort expressions".to_string(),
-        )),
+            },
+        })
+    } else {
+        Err(DataFusionError::Internal(
+            "Expects a sort expression".to_string(),
+        ))
     }
 }
 
