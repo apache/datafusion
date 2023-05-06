@@ -901,48 +901,8 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
-        // Error cases: partition column does not support type
-        let sql =
-            "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'";
-        expect_parse_error(sql, "sql parser error: Expected literal string, found: )");
-
-        // Error cases: partition column does not support type
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected (, found: c1");
-
-        // Error cases: partition column does not support type
-        let sql =
-            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'";
-        expect_parse_error(sql, "sql parser error: Expected ), found: LOCATION");
-
-        // Error case: `with header` is an invalid syntax
-        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
-        expect_parse_error(sql, "sql parser error: Expected ROW, found: LOCATION");
-
-        // Error case: a single word `partitioned` is invalid
-        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
-        expect_parse_error(
-            sql,
-            "sql parser error: Expected BY, found: LOCATION",
-        );
-
-        // Error case: a single word `compression` is invalid
-        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'";
-        expect_parse_error(
-            sql,
-            "sql parser error: Expected TYPE, found: LOCATION",
-        );
+        // For error cases, see: `create_external_table.slt`
 
         Ok(())
-    }
-
-    #[test]
-    fn invalid_compression_type() {
-        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'";
-        expect_parse_error(
-            sql,
-            "sql parser error: Unsupported file compression type ZZZ",
-        )
     }
 }

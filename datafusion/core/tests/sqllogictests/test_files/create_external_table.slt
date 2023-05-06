@@ -35,3 +35,31 @@ CREATE EXTERNAL TABLE t STORED AS CSV
 # Duplicate `LOCATION` clause
 statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
 CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
+
+# Option value is missing
+statement error DataFusion error: SQL error: ParserError\("Expected literal string, found: \)"\)
+CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
+
+# Missing `(` in WITH ORDER clause
+statement error DataFusion error: SQL error: ParserError\("Expected \(, found: c1"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'
+
+# Missing `)` in WITH ORDER clause
+statement error DataFusion error: SQL error: ParserError\("Expected \), found: LOCATION"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'
+
+# Missing `ROW` in WITH HEADER clause
+statement error DataFusion error: SQL error: ParserError\("Expected ROW, found: LOCATION"\)
+CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
+
+# Missing `BY` in PARTITIONED clause
+statement error DataFusion error: SQL error: ParserError\("Expected BY, found: LOCATION"\)
+CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
+
+# Missing `TYPE` in COMPRESSION clause
+statement error DataFusion error: SQL error: ParserError\("Expected TYPE, found: LOCATION"\)
+CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'
+
+# Invalid compression type
+statement error DataFusion error: SQL error: ParserError\("Unsupported file compression type ZZZ"\)
+CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'
