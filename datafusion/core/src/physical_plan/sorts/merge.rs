@@ -108,6 +108,22 @@ struct SortPreservingMergeStream<C> {
     /// the path from bottom to top is visited, keeping the number of
     /// comparisons close to the theoretical limit of `log(S)`.
     ///
+    /// The current implementation uses a vector to store the tree.
+    /// Conceptually, it looks like this (assuming 8 streams):
+    ///
+    ///     0 (winner)
+    ///
+    ///     1
+    ///    / \
+    ///   2   3
+    ///  / \ / \
+    /// 4  5 6  7
+    ///
+    /// Where element at index 0 in the vector is the current winner. Element
+    /// at index 1 is the root of the loser tree, element at index 2 is the
+    /// left child of the root, and element at index 3 is the right child of
+    /// the root and so on.
+    ///
     /// reference: <https://en.wikipedia.org/wiki/K-way_merge_algorithm#Tournament_Tree>
     loser_tree: Vec<usize>,
 
@@ -242,6 +258,18 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         }
     }
 
+    /// Find the leaf node index in the loser tree for the given cursor index
+    #[inline]
+    fn lt_leaf_node_index(&self, cursor_index: usize) -> usize {
+        (self.cursors.len() + cursor_index) / 2
+    }
+
+    /// Find the parent node index for the given cursor index
+    #[inline]
+    fn lt_parent_node_index(&self, current_node_idx: usize) -> usize {
+        current_node_idx / 2
+    }
+
     /// Attempts to initialize the loser tree with one value from each
     /// non exhausted input, if possible
     fn init_loser_tree(&mut self) {
@@ -249,7 +277,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         self.loser_tree = vec![usize::MAX; self.cursors.len()];
         for i in 0..self.cursors.len() {
             let mut winner = i;
-            let mut cmp_node = (self.cursors.len() + i) / 2;
+            let mut cmp_node = self.lt_leaf_node_index(i);
             while cmp_node != 0 && self.loser_tree[cmp_node] != usize::MAX {
                 let challenger = self.loser_tree[cmp_node];
                 if self.is_gt(winner, challenger) {
@@ -257,7 +285,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
                     winner = challenger;
                 }
 
-                cmp_node /= 2;
+                cmp_node = self.lt_parent_node_index(cmp_node);
             }
             self.loser_tree[cmp_node] = winner;
         }
@@ -268,14 +296,14 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     fn update_loser_tree(&mut self) {
         let mut winner = self.loser_tree[0];
         // Replace overall winner by walking tree of losers
-        let mut cmp_node = (self.cursors.len() + winner) / 2;
+        let mut cmp_node = self.lt_leaf_node_index(winner);
         while cmp_node != 0 {
             let challenger = self.loser_tree[cmp_node];
             if self.is_gt(winner, challenger) {
                 self.loser_tree[cmp_node] = winner;
                 winner = challenger;
             }
-            cmp_node /= 2;
+            cmp_node = self.lt_parent_node_index(cmp_node);
         }
         self.loser_tree[0] = winner;
         self.loser_tree_adjusted = true;
