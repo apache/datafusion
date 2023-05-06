@@ -1719,14 +1719,26 @@ select max(x_dict) from value_dict where x_dict > 3;
 ----
 5
 
-query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+query I
 select sum(x_dict) from value_dict group by x_dict % 2;
+----
+13
+8
 
-query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+query R
 select avg(x_dict) from value_dict group by x_dict % 2;
+----
+2.6
+2.666666666667
 
-query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+query I
 select min(x_dict) from value_dict group by x_dict % 2;
+----
+1
+2
 
-query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+query I
 select max(x_dict) from value_dict group by x_dict % 2;
+----
+4
+5

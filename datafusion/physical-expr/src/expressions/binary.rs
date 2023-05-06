@@ -50,7 +50,7 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
-use arrow::compute::{try_unary, unary, CastOptions};
+use arrow::compute::{cast, try_unary, unary, CastOptions};
 use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -694,6 +694,9 @@ impl PhysicalExpr for BinaryExpr {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
                 self.evaluate_array_scalar(array, scalar.clone(), &result_type)?
+                    .map(|r| {
+                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                    })
             }
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
@@ -1025,6 +1028,35 @@ pub(crate) fn array_eq_scalar(lhs: &dyn Array, rhs: &ScalarValue) -> Result<Arra
             ))
         },
     )?
+}
+
+/// Casts dictionary array to result type for binary numerical operators. Such operators
+/// between array and scalar produce a dictionary array other than primitive array of the
+/// same operators between array and array. This leads to inconsistent result types causing
+/// errors in the following query execution. For such operators between array and scalar,
+/// we cast the dictionary array to primitive array.
+fn to_result_type_array(
+    op: &Operator,
+    array: ArrayRef,
+    result_type: &DataType,
+) -> Result<ArrayRef> {
+    if op.is_numerical_operators() {
+        match array.data_type() {
+            DataType::Dictionary(_, value_type) => {
+                if value_type.as_ref() == result_type {
+                    Ok(cast(&array, result_type)?)
+                } else {
+                    Err(DataFusionError::Internal(format!(
+                        "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
+                        value_type, result_type, op
+                    )))
+                }
+            }
+            _ => Ok(array),
+        }
+    } else {
+        Ok(array)
+    }
 }
 
 impl BinaryExpr {
