@@ -2769,7 +2769,6 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
@@ -2988,7 +2987,6 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value - 1),
@@ -3203,7 +3201,6 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
             &[Some(246), Some(244), None, Some(248), Some(246)],
             21,
@@ -3424,7 +3421,6 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(6150000000000),
@@ -3641,7 +3637,6 @@ mod tests {
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
             &[Some(1), Some(0), None, Some(0), Some(1)],
             10,
