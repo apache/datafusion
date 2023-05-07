@@ -126,6 +126,17 @@ select interval '5' nanoseconds
 ----
 0 years 0 mons 0 days 0 hours 0 mins 0.000000005 secs
 
+# Interval with string literal addition
+query ?
+select interval '1 month' + '1 month'
+----
+0 years 2 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+# Interval with string literal addition and leading field
+query ?
+select interval '1' + '1' month
+----
+0 years 2 mons 0 days 0 hours 0 mins 0.000000000 secs
 
 
 

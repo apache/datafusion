@@ -19,9 +19,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, Expr};
 use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::Operator;
+use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Value};
 use sqlparser::parser::ParserError::ParserError;
@@ -162,6 +161,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Convert a SQL interval expression to a DataFusion logical plan
+    /// expression
+    ///
+    /// Waiting for this issue to be resolved:
+    /// https://github.com/sqlparser-rs/sqlparser-rs/issues/869
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn sql_interval_to_expr(
         &self,
         value: SQLExpr,
@@ -196,15 +201,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => s,
             SQLExpr::BinaryOp { left, op, right } => {
-                let left_expr = self.sql_interval_to_expr(
-                    *left, schema, planner_context, None, None, None, None
-                )?;
-                let right = self.sql_expr_to_logical_expr(
-                    *right,
-                    schema,
-                    planner_context,
-                )?;
-                let op = match op {
+                let df_op = match op {
                     BinaryOperator::Plus => Operator::Plus,
                     BinaryOperator::Minus => Operator::Minus,
                     _ => {
@@ -213,9 +210,65 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         )));
                     }
                 };
-                return Ok(Expr::BinaryExpr(
-                    BinaryExpr::new(Box::new(left_expr), op, Box::new(right))
-                ));
+                match (leading_field, left.as_ref(), right.as_ref()) {
+                    (_, SQLExpr::Value(_), SQLExpr::Value(_)) => {
+                        let left_expr = self.sql_interval_to_expr(
+                            *left,
+                            schema,
+                            planner_context,
+                            leading_field,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        let right_expr = self.sql_interval_to_expr(
+                            *right,
+                            schema,
+                            planner_context,
+                            leading_field,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        return Ok(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left_expr),
+                            df_op,
+                            Box::new(right_expr),
+                        )));
+                    }
+                    // In this case, the left node is part of the interval
+                    // expr and the right node is an independent expr.
+                    //
+                    // Leading field is not supported when either the left or
+                    // right is not a value.
+                    (None, _, _) => {
+                        let left_expr = self.sql_interval_to_expr(
+                            *left,
+                            schema,
+                            planner_context,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        let right_expr = self.sql_expr_to_logical_expr(
+                            *right,
+                            schema,
+                            planner_context,
+                        )?;
+                        return Ok(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left_expr),
+                            df_op,
+                            Box::new(right_expr),
+                        )));
+                    }
+                    _ => {
+                        let value = SQLExpr::BinaryOp { left, op, right };
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported interval argument. Expected string literal, got: {value:?}"
+                        )));
+                    }
+                }
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
