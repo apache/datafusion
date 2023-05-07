@@ -211,7 +211,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 };
                 match (leading_field, left.as_ref(), right.as_ref()) {
-                    (_, SQLExpr::Value(_), SQLExpr::Value(_)) => {
+                    (_, _, SQLExpr::Value(_)) => {
                         let left_expr = self.sql_interval_to_expr(
                             *left,
                             schema,
@@ -239,8 +239,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // In this case, the left node is part of the interval
                     // expr and the right node is an independent expr.
                     //
-                    // Leading field is not supported when either the left or
-                    // right is not a value.
+                    // Leading field is not supported when the right operand
+                    // is not a value.
                     (None, _, _) => {
                         let left_expr = self.sql_interval_to_expr(
                             *left,

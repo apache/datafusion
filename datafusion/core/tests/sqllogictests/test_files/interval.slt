@@ -138,6 +138,53 @@ select interval '1' + '1' month
 ----
 0 years 2 mons 0 days 0 hours 0 mins 0.000000000 secs
 
+# Interval with nested string literal addition
+query ?
+select interval '1 month' + '1 month' + '1 month'
+----
+0 years 3 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+# Interval with nested string literal addition and leading field
+query ?
+select interval '1' + '1' + '1' month
+----
+0 years 3 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+# Interval mega nested string literal addition
+query ?
+select interval '1 year' + '1 month' + '1 day' + '1 hour' + '1 minute' + '1 second' + '1 millisecond' + '1 microsecond' + '1 nanosecond'
+----
+0 years 13 mons 1 days 1 hours 1 mins 1.001001001 secs
+
+# Interval with nested string literal substraction
+query ?
+select interval '1 month' - '1 day'
+----
+0 years 1 mons -1 days 0 hours 0 mins 0.000000000 secs
+
+# Interval with nested string literal substraction and leading field
+query ?
+select interval '10' - '1' month;
+----
+0 years 9 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+# Interval mega nested string literal substraction
+query ?
+select interval '1 year' - '1 month' - '1 day' - '1 hour' - '1 minute' - '1 second' - '1 millisecond' - '1 microsecond' - '1 nanosecond'
+----
+0 years 11 mons -1 days -1 hours -1 mins -1.001001001 secs
+
+# Interval string literal + date
+query D
+select interval '1 month' + '1 day' + '2012-01-01'::date;
+----
+2012-02-02
+
+# Interval string literal parenthesized + date
+query D
+select ( interval '1 month' + '1 day' ) + '2012-01-01'::date;
+----
+2012-02-02
 
 
 
