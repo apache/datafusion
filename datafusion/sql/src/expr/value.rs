@@ -165,7 +165,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// expression
     ///
     /// Waiting for this issue to be resolved:
-    /// https://github.com/sqlparser-rs/sqlparser-rs/issues/869
+    /// `<https://github.com/sqlparser-rs/sqlparser-rs/issues/869>`
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sql_interval_to_expr(
         &self,
