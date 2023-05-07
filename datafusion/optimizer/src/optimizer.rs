@@ -18,8 +18,7 @@
 //! Query optimizer traits
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::decorrelate_where_exists::DecorrelateWhereExists;
-use crate::decorrelate_where_in::DecorrelateWhereIn;
+use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -211,8 +210,7 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
-            Arc::new(DecorrelateWhereExists::new()),
-            Arc::new(DecorrelateWhereIn::new()),
+            Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             // simplify expressions does not simplify expressions in subqueries, so we

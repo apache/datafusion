@@ -18,11 +18,12 @@
 use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
 use crate::utils::{
-    collect_subquery_cols, collect_using_cols, conjunction, extract_join_filters,
-    only_or_err, replace_qualified_name, split_conjunction,
+    collect_subquery_cols, conjunction, extract_join_filters, only_or_err,
+    replace_qualified_name, split_conjunction,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, Column, DataFusionError, Result};
+use datafusion_expr::expr_rewriter::unnormalize_col;
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::{
     exists, in_subquery, not_exists, not_in_subquery, BinaryExpr, Distinct, Expr, Filter,
@@ -31,7 +32,6 @@ use datafusion_expr::{
 use log::debug;
 use std::ops::Deref;
 use std::sync::Arc;
-use datafusion_expr::expr_rewriter::unnormalize_col;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
 #[derive(Default)]
@@ -117,7 +117,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                     if let Some(plan) = build_join(&subquery, &cur_input, &self.alias)? {
                         cur_input = plan;
                     } else {
-                        // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to Filter
+                        // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to the Filter
                         let sub_query_expr = match subquery {
                             SubqueryInfo {
                                 query,
@@ -149,8 +149,6 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                     let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
                     cur_input = LogicalPlan::Filter(new_filter);
                 }
-
-                println!("DecorrelatePredicateSubquery output {:?}", cur_input);
                 Ok(Some(cur_input))
             }
             _ => Ok(None),
@@ -179,7 +177,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 ///   LeftSemi Join:  Filter: t1.a = __correlated_sq_1.a AND t1.b = __correlated_sq_1.b AND t1.c > __correlated_sq_1.c
 ///     TableScan: t1
 ///     SubqueryAlias: __correlated_sq_1
-///       Projection: t2.a AS a, t2.b, t2.c
+///       Projection: t2.a, t2.b, t2.c
 ///         TableScan: t2
 /// ```
 ///
@@ -193,7 +191,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 ///   LeftSemi Join:  Filter: t1.id = __correlated_sq_1.id
 ///     TableScan: t1
 ///     SubqueryAlias: __correlated_sq_1
-///       Projection: t2.id AS id
+///       Projection: t2.id
 ///         TableScan: t2
 /// ```
 fn build_join(
@@ -212,7 +210,7 @@ fn build_join(
                 .map_err(|e| context!("single expression projection required", e))?;
 
             // in_predicate may be also include in the join filters
-            Ok(Expr::eq(in_expr.clone(), subquery_expr.clone()))
+            Ok(Expr::eq(in_expr, subquery_expr.clone()))
         })
         .map_or(Ok(None), |v: Result<Expr, DataFusionError>| v.map(Some))?;
 
@@ -237,16 +235,14 @@ fn build_join(
                 Some(join_filter),
             )?
             .build()?;
+        debug!(
+            "predicate subquery optimized:\n{}",
+            new_plan.display_indent()
+        );
         Ok(Some(new_plan))
     } else {
         Ok(None)
     }
-
-    // debug!(
-    //     "predicate subquery optimized:\n{}",
-    //     new_plan.display_indent()
-    // );
-    // Ok(new_plan)
 }
 
 /// This function pull up the correlated expressions(contains outer reference columns) from the inner subquery's [Filter].
@@ -287,19 +283,31 @@ fn pull_up_correlated_expr(
 
             if let Some(in_predicate) = &in_predicate_opt {
                 // in_predicate may be already included in the join filters, remove it from the join filters first.
-                join_filters = remove_duplicated_filter(join_filters, &in_predicate);
+                join_filters = remove_duplicated_filter(join_filters, in_predicate);
             }
-
             let input_schema = subquery_input.schema();
             let correlated_subquery_cols =
                 collect_subquery_cols(&join_filters, input_schema.clone())?;
 
             // add missing columns to projection
-            let mut project_exprs: Vec<Expr> = if in_predicate_opt.is_some() {
-                projection.expr.iter().map(|ex| ex.clone()).collect()
-            } else {
-                vec![]
-            };
+            let mut project_exprs: Vec<Expr> =
+                if let Some(Expr::BinaryExpr(BinaryExpr {
+                    left: _,
+                    op: Operator::Eq,
+                    right,
+                })) = &in_predicate_opt
+                {
+                    if !matches!(right.deref(), Expr::Column(_)) {
+                        vec![right.deref().clone().alias(format!(
+                            "{:?}",
+                            unnormalize_col(right.deref().clone())
+                        ))]
+                    } else {
+                        vec![right.deref().clone()]
+                    }
+                } else {
+                    vec![]
+                };
             // the inner reference cols need to added to the projection if they are missing.
             for col in correlated_subquery_cols.iter() {
                 let col_expr = Expr::Column(col.clone());
@@ -314,12 +322,10 @@ fn pull_up_correlated_expr(
                     replace_qualified_name(
                         filter,
                         &correlated_subquery_cols,
-                        &subquery_alias,
+                        subquery_alias,
                     )
                     .map(Option::Some)
                 })?;
-
-            println!("in_predicate_opt {:?}", in_predicate_opt);
 
             let join_filter = if let Some(Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -327,9 +333,12 @@ fn pull_up_correlated_expr(
                 right,
             })) = in_predicate_opt
             {
-                let right_expr_name = format!("{:?}", unnormalize_col(right.deref().clone()));
-                let right_col = Column::new(Some(subquery_alias.to_string()), right_expr_name);
-                let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
+                let right_expr_name =
+                    format!("{:?}", unnormalize_col(right.deref().clone()));
+                let right_col =
+                    Column::new(Some(subquery_alias.to_string()), right_expr_name);
+                let in_predicate =
+                    Expr::eq(left.deref().clone(), Expr::Column(right_col));
                 join_filter_opt
                     .map(|filter| in_predicate.clone().and(filter))
                     .unwrap_or_else(|| in_predicate)
@@ -344,7 +353,6 @@ fn pull_up_correlated_expr(
             let right = LogicalPlanBuilder::from(subquery_input)
                 .project(project_exprs)?
                 .build()?;
-
             Ok(Some((join_filter, right)))
         }
         _ => Ok(None),
@@ -967,8 +975,8 @@ mod tests {
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey + Int32(1) AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
         \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n    SubqueryAlias: __correlated_sq_1 [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
-        \n      Projection: orders.o_custkey + Int32(1), orders.o_custkey [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
+        \n    SubqueryAlias: __correlated_sq_1 [o_custkey + Int32(1):Int64, o_custkey:Int64]\
+        \n      Projection: orders.o_custkey + Int32(1) AS o_custkey + Int32(1), orders.o_custkey [o_custkey + Int32(1):Int64, o_custkey:Int64]\
         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq_display_indent(
@@ -1178,8 +1186,8 @@ mod tests {
         let expected = "Projection: test.b [b:UInt32]\
         \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n    SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32]\
-        \n      Projection: sq.c * UInt32(2) [sq.c * UInt32(2):UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32]\
+        \n      Projection: sq.c * UInt32(2) AS c * UInt32(2) [c * UInt32(2):UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq_display_indent(
@@ -1212,8 +1220,8 @@ mod tests {
         let expected = "Projection: test.b [b:UInt32]\
         \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n    SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32]\
-        \n      Projection: sq.c * UInt32(2), sq.a [sq.c * UInt32(2):UInt32, a:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, a:UInt32]\
+        \n      Projection: sq.c * UInt32(2) AS c * UInt32(2), sq.a [c * UInt32(2):UInt32, a:UInt32]\
         \n        Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]\
         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -1248,8 +1256,8 @@ mod tests {
         let expected = "Projection: test.b [b:UInt32]\
         \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n    SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
-        \n      Projection: sq.c * UInt32(2), sq.a, sq.b [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
+        \n      Projection: sq.c * UInt32(2) AS c * UInt32(2), sq.a, sq.b [c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
         \n        Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]\
         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -1292,11 +1300,11 @@ mod tests {
         \n    LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]\
         \n      LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
         \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n        SubqueryAlias: __correlated_sq_1 [sq1.c * UInt32(2):UInt32, a:UInt32]\
-        \n          Projection: sq1.c * UInt32(2), sq1.a [sq1.c * UInt32(2):UInt32, a:UInt32]\
+        \n        SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, a:UInt32]\
+        \n          Projection: sq1.c * UInt32(2) AS c * UInt32(2), sq1.a [c * UInt32(2):UInt32, a:UInt32]\
         \n            TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
-        \n      SubqueryAlias: __correlated_sq_2 [sq2.c * UInt32(2):UInt32, a:UInt32]\
-        \n        Projection: sq2.c * UInt32(2), sq2.a [sq2.c * UInt32(2):UInt32, a:UInt32]\
+        \n      SubqueryAlias: __correlated_sq_2 [c * UInt32(2):UInt32, a:UInt32]\
+        \n        Projection: sq2.c * UInt32(2) AS c * UInt32(2), sq2.a [c * UInt32(2):UInt32, a:UInt32]\
         \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq_display_indent(

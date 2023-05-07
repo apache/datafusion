@@ -386,19 +386,6 @@ pub(crate) fn collect_subquery_cols(
     })
 }
 
-pub(crate) fn collect_using_cols(
-    expr: &Expr,
-    subquery_schema: DFSchemaRef,
-) -> Result<BTreeSet<Column>> {
-    let mut using_cols = BTreeSet::new();
-    for col in expr.to_columns()?.into_iter() {
-        if subquery_schema.has_column(&col) {
-            using_cols.insert(col);
-        }
-    }
-    Result::<_>::Ok(using_cols)
-}
-
 pub(crate) fn replace_qualified_name(
     expr: Expr,
     cols: &BTreeSet<Column>,
