@@ -20,8 +20,10 @@ use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{lit, Expr};
+use datafusion_expr::expr::BinaryExpr;
+use datafusion_expr::Operator;
 use log::debug;
-use sqlparser::ast::{DateTimeField, Expr as SQLExpr, Value};
+use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::HashSet;
 
@@ -163,6 +165,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_interval_to_expr(
         &self,
         value: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
         leading_field: Option<DateTimeField>,
         leading_precision: Option<u64>,
         last_field: Option<DateTimeField>,
@@ -191,6 +195,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => s,
+            SQLExpr::BinaryOp { left, op, right } => {
+                let left_expr = self.sql_interval_to_expr(
+                    *left, schema, planner_context, None, None, None, None
+                )?;
+                let right = self.sql_expr_to_logical_expr(
+                    *right,
+                    schema,
+                    planner_context,
+                )?;
+                let op = match op {
+                    BinaryOperator::Plus => Operator::Plus,
+                    BinaryOperator::Minus => Operator::Minus,
+                    _ => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported interval operator: {op:?}"
+                        )));
+                    }
+                };
+                return Ok(Expr::BinaryExpr(
+                    BinaryExpr::new(Box::new(left_expr), op, Box::new(right))
+                ));
+            }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {value:?}"
