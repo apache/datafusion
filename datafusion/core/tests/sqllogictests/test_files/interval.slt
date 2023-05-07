@@ -156,19 +156,31 @@ select interval '1 year' + '1 month' + '1 day' + '1 hour' + '1 minute' + '1 seco
 ----
 0 years 13 mons 1 days 1 hours 1 mins 1.001001001 secs
 
-# Interval with nested string literal substraction
+# Interval with string literal subtraction
 query ?
-select interval '1 month' - '1 day'
+select interval '1 month' - '1 day';
 ----
 0 years 1 mons -1 days 0 hours 0 mins 0.000000000 secs
 
-# Interval with nested string literal substraction and leading field
+# Interval with string literal subtraction and leading field
 query ?
-select interval '10' - '1' month;
+select interval '5' - '1' - '2' year;
 ----
-0 years 9 mons 0 days 0 hours 0 mins 0.000000000 secs
+0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs
 
-# Interval mega nested string literal substraction
+# Interval with nested string literal subtraction
+query ?
+select interval '1 month' - '1 day' - '1 hour';
+----
+0 years 1 mons -1 days -1 hours 0 mins 0.000000000 secs
+
+# Interval with nested string literal subtraction and leading field
+query ?
+select interval '10' - '1' - '1' month;
+----
+0 years 8 mons 0 days 0 hours 0 mins 0.000000000 secs
+
+# Interval mega nested string literal subtraction
 query ?
 select interval '1 year' - '1 month' - '1 day' - '1 hour' - '1 minute' - '1 second' - '1 millisecond' - '1 microsecond' - '1 nanosecond'
 ----
@@ -186,6 +198,17 @@ select ( interval '1 month' + '1 day' ) + '2012-01-01'::date;
 ----
 2012-02-02
 
+# Interval nested string literal + date
+query D
+select interval '1 year' + '1 month' + '1 day' + '2012-01-01'::date
+----
+2013-02-02
+
+# Interval nested string literal subtraction + date
+query D
+select interval '1 year' - '1 month' + '1 day' + '2012-01-01'::date
+----
+2012-12-02
 
 
 
