@@ -315,9 +315,8 @@ fn get_meet_of_orderings_helper(
                     (_, _) => ordering[idx] == first[idx],
                 };
                 if !schema_and_ordering_aligned {
-                    // In Union schema of the first child is the output schema by convention.
-                    // Make sure that result is generated from the first schema, to make it compatible with
-                    // union output ordering.
+                    // In a union, the output schema is that of the first child (by convention).
+                    // Therefore, generate the result from the first child's schema:
                     return if idx > 0 { Some(&first[..idx]) } else { None };
                 }
             }
