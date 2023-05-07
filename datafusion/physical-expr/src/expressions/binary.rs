@@ -2731,13 +2731,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(2)?;
-        dict_builder.append_null();
-        dict_builder.append(3)?;
-        dict_builder.append(6)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(2), None, Some(3), Some(6)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2776,11 +2771,16 @@ mod tests {
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
-            &[Some(value + 1), None, Some(value), Some(value + 2)],
+            &[
+                Some(value + 1),
+                Some(value),
+                None,
+                Some(value + 2),
+                Some(value + 1),
+            ],
             11,
             0,
         ));
-        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2790,7 +2790,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(1), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -2950,13 +2950,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(0)?;
-        dict_builder.append_null();
-        dict_builder.append(1)?;
-        dict_builder.append(4)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(0), None, Some(1), Some(4)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2995,11 +2990,16 @@ mod tests {
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
-            &[Some(value - 1), None, Some(value - 2), Some(value)],
+            &[
+                Some(value - 1),
+                Some(value - 2),
+                None,
+                Some(value),
+                Some(value - 1),
+            ],
             11,
             0,
         ));
-        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3009,7 +3009,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(1), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -3165,13 +3165,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(2)?;
-        dict_builder.append_null();
-        dict_builder.append(4)?;
-        dict_builder.append(10)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(2), None, Some(4), Some(10)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3210,11 +3205,10 @@ mod tests {
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
-            &[Some(246), None, Some(244), Some(248)],
+            &[Some(246), Some(244), None, Some(248), Some(246)],
             21,
             0,
         ));
-        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3224,7 +3218,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -3392,13 +3386,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(0)?;
-        dict_builder.append_null();
-        dict_builder.append(1)?;
-        dict_builder.append(2)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(0), None, Some(1), Some(2)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3439,14 +3428,14 @@ mod tests {
         let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(6150000000000),
-                None,
                 Some(6100000000000),
+                None,
                 Some(6200000000000),
+                Some(6150000000000),
             ],
             21,
             11,
         ));
-        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3456,7 +3445,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -3614,13 +3603,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(1)?;
-        dict_builder.append_null();
-        dict_builder.append(0)?;
-        dict_builder.append(1)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(1), None, Some(0), Some(1)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3659,11 +3643,10 @@ mod tests {
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
         let decimal_array = Arc::new(create_decimal_array(
-            &[Some(1), None, Some(0), Some(0)],
+            &[Some(1), Some(0), None, Some(0), Some(1)],
             10,
             0,
         ));
-        let expected = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -3673,7 +3656,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
