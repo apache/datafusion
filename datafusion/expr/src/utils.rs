@@ -295,7 +295,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
+            | Expr::ScalarFunction(..)
             | Expr::ScalarUDF { .. }
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }

@@ -23,7 +23,7 @@ use sqlparser::ast::Ident;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
-    WindowFunction,
+    ScalarFunction, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -295,13 +295,14 @@ where
                     None => None,
                 },
             ))),
-            Expr::ScalarFunction { fun, args } => Ok(Expr::ScalarFunction {
-                fun: fun.clone(),
-                args: args
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-            }),
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
+                Ok(Expr::ScalarFunction(ScalarFunction::new(
+                    fun.clone(),
+                    args.iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                )))
+            }
             Expr::ScalarUDF { fun, args } => Ok(Expr::ScalarUDF {
                 fun: fun.clone(),
                 args: args

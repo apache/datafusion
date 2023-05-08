@@ -17,7 +17,9 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{AggregateFunction, BinaryExpr, Cast, GroupingSet, TryCast};
+use crate::expr::{
+    AggregateFunction, BinaryExpr, Cast, GroupingSet, ScalarFunction, TryCast,
+};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -214,10 +216,10 @@ pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
 pub fn concat(args: &[Expr]) -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Concat,
-        args: args.to_vec(),
-    }
+    Expr::ScalarFunction(ScalarFunction::new(
+        BuiltinScalarFunction::Concat,
+        args.to_vec(),
+    ))
 }
 
 /// Concatenates all but the first argument, with separators.
@@ -226,26 +228,20 @@ pub fn concat(args: &[Expr]) -> Expr {
 pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     let mut args = values;
     args.insert(0, sep);
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::ConcatWithSeparator,
+    Expr::ScalarFunction(ScalarFunction::new(
+        BuiltinScalarFunction::ConcatWithSeparator,
         args,
-    }
+    ))
 }
 
 /// Returns an approximate value of π
 pub fn pi() -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Pi,
-        args: vec![],
-    }
+    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
 }
 
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Random,
-        args: vec![],
-    }
+    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
 }
 
 /// Returns the approximate number of distinct input values.
@@ -441,10 +437,10 @@ macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
         #[doc = $DOC ]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
-            Expr::ScalarFunction {
-                fun: built_in_function::BuiltinScalarFunction::$ENUM,
-                args: vec![$($arg),*],
-            }
+            Expr::ScalarFunction(ScalarFunction::new(
+                built_in_function::BuiltinScalarFunction::$ENUM,
+                vec![$($arg),*],
+            ))
         }
     };
 }
@@ -453,10 +449,10 @@ macro_rules! nary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
         #[doc = $DOC ]
         pub fn $FUNC(args: Vec<Expr>) -> Expr {
-            Expr::ScalarFunction {
-                fun: built_in_function::BuiltinScalarFunction::$ENUM,
+            Expr::ScalarFunction(ScalarFunction::new(
+                built_in_function::BuiltinScalarFunction::$ENUM,
                 args,
-            }
+            ))
         }
     };
 }
@@ -712,7 +708,7 @@ pub fn create_udaf(
 /// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
-        Ok(fun) => Ok(Expr::ScalarFunction { fun, args }),
+        Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
         Err(e) => Err(e),
     }
 }
@@ -735,7 +731,9 @@ mod test {
 
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction { fun, args } = $FUNC(col("tableA.a")) {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+                $FUNC(col("tableA.a"))
+            {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(1, args.len());
@@ -753,7 +751,7 @@ mod test {
                     col(stringify!($arg.to_string()))
                 ),*
             );
-            if let Expr::ScalarFunction { fun, args } = result {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(expected.len(), args.len());
@@ -773,7 +771,7 @@ mod test {
                     ),*
                 ]
             );
-            if let Expr::ScalarFunction { fun, args } = result {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(expected.len(), args.len());
@@ -877,8 +875,8 @@ mod test {
 
     #[test]
     fn uuid_function_definitions() {
-        if let Expr::ScalarFunction { fun, args } = uuid() {
-            let name = built_in_function::BuiltinScalarFunction::Uuid;
+        if let Expr::ScalarFunction(ScalarFunction { fun, args }) = uuid() {
+            let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
         } else {
@@ -888,7 +886,9 @@ mod test {
 
     #[test]
     fn digest_function_definitions() {
-        if let Expr::ScalarFunction { fun, args } = digest(col("tableA.a"), lit("md5")) {
+        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+            digest(col("tableA.a"), lit("md5"))
+        {
             let name = BuiltinScalarFunction::Digest;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());
