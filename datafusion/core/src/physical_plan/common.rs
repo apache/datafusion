@@ -26,7 +26,7 @@ use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statist
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -307,12 +307,18 @@ fn get_meet_of_orderings_helper(
                 let schema_and_ordering_aligned = match (
                     ordering[idx].expr.as_any().downcast_ref::<Column>(),
                     first[idx].expr.as_any().downcast_ref::<Column>(),
+                    ordering[idx].expr.as_any().downcast_ref::<BinaryExpr>(),
+                    first[idx].expr.as_any().downcast_ref::<BinaryExpr>(),
                 ) {
-                    (Some(column), Some(column_first)) => {
+                    (Some(column), Some(column_first), _, _) => {
                         column.index() == column_first.index()
                             && ordering[idx].options == first[idx].options
                     }
-                    (_, _) => ordering[idx] == first[idx],
+                    (_, _, Some(binary), Some(binary_first)) => {
+                        get_meet_of_orderings_binary_helper(binary, binary_first)
+                            && ordering[idx].options == first[idx].options
+                    }
+                    (_, _, _, _) => ordering[idx] == first[idx],
                 };
                 if !schema_and_ordering_aligned {
                     // In a union, the output schema is that of the first child (by convention).
@@ -322,6 +328,44 @@ fn get_meet_of_orderings_helper(
             }
         }
         idx += 1;
+    }
+
+    fn get_meet_of_orderings_binary_helper(
+        first_binary: &BinaryExpr,
+        second_binary: &BinaryExpr,
+    ) -> bool {
+        if first_binary.op() != second_binary.op() {
+            return false;
+        }
+        let left = match (
+            first_binary.left().as_any().downcast_ref::<Column>(),
+            second_binary.left().as_any().downcast_ref::<Column>(),
+            first_binary.left().as_any().downcast_ref::<BinaryExpr>(),
+            second_binary.left().as_any().downcast_ref::<BinaryExpr>(),
+        ) {
+            (Some(column), Some(column_first), _, _) => {
+                column.index() == column_first.index()
+            }
+            (_, _, Some(binary), Some(binary_first)) => {
+                get_meet_of_orderings_binary_helper(binary, binary_first)
+            }
+            (_, _, _, _) => false,
+        };
+        let right = match (
+            first_binary.right().as_any().downcast_ref::<Column>(),
+            second_binary.right().as_any().downcast_ref::<Column>(),
+            first_binary.right().as_any().downcast_ref::<BinaryExpr>(),
+            second_binary.right().as_any().downcast_ref::<BinaryExpr>(),
+        ) {
+            (Some(column), Some(column_first), _, _) => {
+                column.index() == column_first.index()
+            }
+            (_, _, Some(binary), Some(binary_first)) => {
+                get_meet_of_orderings_binary_helper(binary, binary_first)
+            }
+            (_, _, _, _) => false,
+        };
+        left && right
     }
 }
 
@@ -340,6 +384,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
+    use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{col, Column};
 
     #[test]
@@ -525,6 +570,65 @@ mod tests {
 
         let result = get_meet_of_orderings_helper(vec![&input1, &input2]);
         assert!(result.is_none());
+
+        let result = get_meet_of_orderings_helper(vec![&input2, &input3]);
+        assert!(result.is_none());
+
+        let result = get_meet_of_orderings_helper(vec![&input1, &input3]);
+        assert!(result.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn get_meet_of_orderings_helper_binary_exprs() -> Result<()> {
+        let input1: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Plus,
+                    Arc::new(Column::new("b", 1)),
+                )),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let input2: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("x", 0)),
+                    Operator::Plus,
+                    Arc::new(Column::new("y", 1)),
+                )),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("z", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        // erroneous input
+        let input3: Vec<PhysicalSortExpr> = vec![
+            PhysicalSortExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 1)),
+                    Operator::Plus,
+                    Arc::new(Column::new("b", 0)),
+                )),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                options: SortOptions::default(),
+            },
+        ];
+
+        let result = get_meet_of_orderings_helper(vec![&input1, &input2]);
+        assert_eq!(input1, result.unwrap());
 
         let result = get_meet_of_orderings_helper(vec![&input2, &input3]);
         assert!(result.is_none());
