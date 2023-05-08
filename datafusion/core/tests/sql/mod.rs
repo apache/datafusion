@@ -105,8 +105,6 @@ pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod subqueries;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
