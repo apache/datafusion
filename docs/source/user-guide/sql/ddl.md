@@ -156,6 +156,8 @@ CREATE [OR REPLACE] TABLE [IF NOT EXISTS] <b><i>table_name</i></b> AS [SELECT | 
 ```sql
 CREATE TABLE IF NOT EXISTS valuetable AS VALUES(1,'HELLO'),(12,'DATAFUSION');
 
+CREATE TABLE IF NOT EXISTS valuetable(c1 INT, c2 VARCHAR) AS VALUES(1,'HELLO'),(12,'DATAFUSION');
+
 CREATE TABLE memtable as select * from valuetable;
 ```
 
