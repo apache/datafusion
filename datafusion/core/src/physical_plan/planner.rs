@@ -205,6 +205,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             filter,
             order_by,
         } => {
+            // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
                     "aggregate expression with filter is not supported".to_string(),
