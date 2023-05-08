@@ -26,7 +26,6 @@ use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
 use crate::Operator;
-use crate::ScalarUDF;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column};
@@ -154,12 +153,7 @@ pub enum Expr {
     /// Represents the call of a built-in scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Represents the call of a user-defined scalar function with arguments.
-    ScalarUDF {
-        /// The function
-        fun: Arc<ScalarUDF>,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-    },
+    ScalarUDF(ScalarUDF),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
@@ -360,6 +354,22 @@ pub struct ScalarFunction {
 impl ScalarFunction {
     /// Create a new ScalarFunction expression
     pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
+        Self { fun, args }
+    }
+}
+
+/// ScalarUDF expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScalarUDF {
+    /// The function
+    pub fun: Arc<crate::ScalarUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl ScalarUDF {
+    /// Create a new ScalarUDF expression
+    pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
         Self { fun, args }
     }
 }
@@ -605,7 +615,7 @@ impl Expr {
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
-            Expr::ScalarUDF { .. } => "ScalarUDF",
+            Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
@@ -941,7 +951,7 @@ impl fmt::Debug for Expr {
             Expr::ScalarFunction(func) => {
                 fmt_function(f, &func.fun.to_string(), false, &func.args, false)
             }
-            Expr::ScalarUDF { fun, ref args, .. } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 fmt_function(f, &fun.name, false, args, false)
             }
             Expr::WindowFunction(WindowFunction {
@@ -1300,7 +1310,9 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarFunction(func) => {
             create_function_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
+            create_function_name(&fun.name, false, args)
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
