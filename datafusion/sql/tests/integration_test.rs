@@ -56,6 +56,11 @@ fn parse_decimals() {
             "10000000000000000000.00",
             "Decimal128(Some(1000000000000000000000),22,2)",
         ),
+        ("18446744073709551615", "UInt64(18446744073709551615)"),
+        (
+            "18446744073709551616",
+            "Decimal128(Some(18446744073709551616),38,0)",
+        ),
     ];
     for (a, b) in test_data {
         let sql = format!("SELECT {a}");
@@ -3386,10 +3391,6 @@ fn test_select_distinct_order_by() {
 #[case::select_sort_by_unsupported(
     "SELECT * FROM person SORT BY id",
     "This feature is not implemented: SORT BY"
-)]
-#[case::select_into_unsupported(
-    "SELECT * INTO test FROM person",
-    "This feature is not implemented: INTO"
 )]
 #[test]
 fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {

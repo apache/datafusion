@@ -371,11 +371,28 @@ select host, median(usage) from cpu group by host;
 host0 90.1
 host1 90.3
 
+statement ok
+drop table cpu;
+
+# this test is to show create table as and select into works in the same way
+statement ok
+SELECT * INTO cpu 
+FROM (VALUES
+    ('host0', 90.1),
+    ('host1', 90.2),
+    ('host1', 90.4)
+  ) AS cpu (host, usage);
+
+query TR rowsort
+select host, median(usage) from cpu group by host;
+----
+host0 90.1
+host1 90.3
+
 query R
 select median(usage) from cpu;
 ----
 90.2
-
 
 statement ok
 drop table cpu;
@@ -1389,7 +1406,6 @@ as values
  (null, 'Row 2'),
  ('2021-01-01T05:11:10.432', 'Row 3');
 
-
 statement ok
 create table t as
 select
@@ -1643,3 +1659,74 @@ NULL 1 10.1 10.1 10.1 10.1 0 NULL
 # Restore the default dialect
 statement ok
 set datafusion.sql_parser.dialect = 'Generic';
+
+# Prepare the table with dictionary values for testing
+statement ok
+CREATE TABLE value(x bigint) AS VALUES (1), (2), (3), (1), (3), (4), (5), (2);
+
+statement ok
+CREATE TABLE value_dict AS SELECT arrow_cast(x, 'Dictionary(Int64, Int32)') AS x_dict FROM value;
+
+query ?
+select x_dict from value_dict;
+----
+1
+2
+3
+1
+3
+4
+5
+2
+
+query I
+select sum(x_dict) from value_dict;
+----
+21
+
+query R
+select avg(x_dict) from value_dict;
+----
+2.625
+
+query I
+select min(x_dict) from value_dict;
+----
+1
+
+query I
+select max(x_dict) from value_dict;
+----
+5
+
+query I
+select sum(x_dict) from value_dict where x_dict > 3;
+----
+9
+
+query R
+select avg(x_dict) from value_dict where x_dict > 3;
+----
+4.5
+
+query I
+select min(x_dict) from value_dict where x_dict > 3;
+----
+4
+
+query I
+select max(x_dict) from value_dict where x_dict > 3;
+----
+5
+
+query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+select sum(x_dict) from value_dict group by x_dict % 2;
+
+query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+select avg(x_dict) from value_dict group by x_dict % 2;
+
+query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+select min(x_dict) from value_dict group by x_dict % 2;
+
+query error DataFusion error: External error: Arrow error: Invalid argument error: RowConverter column schema mismatch, expected Int64 got Dictionary\(Int64, Int64\)
+select max(x_dict) from value_dict group by x_dict % 2;

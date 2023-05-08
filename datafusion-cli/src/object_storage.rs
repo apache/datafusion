@@ -112,7 +112,8 @@ fn get_bucket_name(url: &Url) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use datafusion::{
-        datasource::listing::ListingTableUrl, logical_expr::LogicalPlan,
+        datasource::listing::ListingTableUrl,
+        logical_expr::{DdlStatement, LogicalPlan},
         prelude::SessionContext,
     };
 
@@ -132,7 +133,7 @@ mod tests {
         let plan = ctx.state().create_logical_plan(&sql).await?;
 
         match &plan {
-            LogicalPlan::CreateExternalTable(cmd) => {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
                 let _builder = get_oss_object_store_builder(table_url.as_ref(), cmd)?;
                 // get the actual configuration information, then assert_eq!
             }

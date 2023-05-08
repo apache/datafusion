@@ -20,10 +20,12 @@ use chrono::{DateTime, TimeZone, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Holds per-execution properties and data (such as starting timestamps, etc).
-/// An instance of this struct is created each time a [`LogicalPlan`] is prepared for
-/// execution (optimized). If the same plan is optimized multiple times, a new
-/// `ExecutionProps` is created each time.
+/// Holds per-query execution properties and data (such as statment
+/// starting timestamps).
+///
+/// An [`ExecutionProps`] is created each time a [`LogicalPlan`] is
+/// prepared for execution (optimized). If the same plan is optimized
+/// multiple times, a new `ExecutionProps` is created each time.
 ///
 /// It is important that this structure be cheap to create as it is
 /// done so during predicate pruning and expression simplification

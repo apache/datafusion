@@ -33,7 +33,7 @@ use arrow::{datatypes::SchemaRef, json};
 use bytes::{Buf, Bytes};
 
 use crate::physical_plan::common::AbortOnDropSingle;
-use arrow::json::RawReaderBuilder;
+use arrow::json::ReaderBuilder;
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -44,7 +44,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
 
-use super::{get_output_ordering, FileScanConfig};
+use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
@@ -52,6 +52,7 @@ pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
@@ -63,12 +64,14 @@ impl NdJsonExec {
         base_config: FileScanConfig,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        let (projected_schema, projected_statistics) = base_config.project();
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
         }
@@ -98,7 +101,7 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        get_output_ordering(&self.base_config)
+        self.projected_output_ordering.as_deref()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -118,7 +121,7 @@ impl ExecutionPlan for NdJsonExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let batch_size = context.session_config().batch_size();
-        let (projected_schema, _) = self.base_config.project();
+        let (projected_schema, ..) = self.base_config.project();
 
         let object_store = context
             .runtime_env()
@@ -143,12 +146,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "JsonExec: limit={:?}, files={}",
-                    self.base_config.limit,
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                )
+                write!(f, "JsonExec: {}", self.base_config)
             }
         }
     }
@@ -198,13 +196,13 @@ impl FileOpener for JsonOpener {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let bytes = file_compression_type.convert_read(file)?;
-                    let reader = RawReaderBuilder::new(schema)
+                    let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let mut decoder = RawReaderBuilder::new(schema)
+                    let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
 
@@ -311,7 +309,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_DATA_BASE: &str = "tests/jsons";
+    const TEST_DATA_BASE: &str = "tests/data";
 
     async fn prepare_store(
         state: &SessionState,
@@ -709,7 +707,7 @@ mod tests {
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
-        let df = ctx.read_csv("tests/csv/corrupt.csv", options).await?;
+        let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let e = df

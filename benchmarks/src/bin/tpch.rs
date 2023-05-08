@@ -37,8 +37,6 @@ use std::{iter::Iterator, path::PathBuf, sync::Arc, time::Instant};
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::scheduler::Scheduler;
-use futures::TryStreamExt;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -90,10 +88,6 @@ struct DataFusionBenchmarkOpt {
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
-
-    /// Enable scheduler
-    #[structopt(short = "e", long = "enable-scheduler")]
-    enable_scheduler: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -227,16 +221,14 @@ async fn benchmark_query(
         if query_id == 15 {
             for (n, query) in sql.iter().enumerate() {
                 if n == 1 {
-                    result = execute_query(&ctx, query, opt.debug, opt.enable_scheduler)
-                        .await?;
+                    result = execute_query(&ctx, query, opt.debug).await?;
                 } else {
-                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
+                    execute_query(&ctx, query, opt.debug).await?;
                 }
             }
         } else {
             for query in sql {
-                result =
-                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
+                result = execute_query(&ctx, query, opt.debug).await?;
             }
         }
 
@@ -295,7 +287,6 @@ async fn execute_query(
     ctx: &SessionContext,
     sql: &str,
     debug: bool,
-    enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
     let (state, plan) = plan.into_parts();
@@ -315,15 +306,7 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let result = if enable_scheduler {
-        let scheduler = Scheduler::new(num_cpus::get());
-        let results = scheduler
-            .schedule(physical_plan.clone(), state.task_ctx())
-            .unwrap();
-        results.stream().try_collect().await?
-    } else {
-        collect(physical_plan.clone(), state.task_ctx()).await?
-    };
+    let result = collect(physical_plan.clone(), state.task_ctx()).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -529,8 +512,7 @@ mod tests {
             // handle special q15 which contains "create view" sql statement
             if sql.starts_with("select") {
                 let explain = "explain ".to_string() + sql;
-                let result_batch =
-                    execute_query(&ctx, explain.as_str(), false, false).await?;
+                let result_batch = execute_query(&ctx, explain.as_str(), false).await?;
                 if !actual.is_empty() {
                     actual += "\n";
                 }
@@ -542,7 +524,7 @@ mod tests {
                 // let mut file = File::create(format!("expected-plans/q{}.txt", query))?;
                 // file.write_all(actual.as_bytes())?;
             } else {
-                execute_query(&ctx, sql.as_str(), false, false).await?;
+                execute_query(&ctx, sql.as_str(), false).await?;
             }
         }
 
@@ -726,7 +708,7 @@ mod tests {
 
         let sql = &get_query_sql(n)?;
         for query in sql {
-            execute_query(&ctx, query, false, false).await?;
+            execute_query(&ctx, query, false).await?;
         }
 
         Ok(())
@@ -757,7 +739,6 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            enable_scheduler: false,
         };
         register_tables(&opt, &ctx).await?;
         let queries = get_query_sql(query)?;
@@ -1064,7 +1045,6 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            enable_scheduler: false,
         };
         let mut results = benchmark_datafusion(opt).await?;
         assert_eq!(results.len(), 1);

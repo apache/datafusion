@@ -29,6 +29,7 @@ use crate::physical_plan::{
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
+use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_expr::{
     window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
     WindowFrame,
@@ -44,12 +45,17 @@ mod bounded_window_agg_exec;
 mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
+pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr::{
+    normalize_expr_with_equivalence_properties, OrderedColumn,
+    OrderingEquivalenceProperties, PhysicalSortRequirement,
+};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -241,6 +247,63 @@ pub(crate) fn get_ordered_partition_by_indices(
     input_places[0..first_n].to_vec()
 }
 
+pub(crate) fn window_ordering_equivalence(
+    schema: &SchemaRef,
+    input: &Arc<dyn ExecutionPlan>,
+    window_expr: &[Arc<dyn WindowExpr>],
+) -> OrderingEquivalenceProperties {
+    // We need to update the schema, so we can not directly use
+    // `input.ordering_equivalence_properties()`.
+    let mut result = OrderingEquivalenceProperties::new(schema.clone());
+    result.extend(
+        input
+            .ordering_equivalence_properties()
+            .classes()
+            .iter()
+            .cloned(),
+    );
+    let out_ordering = input.output_ordering().unwrap_or(&[]);
+    for expr in window_expr {
+        if let Some(builtin_window_expr) =
+            expr.as_any().downcast_ref::<BuiltInWindowExpr>()
+        {
+            // Only the built-in `RowNumber` window function introduces a new
+            // ordering:
+            if builtin_window_expr
+                .get_built_in_func_expr()
+                .as_any()
+                .is::<RowNumber>()
+            {
+                // If there is an existing ordering, add new ordering as an equivalence:
+                if let Some(first) = out_ordering.first() {
+                    // Normalize expression, as we search for ordering equivalences
+                    // on normalized versions:
+                    let normalized = normalize_expr_with_equivalence_properties(
+                        first.expr.clone(),
+                        input.equivalence_properties().classes(),
+                    );
+                    if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
+                        let column_info =
+                            schema.column_with_name(expr.field().unwrap().name());
+                        if let Some((idx, field)) = column_info {
+                            let lhs = OrderedColumn::new(column.clone(), first.options);
+                            let options = SortOptions {
+                                descending: false,
+                                nulls_first: false,
+                            }; // ASC, NULLS LAST
+                            let rhs = OrderedColumn::new(
+                                Column::new(field.name(), idx),
+                                options,
+                            );
+                            result.add_equal_conditions((&lhs, &rhs));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
 #[cfg(test)]
 mod tests {
     use super::*;

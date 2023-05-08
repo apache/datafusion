@@ -38,7 +38,7 @@ impl DecorrelateWhereExists {
         Self {}
     }
 
-    /// Finds expressions that have a where in subquery (and recurses when found)
+    /// Finds expressions that have a where in subquery (and recurse when found)
     ///
     /// # Arguments
     ///
@@ -224,9 +224,10 @@ impl SubqueryInfo {
 mod tests {
     use super::*;
     use crate::test::*;
+    use arrow::datatypes::DataType;
     use datafusion_common::Result;
     use datafusion_expr::{
-        col, exists, lit, logical_plan::LogicalPlanBuilder, not_exists,
+        col, exists, lit, logical_plan::LogicalPlanBuilder, not_exists, out_ref_col,
     };
     use std::ops::Add;
 
@@ -244,7 +245,10 @@ mod tests {
     fn multiple_subqueries() -> Result<()> {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("orders.o_custkey").eq(col("customer.c_custkey")))?
+                .filter(
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -270,7 +274,10 @@ mod tests {
     fn recursive_subqueries() -> Result<()> {
         let lineitem = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("lineitem"))
-                .filter(col("lineitem.l_orderkey").eq(col("orders.o_orderkey")))?
+                .filter(
+                    col("lineitem.l_orderkey")
+                        .eq(out_ref_col(DataType::Int64, "orders.o_orderkey")),
+                )?
                 .project(vec![col("lineitem.l_orderkey")])?
                 .build()?,
         );
@@ -278,8 +285,10 @@ mod tests {
         let orders = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    exists(lineitem)
-                        .and(col("orders.o_custkey").eq(col("customer.c_custkey"))),
+                    exists(lineitem).and(
+                        col("orders.o_custkey")
+                            .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                    ),
                 )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
@@ -307,7 +316,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("customer.c_custkey")
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey"))
                         .and(col("o_orderkey").eq(lit(1))),
                 )?
@@ -334,7 +343,7 @@ mod tests {
     fn exists_subquery_no_cols() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").eq(lit(1u32)))?
+                .filter(out_ref_col(DataType::Int64, "customer.c_custkey").eq(lit(1u32)))?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -377,7 +386,10 @@ mod tests {
     fn exists_subquery_where_not_eq() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").not_eq(col("orders.o_custkey")))?
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .not_eq(col("orders.o_custkey")),
+                )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -401,7 +413,10 @@ mod tests {
     fn exists_subquery_where_less_than() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").lt(col("orders.o_custkey")))?
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .lt(col("orders.o_custkey")),
+                )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -426,7 +441,7 @@ mod tests {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
                 .filter(
-                    col("customer.c_custkey")
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
                         .eq(col("orders.o_custkey"))
                         .or(col("o_orderkey").eq(lit(1))),
                 )?
@@ -470,7 +485,10 @@ mod tests {
     fn exists_subquery_project_expr() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
                 .project(vec![col("orders.o_custkey").add(lit(1))])?
                 .build()?,
         );
@@ -494,7 +512,10 @@ mod tests {
     fn should_support_additional_filters() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(scan_tpch_table("orders"))
-                .filter(col("customer.c_custkey").eq(col("orders.o_custkey")))?
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
                 .project(vec![col("orders.o_custkey")])?
                 .build()?,
         );
@@ -513,7 +534,7 @@ mod tests {
         assert_plan_eq(&plan, expected)
     }
 
-    /// Test for correlated exists subquery filter with disjustions
+    /// Test for correlated exists subquery filter with disjunctions
     #[test]
     fn exists_subquery_disjunction() -> Result<()> {
         let sq = Arc::new(
@@ -545,7 +566,7 @@ mod tests {
     fn exists_subquery_correlated() -> Result<()> {
         let sq = Arc::new(
             LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
-                .filter(col("test.a").eq(col("sq.a")))?
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
                 .project(vec![col("c")])?
                 .build()?,
         );
@@ -595,12 +616,12 @@ mod tests {
         let subquery_scan2 = test_table_scan_with_name("sq2")?;
 
         let subquery1 = LogicalPlanBuilder::from(subquery_scan1)
-            .filter(col("test.a").eq(col("sq1.a")))?
+            .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq1.a")))?
             .project(vec![col("c")])?
             .build()?;
 
         let subquery2 = LogicalPlanBuilder::from(subquery_scan2)
-            .filter(col("test.a").eq(col("sq2.a")))?
+            .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq2.a")))?
             .project(vec![col("c")])?
             .build()?;
 
@@ -630,7 +651,10 @@ mod tests {
         let table_scan = test_table_scan()?;
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
-            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
+            .filter(
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+            )?
             .project(vec![lit(1u32)])?
             .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -678,7 +702,10 @@ mod tests {
         let table_scan = test_table_scan()?;
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
-            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
+            .filter(
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+            )?
             .project(vec![col("sq.c")])?
             .distinct()?
             .build()?;
@@ -702,7 +729,10 @@ mod tests {
         let table_scan = test_table_scan()?;
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
-            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
+            .filter(
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+            )?
             .project(vec![col("sq.b") + col("sq.c")])?
             .distinct()?
             .build()?;
@@ -726,7 +756,10 @@ mod tests {
         let table_scan = test_table_scan()?;
         let subquery_scan = test_table_scan_with_name("sq")?;
         let subquery = LogicalPlanBuilder::from(subquery_scan)
-            .filter((lit(1u32) + col("sq.a")).gt(col("test.a") * lit(2u32)))?
+            .filter(
+                (lit(1u32) + col("sq.a"))
+                    .gt(out_ref_col(DataType::UInt32, "test.a") * lit(2u32)),
+            )?
             .project(vec![lit(1u32), col("sq.c")])?
             .distinct()?
             .build()?;

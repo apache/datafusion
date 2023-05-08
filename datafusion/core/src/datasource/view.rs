@@ -473,7 +473,8 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("ParquetExec: limit=Some(10)"));
+        assert!(formatted.contains("ParquetExec: "));
+        assert!(formatted.contains("projection=[bool_col, int_col], limit=10"));
         Ok(())
     }
 

@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::coerce_types;
+use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
@@ -37,45 +37,16 @@ pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
     rhs: Arc<dyn PhysicalExpr>,
-    // TODO: move type checking to the planning phase and not in the physical expr
-    // so we can remove this
-    input_schema: Schema,
 }
 
 impl DateTimeIntervalExpr {
     /// Create a new instance of DateIntervalExpr
-    pub fn try_new(
+    pub fn new(
         lhs: Arc<dyn PhysicalExpr>,
         op: Operator,
         rhs: Arc<dyn PhysicalExpr>,
-        input_schema: &Schema,
-    ) -> Result<Self> {
-        match (
-            lhs.data_type(input_schema)?,
-            op,
-            rhs.data_type(input_schema)?,
-        ) {
-            (
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                Operator::Plus | Operator::Minus,
-                DataType::Interval(_),
-            )
-            | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
-            | (DataType::Interval(_), Operator::Plus, DataType::Timestamp(_, _))
-            | (
-                DataType::Interval(_),
-                Operator::Plus | Operator::Minus,
-                DataType::Interval(_),
-            ) => Ok(Self {
-                lhs,
-                op,
-                rhs,
-                input_schema: input_schema.clone(),
-            }),
-            (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
-                "Invalid operation {op} between '{lhs}' and '{rhs}' for DateIntervalExpr"
-            ))),
-        }
+    ) -> Self {
+        Self { lhs, op, rhs }
     }
 
     /// Get the left-hand side expression
@@ -106,7 +77,7 @@ impl PhysicalExpr for DateTimeIntervalExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        coerce_types(
+        get_result_type(
             &self.lhs.data_type(input_schema)?,
             &Operator::Minus,
             &self.rhs.data_type(input_schema)?,
@@ -149,16 +120,21 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(array_rhs)) => {
                 resolve_temporal_op_scalar(&array_lhs, sign, &array_rhs)
             }
+            // This function evaluates operations between a scalar value and an array of temporal
+            // values. One example is calculating the duration between a scalar timestamp and an
+            // array of timestamps (i.e. `now() - some_column`).
+            (ColumnarValue::Scalar(scalar_lhs), ColumnarValue::Array(array_rhs)) => {
+                let array_lhs = scalar_lhs.to_array_of_size(array_rhs.len());
+                Ok(ColumnarValue::Array(resolve_temporal_op(
+                    &array_lhs, sign, &array_rhs,
+                )?))
+            }
             // This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
             // timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
             // the operation (+1 for addition and -1 for subtraction).
             (ColumnarValue::Array(array_lhs), ColumnarValue::Array(array_rhs)) => Ok(
                 ColumnarValue::Array(resolve_temporal_op(&array_lhs, sign, &array_rhs)?),
             ),
-            (_, _) => {
-                let msg = "If RHS of the operation is an array, then LHS also must be";
-                Err(DataFusionError::Internal(msg.to_string()))
-            }
         }
     }
 
@@ -202,12 +178,11 @@ impl PhysicalExpr for DateTimeIntervalExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(DateTimeIntervalExpr::try_new(
+        Ok(Arc::new(DateTimeIntervalExpr::new(
             children[0].clone(),
             self.op,
             children[1].clone(),
-            &self.input_schema,
-        )?))
+        )))
     }
 }
 
@@ -220,6 +195,36 @@ impl PartialEq<dyn Any> for DateTimeIntervalExpr {
     }
 }
 
+/// create a DateIntervalExpr
+pub fn date_time_interval_expr(
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    match (
+        lhs.data_type(input_schema)?,
+        op,
+        rhs.data_type(input_schema)?,
+    ) {
+        (
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+            Operator::Plus | Operator::Minus,
+            DataType::Interval(_),
+        )
+        | (DataType::Timestamp(_, _), Operator::Minus, DataType::Timestamp(_, _))
+        | (DataType::Interval(_), Operator::Plus, DataType::Timestamp(_, _))
+        | (
+            DataType::Interval(_),
+            Operator::Plus | Operator::Minus,
+            DataType::Interval(_),
+        ) => Ok(Arc::new(DateTimeIntervalExpr::new(lhs, op, rhs))),
+        (lhs, _, rhs) => Err(DataFusionError::Execution(format!(
+            "Invalid operation {op} between '{lhs}' and '{rhs}' for DateIntervalExpr"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,52 +234,9 @@ mod tests {
     use arrow::datatypes::*;
     use arrow_array::IntervalMonthDayNanoArray;
     use chrono::{Duration, NaiveDate};
-    use datafusion_common::delta::shift_months;
     use datafusion_common::{Column, Result, ScalarValue, ToDFSchema};
     use datafusion_expr::Expr;
     use std::ops::Add;
-
-    #[test]
-    fn add_11_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 11);
-        assert_eq!(format!("{actual:?}").as_str(), "2000-12-01");
-    }
-
-    #[test]
-    fn add_12_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 12);
-        assert_eq!(format!("{actual:?}").as_str(), "2001-01-01");
-    }
-
-    #[test]
-    fn add_13_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, 13);
-        assert_eq!(format!("{actual:?}").as_str(), "2001-02-01");
-    }
-
-    #[test]
-    fn sub_11_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -11);
-        assert_eq!(format!("{actual:?}").as_str(), "1999-02-01");
-    }
-
-    #[test]
-    fn sub_12_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -12);
-        assert_eq!(format!("{actual:?}").as_str(), "1999-01-01");
-    }
-
-    #[test]
-    fn sub_13_months() {
-        let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let actual = shift_months(prior, -13);
-        assert_eq!(format!("{actual:?}").as_str(), "1998-12-01");
-    }
 
     #[test]
     fn add_32_day_time() -> Result<()> {
@@ -535,7 +497,7 @@ mod tests {
         let lhs = create_physical_expr(&dt, &dfs, &schema, &props)?;
         let rhs = create_physical_expr(&interval, &dfs, &schema, &props)?;
 
-        let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let cut = date_time_interval_expr(lhs, op, rhs, &schema)?;
         let res = cut.evaluate(&batch)?;
 
         let mut builder = Date32Builder::with_capacity(8);
@@ -613,7 +575,7 @@ mod tests {
         let lhs_str = format!("{lhs}");
         let rhs_str = format!("{rhs}");
 
-        let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
+        let cut = DateTimeIntervalExpr::new(lhs, op, rhs);
 
         assert_eq!(lhs_str, format!("{}", cut.lhs()));
         assert_eq!(op, cut.op().clone());
