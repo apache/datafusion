@@ -17,6 +17,7 @@
 
 //! Factory for creating ListingTables with default options
 
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -66,8 +67,11 @@ impl TableProviderFactory for ListingTableFactory {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
 
-        let file_extension =
-            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
+        let file_path: &str = cmd.location.as_ref();
+        let file_extension = Path::new(file_path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
 
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::CSV => Arc::new(
