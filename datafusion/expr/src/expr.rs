@@ -152,12 +152,7 @@ pub enum Expr {
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
     /// Represents the call of a built-in scalar function with a set of arguments.
-    ScalarFunction {
-        /// The function
-        fun: built_in_function::BuiltinScalarFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-    },
+    ScalarFunction(ScalarFunction),
     /// Represents the call of a user-defined scalar function with arguments.
     ScalarUDF {
         /// The function
@@ -350,6 +345,22 @@ impl Between {
             low,
             high,
         }
+    }
+}
+
+/// ScalarFunction expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScalarFunction {
+    /// The function
+    pub fun: built_in_function::BuiltinScalarFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl ScalarFunction {
+    /// Create a new ScalarFunction expression
+    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
+        Self { fun, args }
     }
 }
 
@@ -592,7 +603,7 @@ impl Expr {
             Expr::Not(..) => "Not",
             Expr::Placeholder { .. } => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
-            Expr::ScalarFunction { .. } => "ScalarFunction",
+            Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
             Expr::ScalarUDF { .. } => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
@@ -927,8 +938,8 @@ impl fmt::Debug for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction { fun, args, .. } => {
-                fmt_function(f, &fun.to_string(), false, args, false)
+            Expr::ScalarFunction(func) => {
+                fmt_function(f, &func.fun.to_string(), false, &func.args, false)
             }
             Expr::ScalarUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args, false)
@@ -1286,8 +1297,8 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{expr}[{key}]"))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_name(&fun.to_string(), false, args)
+        Expr::ScalarFunction(func) => {
+            create_function_name(&func.fun.to_string(), false, &func.args)
         }
         Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
         Expr::WindowFunction(WindowFunction {

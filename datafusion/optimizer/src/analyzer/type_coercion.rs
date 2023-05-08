@@ -24,7 +24,9 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
+use datafusion_expr::expr::{
+    self, Between, BinaryExpr, Case, Like, ScalarFunction, WindowFunction,
+};
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
@@ -379,16 +381,13 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::ScalarFunction { fun, args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let nex_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &function::signature(&fun),
                 )?;
-                let expr = Expr::ScalarFunction {
-                    fun,
-                    args: nex_expr,
-                };
+                let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
                 Ok(expr)
             }
             Expr::AggregateFunction(expr::AggregateFunction {
@@ -746,7 +745,7 @@ mod test {
 
     use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, Like};
+    use datafusion_expr::expr::{self, Like, ScalarFunction};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
@@ -862,10 +861,8 @@ mod test {
         let empty = empty();
         let lit_expr = lit(10i64);
         let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
-        let scalar_function_expr = Expr::ScalarFunction {
-            fun,
-            args: vec![lit_expr],
-        };
+        let scalar_function_expr =
+            Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,

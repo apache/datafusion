@@ -27,7 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::Cast;
+use datafusion_expr::expr::{Cast, ScalarFunction};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -383,7 +383,7 @@ pub fn create_physical_expr(
             )))
         }
 
-        Expr::ScalarFunction { fun, args } => {
+        Expr::ScalarFunction(ScalarFunction { fun, args }) => {
             let physical_args = args
                 .iter()
                 .map(|e| {

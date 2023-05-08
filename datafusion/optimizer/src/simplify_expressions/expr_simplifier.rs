@@ -28,6 +28,7 @@ use arrow::{
 };
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
     Volatility,
@@ -265,7 +266,9 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::Placeholder { .. } => false,
-            Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
+            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
+                Self::volatility_ok(fun.volatility())
+            }
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
@@ -1073,33 +1076,33 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
 
             // log
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Log,
                 args,
-            } => simpl_log(args, <&S>::clone(&info))?,
+            }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Power,
                 args,
-            } => simpl_power(args, <&S>::clone(&info))?,
+            }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
                 args,
-            } => simpl_concat(args)?,
+            }) => simpl_concat(args)?,
 
             // concat_ws
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
-            } => match &args[..] {
+            }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
-                _ => Expr::ScalarFunction {
-                    fun: BuiltinScalarFunction::ConcatWithSeparator,
+                _ => Expr::ScalarFunction(ScalarFunction::new(
+                    BuiltinScalarFunction::ConcatWithSeparator,
                     args,
-                },
+                )),
             },
 
             //
@@ -1385,7 +1388,7 @@ mod tests {
         // rand() + (1 + 2) --> rand() + 3
         let fun = BuiltinScalarFunction::Random;
         assert_eq!(fun.volatility(), Volatility::Volatile);
-        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
         let expr = rand.clone() + (lit(1) + lit(2));
         let expected = rand + lit(3);
         test_evaluate(expr, expected);
@@ -1393,7 +1396,7 @@ mod tests {
         // parenthesization matters: can't rewrite
         // (rand() + 1) + 2 --> (rand() + 1) + 2)
         let fun = BuiltinScalarFunction::Random;
-        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
         let expr = (rand + lit(1)) + lit(2);
         test_evaluate(expr.clone(), expr);
     }
