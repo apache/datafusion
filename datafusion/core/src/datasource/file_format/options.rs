@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
@@ -58,9 +59,9 @@ pub struct CsvReadOptions<'a> {
     pub schema: Option<&'a Schema>,
     /// Max number of rows to read from CSV files for schema inference if needed. Defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
     pub schema_infer_max_records: usize,
-    /// File extension; only files with this extension are selected for data
-    /// input.
-    pub file_extension: Option<String>,
+    /// File extension; only files with this extension are selected for data input.
+    /// Defaults to `FileType::CSV.get_ext().as_str()`.
+    pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<(String, DataType)>,
     /// File compression type
@@ -83,7 +84,7 @@ impl<'a> CsvReadOptions<'a> {
             schema: None,
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
-            file_extension: None,
+            file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             infinite: false,
@@ -109,8 +110,8 @@ impl<'a> CsvReadOptions<'a> {
     }
 
     /// Specify the file extension for CSV file selection
-    pub fn file_extension(mut self, file_extension: impl Into<String>) -> Self {
-        self.file_extension = Some(file_extension.into());
+    pub fn file_extension(mut self, file_extension: &'a str) -> Self {
+        self.file_extension = file_extension;
         self
     }
 
@@ -391,7 +392,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
-            .with_file_extension(self.file_extension.as_deref().unwrap_or(""))
+            .with_file_extension(self.file_extension)
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             // TODO: Add file sort order into CsvReadOptions and introduce here.
