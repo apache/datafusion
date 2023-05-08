@@ -167,9 +167,7 @@ impl TableProviderFactory for ListingTableFactory {
 
 // Get file extension from path
 fn get_extension(path: &str) -> String {
-    let res = Path::new(path)
-        .extension()
-        .and_then(|ext| ext.to_str());
+    let res = Path::new(path).extension().and_then(|ext| ext.to_str());
     match res {
         Some(ext) => format!(".{}", ext),
         None => "".to_string(),
@@ -213,7 +211,10 @@ mod tests {
             options: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
-        let listing_table = table_provider.as_any().downcast_ref::<ListingTable>().unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
     }
