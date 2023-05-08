@@ -1416,7 +1416,8 @@ mod roundtrip_tests {
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
     use datafusion_expr::expr::{
-        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, ScalarFunction, Sort,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, ScalarFunction,
+        ScalarUDF, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
     use datafusion_expr::{
@@ -2627,10 +2628,8 @@ mod roundtrip_tests {
             scalar_fn,
         );
 
-        let test_expr = Expr::ScalarUDF {
-            fun: Arc::new(udf.clone()),
-            args: vec![lit("")],
-        };
+        let test_expr =
+            Expr::ScalarUDF(ScalarUDF::new(Arc::new(udf.clone()), vec![lit("")]));
 
         let ctx = SessionContext::new();
         ctx.register_udf(udf);

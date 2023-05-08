@@ -63,7 +63,7 @@ use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
-    Like, TryCast, WindowFunction,
+    Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -187,7 +187,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::ScalarFunction(func) => {
             create_function_physical_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF { fun, args, .. } => {
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             create_function_physical_name(&fun.name, false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {

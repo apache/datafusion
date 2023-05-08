@@ -37,7 +37,7 @@ use arrow::datatypes::{
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, ScalarFunction,
-    Sort,
+    ScalarUDF, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -695,7 +695,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { fun, args } => Self {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
                     fun_name: fun.name.clone(),
                     args: args

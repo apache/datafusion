@@ -27,7 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{Cast, ScalarFunction};
+use datafusion_expr::expr::{Cast, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -397,7 +397,7 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::ScalarUDF { fun, args } => {
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             let mut physical_args = vec![];
             for e in args {
                 physical_args.push(create_physical_expr(
