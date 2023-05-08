@@ -104,7 +104,7 @@ impl TreeNode for Expr {
                     expr_vec.push(f.as_ref().clone());
                 }
                 if let Some(o) = order_by {
-                    expr_vec.push(o.as_ref().clone());
+                    expr_vec.extend(o.clone());
                 }
 
                 expr_vec
@@ -329,7 +329,13 @@ impl TreeNode for Expr {
                 args: transform_vec(args, &mut transform)?,
                 fun,
                 filter: transform_option_box(filter, &mut transform)?,
-                order_by: transform_option_box(order_by, &mut transform)?,
+                order_by: {
+                    if let Some(order_by) = order_by {
+                        Some(transform_vec(order_by, &mut transform)?)
+                    } else {
+                        None
+                    }
+                },
             },
             Expr::InList {
                 expr,

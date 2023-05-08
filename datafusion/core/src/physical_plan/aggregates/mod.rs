@@ -230,7 +230,7 @@ pub struct AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
-    pub(crate) order_by_expr: Vec<Option<PhysicalSortExpr>>,
+    pub(crate) order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -346,7 +346,7 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
 /// aggregations in a single [`AggregateExec`]), the function returns an error
 /// value. Note that handling of multiple requirement sets is left as future work.
 fn get_finest_requirement(
-    order_by_expr: &[Option<PhysicalSortExpr>],
+    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
     eq_properties: &[EquivalentClass],
     ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Result<Option<PhysicalSortExpr>> {
@@ -354,8 +354,11 @@ fn get_finest_requirement(
     let mut normalized_result: Option<PhysicalSortExpr> = None;
     for item in order_by_expr.iter().flatten() {
         if let Some(normalized_expr) = &normalized_result {
-            let normalized_item =
-                normalize_sort_expr(item.clone(), eq_properties, ordering_eq_properties);
+            let normalized_item = normalize_sort_expr(
+                item[0].clone(),
+                eq_properties,
+                ordering_eq_properties,
+            );
             if normalized_item.ne(normalized_expr) {
                 return Err(DataFusionError::Plan(
                     "Conflicting ordering requirements in aggregate functions"
@@ -363,9 +366,9 @@ fn get_finest_requirement(
                 ));
             }
         } else {
-            result = Some(item.clone());
+            result = Some(item[0].clone());
             normalized_result = Some(normalize_sort_expr(
-                item.clone(),
+                item[0].clone(),
                 eq_properties,
                 ordering_eq_properties,
             ));
@@ -381,7 +384,7 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        order_by_expr: Vec<Option<PhysicalSortExpr>>,
+        order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -498,7 +501,7 @@ impl AggregateExec {
     }
 
     /// ORDER BY clause expression for each aggregate expression
-    pub fn order_by_expr(&self) -> &[Option<PhysicalSortExpr>] {
+    pub fn order_by_expr(&self) -> &[Option<Vec<PhysicalSortExpr>>] {
         &self.order_by_expr
     }
 

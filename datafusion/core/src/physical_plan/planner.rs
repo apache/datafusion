@@ -1613,8 +1613,8 @@ type AggregateExprWithOptionalArgs = (
     Arc<dyn AggregateExpr>,
     // The filter clause, if any
     Option<Arc<dyn PhysicalExpr>>,
-    // Ordering requirement, if any
-    Option<PhysicalSortExpr>,
+    // Ordering requirements, if any
+    Option<Vec<PhysicalSortExpr>>,
 );
 
 /// Create an aggregate expression with a name from a logical expression
@@ -1661,12 +1661,18 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 name,
             )?;
             let order_by = match order_by {
-                Some(e) => Some(create_physical_sort_expr(
-                    e,
-                    logical_input_schema,
-                    physical_input_schema,
-                    execution_props,
-                )?),
+                Some(e) => Some(
+                    e.iter()
+                        .map(|expr| {
+                            create_physical_sort_expr(
+                                expr,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
                 None => None,
             };
             Ok((agg_expr, filter, order_by))
@@ -1699,12 +1705,18 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
             let order_by = match order_by {
-                Some(e) => Some(create_physical_sort_expr(
-                    e,
-                    logical_input_schema,
-                    physical_input_schema,
-                    execution_props,
-                )?),
+                Some(e) => Some(
+                    e.iter()
+                        .map(|expr| {
+                            create_physical_sort_expr(
+                                expr,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
                 None => None,
             };
 

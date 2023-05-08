@@ -551,7 +551,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
     filter: Option<Box<Expr>>,
-    order_by: Option<Box<Expr>>,
+    order_by: Option<Vec<Expr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let mut args: Vec<Expr> = vec![];

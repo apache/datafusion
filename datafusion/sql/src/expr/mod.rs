@@ -318,11 +318,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = array_agg;
 
         let order_by = if let Some(order_by) = order_by {
-            Some(Box::new(self.order_by_to_sort_expr(
+            // TODO: Once sqlparser supports multiple order by clause, handle it
+            Some(vec![self.order_by_to_sort_expr(
                 *order_by,
                 input_schema,
                 planner_context,
-            )?))
+            )?])
         } else {
             None
         };

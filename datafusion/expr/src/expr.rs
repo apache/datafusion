@@ -176,7 +176,7 @@ pub enum Expr {
         /// Optional filter applied prior to aggregating
         filter: Option<Box<Expr>>,
         /// Optional ORDER BY applied prior to aggregating
-        order_by: Option<Box<Expr>>,
+        order_by: Option<Vec<Expr>>,
     },
     /// Returns whether the list contains the expr value.
     InList {
@@ -435,7 +435,7 @@ pub struct AggregateFunction {
     /// Optional filter
     pub filter: Option<Box<Expr>>,
     /// Optional ordering
-    pub order_by: Option<Box<Expr>>,
+    pub order_by: Option<Vec<Expr>>,
 }
 
 impl AggregateFunction {
@@ -444,7 +444,7 @@ impl AggregateFunction {
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
-        order_by: Option<Box<Expr>>,
+        order_by: Option<Vec<Expr>>,
     ) -> Self {
         Self {
             fun,
@@ -971,7 +971,7 @@ impl fmt::Debug for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {ob}")?;
+                    write!(f, " ORDER BY {:?}", ob)?;
                 }
                 Ok(())
             }
@@ -1347,7 +1347,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" FILTER (WHERE {fe})");
             }
             if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ({ob})");
+                info += &format!(" ORDER BY ({:?})", ob);
             }
             Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }

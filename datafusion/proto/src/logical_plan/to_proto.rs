@@ -670,8 +670,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         None => None,
                     },
                     order_by: match order_by {
-                        Some(e) => Some(Box::new(e.as_ref().try_into()?)),
-                        None => None,
+                        Some(e) => e
+                            .iter()
+                            .map(|expr| expr.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => vec![],
                     },
                 };
                 Self {
@@ -727,8 +730,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             None => None,
                         },
                         order_by: match order_by {
-                            Some(e) => Some(Box::new(e.as_ref().try_into()?)),
-                            None => None,
+                            Some(e) => e
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            None => vec![],
                         },
                     },
                 ))),

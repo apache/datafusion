@@ -376,7 +376,7 @@ fn reorder_aggregate_keys(
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<dyn AggregateExpr>],
     filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
-    order_by_expr: &[Option<PhysicalSortExpr>],
+    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
     agg_input: Arc<dyn ExecutionPlan>,
     input_schema: &SchemaRef,
 ) -> Result<PlanWithKeyRequirements> {

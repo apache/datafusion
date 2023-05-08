@@ -692,8 +692,8 @@ pub struct AggregateExprNode {
     pub distinct: bool,
     #[prost(message, optional, boxed, tag = "4")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "5")]
-    pub order_by: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "5")]
+    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -704,8 +704,8 @@ pub struct AggregateUdfExprNode {
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag = "4")]
-    pub order_by: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "4")]
+    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1824,9 +1824,9 @@ pub struct MaybeFilter {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MaybePhysicalSortExpr {
-    #[prost(message, optional, tag = "1")]
-    pub expr: ::core::option::Option<PhysicalSortExprNode>,
+pub struct MaybePhysicalSortExprs {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1853,7 +1853,7 @@ pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "10")]
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
     #[prost(message, repeated, tag = "11")]
-    pub order_by_expr: ::prost::alloc::vec::Vec<MaybePhysicalSortExpr>,
+    pub order_by_expr: ::prost::alloc::vec::Vec<MaybePhysicalSortExprs>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

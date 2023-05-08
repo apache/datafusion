@@ -531,14 +531,17 @@ impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
     }
 }
 
-impl TryFrom<Option<PhysicalSortExpr>> for protobuf::MaybePhysicalSortExpr {
+impl TryFrom<Option<Vec<PhysicalSortExpr>>> for protobuf::MaybePhysicalSortExprs {
     type Error = DataFusionError;
 
-    fn try_from(sort_expr: Option<PhysicalSortExpr>) -> Result<Self, Self::Error> {
-        match sort_expr {
-            None => Ok(protobuf::MaybePhysicalSortExpr { expr: None }),
-            Some(sort_expr) => Ok(protobuf::MaybePhysicalSortExpr {
-                expr: Some(sort_expr.try_into()?),
+    fn try_from(sort_exprs: Option<Vec<PhysicalSortExpr>>) -> Result<Self, Self::Error> {
+        match sort_exprs {
+            None => Ok(protobuf::MaybePhysicalSortExprs { sort_expr: vec![] }),
+            Some(sort_exprs) => Ok(protobuf::MaybePhysicalSortExprs {
+                sort_expr: sort_exprs
+                    .into_iter()
+                    .map(|sort_expr| sort_expr.try_into())
+                    .collect::<Result<Vec<_>>>()?,
             }),
         }
     }

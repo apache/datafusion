@@ -420,12 +420,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .order_by_expr
                     .iter()
                     .map(|expr| {
-                        let x = expr.expr.as_ref().map(|e| {
-                            parse_physical_sort_expr(e, registry, &physical_schema)
-                        });
-                        x.transpose()
+                        let x = expr
+                            .sort_expr
+                            .iter()
+                            .map(|e| {
+                                parse_physical_sort_expr(e, registry, &physical_schema)
+                            })
+                            .collect::<Result<Vec<_>>>();
+                        match x {
+                            Ok(exprs) => {
+                                // Convert empty vec to None.
+                                Ok((!exprs.is_empty()).then_some(exprs))
+                            }
+                            Err(e) => Err(e),
+                        }
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
