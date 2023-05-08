@@ -144,7 +144,9 @@ impl ExprPrunabilityGraph {
                 // Set initially as unordered column with undefined table side
                 self.graph[node].table_side = TableSide::None;
                 self.graph[node].sort_info.dir = Monotonicity::Unordered;
-                self.graph[node].sort_info.nulls_first = false;
+                // By convertion we set nulls_first and nulls_last to the false.
+                // These parameters are used in the Monotonicity::ASC and Monotonicity::DESC cases.
+                self.graph[node].sort_info.nulls_first = true;
                 self.graph[node].sort_info.nulls_last = false;
 
                 self.update_node_with_sort_information(
@@ -204,49 +206,34 @@ impl ExprPrunabilityGraph {
         right_sort_expr: &Option<PhysicalSortExpr>,
         node: NodeIndex,
     ) {
-        if let Some(column) = self.clone().graph[node]
-            .expr
-            .as_any()
-            .downcast_ref::<Column>()
+        if let Some(column) = &mut self.graph[node].expr.as_any().downcast_ref::<Column>()
         {
-            for (i, sort_expr) in [left_sort_expr, right_sort_expr]
-                .into_iter()
-                .flatten()
-                .enumerate()
+            for (table_side, sort_expr) in [
+                (TableSide::Left, left_sort_expr),
+                (TableSide::Right, right_sort_expr),
+            ]
+            .into_iter()
             {
                 // SortExpr's in the form of BinaryExpr is handled in intermediate nodes.
                 // We need only to check Column-wise SortExpr's.
-                if let Some(sorted) = sort_expr.expr.as_any().downcast_ref::<Column>() {
-                    if *column == *sorted {
-                        if i == 0 {
-                            self.graph[node].table_side = TableSide::Left
-                        } else {
-                            self.graph[node].table_side = TableSide::Right
-                        };
-                        match sort_expr.options.descending {
-                            false => {
-                                self.graph[node].sort_info = SortInfo {
-                                    dir: Monotonicity::Asc,
-                                    nulls_first: sort_expr.options.nulls_first,
-                                    nulls_last: !sort_expr.options.nulls_first,
-                                };
-                            }
-                            true => {
-                                self.graph[node].sort_info = SortInfo {
-                                    dir: Monotonicity::Desc,
-                                    nulls_first: sort_expr.options.nulls_first,
-                                    nulls_last: !sort_expr.options.nulls_first,
-                                };
-                            }
+                if let Some(sort_expr) = sort_expr {
+                    if let Some(sorted) = sort_expr.expr.as_any().downcast_ref::<Column>()
+                    {
+                        if *column == sorted {
+                            self.graph[node].table_side = table_side;
+                            let dir = if sort_expr.options.descending {
+                                Monotonicity::Desc
+                            } else {
+                                Monotonicity::Asc
+                            };
+                            self.graph[node].sort_info = SortInfo {
+                                dir,
+                                nulls_first: sort_expr.options.nulls_first,
+                                nulls_last: !sort_expr.options.nulls_first,
+                            };
+                            break;
                         }
-                        break;
                     }
-                    self.graph[node].sort_info = SortInfo {
-                        dir: Monotonicity::Unordered,
-                        // default of nulls first
-                        nulls_first: true,
-                        nulls_last: false,
-                    };
                 }
             }
         } else {
@@ -269,34 +256,32 @@ fn numeric_node_order(
 ) -> (TableSide, SortInfo) {
     // There may be SortOptions for BinaryExpr's like (a + b) sorted.
     // This part handles such expressions.
-    for (i, sort_expr) in [left_sort_expr, right_sort_expr]
-        .into_iter()
-        .flatten()
-        .enumerate()
+    for (table_side, sort_expr) in [
+        (TableSide::Left, left_sort_expr),
+        (TableSide::Right, right_sort_expr),
+    ]
+    .into_iter()
     {
-        if let Some(binary_expr_sorted) =
-            sort_expr.expr.as_any().downcast_ref::<BinaryExpr>()
-        {
-            if binary_expr.eq(binary_expr_sorted) {
-                let from = if i == 0 {
-                    TableSide::Left
-                } else {
-                    TableSide::Right
-                };
-                let dir = if sort_expr.options.descending {
-                    Monotonicity::Desc
-                } else {
-                    Monotonicity::Asc
-                };
-                let nulls_first = sort_expr.options.nulls_first;
-                return (
-                    from,
-                    SortInfo {
-                        dir,
-                        nulls_first,
-                        nulls_last: !nulls_first,
-                    },
-                );
+        if let Some(sort_expr) = sort_expr {
+            if let Some(binary_expr_sorted) =
+                sort_expr.expr.as_any().downcast_ref::<BinaryExpr>()
+            {
+                if binary_expr.eq(binary_expr_sorted) {
+                    let dir = if sort_expr.options.descending {
+                        Monotonicity::Desc
+                    } else {
+                        Monotonicity::Asc
+                    };
+                    let nulls_first = sort_expr.options.nulls_first;
+                    return (
+                        table_side,
+                        SortInfo {
+                            dir,
+                            nulls_first,
+                            nulls_last: !nulls_first,
+                        },
+                    );
+                }
             }
         }
     }
