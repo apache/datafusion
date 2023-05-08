@@ -22,8 +22,8 @@ use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
-    WindowFunction,
+    AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, InList,
+    Like, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -220,18 +220,18 @@ where
                 Box::new(clone_with_replacement(low, replacement_fn)?),
                 Box::new(clone_with_replacement(high, replacement_fn)?),
             ))),
-            Expr::InList {
+            Expr::InList(InList {
                 expr: nested_expr,
                 list,
                 negated,
-            } => Ok(Expr::InList {
+            }) => Ok(Expr::InList(InList {
                 expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 list: list
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
                 negated: *negated,
-            }),
+            })),
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 Ok(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(clone_with_replacement(left, replacement_fn)?),

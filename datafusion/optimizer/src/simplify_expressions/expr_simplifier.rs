@@ -29,8 +29,8 @@ use arrow::{
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Volatility,
+    and, expr::InList, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr,
+    Like, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -386,20 +386,20 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
             // expr IN () --> false
             // expr NOT IN () --> true
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
                 lit(negated)
             }
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 mut list,
                 negated,
-            } if list.len() == 1
+            }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
                 let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
@@ -412,11 +412,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
             // if expr is a single column reference:
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } if !list.is_empty()
+            }) if !list.is_empty()
                 && (
                     // For lists with only 1 value we allow more complex expressions to be simplified
                     // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'

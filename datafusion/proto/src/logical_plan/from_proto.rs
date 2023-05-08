@@ -38,7 +38,7 @@ use datafusion_expr::{
     abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
     cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
     date_bin, date_part, date_trunc, degrees, digest, exp,
-    expr::{self, Sort, WindowFunction},
+    expr::{self, InList, Sort, WindowFunction},
     floor, from_unixtime, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
@@ -1118,7 +1118,7 @@ pub fn parse_expr(
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr")?,
         ))),
-        ExprType::InList(in_list) => Ok(Expr::InList {
+        ExprType::InList(in_list) => Ok(Expr::InList(InList {
             expr: Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
                 registry,
@@ -1130,7 +1130,7 @@ pub fn parse_expr(
                 .map(|expr| parse_expr(expr, registry))
                 .collect::<Result<Vec<_>, _>>()?,
             negated: in_list.negated,
-        }),
+        })),
         ExprType::Wildcard(_) => Ok(Expr::Wildcard),
         ExprType::ScalarFunction(expr) => {
             let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)

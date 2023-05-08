@@ -179,14 +179,7 @@ pub enum Expr {
         filter: Option<Box<Expr>>,
     },
     /// Returns whether the list contains the expr value.
-    InList {
-        /// The expression to compare
-        expr: Box<Expr>,
-        /// A list of values to compare against
-        list: Vec<Expr>,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    InList(InList),
     /// EXISTS subquery
     Exists {
         /// subquery that will produce a single column of data
@@ -486,6 +479,17 @@ impl WindowFunction {
     }
 }
 
+/// InList expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct InList {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// The list of values to compare against
+    pub list: Vec<Expr>,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
 /// Grouping sets
 /// See <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>
 /// for Postgres definition.
@@ -716,11 +720,11 @@ impl Expr {
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
-        Expr::InList {
+        Expr::InList(InList {
             expr: Box::new(self),
             list,
             negated,
-        }
+        })
     }
 
     /// Return `IsNull(Box(self))
@@ -1039,11 +1043,11 @@ impl fmt::Debug for Expr {
                     write!(f, " SIMILAR TO {pattern:?}")
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 if *negated {
                     write!(f, "{expr:?} NOT IN ({list:?})")
                 } else {
@@ -1348,11 +1352,11 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("GROUPING SETS ({})", list_of_names.join(", ")))
             }
         },
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => {
+        }) => {
             let expr = create_name(expr)?;
             let list = list.iter().map(create_name);
             if *negated {

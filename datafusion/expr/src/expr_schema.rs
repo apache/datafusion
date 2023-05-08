@@ -17,7 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
+    AggregateFunction, BinaryExpr, Cast, GetIndexedField, InList, Sort, TryCast,
+    WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -191,7 +192,7 @@ impl ExprSchemable for Expr {
             | Expr::Not(expr)
             | Expr::Negative(expr)
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InList { expr, .. } => expr.nullable(input_schema),
+            | Expr::InList(InList { expr, .. }) => expr.nullable(input_schema),
             Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),

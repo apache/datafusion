@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
-    Like, Sort, TryCast, WindowFunction,
+    InList, Like, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -117,7 +117,7 @@ impl TreeNode for Expr {
                 expr_vec.extend(order_by.clone());
                 expr_vec
             }
-            Expr::InList { expr, list, .. } => {
+            Expr::InList(InList { expr, list, .. }) => {
                 let mut expr_vec = vec![];
                 expr_vec.push(expr.as_ref().clone());
                 expr_vec.extend(list.clone());
@@ -320,15 +320,15 @@ impl TreeNode for Expr {
                 fun,
                 filter: transform_option_box(filter, &mut transform)?,
             },
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => Expr::InList {
+            }) => Expr::InList(InList {
                 expr: transform_boxed(expr, &mut transform)?,
                 list: transform_vec(list, &mut transform)?,
                 negated,
-            },
+            }),
             Expr::Wildcard => Expr::Wildcard,
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }

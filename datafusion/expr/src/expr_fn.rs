@@ -17,7 +17,7 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{AggregateFunction, BinaryExpr, Cast, GroupingSet, TryCast};
+use crate::expr::{AggregateFunction, BinaryExpr, Cast, GroupingSet, InList, TryCast};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -205,11 +205,11 @@ pub fn count_distinct(expr: Expr) -> Expr {
 
 /// Create an in_list expression
 pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
-    Expr::InList {
+    Expr::InList(InList {
         expr: Box::new(expr),
         list,
         negated,
-    }
+    })
 }
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.

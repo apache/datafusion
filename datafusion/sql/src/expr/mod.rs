@@ -30,6 +30,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::InList;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -358,7 +359,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::InList {
+        Ok(Expr::InList(InList {
             expr: Box::new(self.sql_expr_to_logical_expr(
                 expr,
                 schema,
@@ -366,7 +367,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?),
             list: list_expr,
             negated,
-        })
+        }))
     }
 
     fn sql_like_to_expr(

@@ -27,7 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::Cast;
+use datafusion_expr::expr::{Cast, InList};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -448,11 +448,11 @@ pub fn create_physical_expr(
                 binary_expr
             }
         }
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => match expr.as_ref() {
+        }) => match expr.as_ref() {
             Expr::Literal(ScalarValue::Utf8(None)) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }

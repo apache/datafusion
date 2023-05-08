@@ -20,7 +20,7 @@
 use crate::simplify_expressions::SimplifyInfo;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    expr::{Between, BinaryExpr},
+    expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
@@ -280,11 +280,11 @@ pub fn negate_clause(expr: Expr) -> Expr {
         Expr::IsNull(expr) => expr.is_not_null(),
         // not (A not in (..)) ===> A in (..)
         // not (A in (..)) ===> A not in (..)
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => expr.in_list(list, !negated),
+        }) => expr.in_list(list, !negated),
         // not (A between B and C) ===> (A not between B and C)
         // not (A not between B and C) ===> (A between B and C)
         Expr::Between(between) => Expr::Between(Between::new(
