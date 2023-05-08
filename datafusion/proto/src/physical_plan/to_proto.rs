@@ -37,7 +37,8 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 
 use datafusion::physical_plan::expressions::{
-    Avg, BinaryExpr, Column, LikeExpr, Max, Min, Sum,
+    Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Column, LikeExpr, Max, Min,
+    Sum,
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
