@@ -456,7 +456,7 @@ impl AggregateExpr for BoolOr {
         &self,
         start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BoolAndRowAccumulator::new(
+        Ok(Box::new(BoolOrRowAccumulator::new(
             start_index,
             self.data_type.clone(),
         )))
@@ -467,7 +467,7 @@ impl AggregateExpr for BoolOr {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BoolAndAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(BoolOrAccumulator::try_new(&self.data_type)?))
     }
 }
 
