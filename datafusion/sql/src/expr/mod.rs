@@ -30,6 +30,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -121,13 +122,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::DatePart,
-                args: vec![
+            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction (ScalarFunction::new(
+                BuiltinScalarFunction::DatePart,
+                 vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ],
-            }),
+            ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval {
@@ -464,7 +465,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg],
         };
-        Ok(Expr::ScalarFunction { fun, args })
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
     fn sql_agg_with_filter_to_expr(

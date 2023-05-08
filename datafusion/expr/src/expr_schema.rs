@@ -17,7 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
+    AggregateFunction, BinaryExpr, Cast, GetIndexedField, ScalarFunction, Sort, TryCast,
+    WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -101,7 +102,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
-            Expr::ScalarFunction { fun, args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -216,7 +217,7 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
-            | Expr::ScalarFunction { .. }
+            | Expr::ScalarFunction(..)
             | Expr::ScalarUDF { .. }
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
