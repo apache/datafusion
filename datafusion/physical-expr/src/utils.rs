@@ -331,29 +331,28 @@ fn ordering_satisfy_concrete<
     equal_properties: F,
     ordering_equal_properties: F2,
 ) -> bool {
-    if required.len() > provided.len() {
-        false
-    } else if required
+    let oeq_properties = ordering_equal_properties();
+    let ordering_eq_classes = oeq_properties.classes();
+    let eq_properties = equal_properties();
+    let eq_classes = eq_properties.classes();
+    let mut required_unique = Vec::new();
+    required.iter().for_each(|e| {
+        let item = normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes);
+        if !required_unique.contains(&item) {
+            required_unique.push(item);
+        }
+    });
+    let provided_normalized = provided
         .iter()
-        .zip(provided.iter())
-        .all(|(req, given)| req.eq(given))
-    {
-        true
-    } else {
-        let oeq_properties = ordering_equal_properties();
-        let ordering_eq_classes = oeq_properties.classes();
-        let eq_properties = equal_properties();
-        let eq_classes = eq_properties.classes();
-        required
-            .iter()
-            .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
-            .zip(
-                provided.iter().map(|e| {
-                    normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes)
-                }),
-            )
-            .all(|(req, given)| req == given)
+        .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
+        .collect::<Vec<_>>();
+    if required_unique.len() > provided_normalized.len() {
+        return false;
     }
+    required_unique
+        .into_iter()
+        .zip(provided_normalized)
+        .all(|(req, given)| given == req)
 }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
@@ -390,31 +389,28 @@ pub fn ordering_satisfy_requirement_concrete<
     equal_properties: F,
     ordering_equal_properties: F2,
 ) -> bool {
-    if required.len() > provided.len() {
-        false
-    } else if required
+    let oeq_properties = ordering_equal_properties();
+    let ordering_eq_classes = oeq_properties.classes();
+    let eq_properties = equal_properties();
+    let eq_classes = eq_properties.classes();
+    let mut required_unique = Vec::new();
+    required.iter().for_each(|e| {
+        let item = normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes);
+        if !required_unique.contains(&item) {
+            required_unique.push(item);
+        }
+    });
+    let provided_normalized = provided
         .iter()
-        .zip(provided.iter())
-        .all(|(req, given)| given.satisfy(req))
-    {
-        true
-    } else {
-        let oeq_properties = ordering_equal_properties();
-        let ordering_eq_classes = oeq_properties.classes();
-        let eq_properties = equal_properties();
-        let eq_classes = eq_properties.classes();
-        required
-            .iter()
-            .map(|e| {
-                normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes)
-            })
-            .zip(
-                provided.iter().map(|e| {
-                    normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes)
-                }),
-            )
-            .all(|(req, given)| given.satisfy(&req))
+        .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
+        .collect::<Vec<_>>();
+    if required_unique.len() > provided_normalized.len() {
+        return false;
     }
+    required_unique
+        .into_iter()
+        .zip(provided_normalized)
+        .all(|(req, given)| given.satisfy(&req))
 }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
@@ -451,29 +447,28 @@ fn requirements_compatible_concrete<
     ordering_equal_properties: F,
     equal_properties: F2,
 ) -> bool {
-    if required.len() > provided.len() {
-        false
-    } else if required
+    let oeq_properties = ordering_equal_properties();
+    let ordering_eq_classes = oeq_properties.classes();
+    let eq_properties = equal_properties();
+    let eq_classes = eq_properties.classes();
+    let mut required_unique = Vec::new();
+    required.iter().for_each(|e| {
+        let item = normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes);
+        if !required_unique.contains(&item) {
+            required_unique.push(item);
+        }
+    });
+    let provided_normalized = provided
         .iter()
-        .zip(provided.iter())
-        .all(|(req, given)| given.compatible(req))
-    {
-        true
-    } else {
-        let oeq_properties = ordering_equal_properties();
-        let ordering_eq_classes = oeq_properties.classes();
-        let eq_properties = equal_properties();
-        let eq_classes = eq_properties.classes();
-        required
-            .iter()
-            .map(|e| {
-                normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes)
-            })
-            .zip(provided.iter().map(|e| {
-                normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes)
-            }))
-            .all(|(req, given)| given.compatible(&req))
+        .map(|e| normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes))
+        .collect::<Vec<_>>();
+    if required_unique.len() > provided_normalized.len() {
+        return false;
     }
+    required_unique
+        .into_iter()
+        .zip(provided_normalized)
+        .all(|(req, given)| given.compatible(&req))
 }
 
 /// This function maps back requirement after ProjectionExec
@@ -1425,6 +1420,83 @@ mod tests {
                 "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfy_different_lengths() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let col_c = &Column::new("c", 2);
+        let col_d = &Column::new("d", 3);
+        let col_e = &Column::new("e", 4);
+        let test_schema = create_test_schema()?;
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
+        eq_properties.add_equal_conditions((col_a, col_c));
+
+        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
+        ordering_eq_properties.add_equal_conditions((
+            &OrderedColumn::new(col_a.clone(), option1),
+            &OrderedColumn::new(col_e.clone(), option1),
+        ));
+        let sort_req_a = PhysicalSortExpr {
+            expr: Arc::new((col_a).clone()) as _,
+            options: option1,
+        };
+        let sort_req_b = PhysicalSortExpr {
+            expr: Arc::new((col_b).clone()) as _,
+            options: option1,
+        };
+        let sort_req_c = PhysicalSortExpr {
+            expr: Arc::new((col_c).clone()) as _,
+            options: option1,
+        };
+        let sort_req_d = PhysicalSortExpr {
+            expr: Arc::new((col_d).clone()) as _,
+            options: option1,
+        };
+        let sort_req_e = PhysicalSortExpr {
+            expr: Arc::new((col_e).clone()) as _,
+            options: option1,
+        };
+
+        assert!(ordering_satisfy_concrete(
+            &[sort_req_a.clone(), sort_req_b.clone(), sort_req_d.clone()],
+            &[
+                sort_req_c.clone(),
+                sort_req_b.clone(),
+                sort_req_a.clone(),
+                sort_req_d.clone(),
+                sort_req_e.clone(),
+            ],
+            || eq_properties.clone(),
+            || ordering_eq_properties.clone(),
+        ));
+
+        assert!(!ordering_satisfy_concrete(
+            &[sort_req_a.clone(), sort_req_b.clone()],
+            &[
+                sort_req_c.clone(),
+                sort_req_b.clone(),
+                sort_req_a.clone(),
+                sort_req_d.clone(),
+                sort_req_e.clone(),
+            ],
+            || eq_properties.clone(),
+            || ordering_eq_properties.clone(),
+        ));
+
+        assert!(!ordering_satisfy_concrete(
+            &[sort_req_a.clone(), sort_req_b.clone(), sort_req_d.clone()],
+            &[sort_req_c, sort_req_d, sort_req_a, sort_req_b, sort_req_e,],
+            || eq_properties.clone(),
+            || ordering_eq_properties.clone(),
+        ));
+
         Ok(())
     }
 }

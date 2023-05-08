@@ -2378,3 +2378,27 @@ select row_number() over (rows between null preceding and current row) from (sel
 # invalid window frame. negative as following
 statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
+
+# These test are to show ordering satisfy consider ordering equivalences
+# from different length of orderings for provided and required expressions 
+query TT
+EXPLAIN SELECT c9, rn1 FROM (SELECT c9,
+                       ROW_NUMBER() OVER(ORDER BY c9 DESC) as rn1
+                       FROM aggregate_test_100
+                       ORDER BY c9 DESC)
+       ORDER BY rn1, c9 DESC
+       LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+  Sort: rn1 ASC NULLS LAST, aggregate_test_100.c9 DESC NULLS FIRST, fetch=5
+    Sort: aggregate_test_100.c9 DESC NULLS FIRST
+      Projection: aggregate_test_100.c9, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn1
+        WindowAggr: windowExpr=[[ROW_NUMBER() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: aggregate_test_100 projection=[c9]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+  ProjectionExec: expr=[c9@0 as c9, ROW_NUMBER() ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn1]
+    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+      SortExec: expr=[c9@0 DESC]
+        CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c9], has_header=true
