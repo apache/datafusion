@@ -460,16 +460,6 @@ fn mathematics_numerical_coercion(
         return None;
     };
 
-    // same type => all good
-    // TODO: remove this
-    // bug: https://github.com/apache/arrow-datafusion/issues/3387
-    if lhs_type == rhs_type
-        && !(matches!(lhs_type, DataType::Dictionary(_, _))
-            || matches!(rhs_type, DataType::Dictionary(_, _)))
-    {
-        return Some(lhs_type.clone());
-    }
-
     // these are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
