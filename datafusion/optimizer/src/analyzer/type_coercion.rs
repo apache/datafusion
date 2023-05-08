@@ -562,9 +562,8 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    let right_type = DataType::Boolean;
-    let coerced_type = coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
-    expr.clone().cast_to(&coerced_type, schema)
+    coerce_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    expr.clone().cast_to(&DataType::Boolean, schema)
 }
 
 /// Returns `expressions` coerced to types compatible with
