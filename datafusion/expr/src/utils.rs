@@ -270,13 +270,11 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
             }
-            Expr::ScalarVariable(_, var_names) => {
-                accum.insert(Column::from_name(var_names.join(".")));
-            }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::Alias(_, _)
+            Expr::ScalarVariable(_, _)
+            | Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
