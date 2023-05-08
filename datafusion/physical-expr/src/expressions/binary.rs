@@ -2208,10 +2208,10 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let result_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            let common_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
 
-            let left = try_cast(col("a", &schema)?, &schema, result_type.clone())?;
-            let right = try_cast(col("b", &schema)?, &schema, result_type)?;
+            let left = try_cast(col("a", &schema)?, &schema, common_type.clone())?;
+            let right = try_cast(col("b", &schema)?, &schema, common_type)?;
 
             // verify that we can construct the expression
             let expression = binary(left, $OP, right, &schema)?;
@@ -3687,10 +3687,10 @@ mod tests {
     ) -> Result<()> {
         let left_type = left.data_type();
         let right_type = right.data_type();
-        let result_type = coerce_types(left_type, &op, right_type)?;
+        let common_type = coerce_types(left_type, &op, right_type)?;
 
-        let left_expr = try_cast(col("a", schema)?, schema, result_type.clone())?;
-        let right_expr = try_cast(col("b", schema)?, schema, result_type)?;
+        let left_expr = try_cast(col("a", schema)?, schema, common_type.clone())?;
+        let right_expr = try_cast(col("b", schema)?, schema, common_type)?;
         let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
