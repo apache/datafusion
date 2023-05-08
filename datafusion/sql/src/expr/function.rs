@@ -17,7 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
@@ -121,7 +121,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Some(fm) = self.schema_provider.get_function_meta(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::ScalarUDF { fun: fm, args });
+            return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
         }
 
         // User defined aggregate functions

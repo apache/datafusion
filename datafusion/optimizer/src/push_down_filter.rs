@@ -160,7 +160,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InSubquery { .. }
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::ScalarUDF { .. } => {
+        | Expr::ScalarUDF(..) => {
             is_evaluate = false;
             Ok(VisitRecursion::Stop)
         }

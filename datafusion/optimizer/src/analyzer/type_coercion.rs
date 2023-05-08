@@ -25,7 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Like, ScalarFunction, WindowFunction,
+    self, Between, BinaryExpr, Case, Like, ScalarFunction, ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
@@ -369,16 +369,13 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let case = coerce_case_expression(case, &self.schema)?;
                 Ok(Expr::Case(case))
             }
-            Expr::ScalarUDF { fun, args } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                };
+                let expr = Expr::ScalarUDF(ScalarUDF::new(fun, new_expr));
                 Ok(expr)
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
@@ -814,15 +811,15 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation =
             Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Expr::ScalarUDF {
-            fun: Arc::new(ScalarUDF::new(
+        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
+            Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
                 &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
                 &return_type,
                 &fun,
             )),
-            args: vec![lit(123_i32)],
-        };
+            vec![lit(123_i32)],
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -835,15 +832,15 @@ mod test {
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation = Arc::new(move |_| unimplemented!());
-        let udf = Expr::ScalarUDF {
-            fun: Arc::new(ScalarUDF::new(
+        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
+            Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
                 &Signature::uniform(1, vec![DataType::Int32], Volatility::Stable),
                 &return_type,
                 &fun,
             )),
-            args: vec![lit("Apple")],
-        };
+            vec![lit("Apple")],
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
