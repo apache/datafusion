@@ -392,15 +392,43 @@ CREATE SCHEMA [ IF NOT EXISTS ] [ <i><b>catalog.</i></b> ] <b><i>schema_name</i>
 </section>
 <section id="create-external-table">
 <h2>CREATE EXTERNAL TABLE<a class="headerlink" href="#create-external-table" title="Permalink to this heading">¶</a></h2>
-<p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. It is not necessary
-to provide schema information for Parquet files.</p>
+<p><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement registers a location on a local
+file system or remote object store as a named table which can be queried.</p>
+<p>The supported syntax is:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">CREATE</span> <span class="n">EXTERNAL</span> <span class="n">TABLE</span>
+<span class="p">[</span> <span class="n">IF</span> <span class="n">NOT</span> <span class="n">EXISTS</span> <span class="p">]</span>
+<span class="o">&lt;</span><span class="n">TABLE_NAME</span><span class="o">&gt;</span><span class="p">[</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column_definition</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
+<span class="n">STORED</span> <span class="n">AS</span> <span class="o">&lt;</span><span class="n">file_type</span><span class="o">&gt;</span>
+<span class="p">[</span> <span class="n">WITH</span> <span class="n">HEADER</span> <span class="n">ROW</span> <span class="p">]</span>
+<span class="p">[</span> <span class="n">DELIMITER</span> <span class="o">&lt;</span><span class="n">char</span><span class="o">&gt;</span> <span class="p">]</span>
+<span class="p">[</span> <span class="n">COMPRESSION</span> <span class="n">TYPE</span> <span class="o">&lt;</span><span class="n">GZIP</span> <span class="o">|</span> <span class="n">BZIP2</span> <span class="o">|</span> <span class="n">XZ</span> <span class="o">|</span> <span class="n">ZSTD</span><span class="o">&gt;</span> <span class="p">]</span>
+<span class="p">[</span> <span class="n">PARTITIONED</span> <span class="n">BY</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
+<span class="p">[</span> <span class="n">WITH</span> <span class="n">ORDER</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">ordered</span> <span class="n">column</span> <span class="nb">list</span><span class="o">&gt;</span><span class="p">)</span>
+<span class="p">[</span> <span class="n">OPTIONS</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span><span class="p">)</span> <span class="p">]</span>
+<span class="n">LOCATION</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span>
+
+<span class="o">&lt;</span><span class="n">column_definition</span><span class="o">&gt;</span> <span class="o">:=</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column_name</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">data_type</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+
+<span class="o">&lt;</span><span class="n">column_list</span><span class="o">&gt;</span> <span class="o">:=</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column_name</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+
+<span class="o">&lt;</span><span class="n">ordered_column_list</span><span class="o">&gt;</span> <span class="o">:=</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">column_name</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">sort_clause</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+
+<span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span> <span class="o">:=</span> <span class="p">(</span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">literal</span><span class="p">,</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">file_type</span></code> is one of <code class="docutils literal notranslate"><span class="pre">CSV</span></code>, <code class="docutils literal notranslate"><span class="pre">PARQUET</span></code>, <code class="docutils literal notranslate"><span class="pre">AVRO</span></code> or <code class="docutils literal notranslate"><span class="pre">JSON</span></code></p>
+<p><code class="docutils literal notranslate"><span class="pre">LOCATION</span> <span class="pre">&lt;literal&gt;</span></code> specfies the location to find the data. It can be
+a path to a file or directory of partitioned files locally or on an
+object store.</p>
+<p>Parquet data sources can be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement such as the following. It is not necessary to
+provide schema information for Parquet files.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">taxi</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/mnt/nyctaxi/tripdata.parquet&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>CSV data sources can also be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. The schema will be
-inferred based on scanning a subset of the file.</p>
+<p>CSV data sources can also be registered by executing a <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> SQL statement. The schema will be inferred based on
+scanning a subset of the file.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
 <span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
 <span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
@@ -428,9 +456,18 @@ inferred based on scanning a subset of the file.</p>
 <span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/aggregate_test_100.csv&#39;</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>When creating an output from a data source that is already ordered by an expression, you can pre-specify the order of
-the data using the <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause. This applies even if the expression used for sorting is complex,
-allowing for greater flexibility.</p>
+<p>It is also possible to specify a directory that contains a partitioned
+table (multiple files with the same schema)</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">CSV</span>
+<span class="k">WITH</span><span class="w"> </span><span class="n">HEADER</span><span class="w"> </span><span class="k">ROW</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;/path/to/directory/of/files&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>When creating an output from a data source that is already ordered by
+an expression, you can pre-specify the order of the data using the
+<code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause. This applies even if the expression used for
+sorting is complex, allowing for greater flexibility.</p>
 <p>Here’s an example of how to use <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">ORDER</span></code> clause.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">test</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="n">c1</span><span class="w">  </span><span class="nb">VARCHAR</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span>
