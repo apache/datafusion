@@ -18,8 +18,8 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
-    Like, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
+    GroupingSet, Like, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -97,7 +97,7 @@ impl TreeNode for Expr {
                 expr_vec
             }
             Expr::AggregateFunction(AggregateFunction { args, filter, .. })
-            | Expr::AggregateUDF { args, filter, .. } => {
+            | Expr::AggregateUDF ( AggregateUDF{args, filter, .. }) => {
                 let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
@@ -313,11 +313,13 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF { args, fun, filter } => Expr::AggregateUDF {
-                args: transform_vec(args, &mut transform)?,
-                fun,
-                filter: transform_option_box(filter, &mut transform)?,
-            },
+            Expr::AggregateUDF(AggregateUDF { args, fun, filter }) => {
+                Expr::AggregateUDF(AggregateUDF {
+                    args: transform_vec(args, &mut transform)?,
+                    fun,
+                    filter: transform_option_box(filter, &mut transform)?,
+                })
+            }
             Expr::InList {
                 expr,
                 list,

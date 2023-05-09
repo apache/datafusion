@@ -1377,16 +1377,14 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
-            Ok(Expr::AggregateUDF {
-                fun: agg_fn,
-                args: pb
-                    .args
+            Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                agg_fn,
+                pb.args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-                filter: parse_optional_expr(pb.filter.as_deref(), registry)?
-                    .map(Box::new),
-            })
+                parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
+            )))
         }
 
         ExprType::GroupingSet(GroupingSetNode { expr }) => {

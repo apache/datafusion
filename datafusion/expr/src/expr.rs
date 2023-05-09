@@ -21,10 +21,10 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
+use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
-use crate::AggregateUDF;
 use crate::Operator;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
@@ -159,14 +159,7 @@ pub enum Expr {
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
     /// aggregate function
-    AggregateUDF {
-        /// The function
-        fun: Arc<AggregateUDF>,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// Optional filter applied prior to aggregating
-        filter: Option<Box<Expr>>,
-    },
+    AggregateUDF(AggregateUDF),
     /// Returns whether the list contains the expr value.
     InList {
         /// The expression to compare
@@ -504,6 +497,27 @@ impl WindowFunction {
             order_by,
             window_frame,
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AggregateUDF {
+    /// The function
+    pub fun: Arc<udaf::AggregateUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// Optional filter
+    pub filter: Option<Box<Expr>>,
+}
+
+impl AggregateUDF {
+    /// Create a new AggregateUDF expression
+    pub fn new(
+        fun: Arc<udaf::AggregateUDF>,
+        args: Vec<Expr>,
+        filter: Option<Box<Expr>>,
+    ) -> Self {
+        Self { fun, args, filter }
     }
 }
 
@@ -988,12 +1002,12 @@ impl fmt::Debug for Expr {
                 }
                 Ok(())
             }
-            Expr::AggregateUDF {
+            Expr::AggregateUDF(AggregateUDF {
                 fun,
                 ref args,
                 filter,
                 ..
-            } => {
+            }) => {
                 fmt_function(f, &fun.name, false, args, false)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
@@ -1344,7 +1358,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(name)
             }
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
                 names.push(create_name(e)?);
