@@ -25,7 +25,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Like, ScalarFunction, ScalarUDF, WindowFunction,
+    self, Between, BinaryExpr, Case, Exists, Like, ScalarFunction, ScalarUDF,
+    WindowFunction,
 };
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
@@ -133,15 +134,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     outer_ref_columns,
                 }))
             }
-            Expr::Exists { subquery, negated } => {
+            Expr::Exists(Exists { subquery, negated }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
-                Ok(Expr::Exists {
+                Ok(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                     },
                     negated,
-                })
+                }))
             }
             Expr::InSubquery {
                 expr,
