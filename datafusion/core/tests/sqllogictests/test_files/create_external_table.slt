@@ -93,9 +93,9 @@ statement error DataFusion error: SQL error: ParserError\("OPTIONS specified mor
 CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('k1' 'v1', 'k2' 'v2') OPTIONS ('k3' 'v3') LOCATION 'foo.csv'
 
 # With typo error
-statement error DataFusion error: SQL error: ParserError\("WITH clause is incomplete or has typo error in CREATE EXTERNAL TABLE statement"\)
+statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: HEAD"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEAD ROW LOCATION 'foo.csv';
 
 # Missing `anything` in WITH clause
-statement error DataFusion error: SQL error: ParserError\("WITH clause is incomplete or has typo error in CREATE EXTERNAL TABLE statement"\)
-CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH  LOCATION 'foo.csv';
+statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: LOCATION"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';

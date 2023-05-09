@@ -435,17 +435,14 @@ impl<'a> DFParser<'a> {
                 ensure_not_set(&builder.location, "LOCATION")?;
                 builder.location = Some(self.parser.parse_literal_string()?);
             } else if self.parser.parse_keyword(Keyword::WITH) {
-                if self.parser.parse_keyword(Keyword::HEADER) {
-                    self.parser.expect_keyword(Keyword::ROW)?;
-                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
-                    builder.has_header = Some(true);
-                } else if self.parser.parse_keyword(Keyword::ORDER) {
+                if self.parser.parse_keyword(Keyword::ORDER) {
                     ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
                     builder.order_exprs = Some(self.parse_order_by_exprs()?);
                 } else {
-                    return Err(ParserError::ParserError(
-                        "WITH clause is incomplete or has typo error in CREATE EXTERNAL TABLE statement".into(),
-                    ));
+                    self.parser.expect_keyword(Keyword::HEADER)?;
+                    self.parser.expect_keyword(Keyword::ROW)?;
+                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                    builder.has_header = Some(true);
                 }
             } else if self.parser.parse_keyword(Keyword::DELIMITER) {
                 ensure_not_set(&builder.delimiter, "DELIMITER")?;
@@ -980,6 +977,7 @@ mod tests {
         expect_parse_ok(sql, expected)?;
 
         // For error cases, see: `create_external_table.slt`
+
         Ok(())
     }
 }
