@@ -308,7 +308,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. }
-            | Expr::Placeholder { .. }
+            | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
         Ok(())

@@ -34,6 +34,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
     abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
     cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
@@ -1413,14 +1414,11 @@ pub fn parse_expr(
             )))
         }
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
-            None => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: None,
-            }),
-            Some(data_type) => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: Some(data_type.try_into()?),
-            }),
+            None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
+            Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
+                id.clone(),
+                Some(data_type.try_into()?),
+            ))),
         },
     }
 }
