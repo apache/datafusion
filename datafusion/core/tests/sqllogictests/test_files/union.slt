@@ -203,3 +203,76 @@ drop table t2;
 
 statement ok
 drop table aggregate_test_100;
+
+statement ok
+CREATE EXTERNAL TABLE t1 (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c1 ASC)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+statement ok
+CREATE EXTERNAL TABLE t2 (
+        c1a  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c1a ASC)
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query TT
+explain
+SELECT c1 FROM(
+(   
+    SELECT c1 FROM t1
+)  
+UNION ALL
+(   
+    SELECT c1a FROM t2
+))
+ORDER BY c1
+----
+logical_plan
+  Sort: t1.c1 ASC NULLS LAST
+    Union
+      TableScan: t1 projection=[c1]
+      Projection: t2.c1a AS t1.c1
+        TableScan: t2 projection=[c1a]
+physical_plan
+  SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
+    UnionExec
+      CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
+        ProjectionExec: expr=[c1a@0 as t1.c1]
+      CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], has_header=true
+
+statement ok
+drop table t1
+
+statement ok
+drop table t2
