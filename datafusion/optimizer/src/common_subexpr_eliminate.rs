@@ -21,7 +21,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-
 use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
@@ -267,8 +266,9 @@ impl OptimizerRule for CommonSubexprEliminate {
 
                     let mut proj_exprs = vec![];
                     for expr in &new_group_expr {
-                        let out_name = expr.to_field(&new_input_schema)?.qualified_name();
-                        proj_exprs.push(Expr::Column(Column::from_name(out_name)));
+                        let out_col: Column =
+                            expr.to_field(&new_input_schema)?.qualified_column();
+                        proj_exprs.push(Expr::Column(out_col));
                     }
                     for (expr_rewritten, expr_orig) in
                         rewritten.into_iter().zip(new_aggr_expr)
@@ -869,16 +869,18 @@ mod test {
         let accumulator: AccumulatorFunctionImplementation =
             Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
-        let udf_agg = |inner: Expr| Expr::AggregateUDF {
-            fun: Arc::new(AggregateUDF::new(
-                "my_agg",
-                &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
-                &return_type,
-                &accumulator,
-                &state_type,
-            )),
-            args: vec![inner],
-            filter: None,
+        let udf_agg = |inner: Expr| {
+            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
+                Arc::new(AggregateUDF::new(
+                    "my_agg",
+                    &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
+                    &return_type,
+                    &accumulator,
+                    &state_type,
+                )),
+                vec![inner],
+                None,
+            ))
         };
 
         // test: common aggregates
@@ -980,6 +982,33 @@ mod test {
         \n  Aggregate: groupBy=[[UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a]], aggr=[[AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a, my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a]]\
         \n    Projection: UInt32(1) + test.a AS UInt32(1) + test.atest.aUInt32(1), test.a, test.b, test.c\
         \n      TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_with_releations_and_dots() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("col.a", DataType::UInt32, false)]);
+        let table_scan = table_scan(Some("table.test"), &schema, None)?.build()?;
+
+        let col_a = Expr::Column(Column::new(Some("table.test"), "col.a"));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col_a.clone()],
+                vec![
+                    (lit(1u32) + avg(lit(1u32) + col_a.clone())),
+                    avg(lit(1u32) + col_a),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Projection: table.test.col.a, UInt32(1) + AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a)UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a AS AVG(UInt32(1) + table.test.col.a), AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a)UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a AS AVG(UInt32(1) + table.test.col.a)\
+        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a) AS AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a)UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a]]\
+        \n    Projection: UInt32(1) + table.test.col.a AS UInt32(1) + table.test.col.atable.test.col.aUInt32(1), table.test.col.a\
+        \n      TableScan: table.test";
 
         assert_optimized_plan_eq(expected, &plan);
 

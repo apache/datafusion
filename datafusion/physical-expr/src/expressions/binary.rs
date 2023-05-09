@@ -98,7 +98,7 @@ use datafusion_common::scalar::*;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::{
-    binary_operator_data_type, coercion_decimal_mathematics_type,
+    coercion_decimal_mathematics_type, get_result_type,
 };
 use datafusion_expr::{ColumnarValue, Operator};
 
@@ -651,7 +651,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        binary_operator_data_type(
+        get_result_type(
             &self.left.data_type(input_schema)?,
             &self.op,
             &self.right.data_type(input_schema)?,
@@ -670,32 +670,6 @@ impl PhysicalExpr for BinaryExpr {
 
         let schema = batch.schema();
         let input_schema = schema.as_ref();
-
-        match (&left_value, &left_data_type, &right_value, &right_data_type) {
-            // Types are equal => valid
-            // Decimal types can be different but still valid as we coerce them to the same type later
-            (_, l, _, r) if l == r || (is_decimal(l) && is_decimal(r)) => {}
-            // Allow comparing a dictionary value with its corresponding scalar value
-            (
-                ColumnarValue::Array(_),
-                DataType::Dictionary(_, dict_t),
-                ColumnarValue::Scalar(_),
-                scalar_t,
-            )
-            | (
-                ColumnarValue::Scalar(_),
-                scalar_t,
-                ColumnarValue::Array(_),
-                DataType::Dictionary(_, dict_t),
-            ) if dict_t.as_ref() == scalar_t
-                || (is_decimal(dict_t.as_ref()) && is_decimal(scalar_t)) => {}
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                    self.op, left_data_type, right_data_type
-                )));
-            }
-        }
 
         // Coerce decimal types to the same scale and precision
         let coerced_type = coercion_decimal_mathematics_type(
@@ -2234,10 +2208,10 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let result_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            let common_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
 
-            let left = try_cast(col("a", &schema)?, &schema, result_type.clone())?;
-            let right = try_cast(col("b", &schema)?, &schema, result_type)?;
+            let left = try_cast(col("a", &schema)?, &schema, common_type.clone())?;
+            let right = try_cast(col("b", &schema)?, &schema, common_type)?;
 
             // verify that we can construct the expression
             let expression = binary(left, $OP, right, &schema)?;
@@ -3713,10 +3687,10 @@ mod tests {
     ) -> Result<()> {
         let left_type = left.data_type();
         let right_type = right.data_type();
-        let result_type = coerce_types(left_type, &op, right_type)?;
+        let common_type = coerce_types(left_type, &op, right_type)?;
 
-        let left_expr = try_cast(col("a", schema)?, schema, result_type.clone())?;
-        let right_expr = try_cast(col("b", schema)?, schema, result_type)?;
+        let left_expr = try_cast(col("a", schema)?, schema, common_type.clone())?;
+        let right_expr = try_cast(col("b", schema)?, schema, common_type)?;
         let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;

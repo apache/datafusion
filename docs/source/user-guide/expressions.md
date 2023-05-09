@@ -91,7 +91,10 @@ expressions such as `col("a") + col("b")` to be used.
 | cosh(x)               | hyperbolic cosine                                 |
 | degrees(x)            | converts radians to degrees                       |
 | exp(x)                | exponential                                       |
+| factorial(x)          | factorial                                         |
 | floor(x)              | nearest integer less than or equal to argument    |
+| gcd(x, y)             | greatest common divisor                           |
+| lcm(x, y)             | least common multiple                             |
 | ln(x)                 | natural logarithm                                 |
 | log(base, x)          | logarithm of x for a particular base              |
 | log10(x)              | base 10 logarithm                                 |

@@ -19,8 +19,9 @@
 
 use crate::simplify_expressions::SimplifyInfo;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    expr::{Between, BinaryExpr},
+    expr::{Between, BinaryExpr, InList},
     expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
@@ -280,11 +281,11 @@ pub fn negate_clause(expr: Expr) -> Expr {
         Expr::IsNull(expr) => expr.is_not_null(),
         // not (A not in (..)) ===> A in (..)
         // not (A in (..)) ===> A not in (..)
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => expr.in_list(list, !negated),
+        }) => expr.in_list(list, !negated),
         // not (A between B and C) ===> (A not between B and C)
         // not (A not between B and C) ===> (A between B and C)
         Expr::Between(between) => Expr::Between(Between::new(
@@ -371,20 +372,20 @@ pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Exp
                 &info.get_data_type(base)?,
             )?))
         }
-        Expr::ScalarFunction {
+        Expr::ScalarFunction(ScalarFunction {
             fun: BuiltinScalarFunction::Power,
             args,
-        } if base == &args[0] => Ok(args[1].clone()),
+        }) if base == &args[0] => Ok(args[1].clone()),
         _ => {
             if number == base {
                 Ok(Expr::Literal(ScalarValue::new_one(
                     &info.get_data_type(number)?,
                 )?))
             } else {
-                Ok(Expr::ScalarFunction {
-                    fun: BuiltinScalarFunction::Log,
-                    args: vec![base.clone(), number.clone()],
-                })
+                Ok(Expr::ScalarFunction(ScalarFunction::new(
+                    BuiltinScalarFunction::Log,
+                    vec![base.clone(), number.clone()],
+                )))
             }
         }
     }
@@ -411,14 +412,14 @@ pub fn simpl_power(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<E
         {
             Ok(base.clone())
         }
-        Expr::ScalarFunction {
+        Expr::ScalarFunction(ScalarFunction {
             fun: BuiltinScalarFunction::Log,
             args,
-        } if base == &args[0] => Ok(args[1].clone()),
-        _ => Ok(Expr::ScalarFunction {
-            fun: BuiltinScalarFunction::Power,
-            args: current_args,
-        }),
+        }) if base == &args[0] => Ok(args[1].clone()),
+        _ => Ok(Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::Power,
+            current_args,
+        ))),
     }
 }
 
@@ -463,10 +464,10 @@ pub fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
         new_args.push(lit(contiguous_scalar));
     }
 
-    Ok(Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::Concat,
-        args: new_args,
-    })
+    Ok(Expr::ScalarFunction(ScalarFunction::new(
+        BuiltinScalarFunction::Concat,
+        new_args,
+    )))
 }
 
 /// Simply the `concat_ws` function by
@@ -517,10 +518,10 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
                     if let Some(val) = contiguous_scalar {
                         new_args.push(lit(val));
                     }
-                    Ok(Expr::ScalarFunction {
-                        fun: BuiltinScalarFunction::ConcatWithSeparator,
-                        args: new_args,
-                    })
+                    Ok(Expr::ScalarFunction(ScalarFunction::new(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                        new_args,
+                    )))
                 }
                 // if the delimiter is null, then the value of the whole expression is null.
                 None => Ok(Expr::Literal(ScalarValue::Utf8(None))),

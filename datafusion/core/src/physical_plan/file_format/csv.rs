@@ -172,11 +172,8 @@ impl ExecutionPlan for CsvExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "CsvExec: files={}, has_header={}, limit={:?}, projection={}",
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                    self.has_header,
-                    self.base_config.limit,
-                    super::ProjectSchemaDisplay(&self.projected_schema),
+                    "CsvExec: {}, has_header={}",
+                    self.base_config, self.has_header,
                 )
             }
         }
@@ -786,7 +783,7 @@ mod tests {
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
-        let df = ctx.read_csv("tests/csv/corrupt.csv", options).await?;
+        let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let e = df

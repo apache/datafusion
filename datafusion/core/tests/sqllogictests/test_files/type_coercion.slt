@@ -29,3 +29,23 @@ query B
 select 's' is not distinct from arrow_cast('s', 'LargeUtf8');
 ----
 true
+
+# date - interval
+query D
+select '2023-05-01'::date - interval '1 month';
+----
+2023-04-01
+
+# timestamp - interval
+query P
+SELECT '2023-05-01 12:30:00'::timestamp - interval '1 month';
+----
+2023-04-01T12:30:00
+
+# interval - date
+query error DataFusion error: type_coercion
+select interval '1 month' - '2023-05-01'::date;
+
+# interval - timestamp
+query error DataFusion error: type_coercion
+SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;

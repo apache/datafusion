@@ -257,6 +257,10 @@ pub fn return_type(
             }
         }),
 
+        BuiltinScalarFunction::Factorial
+        | BuiltinScalarFunction::Gcd
+        | BuiltinScalarFunction::Lcm => Ok(DataType::Int64),
+
         BuiltinScalarFunction::Power => match &input_expr_types[0] {
             DataType::Int64 => Ok(DataType::Int64),
             _ => Ok(DataType::Float64),
@@ -308,7 +312,7 @@ pub fn return_type(
     }
 }
 
-/// the signatures supported by the function `fun`.
+/// Return the [`Signature`] supported by the function `fun`.
 pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
 
@@ -673,16 +677,53 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::Factorial => {
+            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
+        }
+        BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
+            Signature::uniform(2, vec![DataType::Int64], fun.volatility())
+        }
         BuiltinScalarFunction::ArrowTypeof => Signature::any(1, fun.volatility()),
-        // math expressions expect 1 argument of type f64 or f32
-        // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
-        // return the best approximation for it (in f64).
-        // We accept f32 because in this case it is clear that the best approximation
-        // will be as good as the number of digits in the number
-        _ => Signature::uniform(
-            1,
-            vec![DataType::Float64, DataType::Float32],
-            fun.volatility(),
-        ),
+        BuiltinScalarFunction::Abs
+        | BuiltinScalarFunction::Acos
+        | BuiltinScalarFunction::Asin
+        | BuiltinScalarFunction::Atan
+        | BuiltinScalarFunction::Acosh
+        | BuiltinScalarFunction::Asinh
+        | BuiltinScalarFunction::Atanh
+        | BuiltinScalarFunction::Cbrt
+        | BuiltinScalarFunction::Ceil
+        | BuiltinScalarFunction::Cos
+        | BuiltinScalarFunction::Cosh
+        | BuiltinScalarFunction::Degrees
+        | BuiltinScalarFunction::Exp
+        | BuiltinScalarFunction::Floor
+        | BuiltinScalarFunction::Ln
+        | BuiltinScalarFunction::Log10
+        | BuiltinScalarFunction::Log2
+        | BuiltinScalarFunction::Radians
+        | BuiltinScalarFunction::Signum
+        | BuiltinScalarFunction::Sin
+        | BuiltinScalarFunction::Sinh
+        | BuiltinScalarFunction::Sqrt
+        | BuiltinScalarFunction::Tan
+        | BuiltinScalarFunction::Tanh
+        | BuiltinScalarFunction::Trunc => {
+            // math expressions expect 1 argument of type f64 or f32
+            // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
+            // return the best approximation for it (in f64).
+            // We accept f32 because in this case it is clear that the best approximation
+            // will be as good as the number of digits in the number
+            Signature::uniform(
+                1,
+                vec![DataType::Float64, DataType::Float32],
+                fun.volatility(),
+            )
+        }
+        BuiltinScalarFunction::Now
+        | BuiltinScalarFunction::CurrentDate
+        | BuiltinScalarFunction::CurrentTime => {
+            Signature::uniform(0, vec![], fun.volatility())
+        }
     }
 }

@@ -201,7 +201,7 @@ fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Res
 
     impl ExpressionVisitor for InSubqueryVisitor<'_> {
         fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-            if let Expr::InSubquery { .. } = expr {
+            if let Expr::InSubquery(_) = expr {
                 self.accum.push(expr.to_owned());
             }
             Ok(Recursion::Continue(self))

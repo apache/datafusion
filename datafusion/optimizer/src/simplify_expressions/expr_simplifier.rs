@@ -28,8 +28,9 @@ use arrow::{
 };
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
+    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
     Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
@@ -257,7 +258,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
@@ -265,8 +266,12 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::Placeholder { .. } => false,
-            Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
-            Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
+            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
+                Self::volatility_ok(fun.volatility())
+            }
+            Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
+                Self::volatility_ok(fun.signature.volatility)
+            }
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -386,37 +391,33 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
             // expr IN () --> false
             // expr NOT IN () --> true
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
                 lit(negated)
             }
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 mut list,
                 negated,
-            } if list.len() == 1
+            }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
                 let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
-                Expr::InSubquery {
-                    expr,
-                    subquery,
-                    negated,
-                }
+                Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 
             // if expr is a single column reference:
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } if !list.is_empty()
+            }) if !list.is_empty()
                 && (
                     // For lists with only 1 value we allow more complex expressions to be simplified
                     // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
@@ -1073,33 +1074,33 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }
 
             // log
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Log,
                 args,
-            } => simpl_log(args, <&S>::clone(&info))?,
+            }) => simpl_log(args, <&S>::clone(&info))?,
 
             // power
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Power,
                 args,
-            } => simpl_power(args, <&S>::clone(&info))?,
+            }) => simpl_power(args, <&S>::clone(&info))?,
 
             // concat
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
                 args,
-            } => simpl_concat(args)?,
+            }) => simpl_concat(args)?,
 
             // concat_ws
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
-            } => match &args[..] {
+            }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
-                _ => Expr::ScalarFunction {
-                    fun: BuiltinScalarFunction::ConcatWithSeparator,
+                _ => Expr::ScalarFunction(ScalarFunction::new(
+                    BuiltinScalarFunction::ConcatWithSeparator,
                     args,
-                },
+                )),
             },
 
             //
@@ -1385,7 +1386,7 @@ mod tests {
         // rand() + (1 + 2) --> rand() + 3
         let fun = BuiltinScalarFunction::Random;
         assert_eq!(fun.volatility(), Volatility::Volatile);
-        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
         let expr = rand.clone() + (lit(1) + lit(2));
         let expected = rand + lit(3);
         test_evaluate(expr, expected);
@@ -1393,7 +1394,7 @@ mod tests {
         // parenthesization matters: can't rewrite
         // (rand() + 1) + 2 --> (rand() + 1) + 2)
         let fun = BuiltinScalarFunction::Random;
-        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
         let expr = (rand + lit(1)) + lit(2);
         test_evaluate(expr.clone(), expr);
     }
@@ -1423,32 +1424,24 @@ mod tests {
 
         // immutable UDF should get folded
         // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarUDF {
-            args: args.clone(),
-            fun: make_udf_add(Volatility::Immutable),
-        };
+        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(
+            make_udf_add(Volatility::Immutable),
+            args.clone(),
+        ));
         test_evaluate(expr, lit(73));
 
         // stable UDF should be entirely folded
         // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarUDF {
-            args: args.clone(),
-            fun: Arc::clone(&fun),
-        };
+        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args.clone()));
         test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
         let fun = make_udf_add(Volatility::Volatile);
-        let expr = Expr::ScalarUDF {
-            args,
-            fun: Arc::clone(&fun),
-        };
-        let expected_expr = Expr::ScalarUDF {
-            args: folded_args,
-            fun: Arc::clone(&fun),
-        };
+        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args));
+        let expected_expr =
+            Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), folded_args));
         test_evaluate(expr, expected_expr);
     }
 

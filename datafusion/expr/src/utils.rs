@@ -270,13 +270,11 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
             }
-            Expr::ScalarVariable(_, var_names) => {
-                accum.insert(Column::from_name(var_names.join(".")));
-            }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::Alias(_, _)
+            Expr::ScalarVariable(_, _)
+            | Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
@@ -297,15 +295,15 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
+            | Expr::ScalarFunction(..)
+            | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::GroupingSet(_)
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
@@ -706,7 +704,7 @@ pub fn from_plan(
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
-                        | Expr::InSubquery { .. } => {
+                        | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }

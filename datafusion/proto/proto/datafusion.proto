@@ -534,6 +534,9 @@ enum ScalarFunction {
   Pi = 80;
   Degrees = 81;
   Radians = 82;
+  Factorial = 83;
+  Lcm = 84;
+  Gcd = 85;
 }
 
 message ScalarFunctionNode {

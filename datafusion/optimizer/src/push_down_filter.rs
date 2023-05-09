@@ -157,10 +157,10 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Placeholder { .. }
         | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
         Expr::Exists { .. }
-        | Expr::InSubquery { .. }
+        | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::ScalarUDF { .. } => {
+        | Expr::ScalarUDF(..) => {
             is_evaluate = false;
             Ok(VisitRecursion::Stop)
         }
@@ -184,7 +184,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Case(_)
         | Expr::Cast(_)
         | Expr::TryCast(_)
-        | Expr::ScalarFunction { .. }
+        | Expr::ScalarFunction(..)
         | Expr::InList { .. } => Ok(VisitRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)

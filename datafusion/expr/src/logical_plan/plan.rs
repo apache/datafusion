@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::Exists;
+use crate::expr::InSubquery;
 ///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -544,8 +546,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the collector sees a
                         // LogicalPlan::Subquery (even though it is
@@ -570,8 +572,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the visitor sees a
                         // LogicalPlan::Subquery (even though it is

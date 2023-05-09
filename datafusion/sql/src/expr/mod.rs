@@ -30,6 +30,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::InList;
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -121,13 +123,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::DatePart,
-                args: vec![
+            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction (ScalarFunction::new(
+                BuiltinScalarFunction::DatePart,
+                 vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ],
-            }),
+            ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval {
@@ -138,6 +140,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             } => self.sql_interval_to_expr(
                 *value,
+                schema,
+                planner_context,
                 leading_field,
                 leading_precision,
                 last_field,
@@ -358,15 +362,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::InList {
-            expr: Box::new(self.sql_expr_to_logical_expr(
-                expr,
-                schema,
-                planner_context,
-            )?),
-            list: list_expr,
+        Ok(Expr::InList(InList::new(
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+            list_expr,
             negated,
-        })
+        )))
     }
 
     fn sql_like_to_expr(
@@ -464,7 +464,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg],
         };
-        Ok(Expr::ScalarFunction { fun, args })
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
     fn sql_agg_with_filter_to_expr(
