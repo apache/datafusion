@@ -38,7 +38,7 @@ the `arrow_typeof` function. For example:
 ```
 
 You can cast a SQL expression to a specific Arrow type using the `arrow_cast` function
-For example, to cast the output of `now()` to a `Timestamp` with second precision rather:
+For example, to cast the output of `now()` to a `Timestamp` with second precision:
 
 ```sql
 ❯ select arrow_cast(now(), 'Timestamp(Second, None)');
@@ -60,29 +60,29 @@ For example, to cast the output of `now()` to a `Timestamp` with second precisio
 
 ## Numeric Types
 
-| SQL DataType                         | Arrow DataType                | Notes                                                                                                       |
-| ------------------------------------ | :---------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `TINYINT`                            | `Int8`                        |                                                                                                             |
-| `SMALLINT`                           | `Int16`                       |                                                                                                             |
-| `INT` or `INTEGER`                   | `Int32`                       |                                                                                                             |
-| `BIGINT`                             | `Int64`                       |                                                                                                             |
-| `TINYINT UNSIGNED`                   | `UInt8`                       |                                                                                                             |
-| `SMALLINT UNSIGNED`                  | `UInt16`                      |                                                                                                             |
-| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                      |                                                                                                             |
-| `BIGINT UNSIGNED`                    | `UInt64`                      |                                                                                                             |
-| `FLOAT`                              | `Float32`                     |                                                                                                             |
-| `REAL`                               | `Float32`                     |                                                                                                             |
-| `DOUBLE`                             | `Float64`                     |                                                                                                             |
-| `DECIMAL(precision,scale)`           | `Decimal128(precision,scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
+| SQL DataType                         | Arrow DataType                 | Notes                                                                                                       |
+| ------------------------------------ | :----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `TINYINT`                            | `Int8`                         |                                                                                                             |
+| `SMALLINT`                           | `Int16`                        |                                                                                                             |
+| `INT` or `INTEGER`                   | `Int32`                        |                                                                                                             |
+| `BIGINT`                             | `Int64`                        |                                                                                                             |
+| `TINYINT UNSIGNED`                   | `UInt8`                        |                                                                                                             |
+| `SMALLINT UNSIGNED`                  | `UInt16`                       |                                                                                                             |
+| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                       |                                                                                                             |
+| `BIGINT UNSIGNED`                    | `UInt64`                       |                                                                                                             |
+| `FLOAT`                              | `Float32`                      |                                                                                                             |
+| `REAL`                               | `Float32`                      |                                                                                                             |
+| `DOUBLE`                             | `Float64`                      |                                                                                                             |
+| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                                  |
-| ------------ | :---------------------------------------------- |
-| `DATE`       | `Date32`                                        |
-| `TIME`       | `Time64(Nanosecond)`                            |
-| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`                   |
-| `INTERVAL`   | `Interval(IntervalUnit)` or `Interval(DayTime)` |
+| SQL DataType | Arrow DataType                   |
+| ------------ | :------------------------------- |
+| `DATE`       | `Date32`                         |
+| `TIME`       | `Time64(Nanosecond)`             |
+| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`    |
+| `INTERVAL`   | `Interval(IntervalMonthDayNano)` |
 
 ## Boolean Types
 

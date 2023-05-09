@@ -18,24 +18,24 @@
 //! Expression simplification API
 
 use super::utils::*;
-use crate::{
-    simplify_expressions::regex::simplify_regex_expr, type_coercion::TypeCoercionRewriter,
-};
+use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
     error::ArrowError,
     record_batch::RecordBatch,
 };
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
-    and,
-    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
-    lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+    and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
+    Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
-use super::SimplifyInfo;
+use crate::simplify_expressions::SimplifyInfo;
 
 /// This structure handles API for expression simplification
 pub struct ExprSimplifier<S> {
@@ -168,7 +168,9 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
-impl<'a> ExprRewriter for ConstEvaluator<'a> {
+impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
+    type N = Expr;
+
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
@@ -256,7 +258,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
@@ -264,8 +266,12 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::Placeholder { .. } => false,
-            Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
-            Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
+            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
+                Self::volatility_ok(fun.volatility())
+            }
+            Expr::ScalarUDF(expr::ScalarUDF { fun, .. }) => {
+                Self::volatility_ok(fun.signature.volatility)
+            }
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -338,7 +344,9 @@ impl<'a, S> Simplifier<'a, S> {
     }
 }
 
-impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
+impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
+    type N = Expr;
+
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use datafusion_expr::Operator::{
@@ -383,37 +391,33 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             }
             // expr IN () --> false
             // expr NOT IN () --> true
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+            }) if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
                 lit(negated)
             }
 
             // expr IN ((subquery)) -> expr IN (subquery), see ##5529
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 mut list,
                 negated,
-            } if list.len() == 1
+            }) if list.len() == 1
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
                 let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
-                Expr::InSubquery {
-                    expr,
-                    subquery,
-                    negated,
-                }
+                Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 
             // if expr is a single column reference:
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } if !list.is_empty()
+            }) if !list.is_empty()
                 && (
                     // For lists with only 1 value we allow more complex expressions to be simplified
                     // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
@@ -1069,22 +1073,34 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 out_expr.rewrite(self)?
             }
 
+            // log
+            Expr::ScalarFunction(ScalarFunction {
+                fun: BuiltinScalarFunction::Log,
+                args,
+            }) => simpl_log(args, <&S>::clone(&info))?,
+
+            // power
+            Expr::ScalarFunction(ScalarFunction {
+                fun: BuiltinScalarFunction::Power,
+                args,
+            }) => simpl_power(args, <&S>::clone(&info))?,
+
             // concat
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::Concat,
                 args,
-            } => simpl_concat(args)?,
+            }) => simpl_concat(args)?,
 
             // concat_ws
-            Expr::ScalarFunction {
+            Expr::ScalarFunction(ScalarFunction {
                 fun: BuiltinScalarFunction::ConcatWithSeparator,
                 args,
-            } => match &args[..] {
+            }) => match &args[..] {
                 [delimiter, vals @ ..] => simpl_concat_ws(delimiter, vals)?,
-                _ => Expr::ScalarFunction {
-                    fun: BuiltinScalarFunction::ConcatWithSeparator,
+                _ => Expr::ScalarFunction(ScalarFunction::new(
+                    BuiltinScalarFunction::ConcatWithSeparator,
                     args,
-                },
+                )),
             },
 
             //
@@ -1114,6 +1130,36 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
                 right,
             }) => simplify_regex_expr(left, op, right)?,
+
+            // Rules for Like
+            Expr::Like(Like {
+                expr,
+                pattern,
+                negated,
+                escape_char: _,
+            }) if !is_null(&expr)
+                && matches!(
+                    pattern.as_ref(),
+                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                ) =>
+            {
+                lit(!negated)
+            }
+
+            // Rules for ILike
+            Expr::ILike(Like {
+                expr,
+                pattern,
+                negated,
+                escape_char: _,
+            }) if !is_null(&expr)
+                && matches!(
+                    pattern.as_ref(),
+                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
+                ) =>
+            {
+                lit(!negated)
+            }
 
             // no additional rewrites possible
             expr => expr,
@@ -1340,7 +1386,7 @@ mod tests {
         // rand() + (1 + 2) --> rand() + 3
         let fun = BuiltinScalarFunction::Random;
         assert_eq!(fun.volatility(), Volatility::Volatile);
-        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
         let expr = rand.clone() + (lit(1) + lit(2));
         let expected = rand + lit(3);
         test_evaluate(expr, expected);
@@ -1348,7 +1394,7 @@ mod tests {
         // parenthesization matters: can't rewrite
         // (rand() + 1) + 2 --> (rand() + 1) + 2)
         let fun = BuiltinScalarFunction::Random;
-        let rand = Expr::ScalarFunction { args: vec![], fun };
+        let rand = Expr::ScalarFunction(ScalarFunction::new(fun, vec![]));
         let expr = (rand + lit(1)) + lit(2);
         test_evaluate(expr.clone(), expr);
     }
@@ -1378,32 +1424,24 @@ mod tests {
 
         // immutable UDF should get folded
         // udf_add(1+2, 30+40) --> 73
-        let expr = Expr::ScalarUDF {
-            args: args.clone(),
-            fun: make_udf_add(Volatility::Immutable),
-        };
+        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(
+            make_udf_add(Volatility::Immutable),
+            args.clone(),
+        ));
         test_evaluate(expr, lit(73));
 
         // stable UDF should be entirely folded
         // udf_add(1+2, 30+40) --> 73
         let fun = make_udf_add(Volatility::Stable);
-        let expr = Expr::ScalarUDF {
-            args: args.clone(),
-            fun: Arc::clone(&fun),
-        };
+        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args.clone()));
         test_evaluate(expr, lit(73));
 
         // volatile UDF should have args folded
         // udf_add(1+2, 30+40) --> udf_add(3, 70)
         let fun = make_udf_add(Volatility::Volatile);
-        let expr = Expr::ScalarUDF {
-            args,
-            fun: Arc::clone(&fun),
-        };
-        let expected_expr = Expr::ScalarUDF {
-            args: folded_args,
-            fun: Arc::clone(&fun),
-        };
+        let expr = Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), args));
+        let expected_expr =
+            Expr::ScalarUDF(expr::ScalarUDF::new(Arc::clone(&fun), folded_args));
         test_evaluate(expr, expected_expr);
     }
 
@@ -2208,6 +2246,68 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_log() {
+        // Log(c3, 1) ===> 0
+        {
+            let expr = log(col("c3_non_null"), lit(1));
+            let expected = lit(0i64);
+            assert_eq!(simplify(expr), expected);
+        }
+        // Log(c3, c3) ===> 1
+        {
+            let expr = log(col("c3_non_null"), col("c3_non_null"));
+            let expected = lit(1i64);
+            assert_eq!(simplify(expr), expected);
+        }
+        // Log(c3, Power(c3, c4)) ===> c4
+        {
+            let expr = log(
+                col("c3_non_null"),
+                power(col("c3_non_null"), col("c4_non_null")),
+            );
+            let expected = col("c4_non_null");
+            assert_eq!(simplify(expr), expected);
+        }
+        // Log(c3, c4) ===> Log(c3, c4)
+        {
+            let expr = log(col("c3_non_null"), col("c4_non_null"));
+            let expected = log(col("c3_non_null"), col("c4_non_null"));
+            assert_eq!(simplify(expr), expected);
+        }
+    }
+
+    #[test]
+    fn test_simplify_power() {
+        // Power(c3, 0) ===> 1
+        {
+            let expr = power(col("c3_non_null"), lit(0));
+            let expected = lit(1i64);
+            assert_eq!(simplify(expr), expected);
+        }
+        // Power(c3, 1) ===> c3
+        {
+            let expr = power(col("c3_non_null"), lit(1));
+            let expected = col("c3_non_null");
+            assert_eq!(simplify(expr), expected);
+        }
+        // Power(c3, Log(c3, c4)) ===> c4
+        {
+            let expr = power(
+                col("c3_non_null"),
+                log(col("c3_non_null"), col("c4_non_null")),
+            );
+            let expected = col("c4_non_null");
+            assert_eq!(simplify(expr), expected);
+        }
+        // Power(c3, c4) ===> Power(c3, c4)
+        {
+            let expr = power(col("c3_non_null"), col("c4_non_null"));
+            let expected = power(col("c3_non_null"), col("c4_non_null"));
+            assert_eq!(simplify(expr), expected);
+        }
+    }
+
+    #[test]
     fn test_simplify_concat_ws() {
         let null = lit(ScalarValue::Utf8(None));
         // the delimiter is not a literal
@@ -2317,16 +2417,10 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
-        assert_change(regex_match(col("c1"), lit("")), like(col("c1"), "%"));
-        assert_change(
-            regex_not_match(col("c1"), lit("")),
-            not_like(col("c1"), "%"),
-        );
-        assert_change(regex_imatch(col("c1"), lit("")), ilike(col("c1"), "%"));
-        assert_change(
-            regex_not_imatch(col("c1"), lit("")),
-            not_ilike(col("c1"), "%"),
-        );
+        assert_change(regex_match(col("c1"), lit("")), lit(true));
+        assert_change(regex_not_match(col("c1"), lit("")), lit(false));
+        assert_change(regex_imatch(col("c1"), lit("")), lit(true));
+        assert_change(regex_not_imatch(col("c1"), lit("")), lit(false));
 
         // single character
         assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
@@ -2345,12 +2439,6 @@ mod tests {
             regex_match(col("c1"), lit("foo|x|baz")),
             like(col("c1"), "%foo%")
                 .or(like(col("c1"), "%x%"))
-                .or(like(col("c1"), "%baz%")),
-        );
-        assert_change(
-            regex_match(col("c1"), lit("foo||baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%"))
                 .or(like(col("c1"), "%baz%")),
         );
         assert_change(
@@ -2692,12 +2780,7 @@ mod tests {
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and should not be rewritten
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c1")),
-            false,
-            Box::new(lit(0)),
-            Box::new(lit(10)),
-        ));
+        let expr = col("c1").between(lit(0), lit(10));
         let expr = expr.or(lit_bool_null());
         let result = simplify(expr);
 
@@ -2806,12 +2889,7 @@ mod tests {
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
         // and the Boolean(NULL) should remain
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c1")),
-            false,
-            Box::new(lit(0)),
-            Box::new(lit(10)),
-        ));
+        let expr = col("c1").between(lit(0), lit(10));
         let expr = expr.and(lit_bool_null());
         let result = simplify(expr);
 
@@ -2825,27 +2903,47 @@ mod tests {
     #[test]
     fn simplify_expr_between() {
         // c2 between 3 and 4 is c2 >= 3 and c2 <= 4
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c2")),
-            false,
-            Box::new(lit(3)),
-            Box::new(lit(4)),
-        ));
+        let expr = col("c2").between(lit(3), lit(4));
         assert_eq!(
             simplify(expr),
             and(col("c2").gt_eq(lit(3)), col("c2").lt_eq(lit(4)))
         );
 
         // c2 not between 3 and 4 is c2 < 3 or c2 > 4
-        let expr = Expr::Between(Between::new(
-            Box::new(col("c2")),
-            true,
-            Box::new(lit(3)),
-            Box::new(lit(4)),
-        ));
+        let expr = col("c2").not_between(lit(3), lit(4));
         assert_eq!(
             simplify(expr),
             or(col("c2").lt(lit(3)), col("c2").gt(lit(4)))
         );
+    }
+
+    #[test]
+    fn test_like_and_ilke() {
+        // test non-null values
+        let expr = like(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = not_like(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = ilike(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = not_ilike(col("c1"), "%");
+        assert_eq!(simplify(expr), lit(false));
+
+        // test null values
+        let null = lit(ScalarValue::Utf8(None));
+        let expr = like(null.clone(), "%");
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = not_like(null.clone(), "%");
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = ilike(null.clone(), "%");
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = not_ilike(null, "%");
+        assert_eq!(simplify(expr), lit_bool_null());
     }
 }

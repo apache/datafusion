@@ -79,7 +79,7 @@ async fn parquet_with_sort_order_specified() {
     // This string appears in ParquetExec if the output ordering is
     // specified
     let expected_output_ordering =
-        "output_ordering=[string_col@9 ASC NULLS LAST, int_col@4 ASC NULLS LAST]";
+        "output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]";
 
     // when sort not specified, should not appear in the explain plan
     let num_files = 1;
@@ -151,7 +151,7 @@ async fn fixed_size_binary_columns() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/data/test_binary.parquet",
+        "tests/data/test_binary.parquet",
         ParquetReadOptions::default(),
     )
     .await
@@ -170,7 +170,7 @@ async fn window_fn_timestamp_tz() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/data/timestamp_with_tz.parquet",
+        "tests/data/timestamp_with_tz.parquet",
         ParquetReadOptions::default(),
     )
     .await
@@ -190,7 +190,7 @@ async fn window_fn_timestamp_tz() {
 
         let ty = batch.column(1).data_type().clone();
         assert_eq!(
-            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".to_owned())),
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             ty
         );
     }
@@ -232,16 +232,12 @@ async fn parquet_list_columns() {
     .unwrap();
 
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
+        Field::new_list(
             "int64_list",
-            DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
+            Field::new("item", DataType::Int64, true),
             true,
         ),
-        Field::new(
-            "utf8_list",
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
-            true,
-        ),
+        Field::new_list("utf8_list", Field::new("item", DataType::Utf8, true), true),
     ]));
 
     let sql = "SELECT int64_list, utf8_list FROM list_columns";

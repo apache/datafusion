@@ -19,13 +19,12 @@ use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat, SortOptions};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
-use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
@@ -78,25 +77,6 @@ pub trait WindowExpr: Send + Sync + Debug {
             "evaluate_stateful is not implemented for {}",
             self.name()
         )))
-    }
-
-    /// Evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element `Vec` of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        if partition_columns.is_empty() {
-            Ok(vec![Range {
-                start: 0,
-                end: num_rows,
-            }])
-        } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
-        }
     }
 
     /// Expressions that's from the window function's partition by clause, empty if absent
@@ -281,7 +261,7 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .iter()
         .map(|e| PhysicalSortExpr {
             expr: e.expr.clone(),
-            options: reverse_sort_options(e.options),
+            options: !e.options,
         })
         .collect()
 }
@@ -420,6 +400,8 @@ pub struct PartitionBatchState {
     pub record_batch: RecordBatch,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
+    /// Number of rows emitted for each partition
+    pub n_out_row: usize,
 }
 
 /// Key for IndexMap for each unique partition

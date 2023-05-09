@@ -57,6 +57,11 @@ impl SessionConfig {
         Ok(ConfigOptions::from_env()?.into())
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        Ok(ConfigOptions::from_string_hash_map(settings)?.into())
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.options.set(key, &value.to_string()).unwrap();
@@ -94,7 +99,7 @@ impl SessionConfig {
 
     /// Customize [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
@@ -104,7 +109,7 @@ impl SessionConfig {
 
     /// Get [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }
@@ -186,6 +191,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the allowing unordered symmetric hash join
+    pub fn with_allow_symmetric_joins_without_pruning(mut self, enabled: bool) -> Self {
+        self.options.optimizer.allow_symmetric_joins_without_pruning = enabled;
+        self
+    }
+
     /// Enables or disables the use of repartitioning for file scans
     pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_file_scans = enabled;
@@ -224,6 +235,19 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.options.execution.batch_size
+    }
+
+    /// Get the currently configured scalar_update_factor for aggregate
+    pub fn agg_scalar_update_factor(&self) -> usize {
+        self.options.execution.aggregate.scalar_update_factor
+    }
+
+    /// Customize scalar_update_factor for aggregate
+    pub fn with_agg_scalar_update_factor(mut self, n: usize) -> Self {
+        // scalar update factor must be greater than zero
+        assert!(n > 0);
+        self.options.execution.aggregate.scalar_update_factor = n;
+        self
     }
 
     /// Convert configuration options to name-value pairs with values

@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
@@ -30,7 +31,6 @@ use crate::physical_plan::{
 use crate::scalar::ScalarValue;
 
 use super::optimizer::PhysicalOptimizerRule;
-use super::utils::optimize_children;
 use crate::error::Result;
 
 /// Optimizer that uses available statistics for aggregate functions
@@ -51,7 +51,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ConfigOptions,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -87,10 +87,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                     Arc::new(EmptyExec::new(true, plan.schema())),
                 )?))
             } else {
-                optimize_children(self, plan, config)
+                plan.map_children(|child| self.optimize(child, _config))
             }
         } else {
-            optimize_children(self, plan, config)
+            plan.map_children(|child| self.optimize(child, _config))
         }
     }
 
@@ -123,6 +123,7 @@ fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> 
                 {
                     if partial_agg_exec.mode() == &AggregateMode::Partial
                         && partial_agg_exec.group_expr().is_empty()
+                        && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
                     {
                         let stats = partial_agg_exec.input().statistics();
                         if stats.is_exact {
@@ -410,6 +411,7 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -418,6 +420,7 @@ mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -438,6 +441,7 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -446,6 +450,7 @@ mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -465,6 +470,7 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -476,6 +482,7 @@ mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
@@ -495,6 +502,7 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             source,
             Arc::clone(&schema),
         )?;
@@ -506,6 +514,7 @@ mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             Arc::new(coalesce),
             Arc::clone(&schema),
         )?;
@@ -536,6 +545,7 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             filter,
             Arc::clone(&schema),
         )?;
@@ -544,6 +554,7 @@ mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;
@@ -579,6 +590,7 @@ mod tests {
             AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             filter,
             Arc::clone(&schema),
         )?;
@@ -587,6 +599,7 @@ mod tests {
             AggregateMode::Final,
             PhysicalGroupBy::default(),
             vec![agg.count_expr()],
+            vec![None],
             Arc::new(partial_agg),
             Arc::clone(&schema),
         )?;

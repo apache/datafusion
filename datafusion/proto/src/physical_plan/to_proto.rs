@@ -42,12 +42,13 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
-use crate::protobuf::{PhysicalSortExprNode, ScalarValue};
+use crate::protobuf::{physical_aggregate_expr_node, PhysicalSortExprNode, ScalarValue};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_plan::joins::utils::JoinSide;
-use datafusion_common::DataFusionError;
+use datafusion::physical_plan::udaf::AggregateFunctionExpr;
+use datafusion_common::{DataFusionError, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
@@ -55,6 +56,12 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
         use datafusion::physical_plan::expressions;
         use protobuf::AggregateFunction;
+
+        let expressions: Vec<protobuf::PhysicalExprNode> = a
+            .expressions()
+            .iter()
+            .map(|e| e.clone().try_into())
+            .collect::<Result<Vec<_>>>()?;
 
         let mut distinct = false;
         let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
@@ -131,19 +138,31 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         {
             Ok(AggregateFunction::ApproxMedian.into())
         } else {
+            if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
+                return Ok(protobuf::PhysicalExprNode {
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+                        protobuf::PhysicalAggregateExprNode {
+                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
+                            expr: expressions,
+                            distinct,
+                        },
+                    )),
+                });
+            }
+
             Err(DataFusionError::NotImplemented(format!(
                 "Aggregate function not supported: {a:?}"
             )))
         }?;
-        let expressions: Vec<protobuf::PhysicalExprNode> = a
-            .expressions()
-            .iter()
-            .map(|e| e.clone().try_into())
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
-                    aggr_function,
+                    aggregate_function: Some(
+                        physical_aggregate_expr_node::AggregateFunction::AggrFunction(
+                            aggr_function,
+                        ),
+                    ),
                     expr: expressions,
                     distinct,
                 },
@@ -364,7 +383,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
 fn try_parse_when_then_expr(
     when_expr: &Arc<dyn PhysicalExpr>,
     then_expr: &Arc<dyn PhysicalExpr>,
-) -> Result<protobuf::PhysicalWhenThen, DataFusionError> {
+) -> Result<protobuf::PhysicalWhenThen> {
     Ok(protobuf::PhysicalWhenThen {
         when_expr: Some(when_expr.clone().try_into()?),
         then_expr: Some(then_expr.clone().try_into()?),
@@ -462,7 +481,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                         nulls_first: o.options.nulls_first,
                     })
                 })
-                .collect::<Result<Vec<PhysicalSortExprNode>, DataFusionError>>()?
+                .collect::<Result<Vec<PhysicalSortExprNode>>>()?
         } else {
             vec![]
         };
@@ -495,6 +514,19 @@ impl From<JoinSide> for protobuf::JoinSide {
         match t {
             JoinSide::Left => protobuf::JoinSide::LeftSide,
             JoinSide::Right => protobuf::JoinSide::RightSide,
+        }
+    }
+}
+
+impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
+    type Error = DataFusionError;
+
+    fn try_from(expr: Option<Arc<dyn PhysicalExpr>>) -> Result<Self, Self::Error> {
+        match expr {
+            None => Ok(protobuf::MaybeFilter { expr: None }),
+            Some(expr) => Ok(protobuf::MaybeFilter {
+                expr: Some(expr.try_into()?),
+            }),
         }
     }
 }

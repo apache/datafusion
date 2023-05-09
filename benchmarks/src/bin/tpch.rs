@@ -17,15 +17,7 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use std::{
-    fs::File,
-    io::Write,
-    iter::Iterator,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
-
+use datafusion::datasource::file_format::{csv::CsvFormat, FileFormat};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::parquet::basic::Compression;
@@ -39,18 +31,12 @@ use datafusion::{
     arrow::util::pretty,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
-use datafusion::{
-    datasource::file_format::{csv::CsvFormat, FileFormat},
-    DATAFUSION_VERSION,
-};
-use datafusion_benchmarks::tpch::*;
+use datafusion_benchmarks::{tpch::*, BenchmarkRun};
+use std::{iter::Iterator, path::PathBuf, sync::Arc, time::Instant};
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::scheduler::Scheduler;
-use futures::TryStreamExt;
-use serde::Serialize;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -95,17 +81,13 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    /// Path to output directory where JSON summary file should be written to
+    /// Path to machine readable output file
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
 
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
-
-    /// Enable scheduler
-    #[structopt(short = "e", long = "enable-scheduler")]
-    enable_scheduler: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -162,11 +144,11 @@ async fn main() -> Result<()> {
             let compression = match opt.compression.as_str() {
                 "none" => Compression::UNCOMPRESSED,
                 "snappy" => Compression::SNAPPY,
-                "brotli" => Compression::BROTLI,
-                "gzip" => Compression::GZIP,
+                "brotli" => Compression::BROTLI(Default::default()),
+                "gzip" => Compression::GZIP(Default::default()),
                 "lz4" => Compression::LZ4,
                 "lz0" => Compression::LZO,
-                "zstd" => Compression::ZSTD,
+                "zstd" => Compression::ZSTD(Default::default()),
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Invalid compression format: {other}"
@@ -201,22 +183,22 @@ async fn benchmark_datafusion(
     let mut benchmark_run = BenchmarkRun::new();
     let mut results = vec![];
     for query_id in query_range {
+        benchmark_run.start_new_case(&format!("Query {query_id}"));
         let (query_run, result) = benchmark_query(&opt, query_id).await?;
         results.push(result);
-        benchmark_run.add_query(query_run);
+        for iter in query_run {
+            benchmark_run.write_iter(iter.elapsed, iter.row_count);
+        }
     }
-
-    if let Some(path) = &opt.output_path {
-        write_summary_json(&mut benchmark_run, path)?;
-    }
+    benchmark_run.maybe_write_json(opt.output_path.as_ref())?;
     Ok(results)
 }
 
 async fn benchmark_query(
     opt: &DataFusionBenchmarkOpt,
     query_id: usize,
-) -> Result<(QueryRun, Vec<RecordBatch>)> {
-    let mut benchmark_run = QueryRun::new(query_id);
+) -> Result<(Vec<QueryResult>, Vec<RecordBatch>)> {
+    let mut query_results = vec![];
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size)
@@ -239,32 +221,31 @@ async fn benchmark_query(
         if query_id == 15 {
             for (n, query) in sql.iter().enumerate() {
                 if n == 1 {
-                    result = execute_query(&ctx, query, opt.debug, opt.enable_scheduler)
-                        .await?;
+                    result = execute_query(&ctx, query, opt.debug).await?;
                 } else {
-                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
+                    execute_query(&ctx, query, opt.debug).await?;
                 }
             }
         } else {
             for query in sql {
-                result =
-                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
+                result = execute_query(&ctx, query, opt.debug).await?;
             }
         }
 
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed);
+        let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        millis.push(ms);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
-            "Query {query_id} iteration {i} took {elapsed:.1} ms and returned {row_count} rows"
+            "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
         );
-        benchmark_run.add_result(elapsed, row_count);
+        query_results.push(QueryResult { elapsed, row_count });
     }
 
     let avg = millis.iter().sum::<f64>() / millis.len() as f64;
     println!("Query {query_id} avg time: {avg:.2} ms");
 
-    Ok((benchmark_run, result))
+    Ok((query_results, result))
 }
 
 async fn register_tables(
@@ -302,25 +283,10 @@ async fn register_tables(
     Ok(())
 }
 
-fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &Path) -> Result<()> {
-    let json =
-        serde_json::to_string_pretty(&benchmark_run).expect("summary is serializable");
-    let filename = format!("tpch-summary--{}.json", benchmark_run.context.start_time);
-    let path = path.join(filename);
-    println!(
-        "Writing summary file to {}",
-        path.as_os_str().to_str().unwrap()
-    );
-    let mut file = File::create(path)?;
-    file.write_all(json.as_bytes())?;
-    Ok(())
-}
-
 async fn execute_query(
     ctx: &SessionContext,
     sql: &str,
     debug: bool,
-    enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
     let (state, plan) = plan.into_parts();
@@ -340,15 +306,7 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let result = if enable_scheduler {
-        let scheduler = Scheduler::new(num_cpus::get());
-        let results = scheduler
-            .schedule(physical_plan.clone(), state.task_ctx())
-            .unwrap();
-        results.stream().try_collect().await?
-    } else {
-        collect(physical_plan.clone(), state.task_ctx()).await?
-    };
+    let result = collect(physical_plan.clone(), state.task_ctx()).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -421,94 +379,19 @@ async fn get_table(
     Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
-#[derive(Debug, Serialize)]
-struct RunContext {
-    /// Benchmark crate version
-    benchmark_version: String,
-    /// DataFusion crate version
-    datafusion_version: String,
-    /// Number of CPU cores
-    num_cpus: usize,
-    /// Start time
-    start_time: u64,
-    /// CLI arguments
-    arguments: Vec<String>,
-}
-
-impl RunContext {
-    fn new() -> Self {
-        Self {
-            benchmark_version: env!("CARGO_PKG_VERSION").to_owned(),
-            datafusion_version: DATAFUSION_VERSION.to_owned(),
-            num_cpus: num_cpus::get(),
-            start_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is later than UNIX_EPOCH")
-                .as_secs(),
-            arguments: std::env::args().skip(1).collect::<Vec<String>>(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct BenchmarkRun {
-    /// Information regarding the environment in which the benchmark was run
-    context: RunContext,
-    /// Per-query summaries
-    queries: Vec<QueryRun>,
-}
-
-impl BenchmarkRun {
-    fn new() -> Self {
-        Self {
-            context: RunContext::new(),
-            queries: vec![],
-        }
-    }
-
-    fn add_query(&mut self, query: QueryRun) {
-        self.queries.push(query)
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct QueryRun {
-    /// query number
-    query: usize,
-    /// list of individual run times and row counts
-    iterations: Vec<QueryResult>,
-    /// Start time
-    start_time: u64,
-}
-
-impl QueryRun {
-    fn new(query: usize) -> Self {
-        Self {
-            query,
-            iterations: vec![],
-            start_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is later than UNIX_EPOCH")
-                .as_secs(),
-        }
-    }
-
-    fn add_result(&mut self, elapsed: f64, row_count: usize) {
-        self.iterations.push(QueryResult { elapsed, row_count })
-    }
-}
-
-#[derive(Debug, Serialize)]
 struct QueryResult {
-    elapsed: f64,
+    elapsed: std::time::Duration,
     row_count: usize,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::config::ConfigOptions;
     use datafusion::sql::TableReference;
+    use std::fs::File;
     use std::io::{BufRead, BufReader};
+    use std::path::Path;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -626,13 +509,23 @@ mod tests {
         let mut actual = String::new();
         let sql = get_query_sql(query)?;
         for sql in &sql {
-            let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.into_optimized_plan()?;
-            if !actual.is_empty() {
-                actual += "\n";
+            // handle special q15 which contains "create view" sql statement
+            if sql.starts_with("select") {
+                let explain = "explain ".to_string() + sql;
+                let result_batch = execute_query(&ctx, explain.as_str(), false).await?;
+                if !actual.is_empty() {
+                    actual += "\n";
+                }
+                use std::fmt::Write as _;
+                write!(actual, "{}", pretty::pretty_format_batches(&result_batch)?)
+                    .unwrap();
+                // write to file for debugging
+                // use std::io::Write;
+                // let mut file = File::create(format!("expected-plans/q{}.txt", query))?;
+                // file.write_all(actual.as_bytes())?;
+            } else {
+                execute_query(&ctx, sql.as_str(), false).await?;
             }
-            use std::fmt::Write as _;
-            write!(actual, "{}", plan.display_indent()).unwrap();
         }
 
         let possibilities = vec![
@@ -657,7 +550,10 @@ mod tests {
     }
 
     fn create_context() -> Result<SessionContext> {
-        let ctx = SessionContext::new();
+        let mut config = ConfigOptions::new();
+        // Ensure that the generated physical plans are the same in different machines.
+        config.execution.target_partitions = 2;
+        let ctx = SessionContext::with_config(config.into());
         for table in TPCH_TABLES {
             let table = table.to_string();
             let schema = get_tpch_table_schema(&table);
@@ -812,7 +708,7 @@ mod tests {
 
         let sql = &get_query_sql(n)?;
         for query in sql {
-            execute_query(&ctx, query, false, false).await?;
+            execute_query(&ctx, query, false).await?;
         }
 
         Ok(())
@@ -823,6 +719,8 @@ mod tests {
 #[cfg(test)]
 #[cfg(feature = "ci")]
 mod ci {
+    use std::path::Path;
+
     use super::*;
     use arrow::datatypes::{DataType, Field};
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
@@ -841,13 +739,12 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            enable_scheduler: false,
         };
         register_tables(&opt, &ctx).await?;
         let queries = get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
-            let plan = plan.to_logical_plan()?;
+            let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
             let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
             let plan_formatted = format!("{}", plan.display_indent());
@@ -992,7 +889,6 @@ mod ci {
         verify_query(5).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4024
     #[tokio::test]
     async fn verify_q6() -> Result<()> {
         verify_query(6).await
@@ -1149,7 +1045,6 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            enable_scheduler: false,
         };
         let mut results = benchmark_datafusion(opt).await?;
         assert_eq!(results.len(), 1);
@@ -1190,12 +1085,25 @@ mod ci {
             let actual_row = &actual_vec[i];
             assert_eq!(expected_row.len(), actual_row.len());
 
-            for j in 0..expected.len() {
+            let tolerance = 0.1;
+            for j in 0..expected_row.len() {
                 match (&expected_row[j], &actual_row[j]) {
                     (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
                         // allow for rounding errors until we move to decimal types
-                        let tolerance = 0.1;
                         if (l - r).abs() > tolerance {
+                            panic!(
+                                "Expected: {}; Actual: {}; Tolerance: {}",
+                                l, r, tolerance
+                            )
+                        }
+                    }
+                    (
+                        ScalarValue::Decimal128(Some(l), _, s),
+                        ScalarValue::Decimal128(Some(r), _, _),
+                    ) => {
+                        if ((l - r) as f64 / 10_i32.pow(*s as u32) as f64).abs()
+                            > tolerance
+                        {
                             panic!(
                                 "Expected: {}; Actual: {}; Tolerance: {}",
                                 l, r, tolerance

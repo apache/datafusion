@@ -17,7 +17,7 @@
 
 //! [`read_as_batch`] converts raw bytes to [`RecordBatch`]
 
-use crate::layout::{RowLayout, RowType};
+use crate::layout::RowLayout;
 use crate::validity::{all_valid, NullBitsFormatter};
 use crate::MutableRecordBatch;
 use arrow::array::*;
@@ -47,11 +47,10 @@ pub fn read_as_batch(
     data: &[u8],
     schema: Arc<Schema>,
     offsets: &[usize],
-    row_type: RowType,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema, row_type);
+    let mut row = RowReader::new(&schema);
 
     for offset in offsets.iter().take(row_num) {
         row.point_to(*offset, data);
@@ -129,9 +128,9 @@ impl<'a> std::fmt::Debug for RowReader<'a> {
 
 impl<'a> RowReader<'a> {
     /// new
-    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+    pub fn new(schema: &Schema) -> Self {
         Self {
-            layout: RowLayout::new(schema, row_type),
+            layout: RowLayout::new(schema),
             data: &[],
             base_offset: 0,
         }
@@ -213,23 +212,8 @@ impl<'a> RowReader<'a> {
         get_idx!(i64, self, idx, 8)
     }
 
-    fn get_utf8(&self, idx: usize) -> &str {
-        self.assert_index_valid(idx);
-        let offset_size = self.get_u64(idx);
-        let offset = (offset_size >> 32) as usize;
-        let len = (offset_size & 0xffff_ffff) as usize;
-        let varlena_offset = self.base_offset + offset;
-        let bytes = &self.data[varlena_offset..varlena_offset + len];
-        unsafe { std::str::from_utf8_unchecked(bytes) }
-    }
-
-    fn get_binary(&self, idx: usize) -> &[u8] {
-        self.assert_index_valid(idx);
-        let offset_size = self.get_u64(idx);
-        let offset = (offset_size >> 32) as usize;
-        let len = (offset_size & 0xffff_ffff) as usize;
-        let varlena_offset = self.base_offset + offset;
-        &self.data[varlena_offset..varlena_offset + len]
+    fn get_decimal128(&self, idx: usize) -> i128 {
+        get_idx!(i128, self, idx, 16)
     }
 
     fn_get_idx_opt!(bool);
@@ -260,9 +244,9 @@ impl<'a> RowReader<'a> {
         }
     }
 
-    fn get_utf8_opt(&self, idx: usize) -> Option<&str> {
+    fn get_decimal128_opt(&self, idx: usize) -> Option<i128> {
         if self.is_valid_at(idx) {
-            Some(self.get_utf8(idx))
+            Some(self.get_decimal128(idx))
         } else {
             None
         }
@@ -327,29 +311,7 @@ fn_read_field!(f32, Float32Builder);
 fn_read_field!(f64, Float64Builder);
 fn_read_field!(date32, Date32Builder);
 fn_read_field!(date64, Date64Builder);
-fn_read_field!(utf8, StringBuilder);
-
-pub(crate) fn read_field_binary(
-    to: &mut Box<dyn ArrayBuilder>,
-    col_idx: usize,
-    row: &RowReader,
-) {
-    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
-    if row.is_valid_at(col_idx) {
-        to.append_value(row.get_binary(col_idx));
-    } else {
-        to.append_null();
-    }
-}
-
-pub(crate) fn read_field_binary_null_free(
-    to: &mut Box<dyn ArrayBuilder>,
-    col_idx: usize,
-    row: &RowReader,
-) {
-    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
-    to.append_value(row.get_binary(col_idx));
-}
+fn_read_field!(decimal128, Decimal128Builder);
 
 fn read_field(
     to: &mut Box<dyn ArrayBuilder>,
@@ -372,8 +334,7 @@ fn read_field(
         Float64 => read_field_f64(to, col_idx, row),
         Date32 => read_field_date32(to, col_idx, row),
         Date64 => read_field_date64(to, col_idx, row),
-        Utf8 => read_field_utf8(to, col_idx, row),
-        Binary => read_field_binary(to, col_idx, row),
+        Decimal128(_, _) => read_field_decimal128(to, col_idx, row),
         _ => unimplemented!(),
     }
 }
@@ -399,8 +360,7 @@ fn read_field_null_free(
         Float64 => read_field_f64_null_free(to, col_idx, row),
         Date32 => read_field_date32_null_free(to, col_idx, row),
         Date64 => read_field_date64_null_free(to, col_idx, row),
-        Utf8 => read_field_utf8_null_free(to, col_idx, row),
-        Binary => read_field_binary_null_free(to, col_idx, row),
+        Decimal128(_, _) => read_field_decimal128_null_free(to, col_idx, row),
         _ => unimplemented!(),
     }
 }

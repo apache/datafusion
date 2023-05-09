@@ -20,6 +20,7 @@
 use crate::aggregate::covariance::CovarianceAccumulator;
 use crate::aggregate::stats::StatsType;
 use crate::aggregate::stddev::StddevAccumulator;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
@@ -114,6 +115,17 @@ impl AggregateExpr for Correlation {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for Correlation {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name && self.expr1.eq(&x.expr1) && self.expr2.eq(&x.expr2)
+            })
+            .unwrap_or(false)
     }
 }
 

@@ -15,31 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr_rewriter::rewrite_expr;
-use crate::expr_visitor::inspect_expr_pre;
-use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use crate::expr::Exists;
+use crate::expr::InSubquery;
 ///! Logical plan types
-use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::plan;
+use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    exprlist_to_fields, find_out_reference_exprs, from_plan, grouping_set_expr_count,
-    grouping_set_to_exprlist,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
+    grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
+};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    ScalarValue, TableReference,
+    Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::Arc;
+
+use super::DdlStatement;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -88,20 +91,8 @@ pub enum LogicalPlan {
     SubqueryAlias(SubqueryAlias),
     /// Skip some number of rows, and then fetch some number of rows.
     Limit(Limit),
-    /// Creates an external table.
-    CreateExternalTable(CreateExternalTable),
-    /// Creates an in memory table.
-    CreateMemoryTable(CreateMemoryTable),
-    /// Creates a new view.
-    CreateView(CreateView),
-    /// Creates a new catalog schema.
-    CreateCatalogSchema(CreateCatalogSchema),
-    /// Creates a new catalog (aka "Database").
-    CreateCatalog(CreateCatalog),
-    /// Drops a table.
-    DropTable(DropTable),
-    /// Drops a view.
-    DropView(DropView),
+    /// [`Statement`]
+    Statement(Statement),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -116,12 +107,12 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
-    /// Set a Variable
-    SetVariable(SetVariable),
     /// Prepare a statement
     Prepare(Prepare),
     /// Insert / Update / Delete
     Dml(DmlStatement),
+    /// CREATE / DROP TABLES / VIEWS / SCHEMAs
+    Ddl(DdlStatement),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
     /// Unnest a column that contains a nested list type.
@@ -147,29 +138,19 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
+            LogicalPlan::Statement(statement) => statement.schema(),
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
-            LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
-                schema
-            }
             LogicalPlan::Prepare(Prepare { input, .. }) => input.schema(),
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. }) => input.schema(),
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
-                schema
-            }
-            LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
-            LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
-            LogicalPlan::DropView(DropView { schema, .. }) => schema,
-            LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
             LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
         }
     }
@@ -213,9 +194,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::Ddl(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -229,18 +208,13 @@ impl LogicalPlan {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Sort(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Prepare(_) => {
                 self.inputs().iter().map(|p| p.schema()).collect()
             }
             // return empty
-            LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
-            | LogicalPlan::DescribeTable(_)
-            | LogicalPlan::SetVariable(_) => vec![],
+            LogicalPlan::Statement(_) | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -259,7 +233,7 @@ impl LogicalPlan {
         let mut exprs = vec![];
         self.inspect_expressions(|e| {
             exprs.push(e.clone());
-            Ok(()) as Result<(), DataFusionError>
+            Ok(()) as Result<()>
         })
         // closure always returns OK
         .unwrap();
@@ -354,20 +328,14 @@ impl LogicalPlan {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_)
+            | LogicalPlan::Statement(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
@@ -375,7 +343,7 @@ impl LogicalPlan {
 
     /// returns all inputs of this `LogicalPlan` node. Does not
     /// include inputs to inputs, or subqueries.
-    pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
+    pub fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
             LogicalPlan::Filter(Filter { input, .. }) => vec![input],
@@ -396,66 +364,45 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::Dml(write) => vec![&write.input],
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Prepare(Prepare { input, .. }) => {
-                vec![input]
-            }
+            LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
+            LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
+            | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
     /// returns all `Using` join columns in a logical plan
     pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
-        struct UsingJoinColumnVisitor {
-            using_columns: Vec<HashSet<Column>>,
-        }
+        let mut using_columns: Vec<HashSet<Column>> = vec![];
 
-        impl PlanVisitor for UsingJoinColumnVisitor {
-            type Error = DataFusionError;
-
-            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
-                if let LogicalPlan::Join(Join {
-                    join_constraint: JoinConstraint::Using,
-                    on,
-                    ..
-                }) = plan
-                {
-                    // The join keys in using-join must be columns.
-                    let columns =
-                        on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
-                            accumu.insert(l.try_into_col()?);
-                            accumu.insert(r.try_into_col()?);
-                            Result::<_, DataFusionError>::Ok(accumu)
-                        })?;
-                    self.using_columns.push(columns);
-                }
-                Ok(true)
+        self.apply(&mut |plan| {
+            if let LogicalPlan::Join(Join {
+                join_constraint: JoinConstraint::Using,
+                on,
+                ..
+            }) = plan
+            {
+                // The join keys in using-join must be columns.
+                let columns =
+                    on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                        accumu.insert(l.try_into_col()?);
+                        accumu.insert(r.try_into_col()?);
+                        Result::<_, DataFusionError>::Ok(accumu)
+                    })?;
+                using_columns.push(columns);
             }
-        }
+            Ok(VisitRecursion::Continue)
+        })?;
 
-        let mut visitor = UsingJoinColumnVisitor {
-            using_columns: vec![],
-        };
-        self.accept(&mut visitor)?;
-        Ok(visitor.using_columns)
+        Ok(using_columns)
     }
 
-    pub fn with_new_inputs(
-        &self,
-        inputs: &[LogicalPlan],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         from_plan(self, &self.expressions(), inputs)
     }
 
@@ -464,7 +411,7 @@ impl LogicalPlan {
     pub fn with_param_values(
         self,
         param_values: Vec<ScalarValue>,
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         match self {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
@@ -495,161 +442,151 @@ impl LogicalPlan {
             _ => Ok(self),
         }
     }
-}
 
-/// Trait that implements the [Visitor
-/// pattern](https://en.wikipedia.org/wiki/Visitor_pattern) for a
-/// depth first walk of `LogicalPlan` nodes. `pre_visit` is called
-/// before any children are visited, and then `post_visit` is called
-/// after all children have been visited.
-////
-/// To use, define a struct that implements this trait and then invoke
-/// [`LogicalPlan::accept`].
-///
-/// For example, for a logical plan like:
-///
-/// ```text
-/// Projection: id
-///    Filter: state Eq Utf8(\"CO\")\
-///       CsvScan: employee.csv projection=Some([0, 3])";
-/// ```
-///
-/// The sequence of visit operations would be:
-/// ```text
-/// visitor.pre_visit(Projection)
-/// visitor.pre_visit(Filter)
-/// visitor.pre_visit(CsvScan)
-/// visitor.post_visit(CsvScan)
-/// visitor.post_visit(Filter)
-/// visitor.post_visit(Projection)
-/// ```
-pub trait PlanVisitor {
-    /// The type of error returned by this visitor
-    type Error;
-
-    /// Invoked on a logical plan before any of its child inputs have been
-    /// visited. If Ok(true) is returned, the recursion continues. If
-    /// Err(..) or Ok(false) are returned, the recursion stops
-    /// immediately and the error, if any, is returned to `accept`
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error>;
-
-    /// Invoked on a logical plan after all of its child inputs have
-    /// been visited. The return value is handled the same as the
-    /// return value of `pre_visit`. The provided default implementation
-    /// returns `Ok(true)`.
-    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, Self::Error> {
-        Ok(true)
+    /// Returns the maximum number of rows that this plan can output, if known.
+    ///
+    /// If `None`, the plan can return any number of rows.
+    /// If `Some(n)` then the plan can return at most `n` rows but may return fewer.
+    pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
+        match self {
+            LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
+            LogicalPlan::Filter(Filter { input, .. }) => input.max_rows(),
+            LogicalPlan::Window(Window { input, .. }) => input.max_rows(),
+            LogicalPlan::Aggregate(Aggregate {
+                input, group_expr, ..
+            }) => {
+                // Empty group_expr will return Some(1)
+                if group_expr
+                    .iter()
+                    .all(|expr| matches!(expr, Expr::Literal(_)))
+                {
+                    Some(1)
+                } else {
+                    input.max_rows()
+                }
+            }
+            LogicalPlan::Sort(Sort { input, fetch, .. }) => {
+                match (fetch, input.max_rows()) {
+                    (Some(fetch_limit), Some(input_max)) => {
+                        Some(input_max.min(*fetch_limit))
+                    }
+                    (Some(fetch_limit), None) => Some(*fetch_limit),
+                    (None, Some(input_max)) => Some(input_max),
+                    (None, None) => None,
+                }
+            }
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows(), right.max_rows()) {
+                        (Some(left_max), Some(right_max)) => {
+                            let min_rows = match join_type {
+                                JoinType::Left => left_max,
+                                JoinType::Right => right_max,
+                                JoinType::Full => left_max + right_max,
+                                _ => 0,
+                            };
+                            Some((left_max * right_max).max(min_rows))
+                        }
+                        _ => None,
+                    }
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => left.max_rows(),
+                JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
+            },
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
+                match (left.max_rows(), right.max_rows()) {
+                    (Some(left_max), Some(right_max)) => Some(left_max * right_max),
+                    _ => None,
+                }
+            }
+            LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
+            LogicalPlan::Union(Union { inputs, .. }) => inputs
+                .iter()
+                .map(|plan| plan.max_rows())
+                .try_fold(0usize, |mut acc, input_max| {
+                    if let Some(i_max) = input_max {
+                        acc += i_max;
+                        Some(acc)
+                    } else {
+                        None
+                    }
+                }),
+            LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
+            LogicalPlan::EmptyRelation(_) => Some(0),
+            LogicalPlan::Subquery(_) => None,
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
+            LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
+            LogicalPlan::Distinct(Distinct { input }) => input.max_rows(),
+            LogicalPlan::Values(v) => Some(v.values.len()),
+            LogicalPlan::Unnest(_) => None,
+            LogicalPlan::Ddl(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Extension(_) => None,
+        }
     }
 }
 
 impl LogicalPlan {
-    /// Visits all inputs in the logical plan. Returns Ok(true) if
-    /// all nodes were visited, and Ok(false) if any call to
-    /// `pre_visit` or `post_visit` returned Ok(false) and may have
-    /// cut short the recursion
-    pub fn accept<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
+    /// applies collect to any subqueries in the plan
+    pub(crate) fn apply_subqueries<F>(&self, op: &mut F) -> datafusion_common::Result<()>
     where
-        V: PlanVisitor,
-    {
-        if !visitor.pre_visit(self)? {
-            return Ok(false);
-        }
-
-        // Now visit any subqueries in expressions
-        self.visit_subqueries(visitor)?;
-
-        let recurse = match self {
-            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Repartition(Repartition { input, .. }) => {
-                input.accept(visitor)?
-            }
-            LogicalPlan::Window(Window { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Aggregate(Aggregate { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Sort(Sort { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Join(Join { left, right, .. })
-            | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                left.accept(visitor)? && right.accept(visitor)?
-            }
-            LogicalPlan::Union(Union { inputs, .. }) => {
-                for input in inputs {
-                    if !input.accept(visitor)? {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            LogicalPlan::Distinct(Distinct { input }) => input.accept(visitor)?,
-            LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Subquery(Subquery { subquery, .. }) => {
-                subquery.accept(visitor)?
-            }
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
-                input.accept(visitor)?
-            }
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Prepare(Prepare { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::Extension(extension) => {
-                for input in extension.node.inputs() {
-                    if !input.accept(visitor)? {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
-            LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
-            LogicalPlan::Dml(write) => write.input.accept(visitor)?,
-            LogicalPlan::Unnest(Unnest { input, .. }) => input.accept(visitor)?,
-            // plans without inputs
-            LogicalPlan::TableScan { .. }
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::SetVariable(_)
-            | LogicalPlan::DropView(_)
-            | LogicalPlan::DescribeTable(_) => true,
-        };
-        if !recurse {
-            return Ok(false);
-        }
-
-        if !visitor.post_visit(self)? {
-            return Ok(false);
-        }
-
-        Ok(true)
-    }
-
-    /// applies visitor to any subqueries in the plan
-    fn visit_subqueries<V>(&self, v: &mut V) -> Result<bool, V::Error>
-    where
-        V: PlanVisitor,
+        F: FnMut(&Self) -> datafusion_common::Result<VisitRecursion>,
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
+                    | Expr::ScalarSubquery(subquery) => {
+                        // use a synthetic plan so the collector sees a
+                        // LogicalPlan::Subquery (even though it is
+                        // actually a Subquery alias)
+                        let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
+                        synthetic_plan.apply(op)?;
+                    }
+                    _ => {}
+                }
+                Ok::<(), DataFusionError>(())
+            })
+        })?;
+        Ok(())
+    }
+
+    /// applies visitor to any subqueries in the plan
+    pub(crate) fn visit_subqueries<V>(&self, v: &mut V) -> datafusion_common::Result<()>
+    where
+        V: TreeNodeVisitor<N = LogicalPlan>,
+    {
+        self.inspect_expressions(|expr| {
+            // recursively look for subqueries
+            inspect_expr_pre(expr, |expr| {
+                match expr {
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the visitor sees a
                         // LogicalPlan::Subquery (even though it is
                         // actually a Subquery alias)
                         let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
-                        synthetic_plan.accept(v)?;
+                        synthetic_plan.visit(v)?;
                     }
                     _ => {}
                 }
-                Ok(())
+                Ok::<(), DataFusionError>(())
             })
         })?;
-        // continue recursion
-        Ok(true)
+        Ok(())
     }
 
     /// Return a logical plan with all placeholders/params (e.g $1 $2,
@@ -658,18 +595,18 @@ impl LogicalPlan {
     pub fn replace_params_with_values(
         &self,
         param_values: &[ScalarValue],
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         let new_exprs = self
             .expressions()
             .into_iter()
             .map(|e| Self::replace_placeholders_with_values(e, param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let new_inputs_with_values = self
             .inputs()
             .into_iter()
             .map(|inp| inp.replace_params_with_values(param_values))
-            .collect::<Result<Vec<_>, DataFusionError>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         from_plan(self, &new_exprs, &new_inputs_with_values)
     }
@@ -678,65 +615,35 @@ impl LogicalPlan {
     pub fn get_parameter_types(
         &self,
     ) -> Result<HashMap<String, Option<DataType>>, DataFusionError> {
-        struct ParamTypeVisitor {
-            param_types: HashMap<String, Option<DataType>>,
-        }
+        let mut param_types: HashMap<String, Option<DataType>> = HashMap::new();
 
-        struct ExprParamTypeVisitor {
-            param_types: HashMap<String, Option<DataType>>,
-        }
-
-        impl ExpressionVisitor for ExprParamTypeVisitor {
-            fn pre_visit(
-                mut self,
-                expr: &Expr,
-            ) -> datafusion_common::Result<Recursion<Self>>
-            where
-                Self: ExpressionVisitor,
-            {
-                if let Expr::Placeholder { id, data_type } = expr {
-                    let prev = self.param_types.get(id);
-                    match (prev, data_type) {
-                        (Some(Some(prev)), Some(dt)) => {
-                            if prev != dt {
-                                Err(DataFusionError::Plan(format!(
-                                    "Conflicting types for {id}"
-                                )))?;
+        self.apply(&mut |plan| {
+            plan.inspect_expressions(|expr| {
+                expr.apply(&mut |expr| {
+                    if let Expr::Placeholder { id, data_type } = expr {
+                        let prev = param_types.get(id);
+                        match (prev, data_type) {
+                            (Some(Some(prev)), Some(dt)) => {
+                                if prev != dt {
+                                    Err(DataFusionError::Plan(format!(
+                                        "Conflicting types for {id}"
+                                    )))?;
+                                }
                             }
+                            (_, Some(dt)) => {
+                                param_types.insert(id.clone(), Some(dt.clone()));
+                            }
+                            _ => {}
                         }
-                        (_, Some(dt)) => {
-                            let _ = self.param_types.insert(id.clone(), Some(dt.clone()));
-                        }
-                        _ => {}
                     }
-                }
-                Ok(Recursion::Continue(self))
-            }
-        }
-
-        impl PlanVisitor for ParamTypeVisitor {
-            type Error = DataFusionError;
-
-            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
-                let mut param_types = HashMap::new();
-                plan.inspect_expressions(|expr| {
-                    let mut visitor = ExprParamTypeVisitor {
-                        param_types: Default::default(),
-                    };
-                    visitor = expr.accept(visitor)?;
-                    param_types.extend(visitor.param_types);
-                    Ok(()) as Result<(), DataFusionError>
+                    Ok(VisitRecursion::Continue)
                 })?;
-                self.param_types.extend(param_types);
-                Ok(true)
-            }
-        }
+                Ok::<(), DataFusionError>(())
+            })?;
+            Ok(VisitRecursion::Continue)
+        })?;
 
-        let mut visitor = ParamTypeVisitor {
-            param_types: Default::default(),
-        };
-        self.accept(&mut visitor)?;
-        Ok(visitor.param_types)
+        Ok(param_types)
     }
 
     /// Return an Expr with all placeholders replaced with their
@@ -744,10 +651,15 @@ impl LogicalPlan {
     fn replace_placeholders_with_values(
         expr: Expr,
         param_values: &[ScalarValue],
-    ) -> Result<Expr, DataFusionError> {
-        rewrite_expr(expr, |expr| {
+    ) -> Result<Expr> {
+        expr.transform(&|expr| {
             match &expr {
                 Expr::Placeholder { id, data_type } => {
+                    if id.is_empty() || id == "$0" {
+                        return Err(DataFusionError::Plan(
+                            "Empty placeholder id".to_string(),
+                        ));
+                    }
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
                     let idx = id[1..].parse::<usize>().map_err(|e| {
                         DataFusionError::Internal(format!(
@@ -769,17 +681,17 @@ impl LogicalPlan {
                         )));
                     }
                     // Replace the placeholder with the value
-                    Ok(Expr::Literal(value.clone()))
+                    Ok(Transformed::Yes(Expr::Literal(value.clone())))
                 }
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Expr::ScalarSubquery(plan::Subquery {
+                    Ok(Transformed::Yes(Expr::ScalarSubquery(Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
-                    }))
+                    })))
                 }
-                _ => Ok(expr),
+                _ => Ok(Transformed::No(expr)),
             }
         })
     }
@@ -820,7 +732,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                match self.0.accept(&mut visitor) {
+                match self.0.visit(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -863,7 +775,7 @@ impl LogicalPlan {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
-                match self.0.accept(&mut visitor) {
+                match self.0.visit(&mut visitor) {
                     Ok(_) => Ok(()),
                     Err(_) => Err(fmt::Error),
                 }
@@ -916,12 +828,12 @@ impl LogicalPlan {
                 let mut visitor = GraphvizVisitor::new(f);
 
                 visitor.pre_visit_plan("LogicalPlan")?;
-                self.0.accept(&mut visitor).map_err(|_| fmt::Error)?;
+                self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 visitor.set_with_schema(true);
                 visitor.pre_visit_plan("Detailed LogicalPlan")?;
-                self.0.accept(&mut visitor).map_err(|_| fmt::Error)?;
+                self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
                 writeln!(f, "}}")?;
@@ -1059,6 +971,9 @@ impl LogicalPlan {
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
                         write!(f, "Dml: op=[{op}] table=[{table_name}]")
                     }
+                    LogicalPlan::Ddl(ddl) => {
+                        write!(f, "{}", ddl.display())
+                    }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
@@ -1172,45 +1087,8 @@ impl LogicalPlan {
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
                         write!(f, "SubqueryAlias: {alias}")
                     }
-                    LogicalPlan::CreateExternalTable(CreateExternalTable {
-                        ref name,
-                        ..
-                    }) => {
-                        write!(f, "CreateExternalTable: {name:?}")
-                    }
-                    LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name, ..
-                    }) => {
-                        write!(f, "CreateMemoryTable: {name:?}")
-                    }
-                    LogicalPlan::CreateView(CreateView { name, .. }) => {
-                        write!(f, "CreateView: {name:?}")
-                    }
-                    LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                        schema_name,
-                        ..
-                    }) => {
-                        write!(f, "CreateCatalogSchema: {schema_name:?}")
-                    }
-                    LogicalPlan::CreateCatalog(CreateCatalog {
-                        catalog_name, ..
-                    }) => {
-                        write!(f, "CreateCatalog: {catalog_name:?}")
-                    }
-                    LogicalPlan::DropTable(DropTable {
-                        name, if_exists, ..
-                    }) => {
-                        write!(f, "DropTable: {name:?} if not exist:={if_exists}")
-                    }
-                    LogicalPlan::DropView(DropView {
-                        name, if_exists, ..
-                    }) => {
-                        write!(f, "DropView: {name:?} if not exist:={if_exists}")
-                    }
-                    LogicalPlan::SetVariable(SetVariable {
-                        variable, value, ..
-                    }) => {
-                        write!(f, "SetVariable: set {variable:?} to {value:?}")
+                    LogicalPlan::Statement(statement) => {
+                        write!(f, "{}", statement.display())
                     }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
@@ -1292,6 +1170,27 @@ impl Display for JoinType {
     }
 }
 
+impl FromStr for JoinType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "INNER" => Ok(JoinType::Inner),
+            "LEFT" => Ok(JoinType::Left),
+            "RIGHT" => Ok(JoinType::Right),
+            "FULL" => Ok(JoinType::Full),
+            "LEFTSEMI" => Ok(JoinType::LeftSemi),
+            "RIGHTSEMI" => Ok(JoinType::RightSemi),
+            "LEFTANTI" => Ok(JoinType::LeftAnti),
+            "RIGHTANTI" => Ok(JoinType::RightAnti),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "The join type {s} does not exist or is not implemented"
+            ))),
+        }
+    }
+}
+
 /// Join constraint
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JoinConstraint {
@@ -1299,62 +1198,6 @@ pub enum JoinConstraint {
     On,
     /// Join USING
     Using,
-}
-
-/// Creates a catalog (aka "Database").
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateCatalog {
-    /// The catalog name
-    pub catalog_name: String,
-    /// Do nothing (except issuing a notice) if a schema with the same name already exists
-    pub if_not_exists: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Creates a schema.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateCatalogSchema {
-    /// The table schema
-    pub schema_name: String,
-    /// Do nothing (except issuing a notice) if a schema with the same name already exists
-    pub if_not_exists: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Drops a table.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DropTable {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// If the table exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
-/// Drops a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DropView {
-    /// The view name
-    pub name: OwnedTableReference,
-    /// If the view exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
-/// Set a Variable's value -- value in
-/// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct SetVariable {
-    /// The variable name
-    pub variable: String,
-    /// The value to set
-    pub value: String,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
 }
 
 /// Produces no rows: An empty relation with an empty schema
@@ -1393,10 +1236,7 @@ pub struct Projection {
 
 impl Projection {
     /// Create a new Projection
-    pub fn try_new(
-        expr: Vec<Expr>,
-        input: Arc<LogicalPlan>,
-    ) -> Result<Self, DataFusionError> {
+    pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
@@ -1409,7 +1249,7 @@ impl Projection {
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         if expr.len() != schema.fields().len() {
             return Err(DataFusionError::Plan(format!("Projection has mismatch between number of expressions ({}) and number of fields in schema ({})", expr.len(), schema.fields().len())));
         }
@@ -1435,7 +1275,7 @@ impl Projection {
         }
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
         match plan {
             LogicalPlan::Projection(it) => Ok(it),
             _ => plan_err!("Could not coerce into Projection!"),
@@ -1451,7 +1291,7 @@ pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// The alias for the input relation
-    pub alias: String,
+    pub alias: OwnedTableReference,
     /// The schema with qualified field names
     pub schema: DFSchemaRef,
 }
@@ -1459,15 +1299,12 @@ pub struct SubqueryAlias {
 impl SubqueryAlias {
     pub fn try_new(
         plan: LogicalPlan,
-        alias: impl Into<String>,
-    ) -> datafusion_common::Result<Self> {
+        alias: impl Into<OwnedTableReference>,
+    ) -> Result<Self> {
         let alias = alias.into();
-        let table_ref = TableReference::bare(&alias);
         let schema: Schema = plan.schema().as_ref().clone().into();
-        let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(
-            table_ref.to_owned_reference(),
-            &schema,
-        )?);
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1498,10 +1335,7 @@ pub struct Filter {
 
 impl Filter {
     /// Create a new filter operator.
-    pub fn try_new(
-        predicate: Expr,
-        input: Arc<LogicalPlan>,
-    ) -> datafusion_common::Result<Self> {
+    pub fn try_new(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -1526,7 +1360,7 @@ impl Filter {
         Ok(Self { predicate, input })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Filter> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
         match plan {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
@@ -1611,112 +1445,6 @@ pub struct Union {
     pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
-}
-
-/// Creates an in memory table.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateMemoryTable {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// The logical plan
-    pub input: Arc<LogicalPlan>,
-    /// Option to not error if table already exists
-    pub if_not_exists: bool,
-    /// Option to replace table content if table already exists
-    pub or_replace: bool,
-}
-
-/// Creates a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateView {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// The logical plan
-    pub input: Arc<LogicalPlan>,
-    /// Option to not error if table already exists
-    pub or_replace: bool,
-    /// SQL used to create the view, if available
-    pub definition: Option<String>,
-}
-
-/// Creates an external table.
-#[derive(Clone, PartialEq, Eq)]
-pub struct CreateExternalTable {
-    /// The table schema
-    pub schema: DFSchemaRef,
-    /// The table name
-    pub name: OwnedTableReference,
-    /// The physical location
-    pub location: String,
-    /// The file type of physical file
-    pub file_type: String,
-    /// Whether the CSV file contains a header
-    pub has_header: bool,
-    /// Delimiter for CSV
-    pub delimiter: char,
-    /// Partition Columns
-    pub table_partition_cols: Vec<String>,
-    /// Option to not error if table already exists
-    pub if_not_exists: bool,
-    /// SQL used to create the table, if available
-    pub definition: Option<String>,
-    /// Order expressions supplied by user
-    pub order_exprs: Vec<Expr>,
-    /// File compression type (GZIP, BZIP2, XZ, ZSTD)
-    pub file_compression_type: CompressionTypeVariant,
-    /// Table(provider) specific options
-    pub options: HashMap<String, String>,
-}
-
-// Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
-impl Hash for CreateExternalTable {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.schema.hash(state);
-        self.name.hash(state);
-        self.location.hash(state);
-        self.file_type.hash(state);
-        self.has_header.hash(state);
-        self.delimiter.hash(state);
-        self.table_partition_cols.hash(state);
-        self.if_not_exists.hash(state);
-        self.definition.hash(state);
-        self.file_compression_type.hash(state);
-        self.order_exprs.hash(state);
-        self.options.len().hash(state); // HashMap is not hashable
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum WriteOp {
-    Insert,
-    Delete,
-    Update,
-    Ctas,
-}
-
-impl Display for WriteOp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            WriteOp::Insert => write!(f, "Insert"),
-            WriteOp::Delete => write!(f, "Delete"),
-            WriteOp::Update => write!(f, "Update"),
-            WriteOp::Ctas => write!(f, "Ctas"),
-        }
-    }
-}
-
-/// The operator that modifies the content of a database (adapted from substrait WriteRel)
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DmlStatement {
-    /// The table name
-    pub table_name: OwnedTableReference,
-    /// The schema of the table (must align with Rel input)
-    pub table_schema: DFSchemaRef,
-    /// The type of operation to perform
-    pub op: WriteOp,
-    /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
-    pub input: Arc<LogicalPlan>,
 }
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
@@ -1826,10 +1554,10 @@ impl Aggregate {
         input: Arc<LogicalPlan>,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
+        let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone())?;
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
@@ -1847,7 +1575,7 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
         schema: DFSchemaRef,
-    ) -> datafusion_common::Result<Self> {
+    ) -> Result<Self> {
         if group_expr.is_empty() && aggr_expr.is_empty() {
             return Err(DataFusionError::Plan(
                 "Aggregate requires at least one grouping or aggregate expression"
@@ -1870,7 +1598,7 @@ impl Aggregate {
         })
     }
 
-    pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Aggregate> {
+    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(it) => Ok(it),
             _ => plan_err!("Could not coerce into Aggregate!"),
@@ -1917,7 +1645,7 @@ impl Join {
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
         column_on: (Vec<Column>, Vec<Column>),
-    ) -> Result<Self, DataFusionError> {
+    ) -> Result<Self> {
         let original_join = match original {
             LogicalPlan::Join(join) => join,
             _ => return plan_err!("Could not create join with project input"),
@@ -1955,11 +1683,18 @@ pub struct Subquery {
 }
 
 impl Subquery {
-    pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
+    pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
             Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
+        }
+    }
+
+    pub fn with_plan(&self, plan: Arc<LogicalPlan>) -> Subquery {
+        Subquery {
+            subquery: plan,
+            outer_ref_columns: self.outer_ref_columns.clone(),
         }
     }
 }
@@ -1988,6 +1723,13 @@ pub enum Partitioning {
 pub enum PlanType {
     /// The initial LogicalPlan provided to DataFusion
     InitialLogicalPlan,
+    /// The LogicalPlan which results from applying an analyzer pass
+    AnalyzedLogicalPlan {
+        /// The name of the analyzer which produced this plan
+        analyzer_name: String,
+    },
+    /// The LogicalPlan after all analyzer passes have been applied
+    FinalAnalyzedLogicalPlan,
     /// The LogicalPlan which results from applying an optimizer pass
     OptimizedLogicalPlan {
         /// The name of the optimizer which produced this plan
@@ -2010,6 +1752,10 @@ impl Display for PlanType {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
+            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                write!(f, "logical_plan after {analyzer_name}")
+            }
+            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
                 write!(f, "logical_plan after {optimizer_name}")
             }
@@ -2076,8 +1822,8 @@ mod tests {
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::DFSchema;
-    use datafusion_common::Result;
+    use datafusion_common::tree_node::TreeNodeVisitor;
+    use datafusion_common::{DFSchema, TableReference};
     use std::collections::HashMap;
 
     fn employee_schema() -> Schema {
@@ -2186,31 +1932,39 @@ mod tests {
         strings: Vec<String>,
     }
 
-    impl PlanVisitor for OkVisitor {
-        type Error = String;
+    impl TreeNodeVisitor for OkVisitor {
+        type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
                 LogicalPlan::TableScan { .. } => "pre_visit TableScan",
-                _ => unimplemented!("unknown plan type"),
+                _ => {
+                    return Err(DataFusionError::NotImplemented(
+                        "unknown plan type".to_string(),
+                    ))
+                }
             };
 
             self.strings.push(s.into());
-            Ok(true)
+            Ok(VisitRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
                 LogicalPlan::TableScan { .. } => "post_visit TableScan",
-                _ => unimplemented!("unknown plan type"),
+                _ => {
+                    return Err(DataFusionError::NotImplemented(
+                        "unknown plan type".to_string(),
+                    ))
+                }
             };
 
             self.strings.push(s.into());
-            Ok(true)
+            Ok(VisitRecursion::Continue)
         }
     }
 
@@ -2218,7 +1972,7 @@ mod tests {
     fn visit_order() {
         let mut visitor = OkVisitor::default();
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2265,19 +2019,21 @@ mod tests {
         return_false_from_post_in: OptionalCounter,
     }
 
-    impl PlanVisitor for StoppingVisitor {
-        type Error = String;
+    impl TreeNodeVisitor for StoppingVisitor {
+        type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_false_from_pre_in.dec() {
-                return Ok(false);
+                return Ok(VisitRecursion::Stop);
             }
-            self.inner.pre_visit(plan)
+            self.inner.pre_visit(plan)?;
+
+            Ok(VisitRecursion::Continue)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_false_from_post_in.dec() {
-                return Ok(false);
+                return Ok(VisitRecursion::Stop);
             }
 
             self.inner.post_visit(plan)
@@ -2292,7 +2048,7 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2308,7 +2064,7 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
         assert!(res.is_ok());
 
         assert_eq!(
@@ -2332,20 +2088,24 @@ mod tests {
         return_error_from_post_in: OptionalCounter,
     }
 
-    impl PlanVisitor for ErrorVisitor {
-        type Error = String;
+    impl TreeNodeVisitor for ErrorVisitor {
+        type N = LogicalPlan;
 
-        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_pre_in.dec() {
-                return Err("Error in pre_visit".into());
+                return Err(DataFusionError::NotImplemented(
+                    "Error in pre_visit".to_string(),
+                ));
             }
 
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<VisitRecursion> {
             if self.return_error_from_post_in.dec() {
-                return Err("Error in post_visit".into());
+                return Err(DataFusionError::NotImplemented(
+                    "Error in post_visit".to_string(),
+                ));
             }
 
             self.inner.post_visit(plan)
@@ -2359,9 +2119,9 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
+        let res = plan.visit(&mut visitor);
 
-        if let Err(e) = res {
+        if let Err(DataFusionError::NotImplemented(e)) = res {
             assert_eq!("Error in pre_visit", e);
         } else {
             panic!("Expected an error");
@@ -2380,8 +2140,8 @@ mod tests {
             ..Default::default()
         };
         let plan = test_plan();
-        let res = plan.accept(&mut visitor);
-        if let Err(e) = res {
+        let res = plan.visit(&mut visitor);
+        if let Err(DataFusionError::NotImplemented(e)) = res {
             assert_eq!("Error in post_visit", e);
         } else {
             panic!("Expected an error");
@@ -2495,5 +2255,40 @@ mod tests {
         let schemas = plan.all_schemas();
         assert_eq!(1, schemas.len());
         assert_eq!(0, schemas[0].fields().len());
+    }
+
+    #[test]
+    fn test_replace_invalid_placeholder() {
+        // test empty placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(Expr::Placeholder {
+                id: "".into(),
+                data_type: Some(DataType::Int32),
+            }))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        plan.replace_params_with_values(&[42i32.into()])
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+
+        // test $0 placeholder
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col("id").eq(Expr::Placeholder {
+                id: "$0".into(),
+                data_type: Some(DataType::Int32),
+            }))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        plan.replace_params_with_values(&[42i32.into()])
+            .expect_err("unexpectedly succeeded to replace an invalid placeholder");
     }
 }

@@ -25,9 +25,9 @@ use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
-use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
+use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -122,7 +122,9 @@ struct UnwrapCastExprRewriter {
     schema: DFSchemaRef,
 }
 
-impl ExprRewriter for UnwrapCastExprRewriter {
+impl TreeNodeRewriter for UnwrapCastExprRewriter {
+    type N = Expr;
+
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
@@ -191,11 +193,11 @@ impl ExprRewriter for UnwrapCastExprRewriter {
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
-            Expr::InList {
+            Expr::InList(InList {
                 expr: left_expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 if let Some(
                     Expr::TryCast(TryCast {
                         expr: internal_left_expr,
@@ -482,8 +484,8 @@ mod tests {
     use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -787,7 +789,7 @@ mod tests {
     }
 
     fn lit_timestamp_nano_utc(ts: i64) -> Expr {
-        let utc = Some("+0:00".to_string());
+        let utc = Some("+0:00".into());
         lit(ScalarValue::TimestampNanosecond(Some(ts), utc))
     }
 
@@ -801,7 +803,7 @@ mod tests {
 
     // this is the type that now() returns
     fn timestamp_nano_utc_type() -> DataType {
-        let utc = Some("+0:00".to_string());
+        let utc = Some("+0:00".into());
         DataType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
@@ -955,7 +957,7 @@ mod tests {
             TimeUnit::Microsecond,
             TimeUnit::Nanosecond,
         ] {
-            let utc = Some("+0:00".to_string());
+            let utc = Some("+0:00".into());
             // No timezone, utc timezone
             let (lit_tz_none, lit_tz_utc) = match time_unit {
                 TimeUnit::Second => (
@@ -1052,7 +1054,7 @@ mod tests {
         // int64 to list
         expect_cast(
             ScalarValue::Int64(Some(12345)),
-            DataType::List(Box::new(Field::new("f", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("f", DataType::Int32, true))),
             ExpectedCast::NoValue,
         );
     }

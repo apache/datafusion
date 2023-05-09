@@ -83,7 +83,7 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, and `CROSS JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN` and `CROSS JOIN`.
 
 The following examples are based on this table:
 
@@ -151,6 +151,20 @@ either side of the join where there is not a match.
 | 1        | 2        |          |          |
 |          |          | 1        | 2        |
 +----------+----------+----------+----------+
+```
+
+### NATURAL JOIN
+
+A natural join defines an inner join based on common column names found between the input tables. When no common
+column names are found, it behaves like a cross join.
+
+```sql
+❯ select * from x natural join x y;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
 ```
 
 ### CROSS JOIN

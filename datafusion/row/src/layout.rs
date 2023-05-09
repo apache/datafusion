@@ -21,64 +21,54 @@ use crate::schema_null_free;
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{ceil, round_upto_power_of_2};
 
-const UTF8_DEFAULT_SIZE: usize = 20;
-const BINARY_DEFAULT_SIZE: usize = 100;
-
-#[derive(Copy, Clone, Debug)]
-/// Type of a RowLayout
-pub enum RowType {
-    /// Stores  each field with minimum bytes for space efficiency.
-    ///
-    /// Its typical use case represents a sorting payload that
-    /// accesses all row fields as a unit.
-    ///
-    /// Each tuple consists of up to three parts: "`null bit set`" ,
-    /// "`values`" and "`var length data`"
-    ///
-    /// The null bit set is used for null tracking and is aligned to 1-byte. It stores
-    /// one bit per field.
-    ///
-    /// In the region of the values, we store the fields in the order they are defined in the schema.
-    /// - For fixed-length, sequential access fields, we store them directly.
-    ///       E.g., 4 bytes for int and 1 byte for bool.
-    /// - For fixed-length, update often fields, we store one 8-byte word per field.
-    /// - For fields of non-primitive or variable-length types,
-    ///       we append their actual content to the end of the var length region and
-    ///       store their offset relative to row base and their length, packed into an 8-byte word.
-    ///
-    /// ```plaintext
-    /// ┌────────────────┬──────────────────────────┬───────────────────────┐        ┌───────────────────────┬────────────┐
-    /// │Validity Bitmask│    Fixed Width Field     │ Variable Width Field  │   ...  │     vardata area      │  padding   │
-    /// │ (byte aligned) │   (native type width)    │(vardata offset + len) │        │   (variable length)   │   bytes    │
-    /// └────────────────┴──────────────────────────┴───────────────────────┘        └───────────────────────┴────────────┘
-    /// ```
-    ///
-    ///  For example, given the schema (Int8, Utf8, Float32, Utf8)
-    ///
-    ///  Encoding the tuple (1, "FooBar", NULL, "baz")
-    ///
-    ///  Requires 32 bytes (31 bytes payload and 1 byte padding to make each tuple 8-bytes aligned):
-    ///
-    /// ```plaintext
-    /// ┌──────────┬──────────┬──────────────────────┬──────────────┬──────────────────────┬───────────────────────┬──────────┐
-    /// │0b00001011│   0x01   │0x00000016  0x00000006│  0x00000000  │0x0000001C  0x00000003│       FooBarbaz       │   0x00   │
-    /// └──────────┴──────────┴──────────────────────┴──────────────┴──────────────────────┴───────────────────────┴──────────┘
-    /// 0          1          2                     10              14                     22                     31         32
-    /// ```
-    Compact,
-
-    /// This type of layout stores one 8-byte word per field for CPU-friendly,
-    /// It is mainly used to represent the rows with frequently updated content,
-    /// for example, grouping state for hash aggregation.
-    WordAligned,
-    // RawComparable,
-}
-
-/// Reveals how the fields of a record are stored in the raw-bytes format
+/// Row layout stores one or multiple 8-byte word(s) per field for CPU-friendly
+/// and efficient processing.
+///
+/// It is mainly used to represent the rows with frequently updated content,
+/// for example, grouping state for hash aggregation.
+///
+/// Each tuple consists of two parts: "`null bit set`" and "`values`".
+///
+/// For null-free tuples, the null bit set can be omitted.
+///
+/// The null bit set, when present, is aligned to 8 bytes. It stores one bit per field.
+///
+/// In the region of the values, we store the fields in the order they are defined in the schema.
+/// Each field is stored in one or multiple 8-byte words.
+///
+/// ```plaintext
+/// ┌─────────────────┬─────────────────────┐
+/// │Validity Bitmask │      Fields         │
+/// │ (8-byte aligned)│   (8-byte words)    │
+/// └─────────────────┴─────────────────────┘
+/// ```
+///
+///  For example, given the schema (Int8, Float32, Int64) with a null-free tuple
+///
+///  Encoding the tuple (1, 3.14, 42)
+///
+///  Requires 24 bytes (3 fields * 8 bytes each):
+///
+/// ```plaintext
+/// ┌──────────────────────┬──────────────────────┬──────────────────────┐
+/// │         0x01         │      0x4048F5C3      │      0x0000002A      │
+/// └──────────────────────┴──────────────────────┴──────────────────────┘
+/// 0                      8                      16                     24
+/// ```
+///
+///  If the schema allows null values and the tuple is (1, NULL, 42)
+///
+///  Encoding the tuple requires 32 bytes (1 * 8 bytes for the null bit set + 3 fields * 8 bytes each):
+///
+/// ```plaintext
+/// ┌──────────────────────────┬──────────────────────┬──────────────────────┬──────────────────────┐
+/// │       0b00000101         │         0x01         │      0x00000000      │      0x0000002A      │
+/// │ (7 bytes padding after)  │                      │                      │                      │
+/// └──────────────────────────┴──────────────────────┴──────────────────────┴──────────────────────┘
+/// 0                          8                      16                     24                     32
+/// ```
 #[derive(Debug, Clone)]
 pub struct RowLayout {
-    /// Type of the layout
-    row_type: RowType,
     /// If a row is null free according to its schema
     pub(crate) null_free: bool,
     /// The number of bytes used to store null bits for each field.
@@ -93,27 +83,20 @@ pub struct RowLayout {
 
 impl RowLayout {
     /// new
-    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+    pub fn new(schema: &Schema) -> Self {
         assert!(
-            row_supported(schema, row_type),
-            "{row_type:?}Row with {schema:?} not supported yet.",
+            row_supported(schema),
+            "Row with {schema:?} not supported yet.",
         );
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
         let null_width = if null_free {
             0
         } else {
-            match row_type {
-                RowType::Compact => ceil(field_count, 8),
-                RowType::WordAligned => round_upto_power_of_2(ceil(field_count, 8), 8),
-            }
+            round_upto_power_of_2(ceil(field_count, 8), 8)
         };
-        let (field_offsets, values_width) = match row_type {
-            RowType::Compact => compact_offsets(null_width, schema),
-            RowType::WordAligned => word_aligned_offsets(null_width, schema),
-        };
+        let (field_offsets, values_width) = word_aligned_offsets(null_width, schema);
         Self {
-            row_type,
             null_free,
             null_width,
             values_width,
@@ -129,119 +112,46 @@ impl RowLayout {
     }
 }
 
-/// Get relative offsets for each field and total width for values
-fn compact_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
-    let mut offsets = vec![];
-    let mut offset = null_width;
-    for f in schema.fields() {
-        offsets.push(offset);
-        offset += compact_type_width(f.data_type());
-    }
-    (offsets, offset - null_width)
-}
-
-fn var_length(dt: &DataType) -> bool {
-    use DataType::*;
-    matches!(dt, Utf8 | Binary)
-}
-
-fn compact_type_width(dt: &DataType) -> usize {
-    use DataType::*;
-    if var_length(dt) {
-        return std::mem::size_of::<u64>();
-    }
-    match dt {
-        Boolean | UInt8 | Int8 => 1,
-        UInt16 | Int16 => 2,
-        UInt32 | Int32 | Float32 | Date32 => 4,
-        UInt64 | Int64 | Float64 | Date64 => 8,
-        _ => unreachable!(),
-    }
-}
-
 fn word_aligned_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
     let mut offsets = vec![];
     let mut offset = null_width;
     for f in schema.fields() {
         offsets.push(offset);
-        assert!(!matches!(f.data_type(), DataType::Decimal128(_, _)));
-        // All of the current support types can fit into one single 8-bytes word.
-        // When we decide to support Decimal type in the future, its width would be
-        // of two 8-bytes words and should adapt the width calculation below.
-        offset += 8;
-    }
-    (offsets, offset - null_width)
-}
-
-/// Estimate row width based on schema
-pub(crate) fn estimate_row_width(schema: &Schema, layout: &RowLayout) -> usize {
-    let mut width = layout.fixed_part_width();
-    if matches!(layout.row_type, RowType::WordAligned) {
-        return width;
-    }
-    for f in schema.fields() {
+        assert!(!matches!(f.data_type(), DataType::Decimal256(_, _)));
+        // All of the current support types can fit into one single 8-bytes word except for Decimal128.
+        // For Decimal128, its width is of two 8-bytes words.
         match f.data_type() {
-            DataType::Utf8 => width += UTF8_DEFAULT_SIZE,
-            DataType::Binary => width += BINARY_DEFAULT_SIZE,
-            _ => {}
+            DataType::Decimal128(_, _) => offset += 16,
+            _ => offset += 8,
         }
     }
-    round_upto_power_of_2(width, 8)
+    (offsets, offset - null_width)
 }
 
 /// Return true of data in `schema` can be converted to raw-bytes
 /// based rows.
 ///
 /// Note all schemas can be supported in the row format
-pub fn row_supported(schema: &Schema, row_type: RowType) -> bool {
-    schema
-        .fields()
-        .iter()
-        .all(|f| supported_type(f.data_type(), row_type))
-}
-
-fn supported_type(dt: &DataType, row_type: RowType) -> bool {
-    use DataType::*;
-
-    match row_type {
-        RowType::Compact => {
-            matches!(
-                dt,
-                Boolean
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | Float32
-                    | Float64
-                    | Date32
-                    | Date64
-                    | Utf8
-                    | Binary
-            )
-        }
-        // only fixed length types are supported for fast in-place update.
-        RowType::WordAligned => {
-            matches!(
-                dt,
-                Boolean
-                    | UInt8
-                    | UInt16
-                    | UInt32
-                    | UInt64
-                    | Int8
-                    | Int16
-                    | Int32
-                    | Int64
-                    | Float32
-                    | Float64
-                    | Date32
-                    | Date64
-            )
-        }
-    }
+pub fn row_supported(schema: &Schema) -> bool {
+    schema.fields().iter().all(|f| {
+        let dt = f.data_type();
+        use DataType::*;
+        matches!(
+            dt,
+            Boolean
+                | UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | Float32
+                | Float64
+                | Date32
+                | Date64
+                | Decimal128(_, _)
+        )
+    })
 }

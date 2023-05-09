@@ -272,14 +272,14 @@ impl<'a> TableReference<'a> {
     /// ```
     /// # use datafusion_common::TableReference;
     /// let table_reference = TableReference::partial("myschema", "mytable");
-    /// assert_eq!(table_reference.to_quoted_string(), r#""myschema"."mytable""#);
+    /// assert_eq!(table_reference.to_quoted_string(), "myschema.mytable");
     ///
     /// let table_reference = TableReference::partial("MySchema", "MyTable");
     /// assert_eq!(table_reference.to_quoted_string(), r#""MySchema"."MyTable""#);
     /// ```
     pub fn to_quoted_string(&self) -> String {
         match self {
-            TableReference::Bare { table } => quote_identifier(table),
+            TableReference::Bare { table } => quote_identifier(table).to_string(),
             TableReference::Partial { schema, table } => {
                 format!("{}.{}", quote_identifier(schema), quote_identifier(table))
             }
@@ -315,6 +315,25 @@ impl<'a> TableReference<'a> {
                 table: parts.remove(0).into(),
             },
             _ => Self::Bare { table: s.into() },
+        }
+    }
+
+    /// Decompose a [`TableReference`] to separate parts. The result vector contains
+    /// at most three elements in the following sequence:
+    /// ```no_rust
+    /// [<catalog>, <schema>, table]
+    /// ```
+    pub fn to_vec(&self) -> Vec<String> {
+        match self {
+            TableReference::Bare { table } => vec![table.to_string()],
+            TableReference::Partial { schema, table } => {
+                vec![schema.to_string(), table.to_string()]
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => vec![catalog.to_string(), schema.to_string(), table.to_string()],
         }
     }
 }
@@ -407,5 +426,27 @@ mod tests {
         };
         let actual = TableReference::from("TABLE()");
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_table_reference_to_vector() {
+        let table_reference = TableReference::parse_str("table");
+        assert_eq!(vec!["table".to_string()], table_reference.to_vec());
+
+        let table_reference = TableReference::parse_str("schema.table");
+        assert_eq!(
+            vec!["schema".to_string(), "table".to_string()],
+            table_reference.to_vec()
+        );
+
+        let table_reference = TableReference::parse_str("catalog.schema.table");
+        assert_eq!(
+            vec![
+                "catalog".to_string(),
+                "schema".to_string(),
+                "table".to_string()
+            ],
+            table_reference.to_vec()
+        );
     }
 }

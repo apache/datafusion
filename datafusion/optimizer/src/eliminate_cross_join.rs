@@ -147,19 +147,19 @@ fn flatten_join_inputs(
             possible_join_keys.extend(join.on.clone());
             let left = &*(join.left);
             let right = &*(join.right);
-            Ok::<Vec<&LogicalPlan>, DataFusionError>(vec![left, right])
+            vec![left, right]
         }
         LogicalPlan::CrossJoin(join) => {
             let left = &*(join.left);
             let right = &*(join.right);
-            Ok::<Vec<&LogicalPlan>, DataFusionError>(vec![left, right])
+            vec![left, right]
         }
         _ => {
             return Err(DataFusionError::Plan(
                 "flatten_join_inputs just can call join/cross_join".to_string(),
             ));
         }
-    }?;
+    };
 
     for child in children.iter() {
         match *child {

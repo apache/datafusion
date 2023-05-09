@@ -17,8 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, normalize_ident, rebase_expr,
-    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{
@@ -31,7 +31,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    CreateMemoryTable, DdlStatement, Expr, Filter, GroupingSet, LogicalPlan,
+    LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
 use sqlparser::ast::{Select, SelectItem, TableWithJoins};
@@ -204,7 +205,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }?;
 
         // DISTRIBUTE BY
-        if !select.distribute_by.is_empty() {
+        let plan = if !select.distribute_by.is_empty() {
             let x = select
                 .distribute_by
                 .iter()
@@ -218,7 +219,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
-                .build()
+                .build()?
+        } else {
+            plan
+        };
+
+        if let Some(select_into) = select.into {
+            Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                CreateMemoryTable {
+                    name: self.object_name_to_table_reference(select_into.name)?,
+                    // SELECT INTO statement does not copy constraints such as primary key
+                    primary_key: Vec::new(),
+                    input: Arc::new(plan),
+                    // These are not applicable with SELECT INTO
+                    if_not_exists: false,
+                    or_replace: false,
+                },
+            )))
         } else {
             Ok(plan)
         }
@@ -233,13 +250,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match selection {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
-                let outer_query_schema = planner_context.outer_query_schema.clone();
-                let outer_query_schema_vec =
-                    if let Some(outer) = outer_query_schema.as_ref() {
-                        vec![outer]
-                    } else {
-                        vec![]
-                    };
+                let outer_query_schema = planner_context.outer_query_schema().cloned();
+                let outer_query_schema_vec = outer_query_schema
+                    .as_ref()
+                    .map(|schema| vec![schema])
+                    .unwrap_or_else(Vec::new);
 
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
@@ -332,7 +347,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                let expr = Alias(Box::new(col), normalize_ident(alias));
+                let expr = Alias(Box::new(col), self.normalizer.normalize(alias));
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {

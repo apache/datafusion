@@ -27,10 +27,11 @@ mod unary_op;
 mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
 use arrow_schema::DataType;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::rewrite_expr;
+use datafusion_expr::expr::InList;
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -120,15 +121,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(value) => {
-                self.parse_value(value, &planner_context.prepare_param_data_types)
+                self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::DatePart,
-                args: vec![
+            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction (ScalarFunction::new(
+                BuiltinScalarFunction::DatePart,
+                 vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ],
-            }),
+            ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval {
@@ -139,6 +140,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             } => self.sql_interval_to_expr(
                 *value,
+                schema,
+                planner_context,
                 leading_field,
                 leading_precision,
                 last_field,
@@ -148,7 +151,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(normalize_ident(id)), keys)
+                    plan_indexed(col(self.normalizer.normalize(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {column} instead"
@@ -359,15 +362,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::InList {
-            expr: Box::new(self.sql_expr_to_logical_expr(
-                expr,
-                schema,
-                planner_context,
-            )?),
-            list: list_expr,
+        Ok(Expr::InList(InList::new(
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+            list_expr,
             negated,
-        })
+        )))
     }
 
     fn sql_like_to_expr(
@@ -465,7 +464,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg],
         };
-        Ok(Expr::ScalarFunction { fun, args })
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
     fn sql_agg_with_filter_to_expr(
@@ -519,15 +518,16 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
     Ok(())
 }
 
-/// Find all [`Expr::PlaceHolder`] tokens in a logical plan, and try to infer their type from context
+/// Find all [`Expr::Placeholder`] tokens in a logical plan, and try
+/// to infer their [`DataType`] from the context of their use.
 fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    rewrite_expr(expr, |mut expr| {
+    expr.transform(&|mut expr| {
         // Default to assuming the arguments are the same type
         if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
             rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
             rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
         };
-        Ok(expr)
+        Ok(Transformed::Yes(expr))
     })
 }
 

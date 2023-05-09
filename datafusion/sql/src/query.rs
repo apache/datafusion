@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
+
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query};
+use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, Value};
 
 use sqlparser::parser::ParserError::ParserError;
 
@@ -53,8 +53,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
-                let cte_name = normalize_ident(cte.alias.name.clone());
-                if planner_context.ctes.contains_key(&cte_name) {
+                let cte_name = self.normalizer.normalize(cte.alias.name.clone());
+                if planner_context.contains_cte(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {cte_name:?} specified more than once"
                     ))));
@@ -68,7 +68,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
                 let logical_plan = self.apply_table_alias(logical_plan, cte.alias)?;
 
-                planner_context.ctes.insert(cte_name, logical_plan);
+                planner_context.insert_cte(cte_name, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, planner_context)?;
@@ -109,15 +109,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let fetch = match fetch {
-            Some(limit_expr) => {
+            Some(limit_expr)
+                if limit_expr != sqlparser::ast::Expr::Value(Value::Null) =>
+            {
                 let n = match self.sql_to_expr(
                     limit_expr,
                     input.schema(),
                     &mut PlannerContext::new(),
                 )? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) => Ok(n as usize),
+                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
+                        Ok(n as usize)
+                    }
                     _ => Err(DataFusionError::Plan(
-                        "Unexpected expression for LIMIT clause".to_string(),
+                        "LIMIT must not be negative".to_string(),
                     )),
                 }?;
                 Some(n)

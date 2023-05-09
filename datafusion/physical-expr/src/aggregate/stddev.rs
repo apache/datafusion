@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::stats::StatsType;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::aggregate::variance::VarianceAccumulator;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -102,6 +103,15 @@ impl AggregateExpr for Stddev {
     }
 }
 
+impl PartialEq<dyn Any> for Stddev {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.name == x.name && self.expr.eq(&x.expr))
+            .unwrap_or(false)
+    }
+}
+
 impl StddevPop {
     /// Create a new STDDEV aggregate function
     pub fn new(
@@ -160,6 +170,16 @@ impl AggregateExpr for StddevPop {
         &self.name
     }
 }
+
+impl PartialEq<dyn Any> for StddevPop {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.name == x.name && self.expr.eq(&x.expr))
+            .unwrap_or(false)
+    }
+}
+
 /// An accumulator to compute the average
 #[derive(Debug)]
 pub struct StddevAccumulator {

@@ -28,39 +28,120 @@ use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
+use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::{avg, col, count, lit, max, sum, Expr, ExprSchemable};
+use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_expr::Expr::Wildcard;
+use datafusion_expr::{
+    avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col, scalar_subquery,
+    sum, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunction,
+};
+use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
 #[tokio::test]
-async fn count_wildcard() -> Result<()> {
-    let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
-
-    ctx.register_parquet(
-        "alltypes_tiny_pages",
-        &format!("{testdata}/alltypes_tiny_pages.parquet"),
-        ParquetReadOptions::default(),
-    )
-    .await?;
+async fn test_count_wildcard_on_sort() -> Result<()> {
+    let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select count(*) from alltypes_tiny_pages")
+        .sql("select b,count(*) from t1 group by b order by count(*)")
         .await?
         .explain(false, false)?
         .collect()
         .await?;
 
     let df_results = ctx
-        .table("alltypes_tiny_pages")
+        .table("t1")
         .await?
-        .aggregate(vec![], vec![count(Expr::Wildcard)])?
-        .explain(false, false)
-        .unwrap()
+        .aggregate(vec![col("b")], vec![count(Wildcard)])?
+        .sort(vec![count(Wildcard).sort(true, false)])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+    //make sure sql plan same with df plan
+    assert_eq!(
+        pretty_format_batches(&sql_results)?.to_string(),
+        pretty_format_batches(&df_results)?.to_string()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_count_wildcard_on_where_in() -> Result<()> {
+    let ctx = create_join_context()?;
+    let sql_results = ctx
+        .sql("SELECT a,b FROM t1 WHERE a in (SELECT count(*) FROM t2)")
+        .await?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
+    // https://github.com/apache/arrow-datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
+    // for compare difference betwwen sql and df logical plan, we need to create a new SessionContext here
+    let ctx = create_join_context()?;
+    let df_results = ctx
+        .table("t1")
+        .await?
+        .filter(in_subquery(
+            col("a"),
+            Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .aggregate(vec![], vec![count(Expr::Wildcard)])?
+                    .select(vec![count(Expr::Wildcard)])?
+                    .into_unoptimized_plan(),
+                // Usually, into_optimized_plan() should be used here, but due to
+                // https://github.com/apache/arrow-datafusion/issues/5771,
+                // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
+            ),
+        ))?
+        .select(vec![col("a"), col("b")])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    // make sure sql plan same with df plan
+    assert_eq!(
+        pretty_format_batches(&sql_results)?.to_string(),
+        pretty_format_batches(&df_results)?.to_string()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_count_wildcard_on_where_exist() -> Result<()> {
+    let ctx = create_join_context()?;
+    let sql_results = ctx
+        .sql("SELECT a, b FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)")
+        .await?
+        .explain(false, false)?
+        .collect()
+        .await?;
+    let df_results = ctx
+        .table("t1")
+        .await?
+        .filter(exists(Arc::new(
+            ctx.table("t2")
+                .await?
+                .aggregate(vec![], vec![count(Expr::Wildcard)])?
+                .select(vec![count(Expr::Wildcard)])?
+                .into_unoptimized_plan(),
+            // Usually, into_optimized_plan() should be used here, but due to
+            // https://github.com/apache/arrow-datafusion/issues/5771,
+            // subqueries in SQL cannot be optimized, resulting in differences in logical_plan. Therefore, into_unoptimized_plan() is temporarily used here.
+        )))?
+        .select(vec![col("a"), col("b")])?
+        .explain(false, false)?
         .collect()
         .await?;
 
@@ -70,24 +151,120 @@ async fn count_wildcard() -> Result<()> {
         pretty_format_batches(&df_results)?.to_string()
     );
 
-    let results = ctx
-        .table("alltypes_tiny_pages")
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_count_wildcard_on_window() -> Result<()> {
+    let ctx = create_join_context()?;
+
+    let sql_results = ctx
+        .sql("select COUNT(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
         .await?
-        .aggregate(vec![], vec![count(Expr::Wildcard)])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+    let df_results = ctx
+        .table("t1")
+        .await?
+        .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateFunction(AggregateFunction::Count),
+            vec![Expr::Wildcard],
+            vec![],
+            vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
+            WindowFrame {
+                units: WindowFrameUnits::Range,
+                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt32(Some(6))),
+                end_bound: WindowFrameBound::Following(ScalarValue::UInt32(Some(2))),
+            },
+        ))])?
+        .explain(false, false)?
         .collect()
         .await?;
 
-    let expected = vec![
-        "+-----------------+",
-        "| COUNT(UInt8(1)) |",
-        "+-----------------+",
-        "| 7300            |",
-        "+-----------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
+    //make sure sql plan same with df plan
+    assert_eq!(
+        pretty_format_batches(&df_results)?.to_string(),
+        pretty_format_batches(&sql_results)?.to_string()
+    );
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_count_wildcard_on_aggregate() -> Result<()> {
+    let ctx = create_join_context()?;
+    register_alltypes_tiny_pages_parquet(&ctx).await?;
+
+    let sql_results = ctx
+        .sql("select count(*) from t1")
+        .await?
+        .select(vec![count(Expr::Wildcard)])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    // add `.select(vec![count(Expr::Wildcard)])?` to make sure we can analyze all node instead of just top node.
+    let df_results = ctx
+        .table("t1")
+        .await?
+        .aggregate(vec![], vec![count(Expr::Wildcard)])?
+        .select(vec![count(Expr::Wildcard)])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    //make sure sql plan same with df plan
+    assert_eq!(
+        pretty_format_batches(&sql_results)?.to_string(),
+        pretty_format_batches(&df_results)?.to_string()
+    );
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
+    let ctx = create_join_context()?;
+
+    let sql_results = ctx
+        .sql("select a,b from t1 where (select count(*) from t2 where t1.a = t2.a)>0;")
+        .await?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
+    // https://github.com/apache/arrow-datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
+    // for compare difference betwwen sql and df logical plan, we need to create a new SessionContext here
+    let ctx = create_join_context()?;
+    let df_results = ctx
+        .table("t1")
+        .await?
+        .filter(
+            scalar_subquery(Arc::new(
+                ctx.table("t2")
+                    .await?
+                    .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
+                    .aggregate(vec![], vec![count(lit(COUNT_STAR_EXPANSION))])?
+                    .select(vec![count(lit(COUNT_STAR_EXPANSION))])?
+                    .into_unoptimized_plan(),
+            ))
+            .gt(lit(ScalarValue::UInt8(Some(0)))),
+        )?
+        .select(vec![col("t1.a"), col("t1.b")])?
+        .explain(false, false)?
+        .collect()
+        .await?;
+
+    //make sure sql plan same with df plan
+    assert_eq!(
+        pretty_format_batches(&sql_results)?.to_string(),
+        pretty_format_batches(&df_results)?.to_string()
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
@@ -227,7 +404,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-    let expected = vec![
+        let expected = vec![
         "+-----+",
         "| a   |",
         "+-----+",
@@ -273,7 +450,7 @@ async fn sort_on_distinct_columns() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-    let expected = vec![
+        let expected = vec![
         "+-----+",
         "| a   |",
         "+-----+",
@@ -329,7 +506,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
         .sort(vec![col("b").sort(true, true)])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -348,7 +525,7 @@ async fn group_by_ambiguous_column() -> Result<()> {
         .aggregate(vec![col("b")], vec![max(col("a"))])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -367,7 +544,7 @@ async fn filter_on_ambiguous_column() -> Result<()> {
         .filter(col("b").eq(lit(1)))
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -386,7 +563,7 @@ async fn select_ambiguous_column() -> Result<()> {
         .select(vec![col("b")])
         .unwrap_err();
 
-    let expected = "Schema error: Ambiguous reference to unqualified field \"b\"";
+    let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.to_string(), expected);
     Ok(())
 }
@@ -415,7 +592,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
     let results = df.collect().await.unwrap();
 
     #[rustfmt::skip]
-    let expected = vec![
+        let expected = vec![
         "+------+",
         "| a    |",
         "+------+",
@@ -1044,4 +1221,51 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
     let ctx = SessionContext::new();
     ctx.register_batch("shapes", batch)?;
     ctx.table("shapes").await
+}
+
+pub async fn register_alltypes_tiny_pages_parquet(ctx: &SessionContext) -> Result<()> {
+    let testdata = parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_tiny_pages",
+        &format!("{testdata}/alltypes_tiny_pages.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+    Ok(())
+}
+#[derive(Debug)]
+struct HardcodedIntProvider {}
+
+impl VarProvider for HardcodedIntProvider {
+    fn get_value(&self, _var_names: Vec<String>) -> Result<ScalarValue, DataFusionError> {
+        Ok(ScalarValue::Int64(Some(1234)))
+    }
+
+    fn get_type(&self, _: &[String]) -> Option<DataType> {
+        Some(DataType::Int64)
+    }
+}
+
+#[tokio::test]
+async fn use_var_provider() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("foo", DataType::Int64, false),
+        Field::new("bar", DataType::Int64, false),
+    ]));
+
+    let mem_table = Arc::new(MemTable::try_new(schema, vec![])?);
+
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        .set_bool("datafusion.optimizer.skip_failed_rules", false);
+    let ctx = SessionContext::with_config(config);
+
+    ctx.register_table("csv_table", mem_table)?;
+    ctx.register_variable(VarType::UserDefined, Arc::new(HardcodedIntProvider {}));
+
+    let dataframe = ctx
+        .sql("SELECT foo FROM csv_table WHERE bar > @var")
+        .await?;
+    dataframe.collect().await?;
+    Ok(())
 }

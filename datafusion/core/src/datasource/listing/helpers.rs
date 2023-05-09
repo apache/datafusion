@@ -36,14 +36,13 @@ use crate::{
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
+use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{
     cast::{as_date64_array, as_string_array, as_uint64_array},
     Column, DataFusionError,
 };
-use datafusion_expr::{
-    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
-    Expr, Volatility,
-};
+use datafusion_expr::expr::ScalarUDF;
+use datafusion_expr::{Expr, Volatility};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -51,33 +50,22 @@ const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";
 const FILE_MODIFIED_COLUMN_NAME: &str = "_df_part_file_modified_";
 
-/// The `ExpressionVisitor` for `expr_applicable_for_cols`. Walks the tree to
-/// validate that the given expression is applicable with only the `col_names`
-/// set of columns.
-struct ApplicabilityVisitor<'a> {
-    col_names: &'a [String],
-    is_applicable: &'a mut bool,
-}
-
-impl ApplicabilityVisitor<'_> {
-    fn visit_volatility(self, volatility: Volatility) -> Recursion<Self> {
-        match volatility {
-            Volatility::Immutable => Recursion::Continue(self),
-            // TODO: Stable functions could be `applicable`, but that would require access to the context
-            Volatility::Stable | Volatility::Volatile => {
-                *self.is_applicable = false;
-                Recursion::Stop(self)
-            }
-        }
-    }
-}
-
-impl ExpressionVisitor for ApplicabilityVisitor<'_> {
-    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-        let rec = match expr {
+/// Check whether the given expression can be resolved using only the columns `col_names`.
+/// This means that if this function returns true:
+/// - the table provider can filter the table partition values with this expression
+/// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
+/// was performed
+pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
+    let mut is_applicable = true;
+    expr.apply(&mut |expr| {
+        Ok(match expr {
             Expr::Column(Column { ref name, .. }) => {
-                *self.is_applicable &= self.col_names.contains(name);
-                Recursion::Stop(self) // leaf node anyway
+                is_applicable &= col_names.contains(name);
+                if is_applicable {
+                    VisitRecursion::Skip
+                } else {
+                    VisitRecursion::Stop
+                }
             }
             Expr::Literal(_)
             | Expr::Alias(_, _)
@@ -102,15 +90,31 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::SimilarTo { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
-            | Expr::Case { .. } => Recursion::Continue(self),
+            | Expr::Case { .. } => VisitRecursion::Continue,
 
-            Expr::ScalarFunction { fun, .. } => self.visit_volatility(fun.volatility()),
-            Expr::ScalarUDF { fun, .. } => {
-                self.visit_volatility(fun.signature.volatility)
+            Expr::ScalarFunction(scalar_function) => {
+                match scalar_function.fun.volatility() {
+                    Volatility::Immutable => VisitRecursion::Continue,
+                    // TODO: Stable functions could be `applicable`, but that would require access to the context
+                    Volatility::Stable | Volatility::Volatile => {
+                        is_applicable = false;
+                        VisitRecursion::Stop
+                    }
+                }
+            }
+            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
+                match fun.signature.volatility {
+                    Volatility::Immutable => VisitRecursion::Continue,
+                    // TODO: Stable functions could be `applicable`, but that would require access to the context
+                    Volatility::Stable | Volatility::Volatile => {
+                        is_applicable = false;
+                        VisitRecursion::Stop
+                    }
+                }
             }
 
             // TODO other expressions are not handled yet:
@@ -124,24 +128,10 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::Placeholder { .. } => {
-                *self.is_applicable = false;
-                Recursion::Stop(self)
+                is_applicable = false;
+                VisitRecursion::Stop
             }
-        };
-        Ok(rec)
-    }
-}
-
-/// Check whether the given expression can be resolved using only the columns `col_names`.
-/// This means that if this function returns true:
-/// - the table provider can filter the table partition values with this expression
-/// - the expression can be marked as `TableProviderFilterPushDown::Exact` once this filtering
-/// was performed
-pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
-    let mut is_applicable = true;
-    expr.accept(ApplicabilityVisitor {
-        col_names,
-        is_applicable: &mut is_applicable,
+        })
     })
     .unwrap();
     is_applicable
@@ -388,7 +378,16 @@ fn parse_partitions_for_path<'a>(
     for (part, pn) in subpath.zip(table_partition_cols) {
         match part.split_once('=') {
             Some((name, val)) if name == pn => part_values.push(val),
-            _ => return None,
+            _ => {
+                debug!(
+                    "Ignoring file: file_path='{}', table_path='{}', part='{}', partition_col='{}'",
+                    file_path,
+                    table_path,
+                    part,
+                    pn,
+                );
+                return None;
+            }
         }
     }
     Some(part_values)

@@ -40,7 +40,9 @@ use datafusion::{
 };
 use datafusion_common::{
     context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
+    Result,
 };
+use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -72,11 +74,11 @@ impl From<to_proto::Error> for DataFusionError {
 }
 
 pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
-    fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
+    fn try_decode(buf: &[u8]) -> Result<Self>
     where
         Self: Sized;
 
-    fn try_encode<B>(&self, buf: &mut B) -> Result<(), DataFusionError>
+    fn try_encode<B>(&self, buf: &mut B) -> Result<()>
     where
         B: BufMut,
         Self: Sized;
@@ -85,12 +87,12 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<LogicalPlan, DataFusionError>;
+    ) -> Result<LogicalPlan>;
 
     fn try_from_logical_plan(
         plan: &LogicalPlan,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<Self, DataFusionError>
+    ) -> Result<Self>
     where
         Self: Sized;
 }
@@ -101,26 +103,22 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         buf: &[u8],
         inputs: &[LogicalPlan],
         ctx: &SessionContext,
-    ) -> Result<Extension, DataFusionError>;
+    ) -> Result<Extension>;
 
-    fn try_encode(
-        &self,
-        node: &Extension,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError>;
+    fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()>;
 
     fn try_decode_table_provider(
         &self,
         buf: &[u8],
         schema: SchemaRef,
         ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>, DataFusionError>;
+    ) -> Result<Arc<dyn TableProvider>>;
 
     fn try_encode_table_provider(
         &self,
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError>;
+    ) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -132,17 +130,13 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &[u8],
         _inputs: &[LogicalPlan],
         _ctx: &SessionContext,
-    ) -> Result<Extension, DataFusionError> {
+    ) -> Result<Extension> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
     }
 
-    fn try_encode(
-        &self,
-        _node: &Extension,
-        _buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
@@ -153,7 +147,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         _buf: &[u8],
         _schema: SchemaRef,
         _ctx: &SessionContext,
-    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+    ) -> Result<Arc<dyn TableProvider>> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
@@ -163,7 +157,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         &self,
         _node: Arc<dyn TableProvider>,
         _buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError> {
+    ) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
         ))
@@ -184,7 +178,7 @@ macro_rules! into_logical_plan {
 fn from_owned_table_reference(
     table_ref: Option<&protobuf::OwnedTableReference>,
     error_context: &str,
-) -> Result<OwnedTableReference, DataFusionError> {
+) -> Result<OwnedTableReference> {
     let table_ref = table_ref.ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Protobuf deserialization error, {error_context} was missing required field name."
@@ -195,7 +189,7 @@ fn from_owned_table_reference(
 }
 
 impl AsLogicalPlan for LogicalPlanNode {
-    fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
+    fn try_decode(buf: &[u8]) -> Result<Self>
     where
         Self: Sized,
     {
@@ -204,7 +198,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         })
     }
 
-    fn try_encode<B>(&self, buf: &mut B) -> Result<(), DataFusionError>
+    fn try_encode<B>(&self, buf: &mut B) -> Result<()>
     where
         B: BufMut,
         Self: Sized,
@@ -218,7 +212,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         &self,
         ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<LogicalPlan, DataFusionError> {
+    ) -> Result<LogicalPlan> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
                 "logical_plan::from_proto() Unsupported logical plan '{self:?}'"
@@ -263,7 +257,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
                             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                                new_proj, alias,
+                                new_proj,
+                                alias.clone(),
                             )?))
                         }
                     },
@@ -516,7 +511,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
 
-                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
@@ -533,7 +528,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
-                }))
+                })))
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
@@ -547,7 +542,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::CreateView(CreateView {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_owned_table_reference(
                         create_view.name.as_ref(),
                         "CreateView",
@@ -555,7 +550,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
-                }))
+                })))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
@@ -564,11 +559,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                    schema_name: create_catalog_schema.schema_name.clone(),
-                    if_not_exists: create_catalog_schema.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                    CreateCatalogSchema {
+                        schema_name: create_catalog_schema.schema_name.clone(),
+                        if_not_exists: create_catalog_schema.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
@@ -577,11 +574,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                    catalog_name: create_catalog.catalog_name.clone(),
-                    if_not_exists: create_catalog.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                    CreateCatalog {
+                        catalog_name: create_catalog.catalog_name.clone(),
+                        if_not_exists: create_catalog.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
@@ -600,9 +599,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::SubqueryAlias(aliased_relation) => {
                 let input: LogicalPlan =
                     into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input)
-                    .alias(&aliased_relation.alias)?
-                    .build()
+                let alias = from_owned_table_reference(
+                    aliased_relation.alias.as_ref(),
+                    "SubqueryAlias",
+                )?;
+                LogicalPlanBuilder::from(input).alias(alias)?.build()
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
@@ -683,7 +684,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .inputs
                     .iter()
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 if input_plans.len() < 2 {
                     return  Err( DataFusionError::Internal(String::from(
@@ -710,7 +711,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input_plans: Vec<LogicalPlan> = inputs
                     .iter()
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 let extension_node =
                     extension_codec.try_decode(node, &input_plans, ctx)?;
@@ -773,7 +774,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     fn try_from_logical_plan(
         plan: &LogicalPlan,
         extension_codec: &dyn LogicalExtensionCodec,
-    ) -> Result<Self, DataFusionError>
+    ) -> Result<Self>
     where
         Self: Sized,
     {
@@ -1076,7 +1077,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
                         protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
-                            alias: alias.clone(),
+                            alias: Some(alias.to_owned_reference().into()),
                         },
                     ))),
                 })
@@ -1170,20 +1171,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable(CreateExternalTable {
-                name,
-                location,
-                file_type,
-                has_header,
-                delimiter,
-                schema: df_schema,
-                table_partition_cols,
-                if_not_exists,
-                definition,
-                file_compression_type,
-                order_exprs,
-                options,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                CreateExternalTable {
+                    name,
+                    location,
+                    file_type,
+                    has_header,
+                    delimiter,
+                    schema: df_schema,
+                    table_partition_cols,
+                    if_not_exists,
+                    definition,
+                    file_compression_type,
+                    order_exprs,
+                    options,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
                         name: Some(name.clone().into()),
@@ -1204,12 +1207,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateView(CreateView {
+            LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 input,
                 or_replace,
                 definition,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
                         name: Some(name.clone().into()),
@@ -1222,11 +1225,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists,
-                schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name,
+                    if_not_exists,
+                    schema: df_schema,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
@@ -1235,11 +1240,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateCatalog(CreateCatalog {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalog(CreateCatalog {
                 catalog_name,
                 if_not_exists,
                 schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalog(
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
@@ -1286,7 +1291,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )
                     })
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Union(
                         protobuf::UnionNode { inputs },
@@ -1325,7 +1330,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )
                     })
-                    .collect::<Result<_, DataFusionError>>()?;
+                    .collect::<Result<_>>()?;
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Extension(
@@ -1358,17 +1363,20 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Unnest(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Unnest",
             )),
-            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
-            LogicalPlan::DropTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
-            LogicalPlan::DropView(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropView(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropView",
             )),
-            LogicalPlan::SetVariable(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for SetVariable",
+            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropCatalogSchema",
+            )),
+            LogicalPlan::Statement(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for Statement",
             )),
             LogicalPlan::Dml(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Dml",
@@ -1389,7 +1397,7 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
-    use arrow::datatypes::{Schema, SchemaRef};
+    use arrow::datatypes::{Fields, Schema, SchemaRef, UnionFields};
     use arrow::{
         array::ArrayRef,
         datatypes::{
@@ -1406,15 +1414,16 @@ mod roundtrip_tests {
         create_udf, CsvReadOptions, SessionConfig, SessionContext,
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
-    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
+    use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
     use datafusion_expr::expr::{
-        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
+        ScalarUDF, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction,
         BuiltinScalarFunction::{Sqrt, Substr},
-        Expr, LogicalPlan, Operator, Volatility,
+        Expr, LogicalPlan, Operator, TryCast, Volatility,
     };
     use datafusion_expr::{
         create_udaf, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
@@ -1451,12 +1460,12 @@ mod roundtrip_tests {
         roundtrip_json_test(&proto);
     }
 
-    fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {
-        Box::new(Field::new(name, dt, nullable))
+    fn new_arc_field(name: &str, dt: DataType, nullable: bool) -> Arc<Field> {
+        Arc::new(Field::new(name, dt, nullable))
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -1489,17 +1498,13 @@ mod roundtrip_tests {
             _buf: &[u8],
             _inputs: &[LogicalPlan],
             _ctx: &SessionContext,
-        ) -> Result<Extension, DataFusionError> {
+        ) -> Result<Extension> {
             Err(DataFusionError::NotImplemented(
                 "No extension codec provided".to_string(),
             ))
         }
 
-        fn try_encode(
-            &self,
-            _node: &Extension,
-            _buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
             Err(DataFusionError::NotImplemented(
                 "No extension codec provided".to_string(),
             ))
@@ -1510,7 +1515,7 @@ mod roundtrip_tests {
             buf: &[u8],
             schema: SchemaRef,
             _ctx: &SessionContext,
-        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        ) -> Result<Arc<dyn TableProvider>> {
             let msg = TestTableProto::decode(buf).map_err(|_| {
                 DataFusionError::Internal("Error decoding test table".to_string())
             })?;
@@ -1525,7 +1530,7 @@ mod roundtrip_tests {
             &self,
             node: Arc<dyn TableProvider>,
             buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        ) -> Result<()> {
             let table = node
                 .as_ref()
                 .as_any()
@@ -1541,7 +1546,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_custom_tables() -> Result<(), DataFusionError> {
+    async fn roundtrip_custom_tables() -> Result<()> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
         table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
@@ -1566,7 +1571,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_aggregation() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_aggregation() -> Result<()> {
         let ctx = SessionContext::new();
 
         let schema = Schema::new(vec![
@@ -1593,7 +1598,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_single_count_distinct() -> Result<(), DataFusionError> {
+    async fn roundtrip_single_count_distinct() -> Result<()> {
         let ctx = SessionContext::new();
 
         let schema = Schema::new(vec![
@@ -1619,7 +1624,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_with_extension() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -1631,7 +1636,7 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_logical_plan_with_view_scan() -> Result<(), DataFusionError> {
+    async fn roundtrip_logical_plan_with_view_scan() -> Result<()> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
@@ -1728,7 +1733,7 @@ mod roundtrip_tests {
             buf: &[u8],
             inputs: &[LogicalPlan],
             ctx: &SessionContext,
-        ) -> Result<Extension, DataFusionError> {
+        ) -> Result<Extension> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
                     DataFusionError::Internal(format!(
@@ -1758,11 +1763,7 @@ mod roundtrip_tests {
             }
         }
 
-        fn try_encode(
-            &self,
-            node: &Extension,
-            buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        fn try_encode(&self, node: &Extension, buf: &mut Vec<u8>) -> Result<()> {
             if let Some(exec) = node.node.as_any().downcast_ref::<TopKPlanNode>() {
                 let proto = proto::TopKPlanProto {
                     k: exec.k as u64,
@@ -1788,7 +1789,7 @@ mod roundtrip_tests {
             _buf: &[u8],
             _schema: SchemaRef,
             _ctx: &SessionContext,
-        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        ) -> Result<Arc<dyn TableProvider>> {
             Err(DataFusionError::Internal(
                 "unsupported plan type".to_string(),
             ))
@@ -1798,7 +1799,7 @@ mod roundtrip_tests {
             &self,
             _node: Arc<dyn TableProvider>,
             _buf: &mut Vec<u8>,
-        ) -> Result<(), DataFusionError> {
+        ) -> Result<()> {
             Err(DataFusionError::Internal(
                 "unsupported plan type".to_string(),
             ))
@@ -1811,7 +1812,7 @@ mod roundtrip_tests {
             // Should fail due to empty values
             ScalarValue::Struct(
                 Some(vec![]),
-                Box::new(vec![Field::new("item", DataType::Int16, true)]),
+                vec![Field::new("item", DataType::Int16, true)].into(),
             ),
             // Should fail due to inconsistent types in the list
             ScalarValue::new_list(
@@ -1819,14 +1820,14 @@ mod roundtrip_tests {
                     ScalarValue::Int16(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                DataType::List(new_box_field("item", DataType::Int16, true)),
+                DataType::List(new_arc_field("item", DataType::Int16, true)),
             ),
             ScalarValue::new_list(
                 Some(vec![
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(Some(32.0)),
                 ]),
-                DataType::List(new_box_field("item", DataType::Int16, true)),
+                DataType::List(new_arc_field("item", DataType::Int16, true)),
             ),
             ScalarValue::new_list(
                 Some(vec![
@@ -1839,7 +1840,7 @@ mod roundtrip_tests {
                 Some(vec![
                     ScalarValue::new_list(
                         None,
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        DataType::List(new_arc_field("level2", DataType::Float32, true)),
                     ),
                     ScalarValue::new_list(
                         Some(vec![
@@ -1849,20 +1850,20 @@ mod roundtrip_tests {
                             ScalarValue::Float32(Some(2.0)),
                             ScalarValue::Float32(Some(1.0)),
                         ]),
-                        DataType::List(new_box_field("level2", DataType::Float32, true)),
+                        DataType::List(new_arc_field("level2", DataType::Float32, true)),
                     ),
                     ScalarValue::new_list(
                         None,
-                        DataType::List(new_box_field(
+                        DataType::List(new_arc_field(
                             "lists are typed inconsistently",
                             DataType::Int16,
                             true,
                         )),
                     ),
                 ]),
-                DataType::List(new_box_field(
+                DataType::List(new_arc_field(
                     "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
+                    DataType::List(new_arc_field("level2", DataType::Float32, true)),
                     true,
                 )),
             ),
@@ -1958,19 +1959,19 @@ mod roundtrip_tests {
             ScalarValue::Time64Nanosecond(None),
             ScalarValue::TimestampNanosecond(Some(0), None),
             ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
-            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampNanosecond(None, None),
             ScalarValue::TimestampMicrosecond(Some(0), None),
             ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampMicrosecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampMicrosecond(None, None),
             ScalarValue::TimestampMillisecond(Some(0), None),
             ScalarValue::TimestampMillisecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMillisecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampMillisecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampMillisecond(None, None),
             ScalarValue::TimestampSecond(Some(0), None),
             ScalarValue::TimestampSecond(Some(i64::MAX), None),
-            ScalarValue::TimestampSecond(Some(0), Some("UTC".to_string())),
+            ScalarValue::TimestampSecond(Some(0), Some("UTC".into())),
             ScalarValue::TimestampSecond(None, None),
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(0, 0))),
             ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(1, 2))),
@@ -2013,7 +2014,7 @@ mod roundtrip_tests {
                         DataType::Float32,
                     ),
                 ]),
-                DataType::List(new_box_field("item", DataType::Float32, true)),
+                DataType::List(new_arc_field("item", DataType::Float32, true)),
             ),
             ScalarValue::Dictionary(
                 Box::new(DataType::Int32),
@@ -2032,14 +2033,14 @@ mod roundtrip_tests {
                     ScalarValue::Int32(Some(23)),
                     ScalarValue::Boolean(Some(false)),
                 ]),
-                Box::new(vec![
+                Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("b", DataType::Boolean, false),
                 ]),
             ),
             ScalarValue::Struct(
                 None,
-                Box::new(vec![
+                Fields::from(vec![
                     Field::new("a", DataType::Int32, true),
                     Field::new("a", DataType::Boolean, false),
                 ]),
@@ -2089,10 +2090,10 @@ mod roundtrip_tests {
             DataType::Utf8,
             DataType::LargeUtf8,
             // Recursive list tests
-            DataType::List(new_box_field("level1", DataType::Boolean, true)),
-            DataType::List(new_box_field(
+            DataType::List(new_arc_field("level1", DataType::Boolean, true)),
+            DataType::List(new_arc_field(
                 "Level1",
-                DataType::List(new_box_field("level2", DataType::Date32, true)),
+                DataType::List(new_arc_field("level2", DataType::Date32, true)),
                 true,
             )),
         ];
@@ -2151,10 +2152,10 @@ mod roundtrip_tests {
             DataType::LargeUtf8,
             DataType::Decimal128(7, 12),
             // Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Binary, true)),
-            DataType::List(new_box_field(
+            DataType::List(new_arc_field("Level1", DataType::Binary, true)),
+            DataType::List(new_arc_field(
                 "Level1",
-                DataType::List(new_box_field(
+                DataType::List(new_arc_field(
                     "Level2",
                     DataType::FixedSizeBinary(53),
                     false,
@@ -2162,11 +2163,11 @@ mod roundtrip_tests {
                 true,
             )),
             // Fixed size lists
-            DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
+            DataType::FixedSizeList(new_arc_field("Level1", DataType::Binary, true), 4),
             DataType::FixedSizeList(
-                new_box_field(
+                new_arc_field(
                     "Level1",
-                    DataType::List(new_box_field(
+                    DataType::List(new_arc_field(
                         "Level2",
                         DataType::FixedSizeBinary(53),
                         false,
@@ -2176,74 +2177,78 @@ mod roundtrip_tests {
                 41,
             ),
             // Struct Testing
-            DataType::Struct(vec![
+            DataType::Struct(Fields::from(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Struct(vec![
+            ])),
+            DataType::Struct(Fields::from(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
                 Field::new("datatype", DataType::Binary, false),
                 Field::new(
                     "nested_struct",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("nullable", DataType::Boolean, false),
                         Field::new("name", DataType::Utf8, false),
                         Field::new("datatype", DataType::Binary, false),
-                    ]),
+                    ])),
                     true,
                 ),
-            ]),
+            ])),
             DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ],
-                vec![7, 5, 3],
+                UnionFields::new(
+                    vec![7, 5, 3],
+                    vec![
+                        Field::new("nullable", DataType::Boolean, false),
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("datatype", DataType::Binary, false),
+                    ],
+                ),
                 UnionMode::Sparse,
             ),
             DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                    Field::new(
-                        "nested_struct",
-                        DataType::Struct(vec![
-                            Field::new("nullable", DataType::Boolean, false),
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("datatype", DataType::Binary, false),
-                        ]),
-                        true,
-                    ),
-                ],
-                vec![5, 8, 1],
+                UnionFields::new(
+                    vec![5, 8, 1],
+                    vec![
+                        Field::new("nullable", DataType::Boolean, false),
+                        Field::new("name", DataType::Utf8, false),
+                        Field::new("datatype", DataType::Binary, false),
+                        Field::new_struct(
+                            "nested_struct",
+                            vec![
+                                Field::new("nullable", DataType::Boolean, false),
+                                Field::new("name", DataType::Utf8, false),
+                                Field::new("datatype", DataType::Binary, false),
+                            ],
+                            true,
+                        ),
+                    ],
+                ),
                 UnionMode::Dense,
             ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
-                Box::new(DataType::Struct(vec![
+                Box::new(DataType::Struct(Fields::from(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
-                ])),
+                ]))),
             ),
             DataType::Dictionary(
                 Box::new(DataType::Decimal128(10, 50)),
                 Box::new(DataType::FixedSizeList(
-                    new_box_field("Level1", DataType::Binary, true),
+                    new_arc_field("Level1", DataType::Binary, true),
                     4,
                 )),
             ),
             DataType::Map(
-                new_box_field(
+                new_arc_field(
                     "entries",
-                    DataType::Struct(vec![
+                    DataType::Struct(Fields::from(vec![
                         Field::new("keys", DataType::Utf8, false),
                         Field::new("values", DataType::Int32, true),
-                    ]),
+                    ])),
                     true,
                 ),
                 false,
@@ -2278,7 +2283,7 @@ mod roundtrip_tests {
             ScalarValue::TimestampNanosecond(None, None),
             ScalarValue::List(
                 None,
-                Box::new(Field::new("item", DataType::Boolean, false)),
+                Arc::new(Field::new("item", DataType::Boolean, false)),
             ),
         ];
 
@@ -2402,6 +2407,21 @@ mod roundtrip_tests {
     }
 
     #[test]
+    fn roundtrip_try_cast() {
+        let test_expr =
+            Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+
+        let test_expr =
+            Expr::TryCast(TryCast::new(Box::new(lit("not a bool")), DataType::Boolean));
+
+        let ctx = SessionContext::new();
+        roundtrip_expr_test(test_expr, ctx);
+    }
+
+    #[test]
     fn roundtrip_sort_expr() {
         let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
 
@@ -2419,11 +2439,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_inlist() {
-        let test_expr = Expr::InList {
-            expr: Box::new(lit(1.0_f32)),
-            list: vec![lit(2.0_f32)],
-            negated: true,
-        };
+        let test_expr = Expr::InList(InList::new(
+            Box::new(lit(1.0_f32)),
+            vec![lit(2.0_f32)],
+            true,
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2439,10 +2459,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_sqrt() {
-        let test_expr = Expr::ScalarFunction {
-            fun: Sqrt,
-            args: vec![col("col")],
-        };
+        let test_expr = Expr::ScalarFunction(ScalarFunction::new(Sqrt, vec![col("col")]));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
@@ -2585,11 +2602,11 @@ mod roundtrip_tests {
             Arc::new(vec![DataType::Float64, DataType::UInt32]),
         );
 
-        let test_expr = Expr::AggregateUDF {
-            fun: Arc::new(dummy_agg.clone()),
-            args: vec![lit(1.0_f64)],
-            filter: Some(Box::new(lit(true))),
-        };
+        let test_expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(dummy_agg.clone()),
+            vec![lit(1.0_f64)],
+            Some(Box::new(lit(true))),
+        ));
 
         let ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
@@ -2611,10 +2628,8 @@ mod roundtrip_tests {
             scalar_fn,
         );
 
-        let test_expr = Expr::ScalarUDF {
-            fun: Arc::new(udf.clone()),
-            args: vec![lit("")],
-        };
+        let test_expr =
+            Expr::ScalarUDF(ScalarUDF::new(Arc::new(udf.clone()), vec![lit("")]));
 
         let ctx = SessionContext::new();
         ctx.register_udf(udf);
@@ -2653,16 +2668,16 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_substr() {
         // substr(string, position)
-        let test_expr = Expr::ScalarFunction {
-            fun: Substr,
-            args: vec![col("col"), lit(1_i64)],
-        };
+        let test_expr = Expr::ScalarFunction(ScalarFunction::new(
+            Substr,
+            vec![col("col"), lit(1_i64)],
+        ));
 
         // substr(string, position, count)
-        let test_expr_with_count = Expr::ScalarFunction {
-            fun: Substr,
-            args: vec![col("col"), lit(1_i64), lit(1_i64)],
-        };
+        let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new(
+            Substr,
+            vec![col("col"), lit(1_i64), lit(1_i64)],
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx.clone());

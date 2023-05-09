@@ -41,14 +41,7 @@ impl PartialEq for PhysicalSortExpr {
 
 impl std::fmt::Display for PhysicalSortExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let opts_string = match (self.options.descending, self.options.nulls_first) {
-            (true, true) => "DESC",
-            (true, false) => "DESC NULLS LAST",
-            (false, true) => "ASC",
-            (false, false) => "ASC NULLS LAST",
-        };
-
-        write!(f, "{} {}", self.expr, opts_string)
+        write!(f, "{} {}", self.expr, to_str(&self.options))
     }
 }
 
@@ -68,5 +61,170 @@ impl PhysicalSortExpr {
             values: array_to_sort,
             options: Some(self.options),
         })
+    }
+
+    /// Check whether sort expression satisfies [`PhysicalSortRequirement`].
+    ///
+    /// If sort options is Some in `PhysicalSortRequirement`, `expr`
+    /// and `options` field are compared for equality.
+    ///
+    /// If sort options is None in `PhysicalSortRequirement`, only
+    /// `expr` is compared for equality.
+    pub fn satisfy(&self, requirement: &PhysicalSortRequirement) -> bool {
+        self.expr.eq(&requirement.expr)
+            && requirement
+                .options
+                .map_or(true, |opts| self.options == opts)
+    }
+}
+
+/// Represents sort requirement associated with a plan
+///
+/// If the requirement incudes [`SortOptions`] then both the
+/// expression *and* the sort options must match.
+///
+/// If the requirement does not include [`SortOptions`]) then only the
+/// expressions must match.
+///
+/// # Examples
+///
+/// With sort options (`A`, `DESC NULLS FIRST`):
+/// * `ORDER BY A DESC NULLS FIRST` matches
+/// * `ORDER BY A ASC  NULLS FIRST` does not match (`ASC` vs `DESC`)
+/// * `ORDER BY B DESC NULLS FIRST` does not match (different expr)
+///
+/// Without sort options (`A`, None):
+/// * `ORDER BY A DESC NULLS FIRST` matches
+/// * `ORDER BY A ASC  NULLS FIRST` matches (`ASC` and `NULL` options ignored)
+/// * `ORDER BY B DESC NULLS FIRST` does not match  (different expr)
+#[derive(Clone, Debug)]
+pub struct PhysicalSortRequirement {
+    /// Physical expression representing the column to sort
+    expr: Arc<dyn PhysicalExpr>,
+    /// Option to specify how the given column should be sorted.
+    /// If unspecified, there are no constraints on sort options.
+    options: Option<SortOptions>,
+}
+
+impl From<PhysicalSortRequirement> for PhysicalSortExpr {
+    fn from(value: PhysicalSortRequirement) -> Self {
+        value.into_sort_expr()
+    }
+}
+
+impl From<PhysicalSortExpr> for PhysicalSortRequirement {
+    fn from(value: PhysicalSortExpr) -> Self {
+        PhysicalSortRequirement::new(value.expr, Some(value.options))
+    }
+}
+
+impl PartialEq for PhysicalSortRequirement {
+    fn eq(&self, other: &PhysicalSortRequirement) -> bool {
+        self.options == other.options && self.expr.eq(&other.expr)
+    }
+}
+
+impl std::fmt::Display for PhysicalSortRequirement {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let opts_string = self.options.as_ref().map_or("NA", to_str);
+        write!(f, "{} {}", self.expr, opts_string)
+    }
+}
+
+impl PhysicalSortRequirement {
+    /// Creates a new requirement.
+    ///
+    /// If `options` is `Some(..)`, creates an `exact` requirement,
+    /// which must match both `options` and `expr`.
+    ///
+    /// If `options` is `None`, Creates a new `expr_only` requirement,
+    /// which must match only `expr`.
+    ///
+    /// See [`PhysicalSortRequirement`] for examples.
+    pub fn new(expr: Arc<dyn PhysicalExpr>, options: Option<SortOptions>) -> Self {
+        Self { expr, options }
+    }
+
+    /// Replace the required expression for this requirement with the new one
+    pub fn with_expr(mut self, expr: Arc<dyn PhysicalExpr>) -> Self {
+        self.expr = expr;
+        self
+    }
+
+    /// Converts the `PhysicalSortRequirement` to `PhysicalSortExpr`.
+    /// If required ordering is `None` for an entry, the default
+    /// ordering `ASC, NULLS LAST` is used.
+    ///
+    /// The default is picked to be consistent with
+    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>
+    pub fn into_sort_expr(self) -> PhysicalSortExpr {
+        let Self { expr, options } = self;
+
+        let options = options.unwrap_or(SortOptions {
+            descending: false,
+            nulls_first: false,
+        });
+        PhysicalSortExpr { expr, options }
+    }
+
+    /// Returns whether this requirement is equal or more specific than `other`.
+    pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
+        self.expr.eq(&other.expr)
+            && other.options.map_or(true, |other_opts| {
+                self.options.map_or(false, |opts| opts == other_opts)
+            })
+    }
+
+    /// Returns [`PhysicalSortRequirement`] that requires the exact
+    /// sort of the [`PhysicalSortExpr`]s in `ordering`
+    ///
+    /// This method takes `&'a PhysicalSortExpr` to make it easy to
+    /// use implementing [`ExecutionPlan::required_input_ordering`].
+    ///
+    /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+    pub fn from_sort_exprs<'a>(
+        ordering: impl IntoIterator<Item = &'a PhysicalSortExpr>,
+    ) -> Vec<PhysicalSortRequirement> {
+        ordering
+            .into_iter()
+            .cloned()
+            .map(PhysicalSortRequirement::from)
+            .collect()
+    }
+
+    /// Converts an iterator of [`PhysicalSortRequirement`] into a Vec
+    /// of [`PhysicalSortExpr`]s.
+    ///
+    /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
+    /// for each entry in the input. If required ordering is None for an entry
+    /// default ordering `ASC, NULLS LAST` if given (see [`Self::into_sort_expr`])
+    pub fn to_sort_exprs(
+        requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
+    ) -> Vec<PhysicalSortExpr> {
+        requirements
+            .into_iter()
+            .map(PhysicalSortExpr::from)
+            .collect()
+    }
+
+    /// Returns the expr for this requirement
+    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+
+    /// Returns the required options, for this requirement
+    pub fn options(&self) -> Option<SortOptions> {
+        self.options
+    }
+}
+
+/// Returns the SQL string representation of the given [SortOptions] object.
+#[inline]
+fn to_str(options: &SortOptions) -> &str {
+    match (options.descending, options.nulls_first) {
+        (true, true) => "DESC",
+        (true, false) => "DESC NULLS LAST",
+        (false, true) => "ASC",
+        (false, false) => "ASC NULLS LAST",
     }
 }

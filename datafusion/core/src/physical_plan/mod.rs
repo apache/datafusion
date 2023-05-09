@@ -32,11 +32,13 @@ use arrow::record_batch::RecordBatch;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::DisplayFormatType;
-use futures::stream::Stream;
+use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
 use std::fmt::Debug;
 
+use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -110,7 +112,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn output_partitioning(&self) -> Partitioning;
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
         Ok(false)
@@ -141,7 +143,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
         vec![None; self.children().len()]
     }
 
@@ -184,6 +186,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Get the EquivalenceProperties within the plan
     fn equivalence_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new(self.schema())
+    }
+
+    /// Get the OrderingEquivalenceProperties within the plan
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        OrderingEquivalenceProperties::new(self.schema())
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
@@ -269,7 +276,7 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     let old_children = plan.children();
     if children.len() != old_children.len() {
         Err(DataFusionError::Internal(
@@ -281,9 +288,9 @@ pub fn with_new_children_if_necessary(
             .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
-        plan.with_new_children(children)
+        Ok(Transformed::Yes(plan.with_new_children(children)?))
     } else {
-        Ok(plan)
+        Ok(Transformed::No(plan))
     }
 }
 
@@ -321,7 +328,7 @@ pub fn with_new_children_if_necessary(
 ///   assert_eq!("CoalesceBatchesExec: target_batch_size=8192\
 ///              \n  FilterExec: a@0 < 5\
 ///              \n    RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1\
-///              \n      CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///              \n      CsvExec: file_groups={1 group: [[WORKING_DIR/tests/data/example.csv]]}, projection=[a], has_header=true",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());
@@ -442,11 +449,21 @@ pub async fn collect_partitioned(
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
     let streams = execute_stream_partitioned(plan, context)?;
-    let mut batches = Vec::with_capacity(streams.len());
-    for stream in streams {
-        batches.push(common::collect(stream).await?);
-    }
-    Ok(batches)
+
+    // Execute the plan and collect the results into batches.
+    let handles = streams
+        .into_iter()
+        .enumerate()
+        .map(|(idx, stream)| async move {
+            let handle = tokio::task::spawn(stream.try_collect());
+            AbortOnDropSingle::new(handle).await.map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "collect_partitioned partition {idx} panicked: {e}"
+                ))
+            })?
+        });
+
+    futures::future::try_join_all(handles).await
 }
 
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
@@ -590,11 +607,11 @@ impl Distribution {
 
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
-use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
 };
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -664,6 +681,7 @@ pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{

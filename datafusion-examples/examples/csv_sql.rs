@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::datasource::file_format::file_type::FileCompressionType;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 
@@ -46,6 +47,23 @@ async fn main() -> Result<()> {
         .await?;
 
     // print the results
+    df.show().await?;
+
+    // query compressed CSV with specific options
+    let csv_options = CsvReadOptions::default()
+        .has_header(true)
+        .file_compression_type(FileCompressionType::GZIP)
+        .file_extension("csv.gz");
+    let df = ctx
+        .read_csv(
+            &format!("{testdata}/csv/aggregate_test_100.csv.gz"),
+            csv_options,
+        )
+        .await?;
+    let df = df
+        .filter(col("c1").eq(lit("a")))?
+        .select_columns(&["c2", "c3"])?;
+
     df.show().await?;
 
     Ok(())

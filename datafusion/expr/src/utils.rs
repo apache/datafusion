@@ -18,21 +18,21 @@
 //! Expression utilities
 
 use crate::expr::{Sort, WindowFunction};
-use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
-use crate::expr_visitor::{
-    inspect_expr_pre, ExprVisitable, ExpressionVisitor, Recursion,
-};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Unnest, Values, Window,
+    Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
+    Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest,
+    Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    Operator, TableScan, TryCast,
+    BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
+    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
+    TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::tree_node::{
+    RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
+};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
@@ -70,6 +70,182 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
+/// The [power set] (or powerset) of a set S is the set of all subsets of S, \
+/// including the empty set and S itself.
+///
+/// Example:
+///
+/// If S is the set {x, y, z}, then all the subsets of S are \
+///  {} \
+///  {x} \
+///  {y} \
+///  {z} \
+///  {x, y} \
+///  {x, z} \
+///  {y, z} \
+///  {x, y, z} \
+///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
+///
+/// [power set]: https://en.wikipedia.org/wiki/Power_set
+fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
+    if slice.len() >= 64 {
+        return Err("The size of the set must be less than 64.".into());
+    }
+
+    let mut v = Vec::new();
+    for mask in 0..(1 << slice.len()) {
+        let mut ss = vec![];
+        let mut bitset = mask;
+        while bitset > 0 {
+            let rightmost: u64 = bitset & !(bitset - 1);
+            let idx = rightmost.trailing_zeros();
+            let item = slice.get(idx as usize).unwrap();
+            ss.push(item);
+            // zero the trailing bit
+            bitset &= bitset - 1;
+        }
+        v.push(ss);
+    }
+    Ok(v)
+}
+
+/// check the number of expressions contained in the grouping_set
+fn check_grouping_set_size_limit(size: usize) -> Result<()> {
+    let max_grouping_set_size = 65535;
+    if size > max_grouping_set_size {
+        return Err(DataFusionError::Plan(format!("The number of group_expression in grouping_set exceeds the maximum limit {max_grouping_set_size}, found {size}")));
+    }
+
+    Ok(())
+}
+
+/// check the number of grouping_set contained in the grouping sets
+fn check_grouping_sets_size_limit(size: usize) -> Result<()> {
+    let max_grouping_sets_size = 4096;
+    if size > max_grouping_sets_size {
+        return Err(DataFusionError::Plan(format!("The number of grouping_set in grouping_sets exceeds the maximum limit {max_grouping_sets_size}, found {size}")));
+    }
+
+    Ok(())
+}
+
+/// Merge two grouping_set
+///
+///
+/// Example:
+///
+/// (A, B), (C, D) -> (A, B, C, D)
+///
+/// Error:
+///
+/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit
+fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
+    check_grouping_set_size_limit(left.len() + right.len())?;
+    Ok(left.iter().chain(right.iter()).cloned().collect())
+}
+
+/// Compute the cross product of two grouping_sets
+///
+///
+/// Example:
+///
+/// \[(A, B), (C, D)], [(E), (F)\] -> \[(A, B, E), (A, B, F), (C, D, E), (C, D, F)\]
+///
+/// Error:
+///
+/// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit \
+/// [`DataFusionError`] The number of grouping_set in grouping_sets exceeds the maximum limit
+fn cross_join_grouping_sets<T: Clone>(
+    left: &[Vec<T>],
+    right: &[Vec<T>],
+) -> Result<Vec<Vec<T>>> {
+    let grouping_sets_size = left.len() * right.len();
+
+    check_grouping_sets_size_limit(grouping_sets_size)?;
+
+    let mut result = Vec::with_capacity(grouping_sets_size);
+    for le in left {
+        for re in right {
+            result.push(merge_grouping_set(le, re)?);
+        }
+    }
+    Ok(result)
+}
+
+/// Convert multiple grouping expressions into one [`GroupingSet::GroupingSets`],\
+/// if the grouping expression does not contain [`Expr::GroupingSet`] or only has one expression,\
+/// no conversion will be performed.
+///
+/// e.g.
+///
+/// person.id,\
+/// GROUPING SETS ((person.age, person.salary),(person.age)),\
+/// ROLLUP(person.state, person.birth_date)
+///
+/// =>
+///
+/// GROUPING SETS (\
+///   (person.id, person.age, person.salary),\
+///   (person.id, person.age, person.salary, person.state),\
+///   (person.id, person.age, person.salary, person.state, person.birth_date),\
+///   (person.id, person.age),\
+///   (person.id, person.age, person.state),\
+///   (person.id, person.age, person.state, person.birth_date)\
+/// )
+pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
+    let has_grouping_set = group_expr
+        .iter()
+        .any(|expr| matches!(expr, Expr::GroupingSet(_)));
+    if !has_grouping_set || group_expr.len() == 1 {
+        return Ok(group_expr);
+    }
+    // only process mix grouping sets
+    let partial_sets = group_expr
+        .iter()
+        .map(|expr| {
+            let exprs = match expr {
+                Expr::GroupingSet(GroupingSet::GroupingSets(grouping_sets)) => {
+                    check_grouping_sets_size_limit(grouping_sets.len())?;
+                    grouping_sets.iter().map(|e| e.iter().collect()).collect()
+                }
+                Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
+                    let grouping_sets =
+                        powerset(group_exprs).map_err(DataFusionError::Plan)?;
+                    check_grouping_sets_size_limit(grouping_sets.len())?;
+                    grouping_sets
+                }
+                Expr::GroupingSet(GroupingSet::Rollup(group_exprs)) => {
+                    let size = group_exprs.len();
+                    let slice = group_exprs.as_slice();
+                    check_grouping_sets_size_limit(size * (size + 1) / 2 + 1)?;
+                    (0..(size + 1))
+                        .map(|i| slice[0..i].iter().collect())
+                        .collect()
+                }
+                expr => vec![vec![expr]],
+            };
+            Ok(exprs)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // cross join
+    let grouping_sets = partial_sets
+        .into_iter()
+        .map(Ok)
+        .reduce(|l, r| cross_join_grouping_sets(&l?, &r?))
+        .transpose()?
+        .map(|e| {
+            e.into_iter()
+                .map(|e| e.into_iter().cloned().collect())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(vec![Expr::GroupingSet(GroupingSet::GroupingSets(
+        grouping_sets,
+    ))])
+}
+
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
@@ -94,13 +270,11 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
             }
-            Expr::ScalarVariable(_, var_names) => {
-                accum.insert(Column::from_name(var_names.join(".")));
-            }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::Alias(_, _)
+            Expr::ScalarVariable(_, _)
+            | Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
@@ -121,15 +295,15 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
+            | Expr::ScalarFunction(..)
+            | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::GroupingSet(_)
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
@@ -416,50 +590,43 @@ fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
-    let Finder { exprs, .. } = expr
-        .accept(Finder::new(test_fn))
-        // pre_visit always returns OK, so this will always too
-        .expect("no way to return error during recursion");
+    let mut exprs = vec![];
+    expr.apply(&mut |expr| {
+        if test_fn(expr) {
+            if !(exprs.contains(expr)) {
+                exprs.push(expr.clone())
+            }
+            // stop recursing down this expr once we find a match
+            return Ok(VisitRecursion::Skip);
+        }
+
+        Ok(VisitRecursion::Continue)
+    })
+    // pre_visit always returns OK, so this will always too
+    .expect("no way to return error during recursion");
     exprs
 }
 
-// Visitor that find expressions that match a particular predicate
-struct Finder<'a, F>
+/// Recursively inspect an [`Expr`] and all its children.
+pub fn inspect_expr_pre<F, E>(expr: &Expr, mut f: F) -> Result<(), E>
 where
-    F: Fn(&Expr) -> bool,
+    F: FnMut(&Expr) -> Result<(), E>,
 {
-    test_fn: &'a F,
-    exprs: Vec<Expr>,
-}
-
-impl<'a, F> Finder<'a, F>
-where
-    F: Fn(&Expr) -> bool,
-{
-    /// Create a new finder with the `test_fn`
-    fn new(test_fn: &'a F) -> Self {
-        Self {
-            test_fn,
-            exprs: Vec::new(),
+    let mut err = Ok(());
+    expr.apply(&mut |expr| {
+        if let Err(e) = f(expr) {
+            // save the error for later (it may not be a DataFusionError
+            err = Err(e);
+            Ok(VisitRecursion::Stop)
+        } else {
+            // keep going
+            Ok(VisitRecursion::Continue)
         }
-    }
-}
+    })
+    // The closure always returns OK, so this will always too
+    .expect("no way to return error during recursion");
 
-impl<'a, F> ExpressionVisitor for Finder<'a, F>
-where
-    F: Fn(&Expr) -> bool,
-{
-    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
-        if (self.test_fn)(expr) {
-            if !(self.exprs.contains(expr)) {
-                self.exprs.push(expr.clone())
-            }
-            // stop recursing down this expr once we find a match
-            return Ok(Recursion::Stop(self));
-        }
-
-        Ok(Recursion::Continue(self))
-    }
+    err
 }
 
 /// Returns a new logical plan based on the original one with inputs
@@ -530,12 +697,14 @@ pub fn from_plan(
 
             struct RemoveAliases {}
 
-            impl ExprRewriter for RemoveAliases {
+            impl TreeNodeRewriter for RemoveAliases {
+                type N = Expr;
+
                 fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
-                        | Expr::InSubquery { .. } => {
+                        | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }
@@ -666,28 +835,31 @@ pub fn from_plan(
             fetch: *fetch,
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
             name,
             if_not_exists,
             or_replace,
             ..
-        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-            input: Arc::new(inputs[0].clone()),
-            name: name.clone(),
-            if_not_exists: *if_not_exists,
-            or_replace: *or_replace,
-        })),
-        LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+            CreateMemoryTable {
+                input: Arc::new(inputs[0].clone()),
+                primary_key: vec![],
+                name: name.clone(),
+                if_not_exists: *if_not_exists,
+                or_replace: *or_replace,
+            },
+        ))),
+        LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             name,
             or_replace,
             definition,
             ..
-        }) => Ok(LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
             definition: definition.clone(),
-        })),
+        }))),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
@@ -740,12 +912,8 @@ pub fn from_plan(
             }))
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::DropView(_)
-        | LogicalPlan::SetVariable(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_) => {
+        | LogicalPlan::Ddl(_)
+        | LogicalPlan::Statement(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{plan:?} should have no exprs");
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
@@ -785,13 +953,12 @@ pub fn from_plan(
 }
 
 /// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
-    Ok(agg
-        .aggr_expr
+fn agg_cols(agg: &Aggregate) -> Vec<Column> {
+    agg.aggr_expr
         .iter()
         .chain(&agg.group_expr)
         .flat_map(find_columns_referenced_by_expr)
-        .collect())
+        .collect()
 }
 
 fn exprlist_to_fields_aggregate(
@@ -799,7 +966,7 @@ fn exprlist_to_fields_aggregate(
     plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
-    let agg_cols = agg_cols(agg)?;
+    let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
         match expr {
@@ -904,8 +1071,7 @@ pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
         }
         Ok(()) as Result<()>
     })
-    // As the `ExpressionVisitor` impl above always returns Ok, this
-    // "can't" error
+    // As the closure always returns Ok, this "can't" error
     .expect("Unexpected error");
     exprs
 }
@@ -1035,7 +1201,7 @@ pub fn find_valid_equijoin_key_pair(
                     right_schema.clone(),
                 )?;
 
-        Result::<_, DataFusionError>::Ok(result)
+        Result::<_>::Ok(result)
     };
 
     let join_key_pair = match (l_is_left, r_is_right) {
@@ -1052,7 +1218,10 @@ pub fn find_valid_equijoin_key_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, expr, AggregateFunction, WindowFrame, WindowFunction};
+    use crate::{
+        col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame,
+        WindowFunction,
+    };
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -1241,6 +1410,126 @@ mod tests {
                 assert_eq!(expected, result);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_enumerate_grouping_sets() -> Result<()> {
+        let multi_cols = vec![col("col1"), col("col2"), col("col3")];
+        let simple_col = col("simple_col");
+        let cube = cube(multi_cols.clone());
+        let rollup = rollup(multi_cols.clone());
+        let grouping_set = grouping_set(vec![multi_cols]);
+
+        // 1. col
+        let sets = enumerate_grouping_sets(vec![simple_col.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!("[simple_col]", &result);
+
+        // 2. cube
+        let sets = enumerate_grouping_sets(vec![cube.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!("[CUBE (col1, col2, col3)]", &result);
+
+        // 3. rollup
+        let sets = enumerate_grouping_sets(vec![rollup.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!("[ROLLUP (col1, col2, col3)]", &result);
+
+        // 4. col + cube
+        let sets = enumerate_grouping_sets(vec![simple_col.clone(), cube.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col), \
+            (simple_col, col1), \
+            (simple_col, col2), \
+            (simple_col, col1, col2), \
+            (simple_col, col3), \
+            (simple_col, col1, col3), \
+            (simple_col, col2, col3), \
+            (simple_col, col1, col2, col3))]",
+            &result
+        );
+
+        // 5. col + rollup
+        let sets = enumerate_grouping_sets(vec![simple_col.clone(), rollup.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col), \
+            (simple_col, col1), \
+            (simple_col, col1, col2), \
+            (simple_col, col1, col2, col3))]",
+            &result
+        );
+
+        // 6. col + grouping_set
+        let sets =
+            enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col, col1, col2, col3))]",
+            &result
+        );
+
+        // 7. col + grouping_set + rollup
+        let sets = enumerate_grouping_sets(vec![
+            simple_col.clone(),
+            grouping_set,
+            rollup.clone(),
+        ])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col, col1, col2, col3), \
+            (simple_col, col1, col2, col3, col1), \
+            (simple_col, col1, col2, col3, col1, col2), \
+            (simple_col, col1, col2, col3, col1, col2, col3))]",
+            &result
+        );
+
+        // 8. col + cube + rollup
+        let sets = enumerate_grouping_sets(vec![simple_col, cube, rollup])?;
+        let result = format!("{sets:?}");
+        assert_eq!(
+            "[GROUPING SETS (\
+            (simple_col), \
+            (simple_col, col1), \
+            (simple_col, col1, col2), \
+            (simple_col, col1, col2, col3), \
+            (simple_col, col1), \
+            (simple_col, col1, col1), \
+            (simple_col, col1, col1, col2), \
+            (simple_col, col1, col1, col2, col3), \
+            (simple_col, col2), \
+            (simple_col, col2, col1), \
+            (simple_col, col2, col1, col2), \
+            (simple_col, col2, col1, col2, col3), \
+            (simple_col, col1, col2), \
+            (simple_col, col1, col2, col1), \
+            (simple_col, col1, col2, col1, col2), \
+            (simple_col, col1, col2, col1, col2, col3), \
+            (simple_col, col3), \
+            (simple_col, col3, col1), \
+            (simple_col, col3, col1, col2), \
+            (simple_col, col3, col1, col2, col3), \
+            (simple_col, col1, col3), \
+            (simple_col, col1, col3, col1), \
+            (simple_col, col1, col3, col1, col2), \
+            (simple_col, col1, col3, col1, col2, col3), \
+            (simple_col, col2, col3), \
+            (simple_col, col2, col3, col1), \
+            (simple_col, col2, col3, col1, col2), \
+            (simple_col, col2, col3, col1, col2, col3), \
+            (simple_col, col1, col2, col3), \
+            (simple_col, col1, col2, col3, col1), \
+            (simple_col, col1, col2, col3, col1, col2), \
+            (simple_col, col1, col2, col3, col1, col2, col3))]",
+            &result
+        );
+
         Ok(())
     }
 }

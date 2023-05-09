@@ -22,7 +22,7 @@ extern crate datafusion;
 
 mod data_utils;
 use crate::criterion::Criterion;
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Fields, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ fn physical_plan(ctx: &SessionContext, sql: &str) {
 
 /// Create schema with the specified number of columns
 pub fn create_schema(column_prefix: &str, num_columns: usize) -> Schema {
-    let fields = (0..num_columns)
+    let fields: Fields = (0..num_columns)
         .map(|i| Field::new(format!("{column_prefix}{i}"), DataType::Int32, true))
         .collect();
     Schema::new(fields)
