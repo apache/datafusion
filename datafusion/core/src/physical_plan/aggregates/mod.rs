@@ -375,7 +375,8 @@ fn get_finest_requirement<
                 *result = fn_reqs.clone();
                 continue;
             }
-            // If either of the requirements satisfy other this means that, requirement are conflicting.
+            // If either of the requirements satisfy the other, this means that requirements are conflicting.
+            // Currently we do not have support for this functionality.
             return Err(DataFusionError::Plan(
                 "Conflicting ordering requirements in aggregate functions".to_string(),
             ));
@@ -457,8 +458,8 @@ impl AggregateExec {
                         vec![]
                     };
                 let mut requirement = requirement_prefix
-                    .iter()
-                    .map(|sort_expr| PhysicalSortRequirement::from(sort_expr.clone()))
+                    .into_iter()
+                    .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>();
                 for req in aggregator_requirement {
                     if requirement.iter().all(|item| req.expr().ne(item.expr())) {
