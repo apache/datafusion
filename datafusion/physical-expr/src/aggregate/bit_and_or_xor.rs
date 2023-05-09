@@ -538,7 +538,7 @@ impl Accumulator for BitAndAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &bit_and_batch(values)?;
-        self.bit_and = compute_bit_and(&self.bit_and, &delta)?;
+        self.bit_and = compute_bit_and(&self.bit_and, delta)?;
         Ok(())
     }
 
@@ -740,7 +740,7 @@ impl Accumulator for BitOrAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &bit_or_batch(values)?;
-        self.bit_or = compute_bit_or(&self.bit_or, &delta)?;
+        self.bit_or = compute_bit_or(&self.bit_or, delta)?;
         Ok(())
     }
 

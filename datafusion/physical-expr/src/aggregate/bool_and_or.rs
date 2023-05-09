@@ -44,14 +44,14 @@ fn bool_and(array: &BooleanArray) -> Option<bool> {
     if array.null_count() == array.len() {
         return None;
     }
-    return Some(array.false_count() == 0);
+    Some(array.false_count() == 0)
 }
 
 fn bool_or(array: &BooleanArray) -> Option<bool> {
     if array.null_count() == array.len() {
         return None;
     }
-    return Some(array.true_count() != 0);
+    Some(array.true_count() != 0)
 }
 
 // Bool and/Bool or aggregation can take Dictionary encode input but always produces unpacked
@@ -305,7 +305,7 @@ impl Accumulator for BoolAndAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &bool_and_batch(values)?;
-        self.bool_and = booland(&self.bool_and, &delta)?;
+        self.bool_and = booland(&self.bool_and, delta)?;
         Ok(())
     }
 
