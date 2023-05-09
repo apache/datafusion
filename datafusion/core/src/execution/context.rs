@@ -31,9 +31,10 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
+use arrow_array::{UInt64Array, ArrayRef};
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan,
+    DescribeTable, StringifiedPlan, CopyTo,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -396,7 +397,9 @@ impl SessionContext {
             LogicalPlan::DescribeTable(DescribeTable { schema, .. }) => {
                 self.return_describe_table_dataframe(schema).await
             }
-
+            LogicalPlan::CopyTo(cmd) => {
+                self.copy_to(cmd).await
+            }
             plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
@@ -451,6 +454,36 @@ impl SessionContext {
         schema: Arc<Schema>,
     ) -> Result<DataFrame> {
         let record_batch = self.return_describe_table_record_batch(schema).await?;
+        self.read_batch(record_batch)
+    }
+
+    // Execute a COPY TO statement, returning the number of rows
+    // returned.
+    async fn copy_to(
+        &self,
+        cmd: CopyTo
+    ) -> Result<DataFrame> {
+        let CopyTo { input, target, options, dummy_schema } = cmd;
+
+
+        // TODO avoid clone if possible
+        let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let physical = DataFrame::new(self.state(), input);
+        let num_rows = 0;
+
+        // TODO build writer props
+        let props = None;
+        plan_to_parquet(
+            self.task_ctx(),
+            physical.create_physical_plan().await?,
+            target,
+            props,
+        ).await?;
+
+        let record_batch = RecordBatch::try_from_iter(vec![
+            ("num_row", Arc::new(UInt64Array::from_iter_values([num_rows])) as ArrayRef)
+        ])?;
+
         self.read_batch(record_batch)
     }
 

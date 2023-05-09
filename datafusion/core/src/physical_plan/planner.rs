@@ -1184,8 +1184,10 @@ impl DefaultPhysicalPlanner {
                     ))
                 }
                 LogicalPlan::CopyTo(_) => {
+                    // There is no plan for CopyTo statements -- they
+                    // must be handled at a higher level
                     Err(DataFusionError::NotImplemented(
-                        format!("Physical plan not yet impelemnted for COPY statement")
+                        format!("Unsupported logical plan: CopyTo")
                     ))
                 }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
