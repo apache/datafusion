@@ -23,6 +23,7 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::Result;
+use datafusion_expr::expr::Exists;
 use datafusion_expr::{
     logical_plan::LogicalPlan, Expr, Filter, LogicalPlanBuilder, TableScan,
 };
@@ -84,11 +85,11 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 
 fn rewrite_subquery(expr: Expr) -> Result<Transformed<Expr>> {
     match expr {
-        Expr::Exists { subquery, negated } => {
+        Expr::Exists(Exists { subquery, negated }) => {
             let plan = subquery.subquery.as_ref().clone();
             let new_plan = plan.transform_up(&analyze_internal)?;
             let subquery = subquery.with_plan(Arc::new(new_plan));
-            Ok(Transformed::Yes(Expr::Exists { subquery, negated }))
+            Ok(Transformed::Yes(Expr::Exists(Exists { subquery, negated })))
         }
         Expr::InSubquery {
             expr,

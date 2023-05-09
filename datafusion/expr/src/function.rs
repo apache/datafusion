@@ -257,6 +257,10 @@ pub fn return_type(
             }
         }),
 
+        BuiltinScalarFunction::Factorial
+        | BuiltinScalarFunction::Gcd
+        | BuiltinScalarFunction::Lcm => Ok(DataType::Int64),
+
         BuiltinScalarFunction::Power => match &input_expr_types[0] {
             DataType::Int64 => Ok(DataType::Int64),
             _ => Ok(DataType::Float64),
@@ -673,6 +677,12 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::Factorial => {
+            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
+        }
+        BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
+            Signature::uniform(2, vec![DataType::Int64], fun.volatility())
+        }
         BuiltinScalarFunction::ArrowTypeof => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos

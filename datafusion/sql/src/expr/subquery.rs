@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::Exists;
 use datafusion_expr::{Expr, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::ast::Query;
@@ -35,13 +36,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
-        Ok(Expr::Exists {
+        Ok(Expr::Exists(Exists {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
             },
             negated,
-        })
+        }))
     }
 
     pub(super) fn parse_in_subquery(

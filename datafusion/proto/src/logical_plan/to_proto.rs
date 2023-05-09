@@ -36,7 +36,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
+    ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -679,7 +680,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .to_string(),
                 ))
             }
-            Expr::ScalarFunction { ref fun, ref args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
                     .iter()
@@ -694,7 +695,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { fun, args } => Self {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
                     fun_name: fun.name.clone(),
                     args: args
@@ -703,7 +704,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args, filter } => Self {
+            Expr::AggregateUDF(expr::AggregateUDF { fun, args, filter }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name.clone(),
@@ -873,11 +874,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Negative(expr)),
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::InListNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     list: list
@@ -1276,6 +1277,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Acosh => Self::Acosh,
             BuiltinScalarFunction::Atanh => Self::Atanh,
             BuiltinScalarFunction::Exp => Self::Exp,
+            BuiltinScalarFunction::Factorial => Self::Factorial,
+            BuiltinScalarFunction::Gcd => Self::Gcd,
+            BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Ln => Self::Ln,
             BuiltinScalarFunction::Log10 => Self::Log10,

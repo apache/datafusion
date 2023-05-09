@@ -22,8 +22,8 @@ use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
-    WindowFunction,
+    AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, GetIndexedField,
+    GroupingSet, InList, Like, ScalarFunction, ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -197,14 +197,15 @@ where
                     .collect::<Result<Vec<_>>>()?,
                 window_frame.clone(),
             ))),
-            Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
-                fun: fun.clone(),
-                args: args
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-                filter: filter.clone(),
-            }),
+            Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
+                Ok(Expr::AggregateUDF(AggregateUDF::new(
+                    fun.clone(),
+                    args.iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                    filter.clone(),
+                )))
+            }
             Expr::Alias(nested_expr, alias_name) => Ok(Expr::Alias(
                 Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 alias_name.clone(),
@@ -220,18 +221,17 @@ where
                 Box::new(clone_with_replacement(low, replacement_fn)?),
                 Box::new(clone_with_replacement(high, replacement_fn)?),
             ))),
-            Expr::InList {
+            Expr::InList(InList {
                 expr: nested_expr,
                 list,
                 negated,
-            } => Ok(Expr::InList {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                list: list
-                    .iter()
+            }) => Ok(Expr::InList(InList::new(
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
+                list.iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
-                negated: *negated,
-            }),
+                *negated,
+            ))),
             Expr::BinaryExpr(BinaryExpr { left, right, op }) => {
                 Ok(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(clone_with_replacement(left, replacement_fn)?),
@@ -295,20 +295,22 @@ where
                     None => None,
                 },
             ))),
-            Expr::ScalarFunction { fun, args } => Ok(Expr::ScalarFunction {
-                fun: fun.clone(),
-                args: args
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-            }),
-            Expr::ScalarUDF { fun, args } => Ok(Expr::ScalarUDF {
-                fun: fun.clone(),
-                args: args
-                    .iter()
-                    .map(|arg| clone_with_replacement(arg, replacement_fn))
-                    .collect::<Result<Vec<Expr>>>()?,
-            }),
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
+                Ok(Expr::ScalarFunction(ScalarFunction::new(
+                    fun.clone(),
+                    args.iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                )))
+            }
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
+                Ok(Expr::ScalarUDF(ScalarUDF::new(
+                    fun.clone(),
+                    args.iter()
+                        .map(|arg| clone_with_replacement(arg, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                )))
+            }
             Expr::Negative(nested_expr) => Ok(Expr::Negative(Box::new(
                 clone_with_replacement(nested_expr, replacement_fn)?,
             ))),

@@ -21,12 +21,11 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
+use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
-use crate::AggregateUDF;
 use crate::Operator;
-use crate::ScalarUDF;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column};
@@ -152,48 +151,19 @@ pub enum Expr {
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
     /// Represents the call of a built-in scalar function with a set of arguments.
-    ScalarFunction {
-        /// The function
-        fun: built_in_function::BuiltinScalarFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-    },
+    ScalarFunction(ScalarFunction),
     /// Represents the call of a user-defined scalar function with arguments.
-    ScalarUDF {
-        /// The function
-        fun: Arc<ScalarUDF>,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-    },
+    ScalarUDF(ScalarUDF),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
     /// aggregate function
-    AggregateUDF {
-        /// The function
-        fun: Arc<AggregateUDF>,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// Optional filter applied prior to aggregating
-        filter: Option<Box<Expr>>,
-    },
+    AggregateUDF(AggregateUDF),
     /// Returns whether the list contains the expr value.
-    InList {
-        /// The expression to compare
-        expr: Box<Expr>,
-        /// A list of values to compare against
-        list: Vec<Expr>,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    InList(InList),
     /// EXISTS subquery
-    Exists {
-        /// subquery that will produce a single column of data
-        subquery: Subquery,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    Exists(Exists),
     /// IN subquery
     InSubquery {
         /// The expression to compare
@@ -353,6 +323,38 @@ impl Between {
     }
 }
 
+/// ScalarFunction expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScalarFunction {
+    /// The function
+    pub fun: built_in_function::BuiltinScalarFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl ScalarFunction {
+    /// Create a new ScalarFunction expression
+    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
+        Self { fun, args }
+    }
+}
+
+/// ScalarUDF expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScalarUDF {
+    /// The function
+    pub fun: Arc<crate::ScalarUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl ScalarUDF {
+    /// Create a new ScalarUDF expression
+    pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
+        Self { fun, args }
+    }
+}
+
 /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct GetIndexedField {
@@ -486,6 +488,65 @@ impl WindowFunction {
     }
 }
 
+// Exists expression.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Exists {
+    /// subquery that will produce a single column of data
+    pub subquery: Subquery,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl Exists {
+    // Create a new Exists expression.
+    pub fn new(subquery: Subquery, negated: bool) -> Self {
+        Self { subquery, negated }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AggregateUDF {
+    /// The function
+    pub fun: Arc<udaf::AggregateUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// Optional filter
+    pub filter: Option<Box<Expr>>,
+}
+
+impl AggregateUDF {
+    /// Create a new AggregateUDF expression
+    pub fn new(
+        fun: Arc<udaf::AggregateUDF>,
+        args: Vec<Expr>,
+        filter: Option<Box<Expr>>,
+    ) -> Self {
+        Self { fun, args, filter }
+    }
+}
+
+/// InList expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct InList {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// The list of values to compare against
+    pub list: Vec<Expr>,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl InList {
+    /// Create a new InList expression
+    pub fn new(expr: Box<Expr>, list: Vec<Expr>, negated: bool) -> Self {
+        Self {
+            expr,
+            list,
+            negated,
+        }
+    }
+}
+
 /// Grouping sets
 /// See <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>
 /// for Postgres definition.
@@ -592,9 +653,9 @@ impl Expr {
             Expr::Not(..) => "Not",
             Expr::Placeholder { .. } => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
-            Expr::ScalarFunction { .. } => "ScalarFunction",
+            Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
-            Expr::ScalarUDF { .. } => "ScalarUDF",
+            Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
@@ -716,11 +777,7 @@ impl Expr {
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
-        Expr::InList {
-            expr: Box::new(self),
-            list,
-            negated,
-        }
+        Expr::InList(InList::new(Box::new(self), list, negated))
     }
 
     /// Return `IsNull(Box(self))
@@ -891,14 +948,14 @@ impl fmt::Debug for Expr {
             Expr::IsNotTrue(expr) => write!(f, "{expr:?} IS NOT TRUE"),
             Expr::IsNotFalse(expr) => write!(f, "{expr:?} IS NOT FALSE"),
             Expr::IsNotUnknown(expr) => write!(f, "{expr:?} IS NOT UNKNOWN"),
-            Expr::Exists {
+            Expr::Exists(Exists {
                 subquery,
                 negated: true,
-            } => write!(f, "NOT EXISTS ({subquery:?})"),
-            Expr::Exists {
+            }) => write!(f, "NOT EXISTS ({subquery:?})"),
+            Expr::Exists(Exists {
                 subquery,
                 negated: false,
-            } => write!(f, "EXISTS ({subquery:?})"),
+            }) => write!(f, "EXISTS ({subquery:?})"),
             Expr::InSubquery {
                 expr,
                 subquery,
@@ -927,10 +984,10 @@ impl fmt::Debug for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction { fun, args, .. } => {
-                fmt_function(f, &fun.to_string(), false, args, false)
+            Expr::ScalarFunction(func) => {
+                fmt_function(f, &func.fun.to_string(), false, &func.args, false)
             }
-            Expr::ScalarUDF { fun, ref args, .. } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 fmt_function(f, &fun.name, false, args, false)
             }
             Expr::WindowFunction(WindowFunction {
@@ -967,12 +1024,12 @@ impl fmt::Debug for Expr {
                 }
                 Ok(())
             }
-            Expr::AggregateUDF {
+            Expr::AggregateUDF(AggregateUDF {
                 fun,
                 ref args,
                 filter,
                 ..
-            } => {
+            }) => {
                 fmt_function(f, &fun.name, false, args, false)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
@@ -1039,11 +1096,11 @@ impl fmt::Debug for Expr {
                     write!(f, " SIMILAR TO {pattern:?}")
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 if *negated {
                     write!(f, "{expr:?} NOT IN ({list:?})")
                 } else {
@@ -1275,8 +1332,8 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::Exists { negated: true, .. } => Ok("NOT EXISTS".to_string()),
-        Expr::Exists { negated: false, .. } => Ok("EXISTS".to_string()),
+        Expr::Exists(Exists { negated: true, .. }) => Ok("NOT EXISTS".to_string()),
+        Expr::Exists(Exists { negated: false, .. }) => Ok("EXISTS".to_string()),
         Expr::InSubquery { negated: true, .. } => Ok("NOT IN".to_string()),
         Expr::InSubquery { negated: false, .. } => Ok("IN".to_string()),
         Expr::ScalarSubquery(subquery) => {
@@ -1286,10 +1343,12 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{expr}[{key}]"))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_name(&fun.to_string(), false, args)
+        Expr::ScalarFunction(func) => {
+            create_function_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
+            create_function_name(&fun.name, false, args)
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -1321,7 +1380,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(name)
             }
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
                 names.push(create_name(e)?);
@@ -1348,11 +1407,11 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("GROUPING SETS ({})", list_of_names.join(", ")))
             }
         },
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => {
+        }) => {
             let expr = create_name(expr)?;
             let list = list.iter().map(create_name);
             if *negated {
