@@ -244,6 +244,7 @@ mod tests {
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::metrics::MetricValue;
     use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::stream::RecordBatchReceiverStream;
     use crate::physical_plan::{collect, common};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -794,7 +795,7 @@ mod tests {
         let mut streams = Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
-            let (sender, receiver) = mpsc::channel(1);
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
             let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
             let join_handle = tokio::spawn(async move {
                 while let Some(batch) = stream.next().await {
