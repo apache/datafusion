@@ -164,7 +164,9 @@ pub fn negative(
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use arrow::{array::*, datatypes::*};
+    #[allow(unused_imports)]
+    use arrow::array::*;
+    use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use arrow_schema::IntervalUnit::{DayTime, MonthDayNano, YearMonth};
     use datafusion_common::{cast::as_primitive_array, Result};
@@ -222,15 +224,15 @@ mod tests {
 
     #[test]
     fn array_negative_op() -> Result<()> {
-        test_array_negative_op!(Int8, -1i8, 1i8);
-        test_array_negative_op!(Int16, -123i16, 123i16);
-        test_array_negative_op!(Int32, -1234i32, 1234i32);
-        test_array_negative_op!(Int64, -12345i64, 12345i64);
-        test_array_negative_op!(Float32, -1234.0f32, 1234.0f32);
-        test_array_negative_op!(Float64, -12345.0f64, 12345.0f64);
-        test_array_negative_op_intervals!(YearMonth, -1234i32, 1234i32);
-        test_array_negative_op_intervals!(DayTime, -12345i64, 12345i64);
-        test_array_negative_op_intervals!(MonthDayNano, -123456i128, 123456i128);
+        test_array_negative_op!(Int8, 2i8, 1i8);
+        test_array_negative_op!(Int16, 234i16, 123i16);
+        test_array_negative_op!(Int32, 2345i32, 1234i32);
+        test_array_negative_op!(Int64, 23456i64, 12345i64);
+        test_array_negative_op!(Float32, 2345.0f32, 1234.0f32);
+        test_array_negative_op!(Float64, 23456.0f64, 12345.0f64);
+        test_array_negative_op_intervals!(YearMonth, 2345i32, 1234i32);
+        test_array_negative_op_intervals!(DayTime, 23456i64, 12345i64);
+        test_array_negative_op_intervals!(MonthDayNano, 234567i128, 123456i128);
         Ok(())
     }
 }
