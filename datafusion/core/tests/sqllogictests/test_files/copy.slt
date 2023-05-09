@@ -22,19 +22,31 @@ create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 
 
 # create an external parquet file
 # TODO figure out how to use a real tempfile name
+#statement ok
+#COPY source_table to '/tmp/table.parquet';
+
+
+# create an external parquet file from a query
+# TODO figure out how to use a real tempfile name
 statement ok
-COPY source_table to '/tmp/table.parquet';
+COPY (select col2, sum(col1) from source_table group by col2 order by col2)  to '/tmp/table.parquet';
 
 # Read the data back in
 statement ok
 CREATE external table new_table STORED as PARQUET LOCATION '/tmp/table.parquet';
 
 # Read the data back in
-query
+query IT
 select * from new_table;
+----
+1 Foo
+2 Bar
 
 statement ok
 drop table new_table;
+
+
+
 
 
 
