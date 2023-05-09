@@ -2602,11 +2602,11 @@ mod roundtrip_tests {
             Arc::new(vec![DataType::Float64, DataType::UInt32]),
         );
 
-        let test_expr = Expr::AggregateUDF {
-            fun: Arc::new(dummy_agg.clone()),
-            args: vec![lit(1.0_f64)],
-            filter: Some(Box::new(lit(true))),
-        };
+        let test_expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(dummy_agg.clone()),
+            vec![lit(1.0_f64)],
+            Some(Box::new(lit(true))),
+        ));
 
         let ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);

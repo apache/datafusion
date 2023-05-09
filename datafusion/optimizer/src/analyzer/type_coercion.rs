@@ -404,17 +404,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            Expr::AggregateUDF { fun, args, filter } => {
+            Expr::AggregateUDF(expr::AggregateUDF { fun, args, filter }) => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::AggregateUDF {
-                    fun,
-                    args: new_expr,
-                    filter,
-                };
+                let expr =
+                    Expr::AggregateUDF(expr::AggregateUDF::new(fun, new_expr, filter));
                 Ok(expr)
             }
             Expr::WindowFunction(WindowFunction {
@@ -883,11 +880,11 @@ mod test {
             }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
-        let udaf = Expr::AggregateUDF {
-            fun: Arc::new(my_avg),
-            args: vec![lit(10i64)],
-            filter: None,
-        };
+        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(my_avg),
+            vec![lit(10i64)],
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
@@ -913,11 +910,11 @@ mod test {
             &accumulator,
             &state_type,
         );
-        let udaf = Expr::AggregateUDF {
-            fun: Arc::new(my_avg),
-            args: vec![lit("10")],
-            filter: None,
-        };
+        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(my_avg),
+            vec![lit("10")],
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
