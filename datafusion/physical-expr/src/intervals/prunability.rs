@@ -51,6 +51,63 @@ pub enum TableSide {
     Both,
 }
 
+fn get_tableside_at_numeric(
+    left_dir: &Monotonicity,
+    right_dir: &Monotonicity,
+    left_tableside: &TableSide,
+    right_tableside: &TableSide,
+) -> TableSide {
+    match (left_dir, right_dir) {
+        (Monotonicity::Singleton, Monotonicity::Singleton) => TableSide::None,
+        (Monotonicity::Singleton, _) => *right_tableside,
+        (_, Monotonicity::Singleton) => *left_tableside,
+        (_, _) => {
+            if left_tableside == right_tableside {
+                *left_tableside
+            } else {
+                TableSide::None
+            }
+        }
+    }
+}
+fn get_tableside_at_gt_or_gteq(
+    left_dir: &Monotonicity,
+    right_dir: &Monotonicity,
+    left_tableside: &TableSide,
+    right_tableside: &TableSide,
+) -> TableSide {
+    match (left_dir, right_dir) {
+        (Monotonicity::Asc, Monotonicity::Asc) => *left_tableside,
+        (Monotonicity::Desc, Monotonicity::Desc) => *right_tableside,
+        (_, _) => TableSide::None,
+    }
+}
+fn get_tableside_at_lt_or_lteq(
+    left_dir: &Monotonicity,
+    right_dir: &Monotonicity,
+    left_tableside: &TableSide,
+    right_tableside: &TableSide,
+) -> TableSide {
+    match (left_dir, right_dir) {
+        (Monotonicity::Desc, Monotonicity::Desc) => *left_tableside,
+        (Monotonicity::Asc, Monotonicity::Asc) => *right_tableside,
+        (_, _) => TableSide::None,
+    }
+}
+fn get_tableside_at_and(
+    left_tableside: &TableSide,
+    right_tableside: &TableSide,
+) -> TableSide {
+    match (left_tableside, right_tableside) {
+        (TableSide::Left, TableSide::Right) | (TableSide::Right, TableSide::Left) => {
+            TableSide::Both
+        }
+        (TableSide::Left, _) | (_, TableSide::Left) => TableSide::Left,
+        (TableSide::Right, _) | (_, TableSide::Right) => TableSide::Right,
+        (_, _) => TableSide::None,
+    }
+}
+
 /// This object is stored in nodes to find the root binary expression's
 /// monotonicity according to the columns on its leaf nodes.
 #[derive(PartialEq, Debug, Clone, Copy)]
@@ -409,39 +466,19 @@ fn numeric_node_order(
         }
     }
     let (left, right) = (children[0], children[1]);
-    match (left.1.dir, right.1.dir, binary_expr.op()) {
-        // Literal + Literal
-        (Monotonicity::Singleton, Monotonicity::Singleton, Operator::Plus) => {
-            (TableSide::None, left.1.add(right.1))
-        }
-        // Literal + Literal
-        (Monotonicity::Singleton, Monotonicity::Singleton, Operator::Minus) => {
-            (TableSide::None, left.1.sub(right.1))
-        }
-        // Literal + some column
-        (Monotonicity::Singleton, _, Operator::Plus) => (*right.0, *right.1),
-        // Literal - some column
-        (Monotonicity::Singleton, _, Operator::Minus) => (*right.0, left.1.sub(right.1)),
-        // Some column + - literal
-        (_, Monotonicity::Singleton, Operator::Minus | Operator::Plus) => {
-            (*left.0, *left.1)
-        }
-        // Column + - column
-        (_, _, op) => {
-            let from = match (left.0, right.0) {
-                (left_child_side, right_child_side)
-                    if left_child_side == right_child_side =>
-                {
-                    *left_child_side
-                }
-                (_, _) => TableSide::None,
-            };
-            if *op == Operator::Plus {
-                (from, left.1.add(right.1))
-            } else {
-                (from, left.1.sub(right.1))
-            }
-        }
+    let from = get_tableside_at_numeric(&left.1.dir, &right.1.dir, left.0, right.0);
+    match binary_expr.op() {
+        Operator::Plus => (from, left.1.add(right.1)),
+        Operator::Minus => (from, left.1.sub(right.1)),
+        // Undefined operators
+        _ => (
+            TableSide::None,
+            SortInfo {
+                dir: Monotonicity::Unordered,
+                nulls_first: false,
+                nulls_last: false,
+            },
+        ),
     }
 }
 
@@ -450,54 +487,30 @@ fn comparison_node_order(
     binary_expr_op: &Operator,
 ) -> (TableSide, SortInfo) {
     let (left, right) = (children[0], children[1]);
-    match (left.1.dir, children[1].1.dir, binary_expr_op) {
-        // Literal > (>=) some column | Some column > (>=) literal
-        (Monotonicity::Singleton, _, Operator::Gt)
-        | (Monotonicity::Singleton, _, Operator::GtEq)
-        | (_, Monotonicity::Singleton, Operator::Gt)
-        | (_, Monotonicity::Singleton, Operator::GtEq) => {
-            (TableSide::None, left.1.gt_or_gteq(right.1))
-        }
-        // Literal < (<=) some column | Some column < (<=) literal
-        (Monotonicity::Singleton, _, Operator::Lt)
-        | (Monotonicity::Singleton, _, Operator::LtEq)
-        | (_, Monotonicity::Singleton, Operator::Lt)
-        | (_, Monotonicity::Singleton, Operator::LtEq) => {
-            (TableSide::None, left.1.lt_or_lteq(right.1))
-        }
-        // Column cmp column
-        (_, _, op) => {
-            let from = match (left.1.dir, right.1.dir, op) {
-                (Monotonicity::Asc, Monotonicity::Asc, Operator::Gt)
-                | (Monotonicity::Asc, Monotonicity::Asc, Operator::GtEq)
-                | (Monotonicity::Desc, Monotonicity::Desc, Operator::Lt)
-                | (Monotonicity::Desc, Monotonicity::Desc, Operator::LtEq) => *left.0,
-                (Monotonicity::Asc, Monotonicity::Asc, Operator::Lt)
-                | (Monotonicity::Asc, Monotonicity::Asc, Operator::LtEq)
-                | (Monotonicity::Desc, Monotonicity::Desc, Operator::Gt)
-                | (Monotonicity::Desc, Monotonicity::Desc, Operator::GtEq) => *right.0,
-                (_, _, _) => TableSide::None,
-            };
-            if *op == Operator::Gt || *op == Operator::GtEq {
-                (from, left.1.gt_or_gteq(right.1))
-            } else {
-                (from, left.1.lt_or_lteq(right.1))
-            }
-        }
+    match binary_expr_op {
+        Operator::Gt | Operator::GtEq => (
+            get_tableside_at_gt_or_gteq(&left.1.dir, &right.1.dir, left.0, right.0),
+            left.1.gt_or_gteq(right.1),
+        ),
+        Operator::Lt | Operator::LtEq => (
+            get_tableside_at_lt_or_lteq(&left.1.dir, &right.1.dir, left.0, right.0),
+            left.1.lt_or_lteq(right.1),
+        ),
+        // Undefined operators
+        _ => (
+            TableSide::None,
+            SortInfo {
+                dir: Monotonicity::Unordered,
+                nulls_first: false,
+                nulls_last: false,
+            },
+        ),
     }
 }
 
 fn logical_node_order(children: &[(&TableSide, &SortInfo)]) -> (TableSide, SortInfo) {
     let (left, right) = (children[0], children[1]);
-    let from = match (left.0, right.0) {
-        (TableSide::Left, TableSide::Right) | (TableSide::Right, TableSide::Left) => {
-            TableSide::Both
-        }
-        (TableSide::Left, _) | (_, TableSide::Left) => TableSide::Left,
-        (TableSide::Right, _) | (_, TableSide::Right) => TableSide::Right,
-        (_, _) => TableSide::None,
-    };
-    (from, left.1.and(right.1))
+    (get_tableside_at_and(left.0, right.0), left.1.and(right.1))
 }
 
 #[cfg(test)]
