@@ -335,21 +335,21 @@ fn ordering_satisfy_concrete<
     let ordering_eq_classes = oeq_properties.classes();
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
-    let mut required_unique = Vec::new();
+    let mut required_normalized = Vec::new();
     required.iter().for_each(|e| {
         let item = normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes);
-        if !required_unique.contains(&item) {
-            required_unique.push(item);
+        if !required_normalized.contains(&item) {
+            required_normalized.push(item);
         }
     });
     let provided_normalized = provided
         .iter()
         .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
         .collect::<Vec<_>>();
-    if required_unique.len() > provided_normalized.len() {
+    if required_normalized.len() > provided_normalized.len() {
         return false;
     }
-    required_unique
+    required_normalized
         .into_iter()
         .zip(provided_normalized)
         .all(|(req, given)| given == req)
@@ -393,21 +393,21 @@ pub fn ordering_satisfy_requirement_concrete<
     let ordering_eq_classes = oeq_properties.classes();
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
-    let mut required_unique = Vec::new();
+    let mut required_normalized = Vec::new();
     required.iter().for_each(|e| {
         let item = normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes);
-        if !required_unique.contains(&item) {
-            required_unique.push(item);
+        if !required_normalized.contains(&item) {
+            required_normalized.push(item);
         }
     });
     let provided_normalized = provided
         .iter()
         .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
         .collect::<Vec<_>>();
-    if required_unique.len() > provided_normalized.len() {
+    if required_normalized.len() > provided_normalized.len() {
         return false;
     }
-    required_unique
+    required_normalized
         .into_iter()
         .zip(provided_normalized)
         .all(|(req, given)| given.satisfy(&req))
@@ -451,21 +451,21 @@ fn requirements_compatible_concrete<
     let ordering_eq_classes = oeq_properties.classes();
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
-    let mut required_unique = Vec::new();
+    let mut required_normalized = Vec::new();
     required.iter().for_each(|e| {
         let item = normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes);
-        if !required_unique.contains(&item) {
-            required_unique.push(item);
+        if !required_normalized.contains(&item) {
+            required_normalized.push(item);
         }
     });
     let provided_normalized = provided
         .iter()
         .map(|e| normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes))
         .collect::<Vec<_>>();
-    if required_unique.len() > provided_normalized.len() {
+    if required_normalized.len() > provided_normalized.len() {
         return false;
     }
-    required_unique
+    required_normalized
         .into_iter()
         .zip(provided_normalized)
         .all(|(req, given)| given.compatible(&req))
@@ -1435,9 +1435,11 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
+        // Column a and c are aliases.
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         eq_properties.add_equal_conditions((col_a, col_c));
 
+        // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
             &OrderedColumn::new(col_a.clone(), option1),
@@ -1465,7 +1467,9 @@ mod tests {
         };
 
         assert!(ordering_satisfy_concrete(
+            // After normalization would be a ASC, b ASC, d ASC
             &[sort_req_a.clone(), sort_req_b.clone(), sort_req_d.clone()],
+            // After normalization would be a ASC, b ASC, d ASC
             &[
                 sort_req_c.clone(),
                 sort_req_b.clone(),
@@ -1478,7 +1482,9 @@ mod tests {
         ));
 
         assert!(!ordering_satisfy_concrete(
+            // After normalization would be a ASC, b ASC
             &[sort_req_a.clone(), sort_req_b.clone()],
+            // After normalization would be a ASC, b ASC, d ASC
             &[
                 sort_req_c.clone(),
                 sort_req_b.clone(),
@@ -1491,7 +1497,9 @@ mod tests {
         ));
 
         assert!(!ordering_satisfy_concrete(
+            // After normalization would be a ASC, b ASC, d ASC
             &[sort_req_a.clone(), sort_req_b.clone(), sort_req_d.clone()],
+            // After normalization would be a ASC, d ASC, b ASC
             &[sort_req_c, sort_req_d, sort_req_a, sort_req_b, sort_req_e,],
             || eq_properties.clone(),
             || ordering_eq_properties.clone(),

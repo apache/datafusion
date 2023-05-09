@@ -2379,8 +2379,10 @@ select row_number() over (rows between null preceding and current row) from (sel
 statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
 
-# These test are to show ordering satisfy consider ordering equivalences
-# from different length of orderings for provided and required expressions 
+# This test shows that ordering satisfy considers ordering equivalences,
+# and can simplify (reduce expression size) multi expression requirements during normalization
+# For the example below, requirement rn1 ASC, c9 DESC should be simplified to the rn1 ASC.
+# Hence in the final plan we shouldn't see SortExec for the global ORDER BY.
 query TT
 EXPLAIN SELECT c9, rn1 FROM (SELECT c9,
                        ROW_NUMBER() OVER(ORDER BY c9 DESC) as rn1
