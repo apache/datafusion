@@ -17,7 +17,6 @@
 
 //! DataFusion SQL Parser based on [`sqlparser`]
 
-use datafusion_common::OwnedTableReference;
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::ast::{OrderByExpr, Query};
 use sqlparser::{
@@ -66,11 +65,11 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
 /// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyTo {
+pub struct CopyToStatement {
     /// From where the data comes from
-    source: CopyToSource,
+    pub source: CopyToSource,
     /// The URL to where the data is heading
-    target: String,
+    pub target: String,
     /// Target specific options
     pub options: HashMap<String, String>,
 }
@@ -78,11 +77,10 @@ pub struct CopyTo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CopyToSource {
     /// `COPY <table> TO ...`
-    Relation(OwnedTableReference),
+    Relation(ObjectName),
     /// COPY (query...) TO ...
     Query(Query),
 }
-
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 ///
@@ -159,12 +157,14 @@ pub struct DescribeTableStmt {
 /// Tokens parsed by [`DFParser`] are converted into these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
-    /// ANSI SQL AST node
+    /// ANSI SQL AST node (from sqlparser-rs)
     Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
     /// Extension: `DESCRIBE TABLE`
     DescribeTableStmt(DescribeTableStmt),
+    /// Extension: `COPY TO`
+    CopyTo(CopyToStatement),
 }
 
 /// DataFusion SQL Parser based on [`sqlparser`]
@@ -253,6 +253,11 @@ impl<'a> DFParser<'a> {
                         // use custom parsing
                         self.parse_create()
                     }
+                    Keyword::COPY => {
+                        // move one token forward
+                        self.parser.next_token();
+                        self.parse_copy()
+                    }
                     Keyword::DESCRIBE => {
                         // move one token forward
                         self.parser.next_token();
@@ -281,6 +286,40 @@ impl<'a> DFParser<'a> {
         let table_name = self.parser.parse_object_name()?;
         Ok(Statement::DescribeTableStmt(DescribeTableStmt {
             table_name,
+        }))
+    }
+
+    /// Parse a SQL `COPY TO` statement
+    pub fn parse_copy(&mut self) -> Result<Statement, ParserError> {
+        self.parser.expect_keyword(Keyword::COPY)?;
+        // parse as a query
+        let source = if self.parser.consume_token(&Token::LParen) {
+            let query = self.parser.parse_query()?;
+            self.parser.expect_token(&Token::RParen)?;
+            CopyToSource::Query(query)
+        } else {
+            // parse as table reference
+            let table_name = self.parser.parse_object_name()?;
+            CopyToSource::Relation(table_name)
+        };
+
+        self.parser.expect_keyword(Keyword::TO)?;
+
+        let target = self.parser.parse_literal_string()?;
+
+        // check for options in parens
+        let options = if self.parser.consume_token(&Token::LParen) {
+            let options = self.parse_options()?;
+            self.parser.expect_token(&Token::RParen)?;
+            options
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Statement::CopyTo(CopyToStatement {
+            source,
+            target,
+            options,
         }))
     }
 

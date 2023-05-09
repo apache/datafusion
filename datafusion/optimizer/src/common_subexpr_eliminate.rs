@@ -340,7 +340,8 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::Prepare(_) => {
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::CopyTo(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?
             }
@@ -784,14 +785,14 @@ mod test {
         )?;
 
         let expected = vec![
-            (9, "(SUM(a + Int32(1)) - AVG(c)) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"), 
-            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"), 
-            (4, ""), 
-            (3, "a + Int32(1)Int32(1)a"), 
-            (1, ""), 
-            (2, ""), 
-            (6, ""), 
-            (5, ""), 
+            (9, "(SUM(a + Int32(1)) - AVG(c)) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"),
+            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"),
+            (4, ""),
+            (3, "a + Int32(1)Int32(1)a"),
+            (1, ""),
+            (2, ""),
+            (6, ""),
+            (5, ""),
             (8, "")
         ]
         .into_iter()

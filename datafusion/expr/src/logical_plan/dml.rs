@@ -16,7 +16,9 @@
 // under the License.
 
 use std::{
+    collections::HashMap,
     fmt::{self, Display},
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -54,5 +56,33 @@ impl Display for WriteOp {
             WriteOp::Update => write!(f, "Update"),
             WriteOp::Ctas => write!(f, "Ctas"),
         }
+    }
+}
+
+/// The operator that modifies the content of a database (adapted from
+/// substrait WriteRel)
+#[derive(Clone, PartialEq, Eq)]
+pub struct CopyTo {
+    /// Plan to read the data from
+    pub input: Arc<LogicalPlan>,
+
+    /// the URL to which the data is headed (e.g. 'foo.parquet' or 'foo')
+    pub target: String,
+
+    /// User supplied name/value pairs that are interpreted for each targe type
+    pub options: HashMap<String, String>,
+
+    /// output schema (is empty)
+    pub dummy_schema: DFSchemaRef,
+}
+
+// Hashing refers to a subset of fields considered in PartialEq. needed b/c HashMap is not Hash
+#[allow(clippy::derived_hash_with_manual_eq)]
+impl Hash for CopyTo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.input.hash(state);
+        self.target.hash(state);
+        self.options.len().hash(state); // HashMap is not hashable
+        self.dummy_schema.hash(state);
     }
 }

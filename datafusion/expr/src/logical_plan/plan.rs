@@ -24,7 +24,8 @@ use crate::utils::{
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
 };
 use crate::{
-    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+    build_join_schema, CopyTo, Expr, ExprSchemable, TableProviderFilterPushDown,
+    TableSource,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{
@@ -113,6 +114,8 @@ pub enum LogicalPlan {
     Ddl(DdlStatement),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
+    /// COPY a table or results of a query to a url
+    CopyTo(CopyTo),
     /// Unnest a column that contains a nested list type.
     Unnest(Unnest),
 }
@@ -150,6 +153,7 @@ impl LogicalPlan {
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
+            LogicalPlan::CopyTo(CopyTo { dummy_schema, .. }) => dummy_schema,
         }
     }
 
@@ -193,6 +197,7 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
+            | LogicalPlan::CopyTo(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -335,6 +340,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::CopyTo(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
@@ -365,6 +371,7 @@ impl LogicalPlan {
             LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
             LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
+            LogicalPlan::CopyTo(CopyTo { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::Statement { .. }
@@ -523,6 +530,7 @@ impl LogicalPlan {
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
             LogicalPlan::Ddl(_)
+            | LogicalPlan::CopyTo(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
@@ -1105,6 +1113,21 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Unnest(Unnest { column, .. }) => {
                         write!(f, "Unnest: {column}")
+                    }
+                    LogicalPlan::CopyTo(CopyTo {
+                        input: _,
+                        target,
+                        options,
+                        dummy_schema: _,
+                    }) => {
+                        let options = if options.is_empty() {
+                            "".to_string()
+                        } else {
+                            let kvs: Vec<_> =
+                                options.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                            format!(", options={}", kvs.join(","))
+                        };
+                        write!(f, "CopyTo: target={target}{options}")
                     }
                 }
             }

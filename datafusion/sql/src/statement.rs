@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
+    Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -33,7 +34,7 @@ use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
+    cast, col, Analyze, CopyTo, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
     Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
@@ -84,6 +85,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
+            DFStatement::CopyTo(s) => self.copy_to_plan(s),
         }
     }
 
@@ -532,6 +534,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok(LogicalPlan::DescribeTable(DescribeTable {
             schema,
+            dummy_schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
+    }
+
+    fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
+        let CopyToStatement {
+            source,
+            target,
+            options,
+        } = statement;
+
+        let input = match source {
+            CopyToSource::Relation(table_name) => {
+                let table_ref = self.object_name_to_table_reference(table_name)?;
+                let provider =
+                    self.schema_provider.get_table_provider(table_ref.clone())?;
+                let projection = None;
+                LogicalPlanBuilder::scan(table_ref, provider, projection)?.build()
+            }
+            CopyToSource::Query(query) => {
+                let mut planner_context = PlannerContext::new();
+                self.query_to_plan(query, &mut planner_context)
+            }
+        }?;
+
+        Ok(LogicalPlan::CopyTo(CopyTo {
+            input: Arc::new(input),
+            target,
+            options,
             dummy_schema: DFSchemaRef::new(DFSchema::empty()),
         }))
     }

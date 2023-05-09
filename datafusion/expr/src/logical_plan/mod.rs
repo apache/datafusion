@@ -31,7 +31,7 @@ pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CreateView, DdlStatement, DropCatalogSchema, DropTable, DropView,
 };
-pub use dml::{DmlStatement, WriteOp};
+pub use dml::{CopyTo, DmlStatement, WriteOp};
 pub use plan::{
     Aggregate, Analyze, CrossJoin, DescribeTable, Distinct, EmptyRelation, Explain,
     Extension, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,

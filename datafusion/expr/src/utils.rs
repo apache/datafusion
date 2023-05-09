@@ -25,9 +25,9 @@ use crate::logical_plan::{
     Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
-    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
-    TryCast,
+    BinaryExpr, Cast, CopyTo, CreateMemoryTable, CreateView, DdlStatement, DmlStatement,
+    Expr, ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator,
+    TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{
@@ -920,6 +920,25 @@ pub fn from_plan(
             Ok(plan.clone())
         }
         LogicalPlan::DescribeTable(_) => Ok(plan.clone()),
+        LogicalPlan::CopyTo(CopyTo {
+            input: _,
+            target,
+            options,
+            dummy_schema,
+        }) => {
+            if inputs.len() != 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "CopyTo has a single input, but had {}",
+                    inputs.len()
+                )));
+            }
+            Ok(LogicalPlan::CopyTo(CopyTo {
+                input: Arc::new(inputs[0].clone()),
+                target: target.clone(),
+                options: options.clone(),
+                dummy_schema: dummy_schema.clone(),
+            }))
+        }
         LogicalPlan::Unnest(Unnest { column, schema, .. }) => {
             // Update schema with unnested column type.
             let input = Arc::new(inputs[0].clone());

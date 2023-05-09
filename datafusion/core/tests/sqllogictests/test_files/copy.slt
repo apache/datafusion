@@ -18,13 +18,28 @@
 # tests for copy command
 
 statement ok
-create table test_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
+create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
 
 # create an external parquet file
 # TODO figure out how to use a real tempfile name
-COPY test_table to '/tmp/test_table.parquet';
+statement ok
+COPY source_table to '/tmp/table.parquet';
+
+# Read the data back in
+statement ok
+CREATE external table new_table STORED as PARQUET LOCATION '/tmp/table.parquet';
+
+# Read the data back in
+query
+select * from new_table;
+
+statement ok
+drop table new_table;
 
 
+
+# TODO add support for reading directly for files without needing to create an external table
+# (TODO find ticket)
 
 
 
@@ -46,4 +61,4 @@ COPY test_table to '/tmp/test_table.parquet';
 
 
 statement ok
-drop table test_table;
+drop table source_table;
