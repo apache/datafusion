@@ -19,7 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
-    GroupingSet, InList, Like, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    GroupingSet, InList, InSubquery, Like, ScalarFunction, ScalarUDF, Sort, TryCast,
+    WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -45,7 +46,7 @@ impl TreeNode for Expr {
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InSubquery { expr, .. } => vec![expr.as_ref().clone()],
+            | Expr::InSubquery(InSubquery{ expr, .. }) => vec![expr.as_ref().clone()],
             Expr::GetIndexedField(GetIndexedField { expr, .. }) => {
                 vec![expr.as_ref().clone()]
             }
@@ -149,15 +150,15 @@ impl TreeNode for Expr {
             Expr::Column(_) => self,
             Expr::OuterReferenceColumn(_, _) => self,
             Expr::Exists { .. } => self,
-            Expr::InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => Expr::InSubquery {
-                expr: transform_boxed(expr, &mut transform)?,
+            }) => Expr::InSubquery(InSubquery::new(
+                transform_boxed(expr, &mut transform)?,
                 subquery,
                 negated,
-            },
+            )),
             Expr::ScalarSubquery(_) => self,
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),

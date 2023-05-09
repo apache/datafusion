@@ -18,8 +18,8 @@
 //! Functions for creating logical expressions
 
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, ScalarFunction,
-    TryCast,
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
+    ScalarFunction, TryCast,
 };
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
@@ -328,27 +328,27 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
 /// Create an IN subquery expression
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::InSubquery {
-        expr: Box::new(expr),
-        subquery: Subquery {
+    Expr::InSubquery(InSubquery::new(
+        Box::new(expr),
+        Subquery {
             subquery,
             outer_ref_columns,
         },
-        negated: false,
-    }
+        false,
+    ))
 }
 
 /// Create a NOT IN subquery expression
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::InSubquery {
-        expr: Box::new(expr),
-        subquery: Subquery {
+    Expr::InSubquery(InSubquery::new(
+        Box::new(expr),
+        Subquery {
             subquery,
             outer_ref_columns,
         },
-        negated: true,
-    }
+        true,
+    ))
 }
 
 /// Create a scalar subquery expression

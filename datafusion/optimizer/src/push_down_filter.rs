@@ -157,7 +157,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Placeholder { .. }
         | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
         Expr::Exists { .. }
-        | Expr::InSubquery { .. }
+        | Expr::InSubquery(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
         | Expr::ScalarUDF(..) => {

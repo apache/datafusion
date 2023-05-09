@@ -90,7 +90,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::SimilarTo { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)

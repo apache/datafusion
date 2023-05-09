@@ -23,7 +23,7 @@ use sqlparser::ast::Ident;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, GetIndexedField,
-    GroupingSet, InList, Like, ScalarFunction, ScalarUDF, WindowFunction,
+    GroupingSet, InList, InSubquery, Like, ScalarFunction, ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -368,15 +368,15 @@ where
             | Expr::ScalarVariable(_, _)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_) => Ok(expr.clone()),
-            Expr::InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr: nested_expr,
                 subquery,
                 negated,
-            } => Ok(Expr::InSubquery {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                subquery: subquery.clone(),
-                negated: *negated,
-            }),
+            }) => Ok(Expr::InSubquery(InSubquery::new(
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
+                subquery.clone(),
+                *negated,
+            ))),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
             Expr::GetIndexedField(GetIndexedField { key, expr }) => {
