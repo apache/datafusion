@@ -27,7 +27,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
@@ -304,23 +304,11 @@ fn get_meet_of_orderings_helper(
             if idx >= ordering.len() {
                 return Some(ordering);
             } else {
-                let schema_and_ordering_aligned = match (
-                    ordering[idx].expr.as_any().downcast_ref::<Column>(),
-                    first[idx].expr.as_any().downcast_ref::<Column>(),
-                    ordering[idx].expr.as_any().downcast_ref::<BinaryExpr>(),
-                    first[idx].expr.as_any().downcast_ref::<BinaryExpr>(),
-                ) {
-                    (Some(column), Some(column_first), _, _) => {
-                        column.index() == column_first.index()
-                            && ordering[idx].options == first[idx].options
-                    }
-                    (_, _, Some(binary), Some(binary_first)) => {
-                        get_meet_of_orderings_binary_helper(binary, binary_first)
-                            && ordering[idx].options == first[idx].options
-                    }
-                    (_, _, _, _) => ordering[idx] == first[idx],
-                };
-                if !schema_and_ordering_aligned {
+                let schema_aligned = check_expr_alignment(
+                    ordering[idx].expr.as_ref(),
+                    first[idx].expr.as_ref(),
+                );
+                if !schema_aligned || (ordering[idx].options != first[idx].options) {
                     // In a union, the output schema is that of the first child (by convention).
                     // Therefore, generate the result from the first child's schema:
                     return if idx > 0 { Some(&first[..idx]) } else { None };
@@ -330,42 +318,31 @@ fn get_meet_of_orderings_helper(
         idx += 1;
     }
 
-    fn get_meet_of_orderings_binary_helper(
-        first_binary: &BinaryExpr,
-        second_binary: &BinaryExpr,
-    ) -> bool {
-        if first_binary.op() != second_binary.op() {
-            return false;
+    fn check_expr_alignment(first: &dyn PhysicalExpr, second: &dyn PhysicalExpr) -> bool {
+        match (
+            first.as_any().downcast_ref::<Column>(),
+            second.as_any().downcast_ref::<Column>(),
+            first.as_any().downcast_ref::<BinaryExpr>(),
+            second.as_any().downcast_ref::<BinaryExpr>(),
+        ) {
+            (Some(first_col), Some(second_col), _, _) => {
+                first_col.index() == second_col.index()
+            }
+            (_, _, Some(first_binary), Some(second_binary)) => {
+                if first_binary.op() == second_binary.op() {
+                    check_expr_alignment(
+                        first_binary.left().as_ref(),
+                        second_binary.left().as_ref(),
+                    ) && check_expr_alignment(
+                        first_binary.right().as_ref(),
+                        second_binary.right().as_ref(),
+                    )
+                } else {
+                    false
+                }
+            }
+            (_, _, _, _) => false,
         }
-        let left = match (
-            first_binary.left().as_any().downcast_ref::<Column>(),
-            second_binary.left().as_any().downcast_ref::<Column>(),
-            first_binary.left().as_any().downcast_ref::<BinaryExpr>(),
-            second_binary.left().as_any().downcast_ref::<BinaryExpr>(),
-        ) {
-            (Some(column), Some(column_first), _, _) => {
-                column.index() == column_first.index()
-            }
-            (_, _, Some(binary), Some(binary_first)) => {
-                get_meet_of_orderings_binary_helper(binary, binary_first)
-            }
-            (_, _, _, _) => false,
-        };
-        let right = match (
-            first_binary.right().as_any().downcast_ref::<Column>(),
-            second_binary.right().as_any().downcast_ref::<Column>(),
-            first_binary.right().as_any().downcast_ref::<BinaryExpr>(),
-            second_binary.right().as_any().downcast_ref::<BinaryExpr>(),
-        ) {
-            (Some(column), Some(column_first), _, _) => {
-                column.index() == column_first.index()
-            }
-            (_, _, Some(binary), Some(binary_first)) => {
-                get_meet_of_orderings_binary_helper(binary, binary_first)
-            }
-            (_, _, _, _) => false,
-        };
-        left && right
     }
 }
 
