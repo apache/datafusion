@@ -22,18 +22,17 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use log::{debug, trace};
-use tokio::sync::mpsc;
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
-use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
-    common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
-    Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
@@ -181,29 +180,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 result
             }
             _ => {
-                // Use tokio only if running from a tokio context (#2201)
-                let receivers = match tokio::runtime::Handle::try_current() {
-                    Ok(_) => (0..input_partitions)
-                        .map(|part_i| {
-                            let (sender, receiver) = mpsc::channel(1);
-                            let join_handle = spawn_execution(
-                                self.input.clone(),
-                                sender,
-                                part_i,
-                                context.clone(),
-                            );
-
-                            RecordBatchReceiverStream::create(
-                                &schema,
-                                receiver,
-                                join_handle,
-                            )
-                        })
-                        .collect(),
-                    Err(_) => (0..input_partitions)
-                        .map(|partition| self.input.execute(partition, context.clone()))
-                        .collect::<Result<_>>()?,
-                };
+                let receivers = (0..input_partitions)
+                    .map(|partition| {
+                        let stream = self.input.execute(partition, context.clone())?;
+                        Ok(spawn_buffered(stream, 1))
+                    })
+                    .collect::<Result<_>>()?;
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 

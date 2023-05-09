@@ -25,7 +25,7 @@ use crate::execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::physical_plan::common::{batch_byte_size, IPCWriter};
+use crate::physical_plan::common::{batch_byte_size, spawn_buffered, IPCWriter};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
@@ -284,11 +284,13 @@ impl ExternalSorter {
                     self.partition_id,
                     &self.runtime.memory_pool,
                 );
-                sort_batch_stream(batch, self.expr.clone(), self.fetch, metrics)
+                Ok(spawn_buffered(
+                    sort_batch_stream(batch, self.expr.clone(), self.fetch, metrics)?,
+                    1,
+                ))
             })
             .collect::<Result<_>>()?;
 
-        // TODO: Run batch sorts concurrently (#6162)
         // TODO: Pushdown fetch to streaming merge (#6000)
 
         streaming_merge(
