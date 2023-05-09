@@ -25,7 +25,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, Like, ScalarFunction, ScalarUDF,
+    self, Between, BinaryExpr, Case, Exists, InList, Like, ScalarFunction, ScalarUDF,
     WindowFunction,
 };
 use datafusion_expr::expr_schema::cast_subquery;
@@ -332,11 +332,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr_data_type = expr.get_type(&self.schema)?;
                 let list_data_types = list
                     .iter()
@@ -357,11 +357,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                                 list_expr.cast_to(&coerced_type, &self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let expr = Expr::InList {
-                            expr: Box::new(cast_expr),
-                            list: cast_list_expr,
+                        let expr = Expr::InList(InList ::new(
+                             Box::new(cast_expr),
+                             cast_list_expr,
                             negated,
-                        };
+                        ));
                         Ok(expr)
                     }
                 }
