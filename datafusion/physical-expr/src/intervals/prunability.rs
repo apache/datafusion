@@ -324,7 +324,7 @@ impl ExprPrunabilityGraph {
                 // Set initially as unordered column with undefined table side
                 self.graph[node].table_side = TableSide::None;
                 self.graph[node].sort_info.dir = Monotonicity::Unordered;
-                // By convertion we set nulls_first and nulls_last to the false.
+                // By convention we set nulls_first and nulls_last to the false.
                 // These parameters are used in the Monotonicity::ASC and Monotonicity::DESC cases.
                 self.graph[node].sort_info.nulls_first = true;
                 self.graph[node].sort_info.nulls_last = false;
@@ -351,18 +351,18 @@ impl ExprPrunabilityGraph {
                             binary_expr,
                             left_sort_expr,
                             right_sort_expr,
-                        );
+                        )?;
                 } else if binary_expr.op().is_comparison_operator() {
                     includes_filter = true;
                     (self.graph[node].table_side, self.graph[node].sort_info) =
-                        comparison_node_order(&children_prunability, binary_expr.op());
+                        comparison_node_order(&children_prunability, binary_expr.op())?;
                 } else if *binary_expr.op() == Operator::And {
                     (self.graph[node].table_side, self.graph[node].sort_info) =
                         logical_node_order(&children_prunability);
                 } else {
-                    return Err(DataFusionError::Internal(
-                        "BinaryExpr has an unknown logical operator for prunability."
-                            .to_string(),
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Prunability cannot be questioned yet for the logical operator {}", *binary_expr.op()
+                            ),
                     ));
                 }
             }
@@ -433,7 +433,7 @@ fn numeric_node_order(
     binary_expr: &BinaryExpr,
     left_sort_expr: &Option<PhysicalSortExpr>,
     right_sort_expr: &Option<PhysicalSortExpr>,
-) -> (TableSide, SortInfo) {
+) -> Result<(TableSide, SortInfo)> {
     // There may be SortOptions for BinaryExpr's like (a + b) sorted.
     // This part handles such expressions.
     for (table_side, sort_expr) in [
@@ -453,14 +453,14 @@ fn numeric_node_order(
                         Monotonicity::Asc
                     };
                     let nulls_first = sort_expr.options.nulls_first;
-                    return (
+                    return Ok((
                         table_side,
                         SortInfo {
                             dir,
                             nulls_first,
                             nulls_last: !nulls_first,
                         },
-                    );
+                    ));
                 }
             }
         }
@@ -468,43 +468,33 @@ fn numeric_node_order(
     let (left, right) = (children[0], children[1]);
     let from = get_tableside_at_numeric(&left.1.dir, &right.1.dir, left.0, right.0);
     match binary_expr.op() {
-        Operator::Plus => (from, left.1.add(right.1)),
-        Operator::Minus => (from, left.1.sub(right.1)),
-        // Undefined operators
-        _ => (
-            TableSide::None,
-            SortInfo {
-                dir: Monotonicity::Unordered,
-                nulls_first: false,
-                nulls_last: false,
-            },
-        ),
+        Operator::Plus => Ok((from, left.1.add(right.1))),
+        Operator::Minus => Ok((from, left.1.sub(right.1))),
+        op => Err(DataFusionError::NotImplemented(format!(
+            "Prunability cannot be questioned yet for binary expressions having the {op} operator"
+                ),
+        ))
     }
 }
 
 fn comparison_node_order(
     children: &[(&TableSide, &SortInfo)],
     binary_expr_op: &Operator,
-) -> (TableSide, SortInfo) {
+) -> Result<(TableSide, SortInfo)> {
     let (left, right) = (children[0], children[1]);
     match binary_expr_op {
-        Operator::Gt | Operator::GtEq => (
+        Operator::Gt | Operator::GtEq => Ok((
             get_tableside_at_gt_or_gteq(&left.1.dir, &right.1.dir, left.0, right.0),
             left.1.gt_or_gteq(right.1),
-        ),
-        Operator::Lt | Operator::LtEq => (
+        )),
+        Operator::Lt | Operator::LtEq => Ok((
             get_tableside_at_lt_or_lteq(&left.1.dir, &right.1.dir, left.0, right.0),
             left.1.lt_or_lteq(right.1),
-        ),
-        // Undefined operators
-        _ => (
-            TableSide::None,
-            SortInfo {
-                dir: Monotonicity::Unordered,
-                nulls_first: false,
-                nulls_last: false,
-            },
-        ),
+        )),
+        op => Err(DataFusionError::NotImplemented(format!(
+            "Prunability cannot be questioned yet for binary expressions having the {op} operator"
+                ),
+        ))
     }
 }
 
@@ -522,6 +512,8 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion_common::ScalarValue;
 
+    // This experiment expects its input expression to be in the form:
+    // ( (left_column + a) > (right_column + b) ) AND ( (left_column + c) < (right_column + d) )
     fn experiment_prunability(
         schema_left: &Schema,
         schema_right: &Schema,
@@ -615,6 +607,8 @@ mod tests {
         Ok(())
     }
 
+    // This experiment expects its input expression to be in the form:
+    // ( (left_column1 + a) > (b - right_column1) ) AND ( (left_column2 + c) < (right_column2 - d) )
     fn experiment_prunability_four_columns(
         schema_left: &Schema,
         schema_right: &Schema,
@@ -727,6 +721,8 @@ mod tests {
         Ok(())
     }
 
+    // This experiment expects its input expression to be in the form:
+    // ( (left_column + a) >= (right_column + b) ) AND ( (right_column + c) <= (left_column - d) )
     fn experiment_sort_info(
         schema_left: &Schema,
         schema_right: &Schema,
@@ -901,7 +897,7 @@ mod tests {
         let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
         let right_expr =
             Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
-        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr));
+        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Or, right_expr));
 
         experiment_prunability_four_columns(&schema_left, &schema_right, expr)?;
 
