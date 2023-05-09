@@ -127,7 +127,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::WindowFunction { .. }
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder { .. } => {
+            | Expr::Placeholder(_) => {
                 is_applicable = false;
                 VisitRecursion::Stop
             }
