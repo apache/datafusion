@@ -291,7 +291,6 @@ impl<'a> DFParser<'a> {
 
     /// Parse a SQL `COPY TO` statement
     pub fn parse_copy(&mut self) -> Result<Statement, ParserError> {
-        self.parser.expect_keyword(Keyword::COPY)?;
         // parse as a query
         let source = if self.parser.consume_token(&Token::LParen) {
             let query = self.parser.parse_query()?;
