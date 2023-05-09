@@ -18,7 +18,7 @@
 //! Functions for creating logical expressions
 
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GroupingSet, ScalarFunction, TryCast,
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, ScalarFunction, TryCast,
 };
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
@@ -307,25 +307,25 @@ pub fn approx_percentile_cont_with_weight(
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::Exists {
+    Expr::Exists(Exists {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
         },
         negated: false,
-    }
+    })
 }
 
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
     let outer_ref_columns = subquery.all_out_ref_exprs();
-    Expr::Exists {
+    Expr::Exists(Exists {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
         },
         negated: true,
-    }
+    })
 }
 
 /// Create an IN subquery expression

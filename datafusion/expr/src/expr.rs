@@ -170,12 +170,7 @@ pub enum Expr {
         negated: bool,
     },
     /// EXISTS subquery
-    Exists {
-        /// subquery that will produce a single column of data
-        subquery: Subquery,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    Exists(Exists),
     /// IN subquery
     InSubquery {
         /// The expression to compare
@@ -497,6 +492,22 @@ impl WindowFunction {
             order_by,
             window_frame,
         }
+    }
+}
+
+// Exists expression.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Exists {
+    /// subquery that will produce a single column of data
+    pub subquery: Subquery,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl Exists {
+    // Create a new Exists expression.
+    pub fn new(subquery: Subquery, negated: bool) -> Self {
+        Self { subquery, negated }
     }
 }
 
@@ -926,14 +937,14 @@ impl fmt::Debug for Expr {
             Expr::IsNotTrue(expr) => write!(f, "{expr:?} IS NOT TRUE"),
             Expr::IsNotFalse(expr) => write!(f, "{expr:?} IS NOT FALSE"),
             Expr::IsNotUnknown(expr) => write!(f, "{expr:?} IS NOT UNKNOWN"),
-            Expr::Exists {
+            Expr::Exists(Exists {
                 subquery,
                 negated: true,
-            } => write!(f, "NOT EXISTS ({subquery:?})"),
-            Expr::Exists {
+            }) => write!(f, "NOT EXISTS ({subquery:?})"),
+            Expr::Exists(Exists {
                 subquery,
                 negated: false,
-            } => write!(f, "EXISTS ({subquery:?})"),
+            }) => write!(f, "EXISTS ({subquery:?})"),
             Expr::InSubquery {
                 expr,
                 subquery,
@@ -1310,8 +1321,8 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::Exists { negated: true, .. } => Ok("NOT EXISTS".to_string()),
-        Expr::Exists { negated: false, .. } => Ok("EXISTS".to_string()),
+        Expr::Exists(Exists { negated: true, .. }) => Ok("NOT EXISTS".to_string()),
+        Expr::Exists(Exists { negated: false, .. }) => Ok("EXISTS".to_string()),
         Expr::InSubquery { negated: true, .. } => Ok("NOT IN".to_string()),
         Expr::InSubquery { negated: false, .. } => Ok("IN".to_string()),
         Expr::ScalarSubquery(subquery) => {
