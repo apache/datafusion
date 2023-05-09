@@ -154,7 +154,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
     predicate.apply(&mut |expr| match expr {
         Expr::Column(_)
         | Expr::Literal(_)
-        | Expr::Placeholder { .. }
+        | Expr::Placeholder(_)
         | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
