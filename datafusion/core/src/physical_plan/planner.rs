@@ -1183,6 +1183,11 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
                     ))
                 }
+                LogicalPlan::CopyTo(_) => {
+                    Err(DataFusionError::NotImplemented(
+                        format!("Physical plan not yet impelemnted for COPY statement")
+                    ))
+                }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
