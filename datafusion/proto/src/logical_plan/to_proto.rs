@@ -36,8 +36,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, ScalarFunction,
-    ScalarUDF, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
+    ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -874,11 +874,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Negative(expr)),
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::InListNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     list: list

@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
-    GroupingSet, Like, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    GroupingSet, InList, Like, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -97,7 +97,7 @@ impl TreeNode for Expr {
                 expr_vec
             }
             Expr::AggregateFunction(AggregateFunction { args, filter, .. })
-            | Expr::AggregateUDF ( AggregateUDF{args, filter, .. }) => {
+            | Expr::AggregateUDF(AggregateUDF { args, filter, .. }) => {
                 let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
@@ -117,7 +117,7 @@ impl TreeNode for Expr {
                 expr_vec.extend(order_by.clone());
                 expr_vec
             }
-            Expr::InList { expr, list, .. } => {
+            Expr::InList(InList { expr, list, .. }) => {
                 let mut expr_vec = vec![];
                 expr_vec.push(expr.as_ref().clone());
                 expr_vec.extend(list.clone());
@@ -314,21 +314,21 @@ impl TreeNode for Expr {
                 }
             },
             Expr::AggregateUDF(AggregateUDF { args, fun, filter }) => {
-                Expr::AggregateUDF(AggregateUDF {
-                    args: transform_vec(args, &mut transform)?,
+                Expr::AggregateUDF(AggregateUDF::new(
                     fun,
-                    filter: transform_option_box(filter, &mut transform)?,
-                })
+                    transform_vec(args, &mut transform)?,
+                    transform_option_box(filter, &mut transform)?,
+                ))
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => Expr::InList {
-                expr: transform_boxed(expr, &mut transform)?,
-                list: transform_vec(list, &mut transform)?,
+            }) => Expr::InList(InList::new(
+                transform_boxed(expr, &mut transform)?,
+                transform_vec(list, &mut transform)?,
                 negated,
-            },
+            )),
             Expr::Wildcard => Expr::Wildcard,
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }

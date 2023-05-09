@@ -27,7 +27,7 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
+use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -193,11 +193,11 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
-            Expr::InList {
+            Expr::InList(InList {
                 expr: left_expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 if let Some(
                     Expr::TryCast(TryCast {
                         expr: internal_left_expr,
