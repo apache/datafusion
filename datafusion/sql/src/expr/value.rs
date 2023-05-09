@@ -200,15 +200,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => s,
-            // Support expressions like `interval '1 month' + date/timestamp`. 
-            // Such expressions are parsed like this by sqlparser-rs 
-            // 
+            // Support expressions like `interval '1 month' + date/timestamp`.
+            // Such expressions are parsed like this by sqlparser-rs
+            //
             // Interval
-            // BinaryOp
-            //   Value(StringLiteral)
-            //   Cast
+            //   BinaryOp
             //     Value(StringLiteral)
-            // 
+            //     Cast
+            //       Value(StringLiteral)
+            //
             // This code rewrites them to the following:
             //
             // BinaryOp
