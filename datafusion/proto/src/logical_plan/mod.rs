@@ -1416,7 +1416,7 @@ mod roundtrip_tests {
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
     use datafusion_expr::expr::{
-        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, ScalarFunction,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
         ScalarUDF, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
@@ -2439,11 +2439,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_inlist() {
-        let test_expr = Expr::InList {
-            expr: Box::new(lit(1.0_f32)),
-            list: vec![lit(2.0_f32)],
-            negated: true,
-        };
+        let test_expr = Expr::InList(InList::new(
+            Box::new(lit(1.0_f32)),
+            vec![lit(2.0_f32)],
+            true,
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

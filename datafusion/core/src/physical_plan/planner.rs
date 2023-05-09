@@ -63,7 +63,7 @@ use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
-    GroupingSet, Like, ScalarUDF, TryCast, WindowFunction,
+    GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -242,11 +242,11 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             }
         },
 
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
