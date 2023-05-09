@@ -344,17 +344,6 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     }
 }
 
-/// function return type of a bit_and/bit_or/bit_xor
-pub fn bit_and_or_xor_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        arg_type if SIGNED_INTEGERS.contains(arg_type) => Ok(DataType::Int64),
-        arg_type if UNSIGNED_INTEGERS.contains(arg_type) => Ok(DataType::UInt64),
-        other => Err(DataFusionError::Plan(format!(
-            "BIT AND/BIT OR/BIT XOR does not support type \"{other:?}\""
-        ))),
-    }
-}
-
 /// function return type of a sum
 pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {

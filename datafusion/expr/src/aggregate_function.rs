@@ -157,7 +157,7 @@ pub fn return_type(
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
         AggregateFunction::BitAnd
         | AggregateFunction::BitOr
-        | AggregateFunction::BitXor => bit_and_or_xor_return_type(&coerced_data_types[0]),
+        | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
         AggregateFunction::BoolAnd | AggregateFunction::BoolOr => Ok(DataType::Boolean),
         AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
