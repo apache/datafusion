@@ -361,9 +361,9 @@ impl ExprPrunabilityGraph {
                         logical_node_order(&children_prunability);
                 } else {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Prunability cannot be questioned yet for the logical operator {}", *binary_expr.op()
-                            ),
-                    ));
+                        "Prunability is not supported yet for the logical operator {}",
+                        *binary_expr.op()
+                    )));
                 }
             }
         }
@@ -471,7 +471,7 @@ fn numeric_node_order(
         Operator::Plus => Ok((from, left.1.add(right.1))),
         Operator::Minus => Ok((from, left.1.sub(right.1))),
         op => Err(DataFusionError::NotImplemented(format!(
-            "Prunability cannot be questioned yet for binary expressions having the {op} operator"
+            "Prunability is not supported yet for binary expressions having the {op} operator"
                 ),
         ))
     }
@@ -492,7 +492,7 @@ fn comparison_node_order(
             left.1.lt_or_lteq(right.1),
         )),
         op => Err(DataFusionError::NotImplemented(format!(
-            "Prunability cannot be questioned yet for binary expressions having the {op} operator"
+            "Prunability is not supported yet for binary expressions having the {op} operator"
                 ),
         ))
     }
@@ -897,7 +897,7 @@ mod tests {
         let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
         let right_expr =
             Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
-        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::Or, right_expr));
+        let expr = Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr));
 
         experiment_prunability_four_columns(&schema_left, &schema_right, expr)?;
 
