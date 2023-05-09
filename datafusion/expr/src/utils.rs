@@ -303,7 +303,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
@@ -704,7 +704,7 @@ pub fn from_plan(
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
-                        | Expr::InSubquery { .. } => {
+                        | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }

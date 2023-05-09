@@ -25,8 +25,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Exists, InList, Like, ScalarFunction, ScalarUDF,
-    WindowFunction,
+    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
+    ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
@@ -144,11 +144,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     negated,
                 }))
             }
-            Expr::InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => {
+            }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
                 let expr_type = expr.get_type(&self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
@@ -161,11 +161,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
-                Ok(Expr::InSubquery {
-                    expr: Box::new(expr.cast_to(&common_type, &self.schema)?),
-                    subquery: cast_subquery(new_subquery, &common_type)?,
+                Ok(Expr::InSubquery(InSubquery::new(
+                    Box::new(expr.cast_to(&common_type, &self.schema)?),
+                    cast_subquery(new_subquery, &common_type)?,
                     negated,
-                })
+                )))
             }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
@@ -739,7 +739,7 @@ mod test {
 
     use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, Like, ScalarFunction};
+    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
@@ -1452,14 +1452,14 @@ mod test {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int64)?);
         // add cast for subquery
         let expected = "\
@@ -1477,14 +1477,14 @@ mod test {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int32)?);
         // add cast for subquery
         let expected = "\
@@ -1501,14 +1501,14 @@ mod test {
         let empty_inside = empty_with_type(DataType::Decimal128(10, 5));
         let empty_outside = empty_with_type(DataType::Decimal128(8, 8));
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_outside)?);
         // add cast for subquery
         let expected = "Filter: CAST(a AS Decimal128(13, 8)) IN (<subquery>)\

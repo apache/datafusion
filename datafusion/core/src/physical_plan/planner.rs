@@ -258,7 +258,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
             "EXISTS is not yet supported in the physical plan".to_string(),
         )),
-        Expr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
+        Expr::InSubquery(_) => Err(DataFusionError::NotImplemented(
             "IN subquery is not yet supported in the physical plan".to_string(),
         )),
         Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(

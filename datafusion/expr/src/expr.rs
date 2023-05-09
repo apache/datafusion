@@ -165,14 +165,7 @@ pub enum Expr {
     /// EXISTS subquery
     Exists(Exists),
     /// IN subquery
-    InSubquery {
-        /// The expression to compare
-        expr: Box<Expr>,
-        /// subquery that will produce a single column of data to compare against
-        subquery: Subquery,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    InSubquery(InSubquery),
     /// Scalar subquery
     ScalarSubquery(Subquery),
     /// Represents a reference to all fields in a schema.
@@ -547,6 +540,28 @@ impl InList {
     }
 }
 
+/// IN subquery
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct InSubquery {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// Subquery that will produce a single column of data to compare against
+    pub subquery: Subquery,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl InSubquery {
+    /// Create a new InSubquery expression
+    pub fn new(expr: Box<Expr>, subquery: Subquery, negated: bool) -> Self {
+        Self {
+            expr,
+            subquery,
+            negated,
+        }
+    }
+}
+
 /// Grouping sets
 /// See <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>
 /// for Postgres definition.
@@ -636,7 +651,7 @@ impl Expr {
             Expr::GetIndexedField { .. } => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
-            Expr::InSubquery { .. } => "InSubquery",
+            Expr::InSubquery(..) => "InSubquery",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Like { .. } => "Like",
@@ -956,16 +971,16 @@ impl fmt::Debug for Expr {
                 subquery,
                 negated: false,
             }) => write!(f, "EXISTS ({subquery:?})"),
-            Expr::InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated: true,
-            } => write!(f, "{expr:?} NOT IN ({subquery:?})"),
-            Expr::InSubquery {
+            }) => write!(f, "{expr:?} NOT IN ({subquery:?})"),
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated: false,
-            } => write!(f, "{expr:?} IN ({subquery:?})"),
+            }) => write!(f, "{expr:?} IN ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
             Expr::Sort(Sort {
@@ -1334,8 +1349,8 @@ fn create_name(e: &Expr) -> Result<String> {
         }
         Expr::Exists(Exists { negated: true, .. }) => Ok("NOT EXISTS".to_string()),
         Expr::Exists(Exists { negated: false, .. }) => Ok("EXISTS".to_string()),
-        Expr::InSubquery { negated: true, .. } => Ok("NOT IN".to_string()),
-        Expr::InSubquery { negated: false, .. } => Ok("IN".to_string()),
+        Expr::InSubquery(InSubquery { negated: true, .. }) => Ok("NOT IN".to_string()),
+        Expr::InSubquery(InSubquery { negated: false, .. }) => Ok("IN".to_string()),
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
