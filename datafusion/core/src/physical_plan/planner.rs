@@ -62,8 +62,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
-    Like, ScalarUDF, TryCast, WindowFunction,
+    self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
+    GroupingSet, Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -199,7 +199,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             ..
         }) => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
                     "aggregate expression with filter is not supported".to_string(),
@@ -1666,7 +1666,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             );
             Ok((agg_expr?, filter))
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
             let args = args
                 .iter()
                 .map(|e| {

@@ -704,7 +704,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args, filter } => Self {
+            Expr::AggregateUDF(expr::AggregateUDF { fun, args, filter }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name.clone(),

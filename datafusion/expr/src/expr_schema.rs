@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GetIndexedField, ScalarFunction, ScalarUDF,
-    Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, ScalarFunction,
+    ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -123,7 +123,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 aggregate_function::return_type(fun, &data_types)
             }
-            Expr::AggregateUDF { fun, args, .. } => {
+            Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
