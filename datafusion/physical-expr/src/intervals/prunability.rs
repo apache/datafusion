@@ -61,11 +61,134 @@ pub enum Monotonicity {
     Singleton,
 }
 
+impl Monotonicity {
+    fn add(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Monotonicity::Singleton, Monotonicity::Singleton) => Monotonicity::Singleton,
+            (Monotonicity::Singleton, rhs) => *rhs,
+            (lhs, Monotonicity::Singleton) => *lhs,
+            (Monotonicity::Asc, Monotonicity::Asc) => Monotonicity::Asc,
+            (Monotonicity::Desc, Monotonicity::Desc) => Monotonicity::Desc,
+            (_, _) => Monotonicity::Unordered,
+        }
+    }
+
+    fn sub(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Monotonicity::Singleton, Monotonicity::Singleton) => Monotonicity::Singleton,
+            (Monotonicity::Singleton, rhs) => {
+                if *rhs == Monotonicity::Asc {
+                    Monotonicity::Desc
+                } else if *rhs == Monotonicity::Desc {
+                    Monotonicity::Asc
+                } else {
+                    Monotonicity::Unordered
+                }
+            }
+            (lhs, Monotonicity::Singleton) => *lhs,
+            (Monotonicity::Asc, Monotonicity::Desc) => Monotonicity::Asc,
+            (Monotonicity::Desc, Monotonicity::Asc) => Monotonicity::Desc,
+            (_, _) => Monotonicity::Unordered,
+        }
+    }
+
+    fn gt_or_gteq(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Monotonicity::Singleton, rhs) => {
+                if *rhs == Monotonicity::Asc {
+                    Monotonicity::Desc
+                } else if *rhs == Monotonicity::Desc {
+                    Monotonicity::Asc
+                } else {
+                    Monotonicity::Unordered
+                }
+            }
+            (lhs, Monotonicity::Singleton) => *lhs,
+            (Monotonicity::Asc, Monotonicity::Desc) => Monotonicity::Asc,
+            (Monotonicity::Desc, Monotonicity::Asc) => Monotonicity::Desc,
+            (_, _) => Monotonicity::Unordered,
+        }
+    }
+
+    fn lt_or_lteq(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Monotonicity::Singleton, rhs) => *rhs,
+            (lhs, Monotonicity::Singleton) => {
+                if *lhs == Monotonicity::Asc {
+                    Monotonicity::Desc
+                } else if *lhs == Monotonicity::Desc {
+                    Monotonicity::Asc
+                } else {
+                    Monotonicity::Unordered
+                }
+            }
+            (Monotonicity::Asc, Monotonicity::Desc) => Monotonicity::Desc,
+            (Monotonicity::Desc, Monotonicity::Asc) => Monotonicity::Asc,
+            (_, _) => Monotonicity::Unordered,
+        }
+    }
+
+    fn and(&self, rhs: &Self) -> Self {
+        match (self, rhs) {
+            (Monotonicity::Asc, Monotonicity::Asc)
+            | (Monotonicity::Asc, Monotonicity::Singleton)
+            | (Monotonicity::Singleton, Monotonicity::Asc) => Monotonicity::Asc,
+            (Monotonicity::Desc, Monotonicity::Desc)
+            | (Monotonicity::Desc, Monotonicity::Singleton)
+            | (Monotonicity::Singleton, Monotonicity::Desc) => Monotonicity::Desc,
+            (Monotonicity::Singleton, Monotonicity::Singleton) => Monotonicity::Singleton,
+            (_, _) => Monotonicity::Unordered,
+        }
+    }
+}
+
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub struct SortInfo {
     dir: Monotonicity,
     nulls_first: bool,
     nulls_last: bool,
+}
+
+impl SortInfo {
+    fn add(&self, rhs: &Self) -> Self {
+        SortInfo {
+            dir: self.dir.add(&rhs.dir),
+            nulls_first: self.nulls_first || rhs.nulls_first,
+            nulls_last: self.nulls_last || rhs.nulls_last,
+        }
+    }
+
+    fn sub(&self, rhs: &Self) -> Self {
+        SortInfo {
+            dir: self.dir.sub(&rhs.dir),
+            nulls_first: self.nulls_first || rhs.nulls_first,
+            nulls_last: self.nulls_last || rhs.nulls_last,
+        }
+    }
+
+    fn gt_or_gteq(&self, rhs: &Self) -> Self {
+        SortInfo {
+            dir: self.dir.gt_or_gteq(&rhs.dir),
+            nulls_first: self.nulls_first || rhs.nulls_first,
+            nulls_last: self.nulls_last || rhs.nulls_last,
+        }
+    }
+
+    fn lt_or_lteq(&self, rhs: &Self) -> Self {
+        SortInfo {
+            dir: self.dir.lt_or_lteq(&rhs.dir),
+            nulls_first: self.nulls_first || rhs.nulls_first,
+            nulls_last: self.nulls_last || rhs.nulls_last,
+        }
+    }
+
+    fn and(&self, rhs: &Self) -> Self {
+        SortInfo {
+            dir: self.dir.and(&rhs.dir),
+            nulls_first: self.nulls_first || rhs.nulls_first,
+            nulls_last: self.nulls_last || rhs.nulls_last,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -287,36 +410,18 @@ fn numeric_node_order(
     }
     let (left, right) = (children[0], children[1]);
     match (left.1.dir, right.1.dir, binary_expr.op()) {
-        // Literal + - Literal
-        (Monotonicity::Singleton, Monotonicity::Singleton, _) => (
-            TableSide::None,
-            SortInfo {
-                dir: Monotonicity::Singleton,
-                nulls_first: false,
-                nulls_last: false,
-            },
-        ),
+        // Literal + Literal
+        (Monotonicity::Singleton, Monotonicity::Singleton, Operator::Plus) => {
+            (TableSide::None, left.1.add(right.1))
+        }
+        // Literal + Literal
+        (Monotonicity::Singleton, Monotonicity::Singleton, Operator::Minus) => {
+            (TableSide::None, left.1.sub(right.1))
+        }
         // Literal + some column
         (Monotonicity::Singleton, _, Operator::Plus) => (*right.0, *right.1),
         // Literal - some column
-        (Monotonicity::Singleton, _, Operator::Minus) => {
-            // if ordered column, reverse the order, otherwise unordered column
-            let order = if right.1.dir == Monotonicity::Asc {
-                Monotonicity::Desc
-            } else if right.1.dir == Monotonicity::Desc {
-                Monotonicity::Asc
-            } else {
-                Monotonicity::Unordered
-            };
-            (
-                *right.0,
-                SortInfo {
-                    dir: order,
-                    nulls_first: right.1.nulls_first,
-                    nulls_last: right.1.nulls_last,
-                },
-            )
-        }
+        (Monotonicity::Singleton, _, Operator::Minus) => (*right.0, left.1.sub(right.1)),
         // Some column + - literal
         (_, Monotonicity::Singleton, Operator::Minus | Operator::Plus) => {
             (*left.0, *left.1)
@@ -331,27 +436,11 @@ fn numeric_node_order(
                 }
                 (_, _) => TableSide::None,
             };
-            let dir = match (left.1.dir, right.1.dir, op) {
-                (Monotonicity::Asc, Monotonicity::Asc, Operator::Plus)
-                | (Monotonicity::Asc, Monotonicity::Desc, Operator::Minus) => {
-                    Monotonicity::Asc
-                }
-                (Monotonicity::Desc, Monotonicity::Desc, Operator::Plus)
-                | (Monotonicity::Desc, Monotonicity::Asc, Operator::Minus) => {
-                    Monotonicity::Desc
-                }
-                (_, _, _) => Monotonicity::Unordered,
-            };
-            let nulls_first = left.1.nulls_first || right.1.nulls_first;
-            let nulls_last = left.1.nulls_last || right.1.nulls_last;
-            (
-                from,
-                SortInfo {
-                    dir,
-                    nulls_first,
-                    nulls_last,
-                },
-            )
+            if *op == Operator::Plus {
+                (from, left.1.add(right.1))
+            } else {
+                (from, left.1.sub(right.1))
+            }
         }
     }
 }
@@ -362,79 +451,23 @@ fn comparison_node_order(
 ) -> (TableSide, SortInfo) {
     let (left, right) = (children[0], children[1]);
     match (left.1.dir, children[1].1.dir, binary_expr_op) {
-        // Literal > (>=) some column
+        // Literal > (>=) some column | Some column > (>=) literal
         (Monotonicity::Singleton, _, Operator::Gt)
-        | (Monotonicity::Singleton, _, Operator::GtEq) => {
-            let dir = match right.1.dir {
-                Monotonicity::Asc => Monotonicity::Desc,
-                Monotonicity::Desc => Monotonicity::Asc,
-                _ => Monotonicity::Unordered,
-            };
-            (
-                TableSide::None,
-                SortInfo {
-                    dir,
-                    nulls_first: right.1.nulls_last,
-                    nulls_last: right.1.nulls_last,
-                },
-            )
-        }
-        // Literal < (<=) some column
-        (Monotonicity::Singleton, _, Operator::Lt)
-        | (Monotonicity::Singleton, _, Operator::LtEq) => {
-            let dir = match right.1.dir {
-                Monotonicity::Asc => Monotonicity::Asc,
-                Monotonicity::Desc => Monotonicity::Desc,
-                _ => Monotonicity::Unordered,
-            };
-            (
-                TableSide::None,
-                SortInfo {
-                    dir,
-                    nulls_first: right.1.nulls_last,
-                    nulls_last: right.1.nulls_last,
-                },
-            )
-        }
-        // Some column > (>=) literal
-        (_, Monotonicity::Singleton, Operator::Gt)
+        | (Monotonicity::Singleton, _, Operator::GtEq)
+        | (_, Monotonicity::Singleton, Operator::Gt)
         | (_, Monotonicity::Singleton, Operator::GtEq) => {
-            let dir = match right.1.dir {
-                Monotonicity::Asc => Monotonicity::Asc,
-                Monotonicity::Desc => Monotonicity::Desc,
-                _ => Monotonicity::Unordered,
-            };
-            (
-                TableSide::None,
-                SortInfo {
-                    dir,
-                    nulls_first: right.1.nulls_last,
-                    nulls_last: right.1.nulls_last,
-                },
-            )
+            (TableSide::None, left.1.gt_or_gteq(right.1))
         }
-        // Some column < (<=) literal
-        (_, Monotonicity::Singleton, Operator::Lt)
+        // Literal < (<=) some column | Some column < (<=) literal
+        (Monotonicity::Singleton, _, Operator::Lt)
+        | (Monotonicity::Singleton, _, Operator::LtEq)
+        | (_, Monotonicity::Singleton, Operator::Lt)
         | (_, Monotonicity::Singleton, Operator::LtEq) => {
-            let dir = match right.1.dir {
-                Monotonicity::Asc => Monotonicity::Desc,
-                Monotonicity::Desc => Monotonicity::Asc,
-                _ => Monotonicity::Unordered,
-            };
-            (
-                TableSide::None,
-                SortInfo {
-                    dir,
-                    nulls_first: right.1.nulls_last,
-                    nulls_last: right.1.nulls_last,
-                },
-            )
+            (TableSide::None, left.1.lt_or_lteq(right.1))
         }
         // Column cmp column
         (_, _, op) => {
-            let nulls_first = left.1.nulls_first | right.1.nulls_first;
-            let nulls_last = left.1.nulls_last | right.1.nulls_last;
-            let table_side = match (left.1.dir, right.1.dir, op) {
+            let from = match (left.1.dir, right.1.dir, op) {
                 (Monotonicity::Asc, Monotonicity::Asc, Operator::Gt)
                 | (Monotonicity::Asc, Monotonicity::Asc, Operator::GtEq)
                 | (Monotonicity::Desc, Monotonicity::Desc, Operator::Lt)
@@ -445,37 +478,10 @@ fn comparison_node_order(
                 | (Monotonicity::Desc, Monotonicity::Desc, Operator::GtEq) => *right.0,
                 (_, _, _) => TableSide::None,
             };
-            match (left.1.dir, right.1.dir, op) {
-                (Monotonicity::Asc, Monotonicity::Desc, Operator::Gt)
-                | (Monotonicity::Asc, Monotonicity::Desc, Operator::GtEq)
-                | (Monotonicity::Desc, Monotonicity::Asc, Operator::Lt)
-                | (Monotonicity::Desc, Monotonicity::Asc, Operator::LtEq) => (
-                    table_side,
-                    SortInfo {
-                        dir: Monotonicity::Asc,
-                        nulls_first,
-                        nulls_last,
-                    },
-                ),
-                (Monotonicity::Asc, Monotonicity::Desc, Operator::Lt)
-                | (Monotonicity::Asc, Monotonicity::Desc, Operator::LtEq)
-                | (Monotonicity::Desc, Monotonicity::Asc, Operator::Gt)
-                | (Monotonicity::Desc, Monotonicity::Asc, Operator::GtEq) => (
-                    table_side,
-                    SortInfo {
-                        dir: Monotonicity::Desc,
-                        nulls_first,
-                        nulls_last,
-                    },
-                ),
-                (_, _, _) => (
-                    table_side,
-                    SortInfo {
-                        dir: Monotonicity::Unordered,
-                        nulls_first,
-                        nulls_last,
-                    },
-                ),
+            if *op == Operator::Gt || *op == Operator::GtEq {
+                (from, left.1.gt_or_gteq(right.1))
+            } else {
+                (from, left.1.lt_or_lteq(right.1))
             }
         }
     }
@@ -491,44 +497,7 @@ fn logical_node_order(children: &[(&TableSide, &SortInfo)]) -> (TableSide, SortI
         (TableSide::Right, _) | (_, TableSide::Right) => TableSide::Right,
         (_, _) => TableSide::None,
     };
-    match (left.1.dir, right.1.dir) {
-        (Monotonicity::Asc, Monotonicity::Asc)
-        | (Monotonicity::Asc, Monotonicity::Singleton)
-        | (Monotonicity::Singleton, Monotonicity::Asc) => (
-            from,
-            SortInfo {
-                dir: Monotonicity::Asc,
-                nulls_first: left.1.nulls_first | right.1.nulls_first,
-                nulls_last: left.1.nulls_last | right.1.nulls_last,
-            },
-        ),
-        (Monotonicity::Desc, Monotonicity::Desc)
-        | (Monotonicity::Desc, Monotonicity::Singleton)
-        | (Monotonicity::Singleton, Monotonicity::Desc) => (
-            from,
-            SortInfo {
-                dir: Monotonicity::Desc,
-                nulls_first: left.1.nulls_first | right.1.nulls_first,
-                nulls_last: left.1.nulls_last | right.1.nulls_last,
-            },
-        ),
-        (Monotonicity::Singleton, Monotonicity::Singleton) => (
-            from,
-            SortInfo {
-                dir: Monotonicity::Singleton,
-                nulls_first: left.1.nulls_first | right.1.nulls_first,
-                nulls_last: left.1.nulls_last | right.1.nulls_last,
-            },
-        ),
-        (_, _) => (
-            from,
-            SortInfo {
-                dir: Monotonicity::Unordered,
-                nulls_first: left.1.nulls_first | right.1.nulls_first,
-                nulls_last: left.1.nulls_last | right.1.nulls_last,
-            },
-        ),
-    }
+    (from, left.1.and(right.1))
 }
 
 #[cfg(test)]
