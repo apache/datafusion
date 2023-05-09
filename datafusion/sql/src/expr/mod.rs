@@ -295,6 +295,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(*subquery, schema, planner_context),
 
             SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, planner_context),
+            SQLExpr::FIRST(first_agg) => self.parse_first_agg(first_agg, schema, planner_context),
+            SQLExpr::LAST(last_agg) => todo!(),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {sql:?}"
@@ -305,6 +307,54 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_array_agg(
         &self,
         array_agg: ArrayAgg,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
+        let ArrayAgg {
+            distinct,
+            expr,
+            order_by,
+            limit,
+            within_group,
+        } = array_agg;
+
+        let order_by = if let Some(order_by) = order_by {
+            // TODO: Once sqlparser supports multiple order by clause, handle it
+            Some(vec![self.order_by_to_sort_expr(
+                *order_by,
+                input_schema,
+                planner_context,
+            )?])
+        } else {
+            None
+        };
+
+        if let Some(limit) = limit {
+            return Err(DataFusionError::NotImplemented(format!(
+                "LIMIT not supported in ARRAY_AGG: {limit}"
+            )));
+        }
+
+        if within_group {
+            return Err(DataFusionError::NotImplemented(
+                "WITHIN GROUP not supported in ARRAY_AGG".to_string(),
+            ));
+        }
+
+        let args =
+            vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
+
+        // next, aggregate built-ins
+        let fun = AggregateFunction::ArrayAgg;
+        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun, args, distinct, None, order_by,
+        )))
+    }
+
+    fn parse_first_agg(
+        &self,
+        array_agg: FirstAgg,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {

@@ -257,3 +257,56 @@ async fn test_source_sorted_groupby2() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_source_sorted_groupby3() -> Result<()> {
+    let tmpdir = TempDir::new().unwrap();
+    let session_config = SessionConfig::new().with_target_partitions(1);
+    let ctx = get_test_context2(&tmpdir, true, session_config).await?;
+
+    let sql = "SELECT a, FIRST(c ORDER BY a DESC)
+           FROM annotated_data
+           GROUP BY a, b";
+    // let sql = "SELECT a, ARRAY_AGG(c ORDER BY a DESC, b DESC)
+    //        FROM annotated_data
+    //        GROUP BY a, b";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let expected = {
+        vec![
+            "ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data.c)@2 as summation1]",
+            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data.c)], ordering_mode=PartiallyOrdered",
+        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---+---+------------+",
+        "| a | d | summation1 |",
+        "+---+---+------------+",
+        "| 0 | 0 | 292        |",
+        "| 0 | 2 | 196        |",
+        "| 0 | 1 | 315        |",
+        "| 0 | 4 | 164        |",
+        "| 0 | 3 | 258        |",
+        "| 1 | 0 | 622        |",
+        "| 1 | 3 | 299        |",
+        "| 1 | 1 | 1043       |",
+        "| 1 | 4 | 913        |",
+        "| 1 | 2 | 848        |",
+        "+---+---+------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}

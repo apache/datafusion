@@ -38,8 +38,10 @@ path = "src/lib.rs"
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { workspace = true }
 datafusion-common = { path = "../common", version = "23.0.0" }
-sqlparser = "0.33"
-
+# sqlparser = "0.33"
+# sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", branch="feature/first_last_support"}
+sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "870b3de"}
+# sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "00719e3"}
 [dev-dependencies]
 ctor = "0.2.0"
 env_logger = "0.10"
