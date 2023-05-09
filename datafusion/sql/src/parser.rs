@@ -17,8 +17,9 @@
 
 //! DataFusion SQL Parser based on [`sqlparser`]
 
+use datafusion_common::OwnedTableReference;
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::OrderByExpr;
+use sqlparser::ast::{OrderByExpr, Query};
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
@@ -41,6 +42,47 @@ macro_rules! parser_err {
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
+
+/// DataFusion extension DDL for `COPY`
+///
+/// Syntax:
+///
+/// ```text
+/// COPY <table_name | (<query>)>
+/// TO
+/// <destination_url>
+/// (key_value_list)
+///
+/// ```
+/// Examples
+/// ``sql
+/// COPY lineitem  TO 'lineitem'
+///  (format parquet,
+///   partitions 16,
+///   row_group_limit_rows 100000,
+//    row_group_limit_bytes
+///  )
+///
+/// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyTo {
+    /// From where the data comes from
+    source: CopyToSource,
+    /// The URL to where the data is heading
+    target: String,
+    /// Target specific options
+    pub options: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyToSource {
+    /// `COPY <table> TO ...`
+    Relation(OwnedTableReference),
+    /// COPY (query...) TO ...
+    Query(Query),
+}
+
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 ///
