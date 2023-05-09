@@ -18,7 +18,7 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
-    ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    InSubquery, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -133,7 +133,7 @@ impl ExprSchemable for Expr {
             Expr::Not(_)
             | Expr::IsNull(_)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -232,7 +232,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. }
             | Expr::Placeholder { .. } => Ok(true),
-            Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
+            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }

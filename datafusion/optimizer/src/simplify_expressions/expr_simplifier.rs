@@ -28,7 +28,7 @@ use arrow::{
 };
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, ScalarFunction};
+use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
     Volatility,
@@ -258,7 +258,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
@@ -408,11 +408,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && matches!(list.first(), Some(Expr::ScalarSubquery { .. })) =>
             {
                 let Expr::ScalarSubquery(subquery) = list.remove(0) else { unreachable!() };
-                Expr::InSubquery {
-                    expr,
-                    subquery,
-                    negated,
-                }
+                Expr::InSubquery(InSubquery::new(expr, subquery, negated))
             }
 
             // if expr is a single column reference:
