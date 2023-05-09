@@ -41,9 +41,9 @@ use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map,
-    utils::{convert_to_expr, get_indices_of_matching_exprs, normalize_sort_expr},
-    AggregateExpr, EquivalentClass, OrderingEquivalentClass, PhysicalExpr,
-    PhysicalSortExpr, PhysicalSortRequirement,
+    utils::{convert_to_expr, get_indices_of_matching_exprs},
+    AggregateExpr, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+    PhysicalSortRequirement,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -56,6 +56,7 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::utils::ordering_satisfy_concrete;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -343,35 +344,43 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
 
 /// This function gets the finest ordering requirement among all the aggregation
 /// functions. If requirements are conflicting, (i.e. we can not compute the
-/// aggregations in a single [`AggregateExec`]), the function returns an error
-/// value. Note that handling of multiple requirement sets is left as future work.
-fn get_finest_requirement(
+/// aggregations in a single [`AggregateExec`]), the function returns an error.
+fn get_finest_requirement<
+    F: Fn() -> EquivalenceProperties,
+    F2: Fn() -> OrderingEquivalenceProperties,
+>(
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
-    eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass],
-) -> Result<Option<PhysicalSortExpr>> {
-    let mut result: Option<PhysicalSortExpr> = None;
-    let mut normalized_result: Option<PhysicalSortExpr> = None;
-    for item in order_by_expr.iter().flatten() {
-        if let Some(normalized_expr) = &normalized_result {
-            let normalized_item = normalize_sort_expr(
-                item[0].clone(),
-                eq_properties,
-                ordering_eq_properties,
-            );
-            if normalized_item.ne(normalized_expr) {
-                return Err(DataFusionError::Plan(
-                    "Conflicting ordering requirements in aggregate functions"
-                        .to_string(),
-                ));
+    eq_properties: F,
+    ordering_eq_properties: F2,
+) -> Result<Option<Vec<PhysicalSortExpr>>> {
+    let mut result: Option<Vec<PhysicalSortExpr>> = None;
+    for fn_reqs in order_by_expr.iter().flatten() {
+        if let Some(result) = &mut result {
+            if ordering_satisfy_concrete(
+                result,
+                fn_reqs,
+                &eq_properties,
+                &ordering_eq_properties,
+            ) {
+                // do not update result, result already satisfies the requirement for current function
+                continue;
             }
-        } else {
-            result = Some(item[0].clone());
-            normalized_result = Some(normalize_sort_expr(
-                item[0].clone(),
-                eq_properties,
-                ordering_eq_properties,
+            if ordering_satisfy_concrete(
+                fn_reqs,
+                result,
+                &eq_properties,
+                &ordering_eq_properties,
+            ) {
+                // update result with fn_reqs, fn_reqs satisfy the existing requirement and itself.
+                *result = fn_reqs.clone();
+                continue;
+            }
+            // If either of the requirements satisfy other this means that, requirement are conflicting.
+            return Err(DataFusionError::Plan(
+                "Conflicting ordering requirements in aggregate functions".to_string(),
             ));
+        } else {
+            result = Some(fn_reqs.clone());
         }
     }
     Ok(result)
@@ -404,12 +413,15 @@ impl AggregateExec {
         if mode == AggregateMode::Partial || mode == AggregateMode::Single {
             let requirement = get_finest_requirement(
                 &order_by_expr,
-                input.equivalence_properties().classes(),
-                input.ordering_equivalence_properties().classes(),
+                || input.equivalence_properties(),
+                || input.ordering_equivalence_properties(),
             )?;
-            if let Some(expr) = requirement {
-                aggregator_requirement = Some(vec![PhysicalSortRequirement::from(expr)]);
-            }
+            aggregator_requirement = requirement.map(|exprs| {
+                exprs
+                    .into_iter()
+                    .map(PhysicalSortRequirement::from)
+                    .collect::<Vec<_>>()
+            });
         }
 
         // construct a map from the input columns to the output columns of the Aggregation
@@ -1053,7 +1065,8 @@ mod tests {
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
-        get_working_mode, AggregateExec, AggregateMode, PhysicalGroupBy,
+        get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
+        PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -1064,8 +1077,13 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
-    use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
+    use datafusion_physical_expr::expressions::{
+        lit, ApproxDistinct, Column, Count, Median,
+    };
+    use datafusion_physical_expr::{
+        AggregateExpr, EquivalenceProperties, OrderedColumn,
+        OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+    };
     use futures::{FutureExt, Stream};
     use std::any::Any;
     use std::sync::Arc;
@@ -1697,6 +1715,65 @@ mod tests {
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_finest_requirements() -> Result<()> {
+        let test_schema = create_test_schema()?;
+        // Assume column a and b are aliases
+        // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
+        let options1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let options2 = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
+        let col_a = Column::new("a", 0);
+        let col_b = Column::new("b", 1);
+        let col_c = Column::new("c", 2);
+        let col_d = Column::new("d", 3);
+        eq_properties.add_equal_conditions((&col_a, &col_b));
+        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
+        ordering_eq_properties.add_equal_conditions((
+            &OrderedColumn::new(col_a.clone(), options1),
+            &OrderedColumn::new(col_c.clone(), options2),
+        ));
+
+        let order_by_exprs = vec![
+            None,
+            Some(vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()),
+                options: options1,
+            }]),
+            Some(vec![PhysicalSortExpr {
+                expr: Arc::new(col_b.clone()),
+                options: options1,
+            }]),
+            Some(vec![PhysicalSortExpr {
+                expr: Arc::new(col_c),
+                options: options2,
+            }]),
+            Some(vec![
+                PhysicalSortExpr {
+                    expr: Arc::new(col_a),
+                    options: options1,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(col_d),
+                    options: options1,
+                },
+            ]),
+        ];
+        let res = get_finest_requirement(
+            &order_by_exprs,
+            || eq_properties.clone(),
+            || ordering_eq_properties.clone(),
+        )?;
+        assert_eq!(res, order_by_exprs[4]);
         Ok(())
     }
 }
