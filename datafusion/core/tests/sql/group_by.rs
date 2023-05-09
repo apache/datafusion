@@ -277,8 +277,8 @@ async fn test_source_sorted_groupby3() -> Result<()> {
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let expected = {
         vec![
-            "ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data.c)@2 as summation1]",
-            "  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data.c)], ordering_mode=PartiallyOrdered",
+            "ProjectionExec: expr=[a@0 as a, FIRST(annotated_data.c) ORDER BY [a DESC NULLS FIRST]@2 as FIRST(annotated_data.c)]",
+            "  AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[FIRST(annotated_data.c)], ordering_mode=FullyOrdered",
         ]
     };
 
@@ -292,20 +292,14 @@ async fn test_source_sorted_groupby3() -> Result<()> {
 
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---+---+------------+",
-        "| a | d | summation1 |",
-        "+---+---+------------+",
-        "| 0 | 0 | 292        |",
-        "| 0 | 2 | 196        |",
-        "| 0 | 1 | 315        |",
-        "| 0 | 4 | 164        |",
-        "| 0 | 3 | 258        |",
-        "| 1 | 0 | 622        |",
-        "| 1 | 3 | 299        |",
-        "| 1 | 1 | 1043       |",
-        "| 1 | 4 | 913        |",
-        "| 1 | 2 | 848        |",
-        "+---+---+------------+",
+        "+---+-------------------------+",
+        "| a | FIRST(annotated_data.c) |",
+        "+---+-------------------------+",
+        "| 0 | 0                       |",
+        "| 0 | 25                      |",
+        "| 1 | 50                      |",
+        "| 1 | 75                      |",
+        "+---+-------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

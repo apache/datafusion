@@ -34,7 +34,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, FirstAgg, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -296,7 +296,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, planner_context),
             SQLExpr::FIRST(first_agg) => self.parse_first_agg(first_agg, schema, planner_context),
-            SQLExpr::LAST(last_agg) => todo!(),
+            SQLExpr::LAST(_last_agg) => todo!(),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {sql:?}"
@@ -359,7 +359,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
-        let ArrayAgg {
+        let FirstAgg {
             distinct,
             expr,
             order_by,
@@ -380,13 +380,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         if let Some(limit) = limit {
             return Err(DataFusionError::NotImplemented(format!(
-                "LIMIT not supported in ARRAY_AGG: {limit}"
+                "LIMIT not supported in FIRST: {limit}"
             )));
         }
 
         if within_group {
             return Err(DataFusionError::NotImplemented(
-                "WITHIN GROUP not supported in ARRAY_AGG".to_string(),
+                "WITHIN GROUP not supported in FIRST".to_string(),
             ));
         }
 
@@ -394,7 +394,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
 
         // next, aggregate built-ins
-        let fun = AggregateFunction::ArrayAgg;
+        let fun = AggregateFunction::First;
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
             fun, args, distinct, None, order_by,
         )))

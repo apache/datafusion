@@ -98,6 +98,11 @@ pub fn create_aggregate_expr(
                 input_phy_types[0].clone(),
             ))
         }
+        (AggregateFunction::First, _) => Arc::new(expressions::FirstAgg::new(
+            input_phy_exprs[0].clone(),
+            name,
+            input_phy_types[0].clone(),
+        )),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             input_phy_exprs[0].clone(),
             name,
