@@ -31,6 +31,7 @@ use crate::cast::{
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
+use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
 use arrow::datatypes::{FieldRef, Fields, SchemaBuilder};
 use arrow::{
@@ -2375,8 +2376,8 @@ impl ScalarValue {
                 let field_values = fields
                     .iter()
                     .zip(columns)
-                    .map(|(field, column)| -> Result<(Field, ArrayRef)> {
-                        Ok((field.as_ref().clone(), Self::iter_to_array(column)?))
+                    .map(|(field, column)| {
+                        Ok((field.clone(), Self::iter_to_array(column)?))
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -2546,7 +2547,7 @@ impl ScalarValue {
         let offsets_array = offsets.finish();
         let array_data = ArrayDataBuilder::new(data_type.clone())
             .len(offsets_array.len() - 1)
-            .null_bit_buffer(Some(valid.finish()))
+            .nulls(Some(NullBuffer::new(valid.finish())))
             .add_buffer(offsets_array.values().inner().clone())
             .add_child_data(flat_array.to_data());
 
@@ -2777,7 +2778,7 @@ impl ScalarValue {
                         .iter()
                         .zip(values.iter())
                         .map(|(field, value)| {
-                            (field.as_ref().clone(), value.to_array_of_size(size))
+                            (field.clone(), value.to_array_of_size(size))
                         })
                         .collect();
 
@@ -4647,17 +4648,17 @@ mod tests {
 
     #[test]
     fn test_scalar_struct() {
-        let field_a = Field::new("A", DataType::Int32, false);
-        let field_b = Field::new("B", DataType::Boolean, false);
-        let field_c = Field::new("C", DataType::Utf8, false);
+        let field_a = Arc::new(Field::new("A", DataType::Int32, false));
+        let field_b = Arc::new(Field::new("B", DataType::Boolean, false));
+        let field_c = Arc::new(Field::new("C", DataType::Utf8, false));
 
-        let field_e = Field::new("e", DataType::Int16, false);
-        let field_f = Field::new("f", DataType::Int64, false);
-        let field_d = Field::new(
+        let field_e = Arc::new(Field::new("e", DataType::Int16, false));
+        let field_f = Arc::new(Field::new("f", DataType::Int64, false));
+        let field_d = Arc::new(Field::new(
             "D",
             DataType::Struct(vec![field_e.clone(), field_f.clone()].into()),
             false,
-        );
+        ));
 
         let scalar = ScalarValue::Struct(
             Some(vec![
@@ -4824,12 +4825,12 @@ mod tests {
 
     #[test]
     fn test_lists_in_struct() {
-        let field_a = Field::new("A", DataType::Utf8, false);
-        let field_primitive_list = Field::new(
+        let field_a = Arc::new(Field::new("A", DataType::Utf8, false));
+        let field_primitive_list = Arc::new(Field::new(
             "primitive_list",
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
             false,
-        );
+        ));
 
         // Define primitive list scalars
         let l0 = ScalarValue::List(

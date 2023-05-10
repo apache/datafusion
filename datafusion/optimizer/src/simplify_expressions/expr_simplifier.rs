@@ -265,7 +265,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder { .. } => false,
+            | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
                 Self::volatility_ok(fun.volatility())
             }

@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::BinaryExpr;
+use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
 use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Value};
@@ -114,10 +114,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             param, param_type
         );
 
-        Ok(Expr::Placeholder {
-            id: param,
-            data_type: param_type.cloned(),
-        })
+        Ok(Expr::Placeholder(Placeholder::new(
+            param,
+            param_type.cloned(),
+        )))
     }
 
     pub(super) fn sql_array_literal(

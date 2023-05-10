@@ -177,12 +177,7 @@ pub enum Expr {
     GroupingSet(GroupingSet),
     /// A place holder for parameters in a prepared statement
     /// (e.g. `$foo` or `$1`)
-    Placeholder {
-        /// The identifier of the parameter (e.g, $1 or $foo)
-        id: String,
-        /// The type the parameter will be filled in with
-        data_type: Option<DataType>,
-    },
+    Placeholder(Placeholder),
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
@@ -562,6 +557,22 @@ impl InSubquery {
     }
 }
 
+/// Placeholder
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Placeholder {
+    /// The identifier of the parameter (e.g, $1 or $foo)
+    pub id: String,
+    /// The type the parameter will be filled in with
+    pub data_type: Option<DataType>,
+}
+
+impl Placeholder {
+    /// Create a new Placeholder expression
+    pub fn new(id: String, data_type: Option<DataType>) -> Self {
+        Self { id, data_type }
+    }
+}
+
 /// Grouping sets
 /// See <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>
 /// for Postgres definition.
@@ -666,7 +677,7 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
-            Expr::Placeholder { .. } => "Placeholder",
+            Expr::Placeholder(_) => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
@@ -1172,7 +1183,7 @@ impl fmt::Debug for Expr {
                     )
                 }
             },
-            Expr::Placeholder { id, .. } => write!(f, "{id}"),
+            Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
         }
     }
 }
@@ -1457,7 +1468,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder { id, .. } => Ok((*id).to_string()),
+        Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
     }
 }
 

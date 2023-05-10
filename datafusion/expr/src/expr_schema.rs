@@ -18,7 +18,7 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
-    InSubquery, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -62,7 +62,7 @@ impl ExprSchemable for Expr {
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
             Expr::Alias(expr, name) => match &**expr {
-                Expr::Placeholder { data_type, .. } => match &data_type {
+                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
                 },
@@ -154,9 +154,13 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
-            Expr::Placeholder { data_type, .. } => data_type.clone().ok_or_else(|| {
-                DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
-            }),
+            Expr::Placeholder(Placeholder { data_type, .. }) => {
+                data_type.clone().ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Placeholder type could not be resolved".to_owned(),
+                    )
+                })
+            }
             Expr::Wildcard => {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -231,7 +235,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. }
-            | Expr::Placeholder { .. } => Ok(true),
+            | Expr::Placeholder(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())

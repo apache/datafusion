@@ -169,7 +169,7 @@ impl TableProviderFactory for ListingTableFactory {
 fn get_extension(path: &str) -> String {
     let res = Path::new(path).extension().and_then(|ext| ext.to_str());
     match res {
-        Some(ext) => format!(".{}", ext),
+        Some(ext) => format!(".{ext}"),
         None => "".to_string(),
     }
 }
