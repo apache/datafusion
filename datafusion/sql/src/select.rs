@@ -34,7 +34,7 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, Filter, GroupingSet, LogicalPlan,
     LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
+use sqlparser::ast::{self, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
 use sqlparser::ast::{Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -70,10 +70,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // process `where` clause
         let plan = self.plan_selection(select.selection, plan, planner_context)?;
 
+        // handle named windows before processing the projection expression
+        let mut modified_projection = select.projection.clone();
+        for proj in modified_projection.iter_mut() {
+            if let SelectItem::ExprWithAlias {
+                expr: ast::Expr::Function(f),
+                alias: _,
+            } = proj
+            {
+                for window in select.named_window.iter() {
+                    if let Some(WindowType::NamedWindow(ident)) = f.over.clone() {
+                        if ident == window.0 {
+                            f.over = Some(WindowType::WindowSpec(window.1.clone()))
+                        }
+                    }
+                }
+            }
+        }
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &plan,
-            select.projection,
+            modified_projection,
             empty_from,
             planner_context,
         )?;

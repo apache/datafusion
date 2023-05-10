@@ -25,7 +25,7 @@ use datafusion_expr::{
     WindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr,
+    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
 };
 use std::str::FromStr;
 
@@ -54,7 +54,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // then, window function
-        if let Some(window) = function.over.take() {
+        if let Some(WindowType::WindowSpec(window)) = function.over.take() {
             let partition_by = window
                 .partition_by
                 .into_iter()
