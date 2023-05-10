@@ -21,7 +21,7 @@
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
-try DataFusion out with your own data sources, and test out its SQL support.
+try DataFusion's SQL support with your own data.
 
 ## Example
 
@@ -100,8 +100,8 @@ this to work.
 
 ```bash
 git clone https://github.com/apache/arrow-datafusion
-git checkout 12.0.0
 cd arrow-datafusion
+git checkout 12.0.0
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
 docker run -it -v $(your_data_location):/data datafusion-cli
 ```

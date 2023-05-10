@@ -1201,7 +1201,7 @@ mod tests {
                 .unwrap()
                 .metadata()
                 .clone();
-        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+        check_page_index_validation(builder.column_index(), builder.offset_index());
 
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await.unwrap();
@@ -1211,7 +1211,7 @@ mod tests {
             .unwrap()
             .metadata()
             .clone();
-        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+        check_page_index_validation(builder.column_index(), builder.offset_index());
 
         Ok(())
     }

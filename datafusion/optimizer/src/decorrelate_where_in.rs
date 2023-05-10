@@ -23,6 +23,7 @@ use crate::utils::{
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, Column, Result};
+use datafusion_expr::expr::InSubquery;
 use datafusion_expr::expr_rewriter::unnormalize_col;
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::{Expr, Filter, LogicalPlan, LogicalPlanBuilder};
@@ -59,11 +60,11 @@ impl DecorrelateWhereIn {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::InSubquery {
+                Expr::InSubquery(InSubquery {
                     expr,
                     subquery,
                     negated,
-                } => {
+                }) => {
                     let subquery_plan = self
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
