@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! TODO: rewite in terms of COPY command
 //! Execution plan for reading in-memory batches of data
 
 use super::expressions::PhysicalSortExpr;

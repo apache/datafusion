@@ -23,11 +23,15 @@ use fmt::Debug;
 use std::any::Any;
 use std::cmp::min;
 use std::fmt;
+use std::fmt::Display;
 use std::fs;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
+use crate::physical_plan::Distribution;
+use crate::physical_plan::copy::DataSink;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -48,7 +52,7 @@ use crate::{
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, FutureExt};
 use itertools::Itertools;
 use log::debug;
 use object_store::ObjectStore;
@@ -655,6 +659,76 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             inner,
             file_metrics,
         }))
+    }
+}
+
+#[derive(Debug)]
+struct ParquetSink {
+    fs_path: PathBuf,
+    writer_properties: Option<WriterProperties>,
+}
+
+impl Display for ParquetSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ParquetSink(fs_path={:?}, props=TODO", self.fs_path)
+    }
+}
+
+impl DataSink for ParquetSink {
+    fn required_input_distribution(&self) -> Distribution {
+        // can handle various distributions
+        Distribution::UnspecifiedDistribution
+    }
+
+    fn write_stream(&self, partition: usize, input: SendableRecordBatchStream) -> BoxFuture<Result<u64>> {
+        let filename = format!("part-{partition}.parquet");
+        let path = self.fs_path.join(filename);
+        let writer_properties = self.writer_properties.clone();
+
+        async move {
+            let file = fs::File::create(path)?;
+
+            let mut writer =
+                ArrowWriter::try_new(file, input.schema(), writer_properties)?;
+
+            let mut num_rows = 0;
+            input
+                .map(|batch| {
+                    let batch = batch?;
+                    writer.write(&batch).map_err(DataFusionError::ParquetError)?;
+                    num_rows += batch.num_rows() as u64;
+                    Ok(()) as Result<()>
+                })
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)?;
+
+            writer.close().map_err(DataFusionError::from).map(|_| ())?;
+
+            Ok(num_rows)
+        }.boxed()
+
+    }
+}
+
+impl ParquetSink {
+    fn try_new(
+        path: impl AsRef<str>,
+        writer_properties: Option<WriterProperties>,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        // create directory to contain the Parquet files (one per partition)
+        let fs_path = std::path::PathBuf::from(path);
+        if let Err(e) = fs::create_dir(&fs_path) {
+            return Err(DataFusionError::Execution(format!(
+                "Could not create directory {path}: {e:?}"
+            )));
+        }
+
+        Ok(Self {
+            fs_path,
+            writer_properties,
+        })
     }
 }
 
