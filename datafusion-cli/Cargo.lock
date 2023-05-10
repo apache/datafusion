@@ -2804,7 +2804,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 [[package]]
 name = "sqlparser"
 version = "0.33.0"
-source = "git+https://github.com/synnada-ai/sqlparser-rs.git?rev=870b3de#870b3de433e8c4c3196b3e4984d1cb101288c5c2"
+source = "git+https://github.com/synnada-ai/sqlparser-rs.git?rev=1c4c3b8#1c4c3b8e7380d640c3271a61c12de171f87c29bb"
 dependencies = [
  "log",
  "sqlparser_derive",
@@ -2813,7 +2813,7 @@ dependencies = [
 [[package]]
 name = "sqlparser_derive"
 version = "0.1.1"
-source = "git+https://github.com/synnada-ai/sqlparser-rs.git?rev=870b3de#870b3de433e8c4c3196b3e4984d1cb101288c5c2"
+source = "git+https://github.com/synnada-ai/sqlparser-rs.git?rev=1c4c3b8#1c4c3b8e7380d640c3271a61c12de171f87c29bb"
 dependencies = [
  "proc-macro2",
  "quote",
