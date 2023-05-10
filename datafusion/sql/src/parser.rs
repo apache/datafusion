@@ -1060,4 +1060,18 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn copy_to() -> Result<(), ParserError> {
+        // positive case
+        let sql = "COPY foo TO bar";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: CopyToSource::Relation(ObjectName(vec![Ident::new("foo")])),
+            target: "bar".to_string(),
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        Ok(())
+    }
 }
