@@ -81,7 +81,6 @@ macro_rules! test_expression {
 pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
-pub mod cast;
 pub mod create_drop;
 pub mod errors;
 pub mod explain_analyze;
@@ -99,19 +98,13 @@ pub mod references;
 pub mod select;
 pub mod timestamp;
 pub mod udf;
-pub mod union;
-pub mod wildcard;
 pub mod window;
 
 pub mod explain;
-pub mod idenfifers;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
-pub mod set_variable;
 pub mod subqueries;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
@@ -750,29 +743,6 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-fn create_union_context() -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new()
-            .with_target_partitions(4)
-            .with_batch_size(4096),
-    );
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, true),
-        Field::new("name", DataType::UInt8, true),
-    ]));
-    let t1_data = RecordBatch::new_empty(t1_schema);
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::UInt8, true),
-        Field::new("name", DataType::UInt8, true),
-    ]));
-    let t2_data = RecordBatch::new_empty(t2_schema);
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
 fn create_nested_loop_join_context() -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
         SessionConfig::new()
@@ -1061,41 +1031,6 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
         results.is_empty(),
         "Expected no rows from executing CREATE EXTERNAL TABLE"
     );
-}
-
-/// Create table "t1" with two boolean columns "a" and "b"
-async fn register_boolean(ctx: &SessionContext) -> Result<()> {
-    let a: BooleanArray = [
-        Some(true),
-        Some(true),
-        Some(true),
-        None,
-        None,
-        None,
-        Some(false),
-        Some(false),
-        Some(false),
-    ]
-    .iter()
-    .collect();
-    let b: BooleanArray = [
-        Some(true),
-        None,
-        Some(false),
-        Some(true),
-        None,
-        Some(false),
-        Some(true),
-        None,
-        Some(false),
-    ]
-    .iter()
-    .collect();
-
-    let data =
-        RecordBatch::try_from_iter([("a", Arc::new(a) as _), ("b", Arc::new(b) as _)])?;
-    ctx.register_batch("t1", data)?;
-    Ok(())
 }
 
 async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {

@@ -41,6 +41,7 @@ use datafusion_common::{
     cast::{as_date64_array, as_string_array, as_uint64_array},
     Column, DataFusionError,
 };
+use datafusion_expr::expr::ScalarUDF;
 use datafusion_expr::{Expr, Volatility};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
@@ -89,14 +90,14 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::SimilarTo { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::GroupingSet(_)
             | Expr::Case { .. } => VisitRecursion::Continue,
 
-            Expr::ScalarFunction { fun, .. } => {
-                match fun.volatility() {
+            Expr::ScalarFunction(scalar_function) => {
+                match scalar_function.fun.volatility() {
                     Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
                     Volatility::Stable | Volatility::Volatile => {
@@ -105,7 +106,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
                     }
                 }
             }
-            Expr::ScalarUDF { fun, .. } => {
+            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
                 match fun.signature.volatility {
                     Volatility::Immutable => VisitRecursion::Continue,
                     // TODO: Stable functions could be `applicable`, but that would require access to the context
@@ -126,7 +127,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
             | Expr::WindowFunction { .. }
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder { .. } => {
+            | Expr::Placeholder(_) => {
                 is_applicable = false;
                 VisitRecursion::Stop
             }

@@ -17,18 +17,17 @@
 
 //! Defines common code used in execution plans
 
-use super::{RecordBatchStream, SendableRecordBatchStream};
+use super::SendableRecordBatchStream;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::MemoryReservation;
-use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use futures::{Future, Stream, StreamExt, TryStreamExt};
+use futures::{Future, StreamExt, TryStreamExt};
 use log::debug;
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
@@ -42,55 +41,6 @@ use tokio::task::JoinHandle;
 
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
-
-/// Stream of record batches
-pub struct SizedRecordBatchStream {
-    schema: SchemaRef,
-    batches: Vec<Arc<RecordBatch>>,
-    index: usize,
-    metrics: MemTrackingMetrics,
-}
-
-impl SizedRecordBatchStream {
-    /// Create a new RecordBatchIterator
-    pub fn new(
-        schema: SchemaRef,
-        batches: Vec<Arc<RecordBatch>>,
-        mut metrics: MemTrackingMetrics,
-    ) -> Self {
-        let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
-        metrics.init_mem_used(size);
-        SizedRecordBatchStream {
-            schema,
-            index: 0,
-            batches,
-            metrics,
-        }
-    }
-}
-
-impl Stream for SizedRecordBatchStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = Poll::Ready(if self.index < self.batches.len() {
-            self.index += 1;
-            Some(Ok(self.batches[self.index - 1].as_ref().clone()))
-        } else {
-            None
-        });
-        self.metrics.record_poll(poll)
-    }
-}
-
-impl RecordBatchStream for SizedRecordBatchStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
 
 /// Create a vector of record batches from a stream
 pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
