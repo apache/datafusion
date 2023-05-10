@@ -203,14 +203,28 @@ fn normalize_sort_expr_with_equivalence_properties(
 }
 
 fn normalize_sort_expr_with_ordering_equivalence_properties(
-    sort_expr: PhysicalSortExpr,
+    mut sort_expr: PhysicalSortExpr,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortExpr {
-    let requirement = normalize_sort_requirement_with_ordering_equivalence_properties(
-        PhysicalSortRequirement::from(sort_expr),
+    let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
+        sort_expr.expr.clone(),
+        sort_expr.options,
         eq_properties,
     );
-    PhysicalSortExpr::from(requirement)
+    if sort_expr.expr.ne(&normalized_expr) {
+        if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
+            for eq_class in eq_properties.iter() {
+                let head = eq_class.head();
+                if head.col.eq(col) {
+                    // Update the with the requirement of its normalized version.
+                    sort_expr.options = head.options;
+                    break;
+                }
+            }
+        }
+        sort_expr.expr = normalized_expr;
+    }
+    sort_expr
 }
 
 fn normalize_sort_requirement_with_equivalence_properties(
@@ -223,32 +237,21 @@ fn normalize_sort_requirement_with_equivalence_properties(
 }
 
 fn normalize_sort_requirement_with_ordering_equivalence_properties(
-    mut sort_requirement: PhysicalSortRequirement,
+    sort_requirement: PhysicalSortRequirement,
     eq_properties: &[OrderingEquivalentClass],
 ) -> PhysicalSortRequirement {
     if let Some(options) = sort_requirement.options {
-        let normalized_expr = normalize_expr_with_ordering_equivalence_properties(
-            sort_requirement.expr.clone(),
-            options,
+        let normalized_expr = normalize_sort_expr_with_ordering_equivalence_properties(
+            PhysicalSortExpr {
+                expr: sort_requirement.expr,
+                options,
+            },
             eq_properties,
         );
-        if sort_requirement.expr.ne(&normalized_expr) {
-            if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
-                for eq_class in eq_properties.iter() {
-                    let head = eq_class.head();
-                    if head.col.eq(col) {
-                        // If there is a requirement, update it with the requirement of its normalized version.
-                        if let Some(options) = &mut sort_requirement.options {
-                            *options = head.options;
-                        }
-                        break;
-                    }
-                }
-            }
-            sort_requirement.expr = normalized_expr;
-        }
+        PhysicalSortRequirement::from(normalized_expr)
+    } else {
+        sort_requirement
     }
-    sort_requirement
 }
 
 pub fn normalize_sort_expr(
