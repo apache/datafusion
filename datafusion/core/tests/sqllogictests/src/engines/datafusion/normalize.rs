@@ -74,7 +74,7 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
 ///   "Sort: d.b ASC NULLS LAST",
 /// ]
 /// [ <--- newly added row
-///   "  Projection: d.b, MAX(d.a) AS max_a",
+///   "|  Projection: d.b, MAX(d.a) AS max_a",
 /// ]
 /// ```
 fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
@@ -92,7 +92,15 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         }
 
         // form new rows with each additional line
-        let new_lines: Vec<_> = lines.into_iter().map(|l| vec![l.to_string()]).collect();
+        let new_lines: Vec<_> = lines
+            .into_iter()
+            .map(|l| {
+                // Add a prefix "|" so that sqllogictest --complete doesn't
+                // strip the leading space
+                // See https://github.com/apache/arrow-datafusion/issues/6328
+                vec![format!("|{l}")]
+            })
+            .collect();
 
         Either::Right(once(row).chain(new_lines.into_iter()))
     } else {
