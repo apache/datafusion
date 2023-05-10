@@ -19,25 +19,41 @@
 
 #### Overview
 
-This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files in `test_files`.
+This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files in [`test_files`](test_files).
+
+#### Running tests: TLDR Examples
+
+```shell
+# Run all tests
+cargo test -p datafusion --test sqllogictests
+```
+
+```shell
+# Run all tests, with debug logging enabled
+RUST_LOG=debug cargo test -p datafusion --test sqllogictests
+```
+
+```shell
+# Run only the tests in `information_schema.slt`
+cargo test -p datafusion --test sqllogictests -- information_schema
+```
+
+```shell
+# Automatically update ddl.slt with expected output
+cargo test -p datafusion --test sqllogictests -- ddl --complete
+```
 
 #### Running tests: Validation Mode
 
 In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the file to the output produced by that run.
 
-Run all tests suites in validation mode
+For example, to run all tests suites in validation mode
 
 ```shell
 cargo test -p datafusion --test sqllogictests
 ```
 
-Run tests with debug logging enabled:
-
-```shell
-RUST_LOG=debug cargo test -p datafusion --test sqllogictests
-```
-
-Run only the tests in `information_schema.slt`:
+sqllogictests also supports `cargo test` style substring matches on file names to restrict which tests to run
 
 ```shell
 # information_schema.slt matches due to substring matching `information`

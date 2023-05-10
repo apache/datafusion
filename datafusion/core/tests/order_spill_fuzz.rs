@@ -74,7 +74,7 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         }];
 
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
-        let sort = Arc::new(SortExec::try_new(sort, Arc::new(exec), None).unwrap());
+        let sort = Arc::new(SortExec::new(sort, Arc::new(exec)));
 
         let runtime_config = RuntimeConfig::new()
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)));
@@ -118,7 +118,7 @@ fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
             RecordBatch::try_from_iter(vec![(
                 "x",
                 Arc::new(Int32Array::from_iter_values(
-                    std::iter::from_fn(|| Some(rng.gen())).take(to_read),
+                    (0..to_read).map(|_| rng.gen()),
                 )) as ArrayRef,
             )])
             .unwrap(),

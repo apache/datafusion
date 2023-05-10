@@ -36,9 +36,9 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     // Since ARRAY_AGG(DISTINCT) ordering is nondeterministic, check the schema and contents.
     assert_eq!(
         *actual[0].schema(),
-        Schema::new(vec![Field::new(
+        Schema::new(vec![Field::new_list(
             "ARRAYAGG(DISTINCT aggregate_test_100.c2)",
-            DataType::List(Box::new(Field::new("item", DataType::UInt32, true))),
+            Field::new("item", DataType::UInt32, true),
             false
         ),])
     );
@@ -67,240 +67,6 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
         unreachable!();
     }
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = plan_and_collect(
-        &ctx,
-        "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Timestamp(Nanosecond, None).");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_count() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+--------------+---------------+---------------+-------------+",
-        "| COUNT(nanos) | COUNT(micros) | COUNT(millis) | COUNT(secs) |",
-        "+--------------+---------------+---------------+-------------+",
-        "| 3            | 3             | 3             | 3           |",
-        "+--------------+---------------+---------------+-------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_min() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+----------------------------+----------------------------+-------------------------+---------------------+",
-        "| MIN(t.nanos)               | MIN(t.micros)              | MIN(t.millis)           | MIN(t.secs)         |",
-        "+----------------------------+----------------------------+-------------------------+---------------------+",
-        "| 2011-12-13T11:13:10.123450 | 2011-12-13T11:13:10.123450 | 2011-12-13T11:13:10.123 | 2011-12-13T11:13:10 |",
-        "+----------------------------+----------------------------+-------------------------+---------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_max() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+-------------------------+-------------------------+-------------------------+---------------------+",
-        "| MAX(t.nanos)            | MAX(t.micros)           | MAX(t.millis)           | MAX(t.secs)         |",
-        "+-------------------------+-------------------------+-------------------------+---------------------+",
-        "| 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10 |",
-        "+-------------------------+-------------------------+-------------------------+---------------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = plan_and_collect(
-        &ctx,
-        "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Time64(Nanosecond).");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_count() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+--------------+---------------+---------------+-------------+",
-        "| COUNT(nanos) | COUNT(micros) | COUNT(millis) | COUNT(secs) |",
-        "+--------------+---------------+---------------+-------------+",
-        "| 4            | 4             | 4             | 4           |",
-        "+--------------+---------------+---------------+-------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_min() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+--------------------+-----------------+---------------+-------------+",
-        "| MIN(t.nanos)       | MIN(t.micros)   | MIN(t.millis) | MIN(t.secs) |",
-        "+--------------------+-----------------+---------------+-------------+",
-        "| 18:06:30.243620451 | 18:06:30.243620 | 18:06:30.243  | 18:06:30    |",
-        "+--------------------+-----------------+---------------+-------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_times_max() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_times()).unwrap();
-
-    let results = execute_to_batches(
-        &ctx,
-        "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
-    )
-    .await;
-
-    let expected = vec![
-        "+--------------------+-----------------+---------------+-------------+",
-        "| MAX(t.nanos)       | MAX(t.micros)   | MAX(t.millis) | MAX(t.secs) |",
-        "+--------------------+-----------------+---------------+-------------+",
-        "| 21:06:28.247821084 | 21:06:28.247821 | 21:06:28.247  | 21:06:28    |",
-        "+--------------------+-----------------+---------------+-------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_timestamps_avg() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_timestamps()).unwrap();
-
-    let results = plan_and_collect(
-        &ctx,
-        "SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t",
-    )
-    .await
-    .unwrap_err();
-
-    assert_eq!(results.to_string(), "Error during planning: The function Avg does not support inputs of type Timestamp(Nanosecond, None).");
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_decimal_sum() -> Result<()> {
-    let ctx = SessionContext::new();
-    // the data type of c1 is decimal(10,3)
-    ctx.register_table("d_table", table_with_decimal()).unwrap();
-    let result = plan_and_collect(&ctx, "select sum(c1) from d_table")
-        .await
-        .unwrap();
-    let expected = vec![
-        "+-----------------+",
-        "| SUM(d_table.c1) |",
-        "+-----------------+",
-        "| 100.000         |",
-        "+-----------------+",
-    ];
-    assert_eq!(
-        &DataType::Decimal128(20, 3),
-        result[0].schema().field(0).data_type()
-    );
-    assert_batches_sorted_eq!(expected, &result);
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregate_decimal_avg() -> Result<()> {
-    let ctx = SessionContext::new();
-    // the data type of c1 is decimal(10,3)
-    ctx.register_table("d_table", table_with_decimal()).unwrap();
-    let result = plan_and_collect(&ctx, "select avg(c1) from d_table")
-        .await
-        .unwrap();
-    let expected = vec![
-        "+-----------------+",
-        "| AVG(d_table.c1) |",
-        "+-----------------+",
-        "| 5.0000000       |",
-        "+-----------------+",
-    ];
-    assert_eq!(
-        &DataType::Decimal128(14, 7),
-        result[0].schema().field(0).data_type()
-    );
-    assert_batches_sorted_eq!(expected, &result);
     Ok(())
 }
 
@@ -731,6 +497,100 @@ async fn count_aggregated_cube() -> Result<()> {
         "+----+----+----------------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn count_multi_expr() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                None,
+                None,
+            ])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", data)?;
+    let sql = "SELECT count(c1, c2) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+------------------------+",
+        "| COUNT(test.c1,test.c2) |",
+        "+------------------------+",
+        "| 2                      |",
+        "+------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn count_multi_expr_group_by() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+        Field::new("c3", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                None,
+                None,
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(10),
+                Some(10),
+                Some(10),
+                Some(10),
+                Some(10),
+            ])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", data)?;
+    let sql = "SELECT c3, count(c1, c2) FROM test group by c3";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----+------------------------+",
+        "| c3 | COUNT(test.c1,test.c2) |",
+        "+----+------------------------+",
+        "| 10 | 2                      |",
+        "+----+------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
     Ok(())
 }
 

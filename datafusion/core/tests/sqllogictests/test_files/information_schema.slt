@@ -84,6 +84,30 @@ datafusion information_schema views VIEW
 datafusion public t BASE TABLE
 datafusion public t2 BASE TABLE
 
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE information_schema.tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE datafusion.information_schema.tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
 # Cleanup
 statement ok
 drop table t
@@ -101,6 +125,12 @@ drop table t2
 statement ok
 SET datafusion.execution.target_partitions=7
 
+# planning_concurrency defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.planning_concurrency=13
+
 # show all variables
 query TT rowsort
 SHOW ALL
@@ -112,6 +142,7 @@ datafusion.catalog.format NULL
 datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
+datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
@@ -121,10 +152,12 @@ datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
+datafusion.execution.planning_concurrency 13
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
+datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.enable_round_robin_repartition true
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
@@ -136,8 +169,9 @@ datafusion.optimizer.repartition_file_scans true
 datafusion.optimizer.repartition_joins true
 datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
-datafusion.optimizer.skip_failed_rules true
+datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
 datafusion.sql_parser.parse_float_as_decimal false
 
@@ -349,7 +383,7 @@ SHOW CREATE TABLE test.xyz
 ----
 datafusion test xyz CREATE VIEW test.xyz AS SELECT * FROM abc
 
-statement error DataFusion error: This feature is not implemented: Only `DROP TABLE/VIEW
+statement error DataFusion error: Execution error: Cannot drop schema test because other tables depend on it: xyz
 DROP SCHEMA test;
 
 statement ok

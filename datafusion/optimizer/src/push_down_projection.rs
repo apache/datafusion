@@ -312,11 +312,28 @@ impl OptimizerRule for PushDownProjection {
 
                 if new_window_expr.is_empty() {
                     // none columns in window expr are needed, remove the window expr
-                    let new_window = window.input.as_ref().clone();
+                    let input = window.input.clone();
+                    let new_window = restrict_outputs(input.clone(), &required_columns)?
+                        .unwrap_or((*input).clone());
 
                     generate_plan!(projection_is_empty, plan, new_window)
                 } else {
-                    let new_window = LogicalPlanBuilder::from((*(window.input)).clone())
+                    let mut referenced_inputs = HashSet::new();
+                    exprlist_to_columns(&new_window_expr, &mut referenced_inputs)?;
+                    window
+                        .input
+                        .schema()
+                        .fields()
+                        .iter()
+                        .filter(|f| required_columns.contains(&f.qualified_column()))
+                        .for_each(|f| {
+                            referenced_inputs.insert(f.qualified_column());
+                        });
+
+                    let input = window.input.clone();
+                    let new_input = restrict_outputs(input.clone(), &referenced_inputs)?
+                        .unwrap_or((*input).clone());
+                    let new_window = LogicalPlanBuilder::from(new_input)
                         .window(new_window_expr)?
                         .build()?;
 
@@ -536,7 +553,9 @@ fn push_down_scan(
     // create the projected schema
     let projected_fields: Vec<DFField> = projection
         .iter()
-        .map(|i| DFField::from_qualified(&scan.table_name, schema.fields()[*i].clone()))
+        .map(|i| {
+            DFField::from_qualified(scan.table_name.clone(), schema.fields()[*i].clone())
+        })
         .collect();
 
     let projected_schema = projected_fields.to_dfschema_ref()?;
@@ -551,6 +570,21 @@ fn push_down_scan(
     }))
 }
 
+fn restrict_outputs(
+    plan: Arc<LogicalPlan>,
+    permitted_outputs: &HashSet<Column>,
+) -> Result<Option<LogicalPlan>> {
+    let schema = plan.schema();
+    if permitted_outputs.len() == schema.fields().len() {
+        return Ok(None);
+    }
+    Ok(Some(generate_projection(
+        permitted_outputs,
+        schema,
+        plan.clone(),
+    )?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,12 +596,15 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_expr::expr;
     use datafusion_expr::expr::Cast;
+    use datafusion_expr::WindowFrame;
+    use datafusion_expr::WindowFunction;
     use datafusion_expr::{
         col, count, lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan, JoinType},
         max, min, AggregateFunction, Expr,
     };
     use std::collections::HashMap;
+    use std::vec;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
@@ -731,7 +768,7 @@ mod tests {
                 vec![
                     DFField::new(Some("test"), "a", DataType::UInt32, false),
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
-                    DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+                    DFField::new(Some("test2"), "c1", DataType::UInt32, true),
                 ],
                 HashMap::new(),
             )?,
@@ -774,7 +811,7 @@ mod tests {
                 vec![
                     DFField::new(Some("test"), "a", DataType::UInt32, false),
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
-                    DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+                    DFField::new(Some("test2"), "c1", DataType::UInt32, true),
                 ],
                 HashMap::new(),
             )?,
@@ -815,7 +852,7 @@ mod tests {
                 vec![
                     DFField::new(Some("test"), "a", DataType::UInt32, false),
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
-                    DFField::new(Some("test2"), "a", DataType::UInt32, false),
+                    DFField::new(Some("test2"), "a", DataType::UInt32, true),
                 ],
                 HashMap::new(),
             )?,
@@ -1028,7 +1065,7 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE c > Int32(42)) AS count2]]\
+        let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE test.c > Int32(42)) AS count2]]\
         \n  TableScan: test projection=[a, b, c]";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -1047,6 +1084,43 @@ mod tests {
         let expected = "Projection: test.a\
         \n  Distinct:\
         \n    TableScan: test projection=[a, b]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn test_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            vec![col("test.a")],
+            vec![col("test.b")],
+            vec![],
+            WindowFrame::new(false),
+        ));
+
+        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            vec![col("test.b")],
+            vec![],
+            vec![],
+            WindowFrame::new(false),
+        ));
+        let col1 = col(max1.display_name()?);
+        let col2 = col(max2.display_name()?);
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![max1])?
+            .window(vec![max2])?
+            .project(vec![col1, col2])?
+            .build()?;
+
+        let expected = "Projection: MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MAX(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[MAX(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n    Projection: test.b, MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n      WindowAggr: windowExpr=[[MAX(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n        TableScan: test projection=[a, b]";
 
         assert_optimized_plan_eq(&plan, expected)
     }

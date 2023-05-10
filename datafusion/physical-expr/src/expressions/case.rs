@@ -195,8 +195,12 @@ impl CaseExpr {
                 _ => when_value,
             };
             let when_value = when_value.into_array(batch.num_rows());
-            let when_value = as_boolean_array(&when_value)
-                .expect("WHEN expression did not return a BooleanArray");
+            let when_value = as_boolean_array(&when_value).map_err(|e| {
+                DataFusionError::Context(
+                    "WHEN expression did not return a BooleanArray".to_string(),
+                    Box::new(e),
+                )
+            })?;
 
             let then_value = self.when_then_expr[i]
                 .1
@@ -387,12 +391,12 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::lit;
     use crate::expressions::{binary, cast};
-    use crate::rewrite::TreeNodeRewritable;
     use arrow::array::StringArray;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -716,10 +720,10 @@ mod tests {
 
         //let valid_array = vec![true, false, false, true, false, tru
         let null_buffer = Buffer::from([0b00101001u8]);
-        let load4 = ArrayDataBuilder::new(load4.data_type().clone())
-            .len(load4.len())
+        let load4 = load4
+            .into_data()
+            .into_builder()
             .null_bit_buffer(Some(null_buffer))
-            .buffers(load4.data().buffers().to_vec())
             .build()
             .unwrap();
         let load4: Float64Array = load4.into();
@@ -870,32 +874,43 @@ mod tests {
 
         let expr2 = expr
             .clone()
-            .transform(
-                &|e| match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                    Some(lit_value) => match lit_value.value() {
-                        ScalarValue::Utf8(Some(str_value)) => {
-                            Ok(Some(lit(str_value.to_uppercase())))
-                        }
-                        _ => Ok(None),
-                    },
-                    _ => Ok(None),
-                },
-            )
+            .transform(&|e| {
+                let transformed =
+                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
+                        Some(lit_value) => match lit_value.value() {
+                            ScalarValue::Utf8(Some(str_value)) => {
+                                Some(lit(str_value.to_uppercase()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                Ok(if let Some(transformed) = transformed {
+                    Transformed::Yes(transformed)
+                } else {
+                    Transformed::No(e)
+                })
+            })
             .unwrap();
 
         let expr3 = expr
             .clone()
-            .transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<crate::expressions::Literal>()
-            {
-                Some(lit_value) => match lit_value.value() {
-                    ScalarValue::Utf8(Some(str_value)) => {
-                        Ok(Some(lit(str_value.to_uppercase())))
-                    }
-                    _ => Ok(None),
-                },
-                _ => Ok(None),
+            .transform_down(&|e| {
+                let transformed =
+                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
+                        Some(lit_value) => match lit_value.value() {
+                            ScalarValue::Utf8(Some(str_value)) => {
+                                Some(lit(str_value.to_uppercase()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                Ok(if let Some(transformed) = transformed {
+                    Transformed::Yes(transformed)
+                } else {
+                    Transformed::No(e)
+                })
             })
             .unwrap();
 

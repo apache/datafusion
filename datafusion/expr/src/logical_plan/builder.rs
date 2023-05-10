@@ -18,15 +18,13 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col, normalize_col_with_schemas,
-    normalize_cols, rewrite_sort_cols_by_aggs,
+    coerce_plan_expr_for_schema, normalize_col,
+    normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
+    rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{
-    columnize_expr, compare_sort_expr, ensure_any_column_reference_is_unambiguous,
-    exprlist_to_fields, from_plan,
-};
-use crate::{and, binary_expr, Operator};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
@@ -42,8 +40,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    ToDFSchema,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -178,8 +176,7 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new(
-                    None,
+                DFField::new_unqualified(
                     name,
                     data_type.clone().unwrap_or(DataType::Utf8),
                     true,
@@ -195,24 +192,70 @@ impl LogicalPlanBuilder {
     }
 
     /// Convert a table provider into a builder with a TableScan
+    ///
+    /// Note that if you pass a string as `table_name`, it is treated
+    /// as a SQL identifier, as described on [`TableReference`] and
+    /// thus is normalized
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_expr::{lit, col, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource, logical_plan::table_scan
+    /// # };
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_common::TableReference;
+    /// #
+    /// # let employee_schema = Arc::new(Schema::new(vec![
+    /// #           Field::new("id", DataType::Int32, false),
+    /// # ])) as _;
+    /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
+    /// // Scan table_source with the name "mytable" (after normalization)
+    /// # let table = table_source.clone();
+    /// let scan = LogicalPlanBuilder::scan("MyTable", table, None);
+    ///
+    /// // Scan table_source with the name "MyTable" by enclosing in quotes
+    /// # let table = table_source.clone();
+    /// let scan = LogicalPlanBuilder::scan(r#""MyTable""#, table, None);
+    ///
+    /// // Scan table_source with the name "MyTable" by forming the table reference
+    /// # let table = table_source.clone();
+    /// let table_reference = TableReference::bare("MyTable");
+    /// let scan = LogicalPlanBuilder::scan(table_reference, table, None);
+    /// ```
     pub fn scan(
-        table_name: impl Into<String>,
+        table_name: impl Into<OwnedTableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
 
+    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    pub fn insert_into(
+        input: LogicalPlan,
+        table_name: impl Into<OwnedTableReference>,
+        table_schema: &Schema,
+    ) -> Result<Self> {
+        let table_schema = table_schema.clone().to_dfschema_ref()?;
+        Ok(Self::from(LogicalPlan::Dml(DmlStatement {
+            table_name: table_name.into(),
+            table_schema,
+            op: WriteOp::Insert,
+            input: Arc::new(input),
+        })))
+    }
+
     /// Convert a table provider into a builder with a TableScan
     pub fn scan_with_filters(
-        table_name: impl Into<String>,
+        table_name: impl Into<OwnedTableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
         let table_name = table_name.into();
 
-        if table_name.is_empty() {
+        if table_name.table().is_empty() {
             return Err(DataFusionError::Plan(
                 "table_name cannot be empty".to_string(),
             ));
@@ -226,14 +269,17 @@ impl LogicalPlanBuilder {
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(&table_name, schema.field(*i).clone())
+                            DFField::from_qualified(
+                                table_name.clone(),
+                                schema.field(*i).clone(),
+                            )
                         })
                         .collect(),
                     schema.metadata().clone(),
                 )
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(&table_name, &schema)
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -335,7 +381,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply an alias
-    pub fn alias(self, alias: impl Into<String>) -> Result<Self> {
+    pub fn alias(self, alias: impl Into<OwnedTableReference>) -> Result<Self> {
         Ok(Self::from(subquery_alias(self.plan, alias)?))
     }
 
@@ -552,15 +598,17 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    fn normalize(
+    pub(crate) fn normalize(
         plan: &LogicalPlan,
         column: impl Into<Column> + Clone,
     ) -> Result<Column> {
-        let schemas = plan.all_schemas();
+        let schema = plan.schema();
+        let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column
-            .into()
-            .normalize_with_schemas(&schemas, &using_columns)
+        column.into().normalize_with_schemas_and_ambiguity_check(
+            &[&[schema], &fallback_schemas],
+            &using_columns,
+        )
     }
 
     /// Apply a join with on constraint and specified null equality
@@ -580,18 +628,10 @@ impl LogicalPlanBuilder {
         }
 
         let filter = if let Some(expr) = filter {
-            // ambiguous check
-            ensure_any_column_reference_is_unambiguous(
-                &expr,
-                &[self.schema(), right.schema()],
-            )?;
-
-            // normalize all columns in expression
-            let using_columns = expr.to_columns()?;
-            let filter = normalize_col_with_schemas(
+            let filter = normalize_col_with_schemas_and_ambiguity_check(
                 expr,
-                &[self.schema(), right.schema()],
-                &[using_columns],
+                &[&[self.schema(), right.schema()]],
+                &[],
             )?;
             Some(filter)
         } else {
@@ -947,16 +987,16 @@ impl LogicalPlanBuilder {
                 let right_key = r.into();
 
                 let left_using_columns = left_key.to_columns()?;
-                let normalized_left_key = normalize_col_with_schemas(
+                let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[left_using_columns],
                 )?;
 
                 let right_using_columns = right_key.to_columns()?;
-                let normalized_right_key = normalize_col_with_schemas(
+                let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[self.plan.schema(), right.schema()],
+                    &[&[self.plan.schema(), right.schema()]],
                     &[right_using_columns],
                 )?;
 
@@ -1001,20 +1041,56 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
+    fn nullify_fields(fields: &[DFField]) -> Vec<DFField> {
+        fields
+            .iter()
+            .map(|f| f.clone().with_nullable(true))
+            .collect()
+    }
+
+    let right_fields = right.fields();
+    let left_fields = left.fields();
+
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let right_fields = right.fields().iter();
-            let left_fields = left.fields().iter();
+        JoinType::Inner => {
             // left then right
-            left_fields.chain(right_fields).cloned().collect()
+            left_fields
+                .iter()
+                .chain(right_fields.iter())
+                .cloned()
+                .collect()
+        }
+        JoinType::Left => {
+            // left then right, right set to nullable in case of not matched scenario
+            left_fields
+                .iter()
+                .chain(&nullify_fields(right_fields))
+                .cloned()
+                .collect()
+        }
+        JoinType::Right => {
+            // left then right, left set to nullable in case of not matched scenario
+            nullify_fields(left_fields)
+                .iter()
+                .chain(right_fields.iter())
+                .cloned()
+                .collect()
+        }
+        JoinType::Full => {
+            // left then right, all set to nullable in case of not matched scenario
+            nullify_fields(left_fields)
+                .iter()
+                .chain(&nullify_fields(right_fields))
+                .cloned()
+                .collect()
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // Only use the left side for the schema
-            left.fields().clone()
+            left_fields.clone()
         }
         JoinType::RightSemi | JoinType::RightAnti => {
             // Only use the right side for the schema
-            right.fields().clone()
+            right_fields.clone()
         }
     };
 
@@ -1098,7 +1174,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                     })?;
 
             Ok(DFField::new(
-                left_field.qualifier().map(|x| x.as_ref()),
+                left_field.qualifier().cloned(),
                 left_field.name(),
                 data_type,
                 nullable,
@@ -1178,7 +1254,7 @@ pub fn project(
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn subquery_alias(
     plan: LogicalPlan,
-    alias: impl Into<String>,
+    alias: impl Into<OwnedTableReference>,
 ) -> Result<LogicalPlan> {
     Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
         plan, alias,
@@ -1187,14 +1263,34 @@ pub fn subquery_alias(
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
 /// This is mostly used for testing and documentation.
-pub fn table_scan(
-    name: Option<&str>,
+pub fn table_scan<'a>(
+    name: Option<impl Into<TableReference<'a>>>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
+    table_scan_with_filters(name, table_schema, projection, vec![])
+}
+
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
+/// and inlined filters.
+/// This is mostly used for testing and documentation.
+pub fn table_scan_with_filters<'a>(
+    name: Option<impl Into<TableReference<'a>>>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+) -> Result<LogicalPlanBuilder> {
+    let table_source = table_source(table_schema);
+    let name = name
+        .map(|n| n.into())
+        .unwrap_or_else(|| OwnedTableReference::bare(UNNAMED_TABLE))
+        .to_owned_reference();
+    LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
+}
+
+fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
-    let table_source = Arc::new(LogicalTableSource { table_schema });
-    LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+    Arc::new(LogicalTableSource { table_schema })
 }
 
 /// Wrap projection for a plan, if the join keys contains normal expression.
@@ -1284,7 +1380,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
         DataType::List(field)
         | DataType::FixedSizeList(field, _)
         | DataType::LargeList(field) => DFField::new(
-            unnest_field.qualifier().map(String::as_str),
+            unnest_field.qualifier().cloned(),
             unnest_field.name(),
             field.data_type().clone(),
             unnest_field.is_nullable(),
@@ -1325,7 +1421,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 mod tests {
     use crate::{expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::SchemaError;
+    use datafusion_common::{OwnedTableReference, SchemaError, TableReference};
 
     use crate::logical_plan::StringifiedPlan;
 
@@ -1352,12 +1448,36 @@ mod tests {
     #[test]
     fn plan_builder_schema() {
         let schema = employee_schema();
-        let plan = table_scan(Some("employee_csv"), &schema, None).unwrap();
+        let projection = None;
+        let plan =
+            LogicalPlanBuilder::scan("employee_csv", table_source(&schema), projection)
+                .unwrap();
+        let expected = DFSchema::try_from_qualified_schema(
+            TableReference::bare("employee_csv"),
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(&expected, plan.schema().as_ref());
 
-        let expected =
-            DFSchema::try_from_qualified_schema("employee_csv", &schema).unwrap();
+        // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifer
+        // (and thus normalized to "employee"csv") as well
+        let projection = None;
+        let plan =
+            LogicalPlanBuilder::scan("EMPLOYEE_CSV", table_source(&schema), projection)
+                .unwrap();
+        assert_eq!(&expected, plan.schema().as_ref());
+    }
 
-        assert_eq!(&expected, plan.schema().as_ref())
+    #[test]
+    fn plan_builder_empty_name() {
+        let schema = employee_schema();
+        let projection = None;
+        let err =
+            LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Error during planning: table_name cannot be empty"
+        );
     }
 
     #[test]
@@ -1472,9 +1592,10 @@ mod tests {
 
     #[test]
     fn plan_builder_union_different_num_columns_error() -> Result<()> {
-        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
-
-        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+        let plan1 =
+            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
+        let plan2 =
+            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
 
         let expected = "Error during planning: Union queries must have the same number of columns, (left is 1, right is 2)";
         let err_msg1 = plan1.clone().union(plan2.clone().build()?).unwrap_err();
@@ -1600,10 +1721,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("id", &name);
                 Ok(())
             }
@@ -1626,10 +1750,13 @@ mod tests {
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
+                field:
+                    Column {
+                        relation: Some(OwnedTableReference::Bare { table }),
+                        name,
+                    },
             })) => {
-                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("employee_csv", table);
                 assert_eq!("state", &name);
                 Ok(())
             }
@@ -1692,9 +1819,10 @@ mod tests {
 
     #[test]
     fn plan_builder_intersect_different_num_columns_error() -> Result<()> {
-        let plan1 = table_scan(None, &employee_schema(), Some(vec![3]))?;
-
-        let plan2 = table_scan(None, &employee_schema(), Some(vec![3, 4]))?;
+        let plan1 =
+            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
+        let plan2 =
+            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
 
         let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
          Left is 1 and right is 2.";
@@ -1730,7 +1858,7 @@ mod tests {
         // Check unnested field is a scalar
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "strings")
+            .field_with_name(Some(&TableReference::bare("test_table")), "strings")
             .unwrap();
         assert_eq!(&DataType::Utf8, field.data_type());
 
@@ -1749,7 +1877,7 @@ mod tests {
         // Check unnested struct list field should be a struct.
         let field = plan
             .schema()
-            .field_with_name(Some("test_table"), "structs")
+            .field_with_name(Some(&TableReference::bare("test_table")), "structs")
             .unwrap();
         assert!(matches!(field.data_type(), DataType::Struct(_)));
 
@@ -1762,19 +1890,19 @@ mod tests {
 
     fn nested_table_scan(table_name: &str) -> Result<LogicalPlanBuilder> {
         // Create a schema with a scalar field, a list of strings, and a list of structs.
-        let struct_field = Box::new(Field::new(
+        let struct_field = Field::new_struct(
             "item",
-            DataType::Struct(vec![
+            vec![
                 Field::new("a", DataType::UInt32, false),
                 Field::new("b", DataType::UInt32, false),
-            ]),
+            ],
             false,
-        ));
-        let string_field = Box::new(Field::new("item", DataType::Utf8, false));
+        );
+        let string_field = Field::new("item", DataType::Utf8, false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),
-            Field::new("strings", DataType::List(string_field), false),
-            Field::new("structs", DataType::List(struct_field), false),
+            Field::new_list("strings", string_field, false),
+            Field::new_list("structs", struct_field, false),
         ]);
 
         table_scan(Some(table_name), &schema, None)

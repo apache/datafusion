@@ -41,7 +41,7 @@ use apache_avro::{
     AvroResult, Error as AvroError, Reader as AvroReader,
 };
 use arrow::array::{BinaryArray, GenericListArray};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use num_traits::NumCast;
@@ -112,8 +112,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let projection = self.projection.clone().unwrap_or_default();
         let arrays =
             self.build_struct_array(rows.as_slice(), self.schema.fields(), &projection);
-        let projected_fields: Vec<Field> = if projection.is_empty() {
-            self.schema.fields().to_vec()
+        let projected_fields = if projection.is_empty() {
+            self.schema.fields().clone()
         } else {
             projection
                 .iter()
@@ -434,7 +434,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         });
         let valid_len = cur_offset.to_usize().unwrap();
         let array_data = match list_field.data_type() {
-            DataType::Null => NullArray::new(valid_len).data().clone(),
+            DataType::Null => NullArray::new(valid_len).into_data(),
             DataType::Boolean => {
                 let num_bytes = bit_util::ceil(valid_len, 8);
                 let mut bool_values = MutableBuffer::from_len_zeroed(num_bytes);
@@ -495,22 +495,20 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             DataType::Utf8 => flatten_string_values(rows)
                 .into_iter()
                 .collect::<StringArray>()
-                .data()
-                .clone(),
+                .into_data(),
             DataType::LargeUtf8 => flatten_string_values(rows)
                 .into_iter()
                 .collect::<LargeStringArray>()
-                .data()
-                .clone(),
+                .into_data(),
             DataType::List(field) => {
                 let child =
                     self.build_nested_list_array::<i32>(&flatten_values(rows), field)?;
-                child.data().clone()
+                child.to_data()
             }
             DataType::LargeList(field) => {
                 let child =
                     self.build_nested_list_array::<i64>(&flatten_values(rows), field)?;
-                child.data().clone()
+                child.to_data()
             }
             DataType::Struct(fields) => {
                 // extract list values, with non-lists converted to Value::Null
@@ -546,13 +544,12 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     })
                     .collect();
                 let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
-                let arrays =
-                    self.build_struct_array(rows.as_slice(), fields.as_slice(), &[])?;
+                let arrays = self.build_struct_array(rows.as_slice(), fields, &[])?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
                     .null_bit_buffer(Some(null_buffer.into()))
-                    .child_data(arrays.into_iter().map(|a| a.data().clone()).collect())
+                    .child_data(arrays.into_iter().map(|a| a.to_data()).collect())
                     .build()
                     .unwrap()
             }
@@ -563,7 +560,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             }
         };
         // build list
-        let list_data = ArrayData::builder(DataType::List(Box::new(list_field.clone())))
+        let list_data = ArrayData::builder(DataType::List(Arc::new(list_field.clone())))
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
@@ -584,7 +581,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     fn build_struct_array(
         &self,
         rows: RecordSlice,
-        struct_fields: &[Field],
+        struct_fields: &Fields,
         projection: &[String],
     ) -> ArrowResult<Vec<ArrayRef>> {
         let arrays: ArrowResult<Vec<ArrayRef>> = struct_fields
@@ -760,9 +757,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         let data = ArrayDataBuilder::new(data_type)
                             .len(len)
                             .null_bit_buffer(Some(null_buffer.into()))
-                            .child_data(
-                                arrays.into_iter().map(|a| a.data().clone()).collect(),
-                            )
+                            .child_data(arrays.into_iter().map(|a| a.to_data()).collect())
                             .build()?;
                         make_array(data)
                     }
@@ -802,7 +797,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             })
             .collect::<Vec<Option<T::Native>>>();
         let array = values.iter().collect::<PrimitiveArray<T>>();
-        array.data().clone()
+        array.to_data()
     }
 
     fn field_lookup<'b>(
@@ -975,6 +970,7 @@ mod test {
         as_int32_array, as_int64_array, as_list_array, as_timestamp_microsecond_array,
     };
     use std::fs::File;
+    use std::sync::Arc;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
         let testdata = crate::test_util::arrow_test_data();
@@ -1030,7 +1026,7 @@ mod test {
         let a_array = as_list_array(batch.column(col_id_index)).unwrap();
         assert_eq!(
             *a_array.data_type(),
-            DataType::List(Box::new(Field::new("bigint", DataType::Int64, true)))
+            DataType::List(Arc::new(Field::new("bigint", DataType::Int64, true)))
         );
         let array = a_array.value(0);
         assert_eq!(*array.data_type(), DataType::Int64);

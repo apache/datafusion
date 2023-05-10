@@ -22,17 +22,11 @@ use crate::engines::output::{DFColumnType, DFOutput};
 
 use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
-use create_table::create_table;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use datafusion_sql::parser::{DFParser, Statement};
-use insert::insert;
 use sqllogictest::DBOutput;
-use sqlparser::ast::Statement as SQLStatement;
 
-mod create_table;
 mod error;
-mod insert;
 mod normalize;
 mod util;
 
@@ -69,7 +63,7 @@ impl sqllogictest::AsyncDB for DataFusion {
 
     /// [`Runner`] calls this function to perform sleep.
     ///
-    /// The default implementation is `std::thread::sleep`, which is universial to any async runtime
+    /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override
     /// this by `tokio::time::sleep`.
     async fn sleep(dur: Duration) {
@@ -78,37 +72,7 @@ impl sqllogictest::AsyncDB for DataFusion {
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DFOutput> {
-    let sql = sql.into();
-    // Check if the sql is `insert`
-    if let Ok(mut statements) = DFParser::parse_sql(&sql) {
-        let statement0 = statements.pop_front().expect("at least one SQL statement");
-        if let Statement::Statement(statement) = statement0 {
-            let statement = *statement;
-            match statement {
-                SQLStatement::Insert { .. } => return insert(ctx, statement).await,
-                SQLStatement::CreateTable {
-                    query,
-                    constraints,
-                    table_properties,
-                    with_options,
-                    name,
-                    columns,
-                    if_not_exists,
-                    or_replace,
-                    ..
-                } if query.is_none()
-                    && constraints.is_empty()
-                    && table_properties.is_empty()
-                    && with_options.is_empty() =>
-                {
-                    return create_table(ctx, name, columns, if_not_exists, or_replace)
-                        .await
-                }
-                _ => {}
-            };
-        }
-    }
-    let df = ctx.sql(sql.as_str()).await?;
+    let df = ctx.sql(sql.into().as_str()).await?;
 
     let types = normalize::convert_schema_to_types(df.schema().fields());
     let results: Vec<RecordBatch> = df.collect().await?;

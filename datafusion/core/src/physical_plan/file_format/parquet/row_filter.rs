@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, BooleanArray};
+use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Column, Literal};
-use datafusion_physical_expr::rewrite::{
-    RewriteRecursion, TreeNodeRewritable, TreeNodeRewriter,
-};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
 use std::collections::BTreeSet;
 
@@ -131,8 +129,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             .map(|v| v.into_array(batch.num_rows()))
         {
             Ok(array) => {
-                let mask = as_boolean_array(&array)?;
-                let bool_arr = BooleanArray::from(mask.data().clone());
+                let bool_arr = as_boolean_array(&array)?.clone();
                 let num_filtered = bool_arr.len() - bool_arr.true_count();
                 self.rows_filtered.add(num_filtered);
                 timer.stop();
@@ -192,7 +189,7 @@ impl<'a> FilterCandidateBuilder<'a> {
         metadata: &ParquetMetaData,
     ) -> Result<Option<FilterCandidate>> {
         let expr = self.expr.clone();
-        let expr = expr.transform_using(&mut self)?;
+        let expr = expr.rewrite(&mut self)?;
 
         if self.non_primitive_columns || self.projected_columns {
             Ok(None)
@@ -211,7 +208,9 @@ impl<'a> FilterCandidateBuilder<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for FilterCandidateBuilder<'a> {
+impl<'a> TreeNodeRewriter for FilterCandidateBuilder<'a> {
+    type N = Arc<dyn PhysicalExpr>;
+
     fn pre_visit(&mut self, node: &Arc<dyn PhysicalExpr>) -> Result<RewriteRecursion> {
         if let Some(column) = node.as_any().downcast_ref::<Column>() {
             if let Ok(idx) = self.file_schema.index_of(column.name()) {
@@ -219,13 +218,16 @@ impl<'a> TreeNodeRewriter<Arc<dyn PhysicalExpr>> for FilterCandidateBuilder<'a> 
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
+                    return Ok(RewriteRecursion::Stop);
                 }
             } else if self.table_schema.index_of(column.name()).is_err() {
                 // If the column does not exist in the (un-projected) table schema then
                 // it must be a projected column.
                 self.projected_columns = true;
+                return Ok(RewriteRecursion::Stop);
             }
         }
+
         Ok(RewriteRecursion::Continue)
     }
 

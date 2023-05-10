@@ -18,11 +18,11 @@
 //! Join related functionality used both on logical and physical plans
 
 use arrow::array::{
-    new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
     UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
@@ -38,7 +38,7 @@ use std::usize;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{ScalarValue, SharedResult};
 
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
 use crate::error::{DataFusionError, Result};
@@ -133,11 +133,11 @@ pub fn adjust_right_output_partitioning(
                 .into_iter()
                 .map(|expr| {
                     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-                        Some(col) => Ok(Some(Arc::new(Column::new(
+                        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
                             col.name(),
                             left_columns_len + col.index(),
                         )))),
-                        None => Ok(None),
+                        None => Ok(Transformed::No(e)),
                     })
                     .unwrap()
                 })
@@ -351,7 +351,7 @@ pub fn build_join_schema(
     right: &Schema,
     join_type: &JoinType,
 ) -> (Schema, Vec<ColumnIndex>) {
-    let (fields, column_indices): (Vec<Field>, Vec<ColumnIndex>) = match join_type {
+    let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             let left_fields = left
                 .fields()
@@ -417,7 +417,7 @@ pub fn build_join_schema(
             .unzip(),
     };
 
-    (Schema::new(fields), column_indices)
+    (fields.finish(), column_indices)
 }
 
 /// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
@@ -735,14 +735,15 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-/// In the end of join execution, need to use bit map of the matched indices to generate the final left and
-/// right indices.
+/// In the end of join execution, need to use bit map of the matched
+/// indices to generate the final left and right indices.
 ///
 /// For example:
-/// left_bit_map: [true, false, true, true, false]
-/// join_type: `Left`
 ///
-/// The result is: ([1,4], [null, null])
+/// 1. left_bit_map: `[true, false, true, true, false]`
+/// 2. join_type: `Left`
+///
+/// The result is: `([1,4], [null, null])`
 pub(crate) fn get_final_indices_from_bit_map(
     left_bit_map: &BooleanBufferBuilder,
     join_type: JoinType,
@@ -783,8 +784,8 @@ pub(crate) fn apply_join_filter_to_indices(
         filter.schema(),
         build_input_buffer,
         probe_batch,
-        PrimitiveArray::from(build_indices.data().clone()),
-        PrimitiveArray::from(probe_indices.data().clone()),
+        build_indices.clone(),
+        probe_indices.clone(),
         filter.column_indices(),
         build_side,
     )?;
@@ -794,13 +795,12 @@ pub(crate) fn apply_join_filter_to_indices(
         .into_array(intermediate_batch.num_rows());
     let mask = as_boolean_array(&filter_result)?;
 
-    let left_filtered = PrimitiveArray::<UInt64Type>::from(
-        compute::filter(&build_indices, mask)?.data().clone(),
-    );
-    let right_filtered = PrimitiveArray::<UInt32Type>::from(
-        compute::filter(&probe_indices, mask)?.data().clone(),
-    );
-    Ok((left_filtered, right_filtered))
+    let left_filtered = compute::filter(&build_indices, mask)?;
+    let right_filtered = compute::filter(&probe_indices, mask)?;
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
 }
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
@@ -1067,6 +1067,7 @@ impl BuildProbeJoinMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::Fields;
     use arrow::error::Result as ArrowResult;
     use arrow::{datatypes::DataType, error::ArrowError};
     use datafusion_common::ScalarValue;
@@ -1203,7 +1204,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .chain(right_out.fields().iter().cloned())
-                .collect();
+                .collect::<Fields>();
 
             let expected_schema = Schema::new(expected_fields);
             assert_eq!(

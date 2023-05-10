@@ -202,7 +202,7 @@ macro_rules! invoke_if_crypto_expressions_feature_flag {
 }
 
 #[cfg(feature = "regex_expressions")]
-macro_rules! invoke_if_regex_expressions_feature_flag {
+macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {{
         use crate::regex_expressions;
         regex_expressions::$FUNC::<$T>
@@ -210,9 +210,29 @@ macro_rules! invoke_if_regex_expressions_feature_flag {
 }
 
 #[cfg(not(feature = "regex_expressions"))]
-macro_rules! invoke_if_regex_expressions_feature_flag {
+macro_rules! invoke_on_array_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {
         |_: &[ArrayRef]| -> Result<ArrayRef> {
+            Err(DataFusionError::Internal(format!(
+                "function {} requires compilation with feature flag: regex_expressions.",
+                $NAME
+            )))
+        }
+    };
+}
+
+#[cfg(feature = "regex_expressions")]
+macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
+    ($FUNC:ident, $T:tt, $NAME:expr) => {{
+        use crate::regex_expressions;
+        regex_expressions::$FUNC::<$T>
+    }};
+}
+
+#[cfg(not(feature = "regex_expressions"))]
+macro_rules! invoke_on_columnar_value_if_regex_expressions_feature_flag {
+    ($FUNC:ident, $T:tt, $NAME:expr) => {
+        |_: &[ColumnarValue]| -> Result<ScalarFunctionImplementation> {
             Err(DataFusionError::Internal(format!(
                 "function {} requires compilation with feature flag: regex_expressions.",
                 $NAME
@@ -319,20 +339,41 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Acos => Arc::new(math_expressions::acos),
         BuiltinScalarFunction::Asin => Arc::new(math_expressions::asin),
         BuiltinScalarFunction::Atan => Arc::new(math_expressions::atan),
+        BuiltinScalarFunction::Acosh => Arc::new(math_expressions::acosh),
+        BuiltinScalarFunction::Asinh => Arc::new(math_expressions::asinh),
+        BuiltinScalarFunction::Atanh => Arc::new(math_expressions::atanh),
         BuiltinScalarFunction::Ceil => Arc::new(math_expressions::ceil),
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
+        BuiltinScalarFunction::Cosh => Arc::new(math_expressions::cosh),
+        BuiltinScalarFunction::Degrees => Arc::new(math_expressions::to_degrees),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
+        BuiltinScalarFunction::Factorial => {
+            Arc::new(|args| make_scalar_function(math_expressions::factorial)(args))
+        }
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
+        BuiltinScalarFunction::Gcd => {
+            Arc::new(|args| make_scalar_function(math_expressions::gcd)(args))
+        }
+        BuiltinScalarFunction::Lcm => {
+            Arc::new(|args| make_scalar_function(math_expressions::lcm)(args))
+        }
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),
         BuiltinScalarFunction::Log10 => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Log2 => Arc::new(math_expressions::log2),
+        BuiltinScalarFunction::Radians => Arc::new(math_expressions::to_radians),
         BuiltinScalarFunction::Random => Arc::new(math_expressions::random),
-        BuiltinScalarFunction::Round => Arc::new(math_expressions::round),
+        BuiltinScalarFunction::Round => {
+            Arc::new(|args| make_scalar_function(math_expressions::round)(args))
+        }
         BuiltinScalarFunction::Signum => Arc::new(math_expressions::signum),
         BuiltinScalarFunction::Sin => Arc::new(math_expressions::sin),
+        BuiltinScalarFunction::Sinh => Arc::new(math_expressions::sinh),
         BuiltinScalarFunction::Sqrt => Arc::new(math_expressions::sqrt),
+        BuiltinScalarFunction::Cbrt => Arc::new(math_expressions::cbrt),
         BuiltinScalarFunction::Tan => Arc::new(math_expressions::tan),
+        BuiltinScalarFunction::Tanh => Arc::new(math_expressions::tanh),
         BuiltinScalarFunction::Trunc => Arc::new(math_expressions::trunc),
+        BuiltinScalarFunction::Pi => Arc::new(math_expressions::pi),
         BuiltinScalarFunction::Power => {
             Arc::new(|args| make_scalar_function(math_expressions::power)(args))
         }
@@ -503,7 +544,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::RegexpMatch => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
-                    let func = invoke_if_regex_expressions_feature_flag!(
+                    let func = invoke_on_array_if_regex_expressions_feature_flag!(
                         regexp_match,
                         i32,
                         "regexp_match"
@@ -511,7 +552,7 @@ pub fn create_physical_fun(
                     make_scalar_function(func)(args)
                 }
                 DataType::LargeUtf8 => {
-                    let func = invoke_if_regex_expressions_feature_flag!(
+                    let func = invoke_on_array_if_regex_expressions_feature_flag!(
                         regexp_match,
                         i64,
                         "regexp_match"
@@ -526,7 +567,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::RegexpReplace => {
             Arc::new(|args| match args[0].data_type() {
                 DataType::Utf8 => {
-                    let specializer_func = invoke_if_regex_expressions_feature_flag!(
+                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
                         specialize_regexp_replace,
                         i32,
                         "regexp_replace"
@@ -535,7 +576,7 @@ pub fn create_physical_fun(
                     func(args)
                 }
                 DataType::LargeUtf8 => {
-                    let specializer_func = invoke_if_regex_expressions_feature_flag!(
+                    let specializer_func = invoke_on_columnar_value_if_regex_expressions_feature_flag!(
                         specialize_regexp_replace,
                         i64,
                         "regexp_replace"
@@ -2734,6 +2775,7 @@ mod tests {
 
         let funs = [
             BuiltinScalarFunction::Now,
+            BuiltinScalarFunction::Pi,
             BuiltinScalarFunction::Random,
             BuiltinScalarFunction::Uuid,
         ];
@@ -2769,7 +2811,7 @@ mod tests {
         assert_eq!(
             expr.data_type(&schema)?,
             // type equals to a common coercion
-            DataType::FixedSizeList(Box::new(Field::new("item", expected_type, true)), 2)
+            DataType::FixedSizeList(Arc::new(Field::new("item", expected_type, true)), 2)
         );
 
         // evaluate works
@@ -2831,7 +2873,7 @@ mod tests {
         // type is correct
         assert_eq!(
             expr.data_type(&schema)?,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
 
         // evaluate works
@@ -2870,7 +2912,7 @@ mod tests {
         // type is correct
         assert_eq!(
             expr.data_type(&schema)?,
-            DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))
         );
 
         // evaluate works

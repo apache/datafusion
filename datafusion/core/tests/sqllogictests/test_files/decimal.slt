@@ -592,3 +592,8 @@ query TB
 select arrow_typeof(null <= a), null <= a from (values (1.1::decimal)) as t(a);
 ----
 Boolean NULL
+
+query R
+select try_cast(1234567 as decimal(7,3));
+----
+NULL

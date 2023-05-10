@@ -22,10 +22,10 @@ use std::sync::Arc;
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::ExecutionPlan;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 
 /// Currently for a sort operator, if
 /// - there are more than one input partitions
@@ -48,34 +48,39 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(&|plan| {
-            Ok(plan
-                .as_any()
-                .downcast_ref::<SortExec>()
-                .and_then(|sort_exec| {
-                    if sort_exec.input().output_partitioning().partition_count() > 1
-                        && sort_exec.fetch().is_some()
+            let transformed =
+                plan.as_any()
+                    .downcast_ref::<SortExec>()
+                    .and_then(|sort_exec| {
+                        if sort_exec.input().output_partitioning().partition_count() > 1
                         // It's already preserving the partitioning so that it can be regarded as a local sort
                         && !sort_exec.preserve_partitioning()
+                        && (sort_exec.fetch().is_some() ||  config.optimizer.repartition_sorts)
                     {
-                        let sort = SortExec::new_with_partitioning(
-                            sort_exec.expr().to_vec(),
-                            sort_exec.input().clone(),
-                            true,
-                            sort_exec.fetch(),
-                        );
-                        let global_sort: Arc<dyn ExecutionPlan> =
-                            Arc::new(SortPreservingMergeExec::new(
+                            let sort = SortExec::new(
                                 sort_exec.expr().to_vec(),
-                                Arc::new(sort),
-                            ));
-                        Some(global_sort)
-                    } else {
-                        None
-                    }
-                }))
+                                sort_exec.input().clone()
+                            )
+                            .with_fetch(sort_exec.fetch())
+                            .with_preserve_partitioning(true);
+                            let global_sort: Arc<dyn ExecutionPlan> =
+                                Arc::new(SortPreservingMergeExec::new(
+                                    sort_exec.expr().to_vec(),
+                                    Arc::new(sort),
+                                ));
+                            Some(global_sort)
+                        } else {
+                            None
+                        }
+                    });
+            Ok(if let Some(transformed) = transformed {
+                Transformed::Yes(transformed)
+            } else {
+                Transformed::No(plan)
+            })
         })
     }
 

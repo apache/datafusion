@@ -55,7 +55,16 @@ pub struct FileRange {
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub object_meta: ObjectMeta,
-    /// Values of partition columns to be appended to each row
+    /// Values of partition columns to be appended to each row.
+    ///
+    /// These MUST have the same count, order, and type than the [`table_partition_cols`].
+    ///
+    /// You may use [`wrap_partition_value_in_dict`] to wrap them if you have used [`wrap_partition_type_in_dict`] to wrap the column type.
+    ///
+    ///
+    /// [`wrap_partition_type_in_dict`]: crate::physical_plan::file_format::wrap_partition_type_in_dict
+    /// [`wrap_partition_value_in_dict`]: crate::physical_plan::file_format::wrap_partition_value_in_dict
+    /// [`table_partition_cols`]: table::ListingOptions::table_partition_cols
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
@@ -106,10 +115,13 @@ impl From<ObjectMeta> for PartitionedFile {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_execution::object_store::ObjectStoreRegistry;
+    use crate::datasource::listing::ListingTableUrl;
+    use datafusion_execution::object_store::{
+        DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    };
     use object_store::local::LocalFileSystem;
-
-    use super::*;
+    use std::sync::Arc;
+    use url::Url;
 
     #[test]
     fn test_object_store_listing_url() {
@@ -123,32 +135,34 @@ mod tests {
     }
 
     #[test]
-    fn test_get_by_url_hdfs() {
-        let sut = ObjectStoreRegistry::default();
-        sut.register_store("hdfs", "localhost:8020", Arc::new(LocalFileSystem::new()));
+    fn test_get_store_hdfs() {
+        let sut = DefaultObjectStoreRegistry::default();
+        let url = Url::parse("hdfs://localhost:8020").unwrap();
+        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("hdfs://localhost:8020/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_s3() {
-        let sut = ObjectStoreRegistry::default();
-        sut.register_store("s3", "bucket", Arc::new(LocalFileSystem::new()));
+    fn test_get_store_s3() {
+        let sut = DefaultObjectStoreRegistry::default();
+        let url = Url::parse("s3://bucket/key").unwrap();
+        sut.register_store(&url, Arc::new(LocalFileSystem::new()));
         let url = ListingTableUrl::parse("s3://bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_file() {
-        let sut = ObjectStoreRegistry::default();
+    fn test_get_store_file() {
+        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("file:///bucket/key").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 
     #[test]
-    fn test_get_by_url_local() {
-        let sut = ObjectStoreRegistry::default();
+    fn test_get_store_local() {
+        let sut = DefaultObjectStoreRegistry::default();
         let url = ListingTableUrl::parse("../").unwrap();
-        sut.get_by_url(&url).unwrap();
+        sut.get_store(url.as_ref()).unwrap();
     }
 }

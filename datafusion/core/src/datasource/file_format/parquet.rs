@@ -20,8 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, Schema};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
@@ -38,7 +38,7 @@ use super::FileScanConfig;
 use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
-use crate::arrow::datatypes::{DataType, Field};
+use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -132,9 +132,9 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.clone().with_metadata(Default::default()) // clear meta
+                field.as_ref().clone().with_metadata(Default::default()) // clear meta
             })
-            .collect::<Vec<_>>();
+            .collect::<Fields>();
         Schema::new(fields)
     })
 }
@@ -209,7 +209,7 @@ impl FileFormat for ParquetFormat {
 fn summarize_min_max(
     max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
-    fields: &[Field],
+    fields: &Fields,
     i: usize,
     stat: &ParquetStatistics,
 ) {
@@ -468,7 +468,7 @@ async fn fetch_statistics(
     )?;
 
     let num_fields = table_schema.fields().len();
-    let fields = table_schema.fields().to_vec();
+    let fields = table_schema.fields();
 
     let mut num_rows = 0;
     let mut total_byte_size = 0;
@@ -502,7 +502,7 @@ async fn fetch_statistics(
                         summarize_min_max(
                             &mut max_values,
                             &mut min_values,
-                            &fields,
+                            fields,
                             table_idx,
                             stats,
                         )
@@ -620,6 +620,7 @@ mod tests {
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
+    use crate::physical_plan::file_format::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
@@ -1200,7 +1201,7 @@ mod tests {
                 .unwrap()
                 .metadata()
                 .clone();
-        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+        check_page_index_validation(builder.column_index(), builder.offset_index());
 
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await.unwrap();
@@ -1210,7 +1211,26 @@ mod tests {
             .unwrap()
             .metadata()
             .clone();
-        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+        check_page_index_validation(builder.column_index(), builder.offset_index());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_scan_files() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let projection = Some(vec![9]);
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
+        let scan_files = get_scan_files(exec)?;
+        assert_eq!(scan_files.len(), 1);
+        assert_eq!(scan_files[0].len(), 1);
+        assert_eq!(scan_files[0][0].len(), 1);
+        assert!(scan_files[0][0][0]
+            .object_meta
+            .location
+            .to_string()
+            .contains("alltypes_plain.parquet"));
 
         Ok(())
     }

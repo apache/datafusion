@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-examples"
 description = "DataFusion usage examples"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 publish = false
 version = { workspace = true }
 edition = { workspace = true }
@@ -36,9 +36,10 @@ required-features = ["datafusion/avro"]
 
 [dev-dependencies]
 arrow = { workspace = true }
-arrow-flight = { version = "34.0.0", features = ["flight-sql-experimental"] }
+arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = "0.1.41"
+bytes = "1.4"
 dashmap = "5.4"
 datafusion = { path = "../datafusion/core" }
 datafusion-common = { path = "../datafusion/common" }
@@ -56,5 +57,6 @@ prost-derive = { version = "0.11", default-features = false }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.82"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-tonic = "0.8"
+tonic = "0.9"
+url = "2.2"
 uuid = "1.2"

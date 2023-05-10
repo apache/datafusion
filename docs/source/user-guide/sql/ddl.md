@@ -19,10 +19,69 @@
 
 # DDL
 
+## CREATE DATABASE
+
+Create catalog with specified name.
+
+<pre>
+CREATE DATABASE [ IF NOT EXISTS ] <i><b>catalog</i></b>
+</pre>
+
+```sql
+-- create catalog cat
+CREATE DATABASE cat;
+```
+
+## CREATE SCHEMA
+
+Create schema under specified catalog, or the default DataFusion catalog if not specified.
+
+<pre>
+CREATE SCHEMA [ IF NOT EXISTS ] [ <i><b>catalog.</i></b> ] <b><i>schema_name</i></b>
+</pre>
+
+```sql
+-- create schema emu under catalog cat
+CREATE SCHEMA cat.emu;
+```
+
 ## CREATE EXTERNAL TABLE
 
-Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. It is not necessary
-to provide schema information for Parquet files.
+`CREATE EXTERNAL TABLE` SQL statement registers a location on a local
+file system or remote object store as a named table which can be queried.
+
+The supported syntax is:
+
+```
+CREATE EXTERNAL TABLE
+[ IF NOT EXISTS ]
+<TABLE_NAME>[ (<column_definition>) ]
+STORED AS <file_type>
+[ WITH HEADER ROW ]
+[ DELIMITER <char> ]
+[ COMPRESSION TYPE <GZIP | BZIP2 | XZ | ZSTD> ]
+[ PARTITIONED BY (<column list>) ]
+[ WITH ORDER (<ordered column list>)
+[ OPTIONS (<key_value_list>) ]
+LOCATION <literal>
+
+<column_definition> := (<column_name> <data_type>, ...)
+
+<column_list> := (<column_name>, ...)
+
+<ordered_column_list> := (<column_name> <sort_clause>, ...)
+
+<key_value_list> := (<literal> <literal, <literal> <literal>, ...)
+```
+
+`file_type` is one of `CSV`, `PARQUET`, `AVRO` or `JSON`
+
+`LOCATION <literal>` specfies the location to find the data. It can be
+a path to a file or directory of partitioned files locally or on an
+object store.
+
+Parquet data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement such as the following. It is not necessary to
+provide schema information for Parquet files.
 
 ```sql
 CREATE EXTERNAL TABLE taxi
@@ -30,8 +89,8 @@ STORED AS PARQUET
 LOCATION '/mnt/nyctaxi/tripdata.parquet';
 ```
 
-CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema will be
-inferred based on scanning a subset of the file.
+CSV data sources can also be registered by executing a `CREATE EXTERNAL TABLE` SQL statement. The schema will be inferred based on
+scanning a subset of the file.
 
 ```sql
 CREATE EXTERNAL TABLE test
@@ -63,6 +122,58 @@ WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
+It is also possible to specify a directory that contains a partitioned
+table (multiple files with the same schema)
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '/path/to/directory/of/files';
+```
+
+When creating an output from a data source that is already ordered by
+an expression, you can pre-specify the order of the data using the
+`WITH ORDER` clause. This applies even if the expression used for
+sorting is complex, allowing for greater flexibility.
+
+Here's an example of how to use `WITH ORDER` clause.
+
+```sql
+CREATE EXTERNAL TABLE test (
+    c1  VARCHAR NOT NULL,
+    c2  INT NOT NULL,
+    c3  SMALLINT NOT NULL,
+    c4  SMALLINT NOT NULL,
+    c5  INT NOT NULL,
+    c6  BIGINT NOT NULL,
+    c7  SMALLINT NOT NULL,
+    c8  INT NOT NULL,
+    c9  BIGINT NOT NULL,
+    c10 VARCHAR NOT NULL,
+    c11 FLOAT NOT NULL,
+    c12 DOUBLE NOT NULL,
+    c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (c2 ASC, c5 + c8 DESC NULL FIRST)
+LOCATION '/path/to/aggregate_test_100.csv';
+```
+
+Where `WITH ORDER` clause specifies the sort order:
+
+```sql
+WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
+         [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
+```
+
+### Cautions when using the WITH ORDER Clause
+
+- It's important to understand that using the `WITH ORDER` clause in the `CREATE EXTERNAL TABLE` statement only specifies the order in which the data should be read from the external file. If the data in the file is not already sorted according to the specified order, then the results may not be correct.
+
+- It's also important to note that the `WITH ORDER` clause does not affect the ordering of the data in the original external file.
+
 If data sources are already partitioned in Hive style, `PARTITIONED BY` can be used for partition pruning.
 
 ```
@@ -89,6 +200,8 @@ CREATE [OR REPLACE] TABLE [IF NOT EXISTS] <b><i>table_name</i></b> AS [SELECT | 
 ```sql
 CREATE TABLE IF NOT EXISTS valuetable AS VALUES(1,'HELLO'),(12,'DATAFUSION');
 
+CREATE TABLE IF NOT EXISTS valuetable(c1 INT, c2 VARCHAR) AS VALUES(1,'HELLO'),(12,'DATAFUSION');
+
 CREATE TABLE memtable as select * from valuetable;
 ```
 
@@ -112,7 +225,7 @@ DROP TABLE IF EXISTS nonexistent_table;
 View is a virtual table based on the result of a SQL query. It can be created from an existing table or values list.
 
 <pre>
-CREATE VIEW <i><b>view_name</b></i> AS statement;
+CREATE [ OR REPLACE ] VIEW <i><b>view_name</b></i> AS statement;
 </pre>
 
 ```sql

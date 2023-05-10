@@ -110,6 +110,21 @@ impl Operator {
         }
     }
 
+    /// Return true if the operator is a numerical operator.
+    ///
+    /// For example, 'Binary(a, +, b)' would be a numerical expression.
+    /// PostgresSQL concept: <https://www.postgresql.org/docs/7.0/operators2198.htm>
+    pub fn is_numerical_operators(&self) -> bool {
+        matches!(
+            self,
+            Operator::Plus
+                | Operator::Minus
+                | Operator::Multiply
+                | Operator::Divide
+                | Operator::Modulo
+        )
+    }
+
     /// Return true if the operator is a comparison operator.
     ///
     /// For example, 'Binary(a, >, b)' would be a comparison expression.
@@ -235,6 +250,7 @@ impl fmt::Display for Operator {
     }
 }
 
+/// Support `<expr> + <expr>` fluent style
 impl ops::Add for Expr {
     type Output = Self;
 
@@ -243,6 +259,7 @@ impl ops::Add for Expr {
     }
 }
 
+/// Support `<expr> - <expr>` fluent style
 impl ops::Sub for Expr {
     type Output = Self;
 
@@ -251,6 +268,7 @@ impl ops::Sub for Expr {
     }
 }
 
+/// Support `<expr> * <expr>` fluent style
 impl ops::Mul for Expr {
     type Output = Self;
 
@@ -259,6 +277,7 @@ impl ops::Mul for Expr {
     }
 }
 
+/// Support `<expr> / <expr>` fluent style
 impl ops::Div for Expr {
     type Output = Self;
 
@@ -267,11 +286,66 @@ impl ops::Div for Expr {
     }
 }
 
+/// Support `<expr> % <expr>` fluent style
 impl ops::Rem for Expr {
     type Output = Self;
 
     fn rem(self, rhs: Self) -> Self {
         binary_expr(self, Operator::Modulo, rhs)
+    }
+}
+
+/// Support `<expr> & <expr>` fluent style
+impl ops::BitAnd for Expr {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self {
+        binary_expr(self, Operator::BitwiseAnd, rhs)
+    }
+}
+
+/// Support `<expr> | <expr>` fluent style
+impl ops::BitOr for Expr {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        binary_expr(self, Operator::BitwiseOr, rhs)
+    }
+}
+
+/// Support `<expr> ^ <expr>` fluent style
+impl ops::BitXor for Expr {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self {
+        binary_expr(self, Operator::BitwiseXor, rhs)
+    }
+}
+
+/// Support `<expr> << <expr>` fluent style
+impl ops::Shl for Expr {
+    type Output = Self;
+
+    fn shl(self, rhs: Self) -> Self::Output {
+        binary_expr(self, Operator::BitwiseShiftLeft, rhs)
+    }
+}
+
+/// Support `<expr> >> <expr>` fluent style
+impl ops::Shr for Expr {
+    type Output = Self;
+
+    fn shr(self, rhs: Self) -> Self::Output {
+        binary_expr(self, Operator::BitwiseShiftRight, rhs)
+    }
+}
+
+/// Support `- <expr>` fluent style
+impl ops::Neg for Expr {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Expr::Negative(Box::new(self))
     }
 }
 
@@ -301,5 +375,26 @@ mod tests {
             format!("{:?}", lit(1u32) % lit(2u32)),
             "UInt32(1) % UInt32(2)"
         );
+        assert_eq!(
+            format!("{:?}", lit(1u32) & lit(2u32)),
+            "UInt32(1) & UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) | lit(2u32)),
+            "UInt32(1) | UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) ^ lit(2u32)),
+            "UInt32(1) # UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) << lit(2u32)),
+            "UInt32(1) << UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) >> lit(2u32)),
+            "UInt32(1) >> UInt32(2)"
+        );
+        assert_eq!(format!("{:?}", -lit(1u32)), "(- UInt32(1))");
     }
 }

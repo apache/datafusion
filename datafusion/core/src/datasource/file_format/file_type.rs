@@ -25,16 +25,21 @@ use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 #[cfg(feature = "compression")]
 use async_compression::tokio::bufread::{
-    BzDecoder as AsyncBzDecoder, GzipDecoder as AsyncGzDecoder,
-    XzDecoder as AsyncXzDecoder, ZstdDecoder as AsyncZstdDecoer,
+    BzDecoder as AsyncBzDecoder, BzEncoder as AsyncBzEncoder,
+    GzipDecoder as AsyncGzDecoder, GzipEncoder as AsyncGzEncoder,
+    XzDecoder as AsyncXzDecoder, XzEncoder as AsyncXzEncoder,
+    ZstdDecoder as AsyncZstdDecoer, ZstdEncoder as AsyncZstdEncoder,
 };
+
 use bytes::Bytes;
 #[cfg(feature = "compression")]
-use bzip2::read::BzDecoder;
+use bzip2::read::MultiBzDecoder;
 use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
-use flate2::read::GzDecoder;
-use futures::Stream;
+use flate2::read::MultiGzDecoder;
+
+use futures::stream::BoxStream;
+use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
 use std::str::FromStr;
@@ -111,53 +116,67 @@ impl FileCompressionType {
         self.variant.is_compressed()
     }
 
-    /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
-    pub fn convert_stream<T: Stream<Item = Result<Bytes>> + Unpin + Send + 'static>(
+    /// Given a `Stream`, create a `Stream` which data are compressed with `FileCompressionType`.
+    pub fn convert_to_compress_stream(
         &self,
-        s: T,
-    ) -> Result<Box<dyn Stream<Item = Result<Bytes>> + Send + Unpin>> {
-        #[cfg(feature = "compression")]
-        let err_converter = |e: std::io::Error| match e
-            .get_ref()
-            .and_then(|e| e.downcast_ref::<DataFusionError>())
-        {
-            Some(_) => {
-                *(e.into_inner()
-                    .unwrap()
-                    .downcast::<DataFusionError>()
-                    .unwrap())
-            }
-            None => Into::<DataFusionError>::into(e),
-        };
-
+        s: BoxStream<'static, Result<Bytes>>,
+    ) -> Result<BoxStream<'static, Result<Bytes>>> {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
-            GZIP => Box::new(
-                ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
-                    .map_err(err_converter),
-            ),
+            GZIP => ReaderStream::new(AsyncGzEncoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
             #[cfg(feature = "compression")]
-            BZIP2 => Box::new(
-                ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
-                    .map_err(err_converter),
-            ),
+            BZIP2 => ReaderStream::new(AsyncBzEncoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
             #[cfg(feature = "compression")]
-            XZ => Box::new(
-                ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
-                    .map_err(err_converter),
-            ),
+            XZ => ReaderStream::new(AsyncXzEncoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
             #[cfg(feature = "compression")]
-            ZSTD => Box::new(
-                ReaderStream::new(AsyncZstdDecoer::new(StreamReader::new(s)))
-                    .map_err(err_converter),
-            ),
+            ZSTD => ReaderStream::new(AsyncZstdEncoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
             }
-            UNCOMPRESSED => Box::new(s),
+            UNCOMPRESSED => s.boxed(),
+        })
+    }
+
+    /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
+    pub fn convert_stream(
+        &self,
+        s: BoxStream<'static, Result<Bytes>>,
+    ) -> Result<BoxStream<'static, Result<Bytes>>> {
+        Ok(match self.variant {
+            #[cfg(feature = "compression")]
+            GZIP => ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
+            #[cfg(feature = "compression")]
+            BZIP2 => ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
+            #[cfg(feature = "compression")]
+            XZ => ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
+            #[cfg(feature = "compression")]
+            ZSTD => ReaderStream::new(AsyncZstdDecoer::new(StreamReader::new(s)))
+                .map_err(DataFusionError::from)
+                .boxed(),
+            #[cfg(not(feature = "compression"))]
+            GZIP | BZIP2 | XZ | ZSTD => {
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
+            }
+            UNCOMPRESSED => s.boxed(),
         })
     }
 
@@ -168,11 +187,11 @@ impl FileCompressionType {
     ) -> Result<Box<dyn std::io::Read + Send>> {
         Ok(match self.variant {
             #[cfg(feature = "compression")]
-            GZIP => Box::new(GzDecoder::new(r)),
+            GZIP => Box::new(MultiGzDecoder::new(r)),
             #[cfg(feature = "compression")]
-            BZIP2 => Box::new(BzDecoder::new(r)),
+            BZIP2 => Box::new(MultiBzDecoder::new(r)),
             #[cfg(feature = "compression")]
-            XZ => Box::new(XzDecoder::new(r)),
+            XZ => Box::new(XzDecoder::new_multi_decoder(r)),
             #[cfg(feature = "compression")]
             ZSTD => match ZstdDecoder::new(r) {
                 Ok(decoder) => Box::new(decoder),

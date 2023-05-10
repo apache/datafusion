@@ -24,27 +24,157 @@ use std::fmt::{Display, Formatter};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
+use crate::intervals::rounding::alter_fp_rounding_mode;
+
+/// This type represents a single endpoint of an [`Interval`]. An endpoint can
+/// be open or closed, denoting whether the interval includes or excludes the
+/// endpoint itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntervalBound {
+    pub value: ScalarValue,
+    pub open: bool,
+}
+
+impl IntervalBound {
+    /// Creates a new `IntervalBound` object using the given value.
+    pub const fn new(value: ScalarValue, open: bool) -> IntervalBound {
+        IntervalBound { value, open }
+    }
+
+    /// This convenience function creates an unbounded interval endpoint.
+    pub fn make_unbounded<T: Borrow<DataType>>(data_type: T) -> Result<Self> {
+        ScalarValue::try_from(data_type.borrow()).map(|v| IntervalBound::new(v, true))
+    }
+
+    /// This convenience function returns the data type associated with this
+    /// `IntervalBound`.
+    pub fn get_datatype(&self) -> DataType {
+        self.value.get_datatype()
+    }
+
+    /// This convenience function checks whether the `IntervalBound` represents
+    /// an unbounded interval endpoint.
+    pub fn is_unbounded(&self) -> bool {
+        self.value.is_null()
+    }
+
+    /// This function casts the `IntervalBound` to the given data type.
+    pub(crate) fn cast_to(
+        &self,
+        data_type: &DataType,
+        cast_options: &CastOptions,
+    ) -> Result<IntervalBound> {
+        cast_scalar_value(&self.value, data_type, cast_options)
+            .map(|value| IntervalBound::new(value, self.open))
+    }
+
+    /// This function adds the given `IntervalBound` to this `IntervalBound`.
+    /// The result is unbounded if either is; otherwise, their values are
+    /// added. The result is closed if both original bounds are closed, or open
+    /// otherwise.
+    pub fn add<const UPPER: bool, T: Borrow<IntervalBound>>(
+        &self,
+        other: T,
+    ) -> Result<IntervalBound> {
+        let rhs = other.borrow();
+        if self.is_unbounded() || rhs.is_unbounded() {
+            return IntervalBound::make_unbounded(get_result_type(
+                &self.get_datatype(),
+                &Operator::Plus,
+                &rhs.get_datatype(),
+            )?);
+        }
+        match self.get_datatype() {
+            DataType::Float64 | DataType::Float32 => {
+                alter_fp_rounding_mode::<UPPER, _>(&self.value, &rhs.value, |lhs, rhs| {
+                    lhs.add(rhs)
+                })
+            }
+            _ => self.value.add(&rhs.value),
+        }
+        .map(|v| IntervalBound::new(v, self.open || rhs.open))
+    }
+
+    /// This function subtracts the given `IntervalBound` from `self`.
+    /// The result is unbounded if either is; otherwise, their values are
+    /// subtracted. The result is closed if both original bounds are closed,
+    /// or open otherwise.
+    pub fn sub<const UPPER: bool, T: Borrow<IntervalBound>>(
+        &self,
+        other: T,
+    ) -> Result<IntervalBound> {
+        let rhs = other.borrow();
+        if self.is_unbounded() || rhs.is_unbounded() {
+            return IntervalBound::make_unbounded(get_result_type(
+                &self.get_datatype(),
+                &Operator::Minus,
+                &rhs.get_datatype(),
+            )?);
+        }
+        match self.get_datatype() {
+            DataType::Float64 | DataType::Float32 => {
+                alter_fp_rounding_mode::<UPPER, _>(&self.value, &rhs.value, |lhs, rhs| {
+                    lhs.sub(rhs)
+                })
+            }
+            _ => self.value.sub(&rhs.value),
+        }
+        .map(|v| IntervalBound::new(v, self.open || rhs.open))
+    }
+
+    /// This function chooses one of the given `IntervalBound`s according to
+    /// the given function `decide`. The result is unbounded if both are. If
+    /// only one of the arguments is unbounded, the other one is chosen by
+    /// default. If neither is unbounded, the function `decide` is used.
+    pub fn choose(
+        first: &IntervalBound,
+        second: &IntervalBound,
+        decide: fn(&ScalarValue, &ScalarValue) -> Result<ScalarValue>,
+    ) -> Result<IntervalBound> {
+        Ok(if first.is_unbounded() {
+            second.clone()
+        } else if second.is_unbounded() {
+            first.clone()
+        } else if first.value != second.value {
+            let chosen = decide(&first.value, &second.value)?;
+            if chosen.eq(&first.value) {
+                first.clone()
+            } else {
+                second.clone()
+            }
+        } else {
+            IntervalBound::new(second.value.clone(), first.open || second.open)
+        })
+    }
+}
+
+impl Display for IntervalBound {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "IntervalBound [{}]", self.value)
+    }
+}
 
 /// This type represents an interval, which is used to calculate reliable
 /// bounds for expressions. Currently, we only support addition and
 /// subtraction, but more capabilities will be added in the future.
 /// Upper/lower bounds having NULL values indicate an unbounded side. For
-/// example; [10, 20], [10, ∞], [-∞, 100] and [-∞, ∞] are all valid intervals.
-#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+/// example; [10, 20], [10, ∞), (-∞, 100] and (-∞, ∞) are all valid intervals.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Interval {
-    pub lower: ScalarValue,
-    pub upper: ScalarValue,
+    pub lower: IntervalBound,
+    pub upper: IntervalBound,
 }
 
 impl Default for Interval {
     fn default() -> Self {
-        Interval {
-            lower: ScalarValue::Null,
-            upper: ScalarValue::Null,
-        }
+        Interval::new(
+            IntervalBound::new(ScalarValue::Null, true),
+            IntervalBound::new(ScalarValue::Null, true),
+        )
     }
 }
 
@@ -55,144 +185,232 @@ impl Display for Interval {
 }
 
 impl Interval {
+    /// Creates a new interval object using the given bounds.
+    /// For boolean intervals, having an open false lower bound is equivalent
+    /// to having a true closed lower bound. Similarly, open true upper bound
+    /// is equivalent to having a false closed upper bound. Also for boolean
+    /// intervals, having an unbounded left endpoint is equivalent to having a
+    /// false closed lower bound, while having an unbounded right endpoint is
+    /// equivalent to having a true closed upper bound. Therefore; input
+    /// parameters to construct an Interval can have different types, but they
+    /// all result in [false, false], [false, true] or [true, true].
+    pub fn new(lower: IntervalBound, upper: IntervalBound) -> Interval {
+        // Boolean intervals need a special handling.
+        if let ScalarValue::Boolean(_) = lower.value {
+            let standardized_lower = match lower.value {
+                ScalarValue::Boolean(None) if lower.open => {
+                    ScalarValue::Boolean(Some(false))
+                }
+                ScalarValue::Boolean(Some(false)) if lower.open => {
+                    ScalarValue::Boolean(Some(true))
+                }
+                // The rest may include some invalid interval cases. The validation of
+                // interval construction parameters will be implemented later.
+                // For now, let's return them unchanged.
+                _ => lower.value,
+            };
+            let standardized_upper = match upper.value {
+                ScalarValue::Boolean(None) if upper.open => {
+                    ScalarValue::Boolean(Some(true))
+                }
+                ScalarValue::Boolean(Some(true)) if upper.open => {
+                    ScalarValue::Boolean(Some(false))
+                }
+                _ => upper.value,
+            };
+            Interval {
+                lower: IntervalBound::new(standardized_lower, false),
+                upper: IntervalBound::new(standardized_upper, false),
+            }
+        } else {
+            Interval { lower, upper }
+        }
+    }
+
+    pub fn make<T>(lower: Option<T>, upper: Option<T>, open: (bool, bool)) -> Interval
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Interval::new(
+            IntervalBound::new(ScalarValue::from(lower), open.0),
+            IntervalBound::new(ScalarValue::from(upper), open.1),
+        )
+    }
+
+    /// Casts this interval to `data_type` using `cast_options`.
     pub(crate) fn cast_to(
         &self,
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Interval> {
-        Ok(Interval {
-            lower: cast_scalar_value(&self.lower, data_type, cast_options)?,
-            upper: cast_scalar_value(&self.upper, data_type, cast_options)?,
-        })
+        let lower = self.lower.cast_to(data_type, cast_options)?;
+        let upper = self.upper.cast_to(data_type, cast_options)?;
+        Ok(Interval::new(lower, upper))
     }
 
-    pub(crate) fn get_datatype(&self) -> DataType {
-        self.lower.get_datatype()
+    /// This function returns the data type of this interval. If both endpoints
+    /// do not have the same data type, returns an error.
+    pub(crate) fn get_datatype(&self) -> Result<DataType> {
+        let lower_type = self.lower.get_datatype();
+        let upper_type = self.upper.get_datatype();
+        if lower_type == upper_type {
+            Ok(lower_type)
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "Interval bounds have different types: {lower_type} != {upper_type}",
+            )))
+        }
     }
 
     /// Decide if this interval is certainly greater than, possibly greater than,
     /// or can't be greater than `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
-    pub(crate) fn gt(&self, other: &Interval) -> Interval {
-        let flags = if !self.upper.is_null()
-            && !other.lower.is_null()
-            && (self.upper <= other.lower)
+    pub(crate) fn gt<T: Borrow<Interval>>(&self, other: T) -> Interval {
+        let rhs = other.borrow();
+        let flags = if !self.upper.is_unbounded()
+            && !rhs.lower.is_unbounded()
+            && self.upper.value <= rhs.lower.value
         {
+            // Values in this interval are certainly less than or equal to those
+            // in the given interval.
             (false, false)
-        } else if !self.lower.is_null()
-            && !other.upper.is_null()
-            && (self.lower > other.upper)
+        } else if !self.lower.is_unbounded()
+            && !rhs.upper.is_unbounded()
+            && self.lower.value >= rhs.upper.value
+            && (self.lower.value > rhs.upper.value || self.lower.open || rhs.upper.open)
         {
+            // Values in this interval are certainly greater than those in the
+            // given interval.
             (true, true)
         } else {
+            // All outcomes are possible.
             (false, true)
         };
-        Interval {
-            lower: ScalarValue::Boolean(Some(flags.0)),
-            upper: ScalarValue::Boolean(Some(flags.1)),
-        }
+
+        Interval::make(Some(flags.0), Some(flags.1), (false, false))
+    }
+
+    /// Decide if this interval is certainly greater than or equal to, possibly greater than
+    /// or equal to, or can't be greater than or equal to `other` by returning [true, true],
+    /// [false, true] or [false, false] respectively.
+    pub(crate) fn gt_eq<T: Borrow<Interval>>(&self, other: T) -> Interval {
+        let rhs = other.borrow();
+        let flags = if !self.lower.is_unbounded()
+            && !rhs.upper.is_unbounded()
+            && self.lower.value >= rhs.upper.value
+        {
+            // Values in this interval are certainly greater than or equal to those
+            // in the given interval.
+            (true, true)
+        } else if !self.upper.is_unbounded()
+            && !rhs.lower.is_unbounded()
+            && self.upper.value <= rhs.lower.value
+            && (self.upper.value < rhs.lower.value || self.upper.open || rhs.lower.open)
+        {
+            // Values in this interval are certainly less than those in the
+            // given interval.
+            (false, false)
+        } else {
+            // All outcomes are possible.
+            (false, true)
+        };
+
+        Interval::make(Some(flags.0), Some(flags.1), (false, false))
     }
 
     /// Decide if this interval is certainly less than, possibly less than,
     /// or can't be less than `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.
-    pub(crate) fn lt(&self, other: &Interval) -> Interval {
-        other.gt(self)
+    pub(crate) fn lt<T: Borrow<Interval>>(&self, other: T) -> Interval {
+        other.borrow().gt(self)
+    }
+
+    /// Decide if this interval is certainly less than or equal to, possibly
+    /// less than or equal to, or can't be less than or equal to `other` by returning
+    /// [true, true], [false, true] or [false, false] respectively.
+    pub(crate) fn lt_eq<T: Borrow<Interval>>(&self, other: T) -> Interval {
+        other.borrow().gt_eq(self)
     }
 
     /// Decide if this interval is certainly equal to, possibly equal to,
     /// or can't be equal to `other` by returning [true, true],
     /// [false, true] or [false, false] respectively.    
-    pub(crate) fn equal(&self, other: &Interval) -> Interval {
-        let flags = if !self.lower.is_null()
-            && (self.lower == self.upper)
-            && (other.lower == other.upper)
-            && (self.lower == other.lower)
+    pub(crate) fn equal<T: Borrow<Interval>>(&self, other: T) -> Interval {
+        let rhs = other.borrow();
+        let flags = if !self.lower.is_unbounded()
+            && (self.lower.value == self.upper.value)
+            && (rhs.lower.value == rhs.upper.value)
+            && (self.lower.value == rhs.lower.value)
         {
             (true, true)
-        } else if (!self.lower.is_null()
-            && !other.upper.is_null()
-            && (self.lower > other.upper))
-            || (!self.upper.is_null()
-                && !other.lower.is_null()
-                && (self.upper < other.lower))
+        } else if self.gt(rhs) == Interval::CERTAINLY_TRUE
+            || self.lt(rhs) == Interval::CERTAINLY_TRUE
         {
             (false, false)
         } else {
             (false, true)
         };
-        Interval {
-            lower: ScalarValue::Boolean(Some(flags.0)),
-            upper: ScalarValue::Boolean(Some(flags.1)),
-        }
+
+        Interval::make(Some(flags.0), Some(flags.1), (false, false))
     }
 
-    /// Compute the logical conjunction of this (boolean) interval with the
-    /// given boolean interval.
-    pub(crate) fn and(&self, other: &Interval) -> Result<Interval> {
-        let flags = match (self, other) {
+    /// Compute the logical conjunction of this (boolean) interval with the given boolean interval.
+    pub(crate) fn and<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
+        let rhs = other.borrow();
+        match (
+            &self.lower.value,
+            &self.upper.value,
+            &rhs.lower.value,
+            &rhs.upper.value,
+        ) {
             (
-                Interval {
-                    lower: ScalarValue::Boolean(Some(lower)),
-                    upper: ScalarValue::Boolean(Some(upper)),
-                },
-                Interval {
-                    lower: ScalarValue::Boolean(Some(other_lower)),
-                    upper: ScalarValue::Boolean(Some(other_upper)),
-                },
+                ScalarValue::Boolean(Some(self_lower)),
+                ScalarValue::Boolean(Some(self_upper)),
+                ScalarValue::Boolean(Some(other_lower)),
+                ScalarValue::Boolean(Some(other_upper)),
             ) => {
-                if *lower && *other_lower {
-                    (true, true)
-                } else if *upper && *other_upper {
-                    (false, true)
-                } else {
-                    (false, false)
-                }
+                let lower = *self_lower && *other_lower;
+                let upper = *self_upper && *other_upper;
+
+                Ok(Interval {
+                    lower: IntervalBound::new(ScalarValue::Boolean(Some(lower)), false),
+                    upper: IntervalBound::new(ScalarValue::Boolean(Some(upper)), false),
+                })
             }
-            _ => {
-                return Err(DataFusionError::Internal(
-                    "Incompatible types for logical conjunction".to_string(),
-                ))
-            }
-        };
-        Ok(Interval {
-            lower: ScalarValue::Boolean(Some(flags.0)),
-            upper: ScalarValue::Boolean(Some(flags.1)),
-        })
+            _ => Err(DataFusionError::Internal(
+                "Incompatible types for logical conjunction".to_string(),
+            )),
+        }
     }
 
     /// Compute the intersection of the interval with the given interval.
     /// If the intersection is empty, return None.
-    pub(crate) fn intersect(&self, other: &Interval) -> Result<Option<Interval>> {
-        let lower = if self.lower.is_null() {
-            other.lower.clone()
-        } else if other.lower.is_null() {
-            self.lower.clone()
-        } else {
-            max(&self.lower, &other.lower)?
-        };
-        let upper = if self.upper.is_null() {
-            other.upper.clone()
-        } else if other.upper.is_null() {
-            self.upper.clone()
-        } else {
-            min(&self.upper, &other.upper)?
-        };
-        Ok(if !lower.is_null() && !upper.is_null() && lower > upper {
+    pub(crate) fn intersect<T: Borrow<Interval>>(
+        &self,
+        other: T,
+    ) -> Result<Option<Interval>> {
+        let rhs = other.borrow();
+        // If it is evident that the result is an empty interval,
+        // do not make any calculation and directly return None.
+        if (!self.lower.is_unbounded()
+            && !rhs.upper.is_unbounded()
+            && self.lower.value > rhs.upper.value)
+            || (!self.upper.is_unbounded()
+                && !rhs.lower.is_unbounded()
+                && self.upper.value < rhs.lower.value)
+        {
             // This None value signals an empty interval.
-            None
-        } else {
-            Some(Interval { lower, upper })
-        })
-    }
+            return Ok(None);
+        }
 
-    // Compute the negation of the interval.
-    #[allow(dead_code)]
-    pub(crate) fn arithmetic_negate(&self) -> Result<Interval> {
-        Ok(Interval {
-            lower: self.upper.arithmetic_negate()?,
-            upper: self.lower.arithmetic_negate()?,
-        })
+        let lower = IntervalBound::choose(&self.lower, &rhs.lower, max)?;
+        let upper = IntervalBound::choose(&self.upper, &rhs.upper, min)?;
+
+        let non_empty = lower.is_unbounded()
+            || upper.is_unbounded()
+            || lower.value != upper.value
+            || (!lower.open && !upper.open);
+        Ok(non_empty.then_some(Interval::new(lower, upper)))
     }
 
     /// Add the given interval (`other`) to this interval. Say we have
@@ -201,17 +419,10 @@ impl Interval {
     /// one can choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = if self.lower.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(self.lower.get_datatype())
-        } else {
-            self.lower.add(&rhs.lower)
-        }?;
-        let upper = if self.upper.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(self.upper.get_datatype())
-        } else {
-            self.upper.add(&rhs.upper)
-        }?;
-        Ok(Interval { lower, upper })
+        Ok(Interval::new(
+            self.lower.add::<false, _>(&rhs.lower)?,
+            self.upper.add::<true, _>(&rhs.upper)?,
+        ))
     }
 
     /// Subtract the given interval (`other`) from this interval. Say we have
@@ -220,18 +431,26 @@ impl Interval {
     /// if one can choose single values arbitrarily from each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
-        let lower = if self.lower.is_null() || rhs.upper.is_null() {
-            ScalarValue::try_from(self.lower.get_datatype())
-        } else {
-            self.lower.sub(&rhs.upper)
-        }?;
-        let upper = if self.upper.is_null() || rhs.lower.is_null() {
-            ScalarValue::try_from(self.upper.get_datatype())
-        } else {
-            self.upper.sub(&rhs.lower)
-        }?;
-        Ok(Interval { lower, upper })
+        Ok(Interval::new(
+            self.lower.sub::<false, _>(&rhs.upper)?,
+            self.upper.sub::<true, _>(&rhs.lower)?,
+        ))
     }
+
+    pub const CERTAINLY_FALSE: Interval = Interval {
+        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
+        upper: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
+    };
+
+    pub const UNCERTAIN: Interval = Interval {
+        lower: IntervalBound::new(ScalarValue::Boolean(Some(false)), false),
+        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+    };
+
+    pub const CERTAINLY_TRUE: Interval = Interval {
+        lower: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+        upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
+    };
 }
 
 /// Indicates whether interval arithmetic is supported for the given operator.
@@ -242,7 +461,9 @@ pub fn is_operator_supported(op: &Operator) -> bool {
             | &Operator::Minus
             | &Operator::And
             | &Operator::Gt
+            | &Operator::GtEq
             | &Operator::Lt
+            | &Operator::LtEq
     )
 }
 
@@ -258,6 +479,8 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
             | &DataType::UInt32
             | &DataType::UInt16
             | &DataType::UInt8
+            | &DataType::Float64
+            | &DataType::Float32
     )
 }
 
@@ -265,14 +488,13 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
     match *op {
         Operator::Eq => Ok(lhs.equal(rhs)),
         Operator::Gt => Ok(lhs.gt(rhs)),
+        Operator::GtEq => Ok(lhs.gt_eq(rhs)),
         Operator::Lt => Ok(lhs.lt(rhs)),
+        Operator::LtEq => Ok(lhs.lt_eq(rhs)),
         Operator::And => lhs.and(rhs),
         Operator::Plus => lhs.add(rhs),
         Operator::Minus => lhs.sub(rhs),
-        _ => Ok(Interval {
-            lower: ScalarValue::Null,
-            upper: ScalarValue::Null,
-        }),
+        _ => Ok(Interval::default()),
     }
 }
 
@@ -288,64 +510,81 @@ fn cast_scalar_value(
 
 #[cfg(test)]
 mod tests {
-    use crate::intervals::Interval;
+    use crate::intervals::{Interval, IntervalBound};
     use datafusion_common::{Result, ScalarValue};
+    use ScalarValue::Boolean;
+
+    fn open_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Interval::make(lower, upper, (true, true))
+    }
+
+    fn open_closed<T>(lower: Option<T>, upper: Option<T>) -> Interval
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Interval::make(lower, upper, (true, false))
+    }
+
+    fn closed_open<T>(lower: Option<T>, upper: Option<T>) -> Interval
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Interval::make(lower, upper, (false, true))
+    }
+
+    fn closed_closed<T>(lower: Option<T>, upper: Option<T>) -> Interval
+    where
+        ScalarValue: From<Option<T>>,
+    {
+        Interval::make(lower, upper, (false, false))
+    }
 
     #[test]
     fn intersect_test() -> Result<()> {
         let possible_cases = vec![
-            (Some(1000), None, None, None, Some(1000), None),
-            (None, Some(1000), None, None, None, Some(1000)),
-            (None, None, Some(1000), None, Some(1000), None),
-            (None, None, None, Some(1000), None, Some(1000)),
-            (Some(1000), None, Some(1000), None, Some(1000), None),
+            (Some(1000_i64), None, None, None, Some(1000_i64), None),
+            (None, Some(1000_i64), None, None, None, Some(1000_i64)),
+            (None, None, Some(1000_i64), None, Some(1000_i64), None),
+            (None, None, None, Some(1000_i64), None, Some(1000_i64)),
+            (
+                Some(1000_i64),
+                None,
+                Some(1000_i64),
+                None,
+                Some(1000_i64),
+                None,
+            ),
             (
                 None,
-                Some(1000),
-                Some(999),
-                Some(1002),
-                Some(999),
-                Some(1000),
+                Some(1000_i64),
+                Some(999_i64),
+                Some(1002_i64),
+                Some(999_i64),
+                Some(1000_i64),
             ),
-            (None, Some(1000), Some(1000), None, Some(1000), Some(1000)), // singleton
             (None, None, None, None, None, None),
         ];
 
         for case in possible_cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Int64(case.0),
-                    upper: ScalarValue::Int64(case.1)
-                }
-                .intersect(&Interval {
-                    lower: ScalarValue::Int64(case.2),
-                    upper: ScalarValue::Int64(case.3)
-                })?
-                .unwrap(),
-                Interval {
-                    lower: ScalarValue::Int64(case.4),
-                    upper: ScalarValue::Int64(case.5)
-                }
+                open_open(case.0, case.1).intersect(open_open(case.2, case.3))?,
+                Some(open_open(case.4, case.5))
             )
         }
 
         let empty_cases = vec![
-            (None, Some(1000), Some(1001), None),
-            (Some(1001), None, None, Some(1000)),
-            (None, Some(1000), Some(1001), Some(1002)),
-            (Some(1001), Some(1002), None, Some(1000)),
+            (None, Some(1000_i64), Some(1001_i64), None),
+            (Some(1001_i64), None, None, Some(1000_i64)),
+            (None, Some(1000_i64), Some(1001_i64), Some(1002_i64)),
+            (Some(1001_i64), Some(1002_i64), None, Some(1000_i64)),
         ];
 
         for case in empty_cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Int64(case.0),
-                    upper: ScalarValue::Int64(case.1)
-                }
-                .intersect(&Interval {
-                    lower: ScalarValue::Int64(case.2),
-                    upper: ScalarValue::Int64(case.3)
-                })?,
+                open_open(case.0, case.1).intersect(open_open(case.2, case.3))?,
                 None
             )
         }
@@ -356,68 +595,90 @@ mod tests {
     #[test]
     fn gt_test() {
         let cases = vec![
-            (Some(1000), None, None, None, false, true),
-            (None, Some(1000), None, None, false, true),
-            (None, None, Some(1000), None, false, true),
-            (None, None, None, Some(1000), false, true),
-            (None, Some(1000), Some(1000), None, false, false),
-            (None, Some(1000), Some(1001), None, false, false),
-            (Some(1000), None, Some(1000), None, false, true),
-            (None, Some(1000), Some(1001), Some(1002), false, false),
-            (None, Some(1000), Some(999), Some(1002), false, true),
-            (Some(1002), None, Some(999), Some(1002), false, true),
-            (Some(1003), None, Some(999), Some(1002), true, true),
+            (Some(1000_i64), None, None, None, false, true),
+            (None, Some(1000_i64), None, None, false, true),
+            (None, None, Some(1000_i64), None, false, true),
+            (None, None, None, Some(1000_i64), false, true),
+            (None, Some(1000_i64), Some(1000_i64), None, false, false),
+            (None, Some(1000_i64), Some(1001_i64), None, false, false),
+            (Some(1000_i64), None, Some(1000_i64), None, false, true),
+            (
+                None,
+                Some(1000_i64),
+                Some(1001_i64),
+                Some(1002_i64),
+                false,
+                false,
+            ),
+            (
+                None,
+                Some(1000_i64),
+                Some(999_i64),
+                Some(1002_i64),
+                false,
+                true,
+            ),
+            (
+                Some(1002_i64),
+                None,
+                Some(999_i64),
+                Some(1002_i64),
+                true,
+                true,
+            ),
+            (
+                Some(1003_i64),
+                None,
+                Some(999_i64),
+                Some(1002_i64),
+                true,
+                true,
+            ),
             (None, None, None, None, false, true),
         ];
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Int64(case.0),
-                    upper: ScalarValue::Int64(case.1)
-                }
-                .gt(&Interval {
-                    lower: ScalarValue::Int64(case.2),
-                    upper: ScalarValue::Int64(case.3)
-                }),
-                Interval {
-                    lower: ScalarValue::Boolean(Some(case.4)),
-                    upper: ScalarValue::Boolean(Some(case.5))
-                }
-            )
+                open_open(case.0, case.1).gt(open_open(case.2, case.3)),
+                closed_closed(Some(case.4), Some(case.5))
+            );
         }
     }
 
     #[test]
     fn lt_test() {
         let cases = vec![
-            (Some(1000), None, None, None, false, true),
-            (None, Some(1000), None, None, false, true),
-            (None, None, Some(1000), None, false, true),
-            (None, None, None, Some(1000), false, true),
-            (None, Some(1000), Some(1000), None, false, true),
-            (None, Some(1000), Some(1001), None, true, true),
-            (Some(1000), None, Some(1000), None, false, true),
-            (None, Some(1000), Some(1001), Some(1002), true, true),
-            (None, Some(1000), Some(999), Some(1002), false, true),
+            (Some(1000_i64), None, None, None, false, true),
+            (None, Some(1000_i64), None, None, false, true),
+            (None, None, Some(1000_i64), None, false, true),
+            (None, None, None, Some(1000_i64), false, true),
+            (None, Some(1000_i64), Some(1000_i64), None, true, true),
+            (None, Some(1000_i64), Some(1001_i64), None, true, true),
+            (Some(1000_i64), None, Some(1000_i64), None, false, true),
+            (
+                None,
+                Some(1000_i64),
+                Some(1001_i64),
+                Some(1002_i64),
+                true,
+                true,
+            ),
+            (
+                None,
+                Some(1000_i64),
+                Some(999_i64),
+                Some(1002_i64),
+                false,
+                true,
+            ),
             (None, None, None, None, false, true),
         ];
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Int64(case.0),
-                    upper: ScalarValue::Int64(case.1)
-                }
-                .lt(&Interval {
-                    lower: ScalarValue::Int64(case.2),
-                    upper: ScalarValue::Int64(case.3)
-                }),
-                Interval {
-                    lower: ScalarValue::Boolean(Some(case.4)),
-                    upper: ScalarValue::Boolean(Some(case.5))
-                }
-            )
+                open_open(case.0, case.1).lt(open_open(case.2, case.3)),
+                closed_closed(Some(case.4), Some(case.5))
+            );
         }
     }
 
@@ -434,19 +695,10 @@ mod tests {
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Boolean(Some(case.0)),
-                    upper: ScalarValue::Boolean(Some(case.1))
-                }
-                .and(&Interval {
-                    lower: ScalarValue::Boolean(Some(case.2)),
-                    upper: ScalarValue::Boolean(Some(case.3))
-                })?,
-                Interval {
-                    lower: ScalarValue::Boolean(Some(case.4)),
-                    upper: ScalarValue::Boolean(Some(case.5))
-                }
-            )
+                open_open(Some(case.0), Some(case.1))
+                    .and(open_open(Some(case.2), Some(case.3)))?,
+                open_open(Some(case.4), Some(case.5))
+            );
         }
         Ok(())
     }
@@ -454,39 +706,43 @@ mod tests {
     #[test]
     fn add_test() -> Result<()> {
         let cases = vec![
-            (Some(1000), None, None, None, None, None),
-            (None, Some(1000), None, None, None, None),
-            (None, None, Some(1000), None, None, None),
-            (None, None, None, Some(1000), None, None),
-            (Some(1000), None, Some(1000), None, Some(2000), None),
-            (None, Some(1000), Some(999), Some(1002), None, Some(2002)),
-            (None, Some(1000), Some(1000), None, None, None),
+            (Some(1000_i64), None, None, None, None, None),
+            (None, Some(1000_i64), None, None, None, None),
+            (None, None, Some(1000_i64), None, None, None),
+            (None, None, None, Some(1000_i64), None, None),
             (
-                Some(2001),
-                Some(1),
-                Some(1005),
-                Some(-999),
-                Some(3006),
-                Some(-998),
+                Some(1000_i64),
+                None,
+                Some(1000_i64),
+                None,
+                Some(2000_i64),
+                None,
+            ),
+            (
+                None,
+                Some(1000_i64),
+                Some(999_i64),
+                Some(1002_i64),
+                None,
+                Some(2002_i64),
+            ),
+            (None, Some(1000_i64), Some(1000_i64), None, None, None),
+            (
+                Some(2001_i64),
+                Some(1_i64),
+                Some(1005_i64),
+                Some(-999_i64),
+                Some(3006_i64),
+                Some(-998_i64),
             ),
             (None, None, None, None, None, None),
         ];
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Int64(case.0),
-                    upper: ScalarValue::Int64(case.1)
-                }
-                .add(&Interval {
-                    lower: ScalarValue::Int64(case.2),
-                    upper: ScalarValue::Int64(case.3)
-                })?,
-                Interval {
-                    lower: ScalarValue::Int64(case.4),
-                    upper: ScalarValue::Int64(case.5)
-                }
-            )
+                open_open(case.0, case.1).add(open_open(case.2, case.3))?,
+                open_open(case.4, case.5)
+            );
         }
         Ok(())
     }
@@ -494,40 +750,426 @@ mod tests {
     #[test]
     fn sub_test() -> Result<()> {
         let cases = vec![
-            (Some(1000), None, None, None, None, None),
-            (None, Some(1000), None, None, None, None),
-            (None, None, Some(1000), None, None, None),
-            (None, None, None, Some(1000), None, None),
-            (Some(1000), None, Some(1000), None, None, None),
-            (None, Some(1000), Some(999), Some(1002), None, Some(1)),
-            (None, Some(1000), Some(1000), None, None, Some(0)),
+            (Some(1000_i64), None, None, None, None, None),
+            (None, Some(1000_i64), None, None, None, None),
+            (None, None, Some(1000_i64), None, None, None),
+            (None, None, None, Some(1000_i64), None, None),
+            (Some(1000_i64), None, Some(1000_i64), None, None, None),
             (
-                Some(2001),
-                Some(1000),
+                None,
+                Some(1000_i64),
+                Some(999_i64),
+                Some(1002_i64),
+                None,
+                Some(1_i64),
+            ),
+            (
+                None,
+                Some(1000_i64),
+                Some(1000_i64),
+                None,
+                None,
+                Some(0_i64),
+            ),
+            (
+                Some(2001_i64),
+                Some(1000_i64),
                 Some(1005),
-                Some(999),
-                Some(1002),
-                Some(-5),
+                Some(999_i64),
+                Some(1002_i64),
+                Some(-5_i64),
             ),
             (None, None, None, None, None, None),
         ];
 
         for case in cases {
             assert_eq!(
-                Interval {
-                    lower: ScalarValue::Int64(case.0),
-                    upper: ScalarValue::Int64(case.1)
-                }
-                .sub(&Interval {
-                    lower: ScalarValue::Int64(case.2),
-                    upper: ScalarValue::Int64(case.3)
-                })?,
-                Interval {
-                    lower: ScalarValue::Int64(case.4),
-                    upper: ScalarValue::Int64(case.5)
-                }
-            )
+                open_open(case.0, case.1).sub(open_open(case.2, case.3))?,
+                open_open(case.4, case.5)
+            );
         }
         Ok(())
+    }
+
+    #[test]
+    fn sub_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                closed_open(Some(200_i64), None),
+                open_closed(None, Some(0_i64)),
+            ),
+            (
+                closed_open(Some(100_i64), Some(200_i64)),
+                open_closed(Some(300_i64), Some(150_i64)),
+                closed_open(Some(-50_i64), Some(-100_i64)),
+            ),
+            (
+                closed_open(Some(100_i64), Some(200_i64)),
+                open_open(Some(200_i64), None),
+                open_open(None, Some(0_i64)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                closed_closed(Some(11_i64), Some(11_i64)),
+                closed_closed(Some(-10_i64), Some(-10_i64)),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.sub(case.1)?, case.2)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn add_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_closed(None, Some(200_i64)),
+                open_closed(None, Some(400_i64)),
+            ),
+            (
+                closed_open(Some(100_i64), Some(200_i64)),
+                closed_open(Some(-300_i64), Some(150_i64)),
+                closed_open(Some(-200_i64), Some(350_i64)),
+            ),
+            (
+                closed_open(Some(100_i64), Some(200_i64)),
+                open_open(Some(200_i64), None),
+                open_open(Some(300_i64), None),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                closed_closed(Some(11_i64), Some(11_i64)),
+                closed_closed(Some(12_i64), Some(12_i64)),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.add(case.1)?, case.2)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lt_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_closed(None, Some(100_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_open(None, Some(100_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                open_open(Some(100_i64), Some(200_i64)),
+                closed_closed(Some(0_i64), Some(100_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_closed(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                open_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.lt(case.1), case.2)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gt_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_closed(None, Some(100_i64)),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_open(None, Some(100_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                open_open(Some(100_i64), Some(200_i64)),
+                closed_closed(Some(0_i64), Some(100_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_closed(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                open_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.gt(case.1), case.2)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lt_eq_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_closed(None, Some(100_i64)),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_open(None, Some(100_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_closed(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                open_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.lt_eq(case.1), case.2)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gt_eq_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_closed(None, Some(100_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_open(None, Some(100_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_closed(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                open_open(Some(1_i64), Some(2_i64)),
+                closed_closed(Some(false), Some(false)),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.gt_eq(case.1), case.2)
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn intersect_test_various_bounds() -> Result<()> {
+        let cases = vec![
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_closed(None, Some(100_i64)),
+                Some(closed_closed(Some(100_i64), Some(100_i64))),
+            ),
+            (
+                closed_closed(Some(100_i64), Some(200_i64)),
+                open_open(None, Some(100_i64)),
+                None,
+            ),
+            (
+                open_open(Some(100_i64), Some(200_i64)),
+                closed_closed(Some(0_i64), Some(100_i64)),
+                None,
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_closed(Some(1_i64), Some(2_i64)),
+                Some(closed_closed(Some(2_i64), Some(2_i64))),
+            ),
+            (
+                closed_closed(Some(2_i64), Some(2_i64)),
+                closed_open(Some(1_i64), Some(2_i64)),
+                None,
+            ),
+            (
+                closed_closed(Some(1_i64), Some(1_i64)),
+                open_open(Some(1_i64), Some(2_i64)),
+                None,
+            ),
+            (
+                closed_closed(Some(1_i64), Some(3_i64)),
+                open_open(Some(1_i64), Some(2_i64)),
+                Some(open_open(Some(1_i64), Some(2_i64))),
+            ),
+        ];
+        for case in cases {
+            assert_eq!(case.0.intersect(case.1)?, case.2)
+        }
+        Ok(())
+    }
+
+    // This function tests if valid constructions produce standardized objects
+    // ([false, false], [false, true], [true, true]) for boolean intervals.
+    #[test]
+    fn non_standard_interval_constructs() {
+        let cases = vec![
+            (
+                IntervalBound::new(Boolean(None), true),
+                IntervalBound::new(Boolean(Some(true)), false),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                IntervalBound::new(Boolean(None), true),
+                IntervalBound::new(Boolean(Some(true)), true),
+                closed_closed(Some(false), Some(false)),
+            ),
+            (
+                IntervalBound::new(Boolean(Some(false)), false),
+                IntervalBound::new(Boolean(None), true),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                IntervalBound::new(Boolean(Some(true)), false),
+                IntervalBound::new(Boolean(None), true),
+                closed_closed(Some(true), Some(true)),
+            ),
+            (
+                IntervalBound::new(Boolean(None), true),
+                IntervalBound::new(Boolean(None), true),
+                closed_closed(Some(false), Some(true)),
+            ),
+            (
+                IntervalBound::new(Boolean(Some(false)), true),
+                IntervalBound::new(Boolean(None), true),
+                closed_closed(Some(true), Some(true)),
+            ),
+        ];
+
+        for case in cases {
+            assert_eq!(Interval::new(case.0, case.1), case.2)
+        }
+    }
+
+    macro_rules! capture_mode_change {
+        ($TYPE:ty) => {
+            paste::item! {
+                capture_mode_change_helper!([<capture_mode_change_ $TYPE>],
+                                            [<create_interval_ $TYPE>],
+                                            $TYPE);
+            }
+        };
+    }
+
+    macro_rules! capture_mode_change_helper {
+        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty) => {
+            fn $CREATE_FN_NAME(lower: $TYPE, upper: $TYPE) -> Interval {
+                Interval::make(Some(lower as $TYPE), Some(upper as $TYPE), (true, true))
+            }
+
+            fn $TEST_FN_NAME(input: ($TYPE, $TYPE), expect_low: bool, expect_high: bool) {
+                assert!(expect_low || expect_high);
+                let interval1 = $CREATE_FN_NAME(input.0, input.0);
+                let interval2 = $CREATE_FN_NAME(input.1, input.1);
+                let result = interval1.add(&interval2).unwrap();
+                let without_fe = $CREATE_FN_NAME(input.0 + input.1, input.0 + input.1);
+                assert!(
+                    (!expect_low || result.lower.value < without_fe.lower.value)
+                        && (!expect_high || result.upper.value > without_fe.upper.value)
+                );
+            }
+        };
+    }
+
+    capture_mode_change!(f32);
+    capture_mode_change!(f64);
+
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
+    #[test]
+    fn test_add_intervals_lower_affected_f32() {
+        // Lower is affected
+        let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
+        let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
+        capture_mode_change_f32((lower, upper), true, false);
+
+        // Upper is affected
+        let lower = f32::from_bits(1072693248); //111111111100000000000000000000
+        let upper = f32::from_bits(715827883); //101010101010101010101010101011
+        capture_mode_change_f32((lower, upper), false, true);
+
+        // Lower is affected
+        let lower = 1.0; // 0x3FF0000000000000
+        let upper = 0.3; // 0x3FD3333333333333
+        capture_mode_change_f64((lower, upper), true, false);
+
+        // Upper is affected
+        let lower = 1.4999999999999998; // 0x3FF7FFFFFFFFFFFF
+        let upper = 0.000_000_000_000_000_022_044_604_925_031_31; // 0x3C796A6B413BB21F
+        capture_mode_change_f64((lower, upper), false, true);
+    }
+
+    #[cfg(any(
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
+        target_os = "windows"
+    ))]
+    #[test]
+    fn test_next_impl_add_intervals_f64() {
+        let lower = 1.5;
+        let upper = 1.5;
+        capture_mode_change_f64((lower, upper), true, true);
+
+        let lower = 1.5;
+        let upper = 1.5;
+        capture_mode_change_f32((lower, upper), true, true);
     }
 }

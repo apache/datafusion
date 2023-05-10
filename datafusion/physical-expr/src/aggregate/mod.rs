@@ -56,7 +56,11 @@ pub(crate) mod variance;
 /// * knows how to create its accumulator
 /// * knows its accumulator's state's field
 /// * knows the expressions from whose its accumulator will receive values
-pub trait AggregateExpr: Send + Sync + Debug {
+///
+/// Any implementation of this trait also needs to implement the
+/// `PartialEq<dyn Any>` to allows comparing equality between the
+/// trait objects.
+pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;

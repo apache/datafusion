@@ -31,37 +31,33 @@ use std::sync::Arc;
 
 /// This object stores the window frame state for use in incremental calculations.
 #[derive(Debug)]
-pub enum WindowFrameContext<'a> {
+pub enum WindowFrameContext {
     /// ROWS frames are inherently stateless.
-    Rows(&'a Arc<WindowFrame>),
+    Rows(Arc<WindowFrame>),
     /// RANGE frames are stateful, they store indices specifying where the
     /// previous search left off. This amortizes the overall cost to O(n)
     /// where n denotes the row count.
     Range {
-        window_frame: &'a Arc<WindowFrame>,
+        window_frame: Arc<WindowFrame>,
         state: WindowFrameStateRange,
     },
     /// GROUPS frames are stateful, they store group boundaries and indices
     /// specifying where the previous search left off. This amortizes the
     /// overall cost to O(n) where n denotes the row count.
     Groups {
-        window_frame: &'a Arc<WindowFrame>,
+        window_frame: Arc<WindowFrame>,
         state: WindowFrameStateGroups,
     },
 }
 
-impl<'a> WindowFrameContext<'a> {
+impl WindowFrameContext {
     /// Create a new state object for the given window frame.
-    pub fn new(
-        window_frame: &'a Arc<WindowFrame>,
-        sort_options: Vec<SortOptions>,
-        last_range: Range<usize>,
-    ) -> Self {
+    pub fn new(window_frame: Arc<WindowFrame>, sort_options: Vec<SortOptions>) -> Self {
         match window_frame.units {
             WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
             WindowFrameUnits::Range => WindowFrameContext::Range {
                 window_frame,
-                state: WindowFrameStateRange::new(sort_options, last_range),
+                state: WindowFrameStateRange::new(sort_options),
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
@@ -74,10 +70,11 @@ impl<'a> WindowFrameContext<'a> {
     pub fn calculate_range(
         &mut self,
         range_columns: &[ArrayRef],
+        last_range: &Range<usize>,
         length: usize,
         idx: usize,
     ) -> Result<Range<usize>> {
-        match *self {
+        match self {
             WindowFrameContext::Rows(window_frame) => {
                 Self::calculate_range_rows(window_frame, length, idx)
             }
@@ -87,7 +84,13 @@ impl<'a> WindowFrameContext<'a> {
             WindowFrameContext::Range {
                 window_frame,
                 ref mut state,
-            } => state.calculate_range(window_frame, range_columns, length, idx),
+            } => state.calculate_range(
+                window_frame,
+                last_range,
+                range_columns,
+                length,
+                idx,
+            ),
             // Sort options is not used in GROUPS mode calculations as the
             // inequality of two rows indicates a group change, and ordering
             // or position of NULLs do not impact inequality.
@@ -159,33 +162,29 @@ impl<'a> WindowFrameContext<'a> {
 }
 
 /// This structure encapsulates all the state information we require as we scan
-/// ranges of data while processing RANGE frames. Attribute `last_range` stores
-/// the resulting indices from the previous search. Since the indices only
-/// advance forward, we start from `last_range` subsequently. Thus, the overall
-/// time complexity of linear search amortizes to O(n) where n denotes the total
-/// row count.
+/// ranges of data while processing RANGE frames.
 /// Attribute `sort_options` stores the column ordering specified by the ORDER
 /// BY clause. This information is used to calculate the range.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
-    last_range: Range<usize>,
     sort_options: Vec<SortOptions>,
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
-    fn new(sort_options: Vec<SortOptions>, last_range: Range<usize>) -> Self {
-        Self {
-            // Stores the search range we calculate for future use.
-            last_range,
-            sort_options,
-        }
+    fn new(sort_options: Vec<SortOptions>) -> Self {
+        Self { sort_options }
     }
 
     /// This function calculates beginning/ending indices for the frame of the current row.
+    // Argument `last_range` stores the resulting indices from the previous search. Since the indices only
+    // advance forward, we start from `last_range` subsequently. Thus, the overall
+    // time complexity of linear search amortizes to O(n) where n denotes the total
+    // row count.
     fn calculate_range(
         &mut self,
         window_frame: &Arc<WindowFrame>,
+        last_range: &Range<usize>,
         range_columns: &[ArrayRef],
         length: usize,
         idx: usize,
@@ -198,6 +197,7 @@ impl WindowFrameStateRange {
                 } else {
                     self.calculate_index_of_row::<true, true>(
                         range_columns,
+                        last_range,
                         idx,
                         Some(n),
                         length,
@@ -206,6 +206,7 @@ impl WindowFrameStateRange {
             }
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<true, true>(
                 range_columns,
+                last_range,
                 idx,
                 None,
                 length,
@@ -213,6 +214,7 @@ impl WindowFrameStateRange {
             WindowFrameBound::Following(ref n) => self
                 .calculate_index_of_row::<true, false>(
                     range_columns,
+                    last_range,
                     idx,
                     Some(n),
                     length,
@@ -222,12 +224,14 @@ impl WindowFrameStateRange {
             WindowFrameBound::Preceding(ref n) => self
                 .calculate_index_of_row::<false, true>(
                     range_columns,
+                    last_range,
                     idx,
                     Some(n),
                     length,
                 )?,
             WindowFrameBound::CurrentRow => self.calculate_index_of_row::<false, false>(
                 range_columns,
+                last_range,
                 idx,
                 None,
                 length,
@@ -239,6 +243,7 @@ impl WindowFrameStateRange {
                 } else {
                     self.calculate_index_of_row::<false, false>(
                         range_columns,
+                        last_range,
                         idx,
                         Some(n),
                         length,
@@ -246,9 +251,6 @@ impl WindowFrameStateRange {
                 }
             }
         };
-        // Store the resulting range so we can start from here subsequently:
-        self.last_range.start = start;
-        self.last_range.end = end;
         Ok(Range { start, end })
     }
 
@@ -258,6 +260,7 @@ impl WindowFrameStateRange {
     fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
+        last_range: &Range<usize>,
         idx: usize,
         delta: Option<&ScalarValue>,
         length: usize,
@@ -298,9 +301,9 @@ impl WindowFrameStateRange {
             current_row_values
         };
         let search_start = if SIDE {
-            self.last_range.start
+            last_range.start
         } else {
-            self.last_range.end
+            last_range.end
         };
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
             let cmp = compare_rows(current, target, &self.sort_options)?;
@@ -332,16 +335,16 @@ impl WindowFrameStateRange {
 //                        last row of the group that comes "offset" groups after the current group.
 //    - UNBOUNDED FOLLOWING: End with the last row of the partition. Possible only in frame_end.
 
-// This structure encapsulates all the state information we require as we
-// scan groups of data while processing window frames.
+/// This structure encapsulates all the state information we require as we
+/// scan groups of data while processing window frames.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateGroups {
     /// A tuple containing group values and the row index where the group ends.
     /// Example: [[1, 1], [1, 1], [2, 1], [2, 1], ...] would correspond to
     ///          [([1, 1], 2), ([2, 1], 4), ...].
-    group_start_indices: VecDeque<(Vec<ScalarValue>, usize)>,
+    pub group_end_indices: VecDeque<(Vec<ScalarValue>, usize)>,
     /// The group index to which the row index belongs.
-    current_group_idx: usize,
+    pub current_group_idx: usize,
 }
 
 impl WindowFrameStateGroups {
@@ -435,14 +438,28 @@ impl WindowFrameStateGroups {
             0
         };
         let mut group_start = 0;
-        let last_group = self.group_start_indices.back();
-        if let Some((_, group_end)) = last_group {
+        let last_group = self.group_end_indices.back_mut();
+        if let Some((group_row, group_end)) = last_group {
+            if *group_end < length {
+                let new_group_row = get_row_at_idx(range_columns, *group_end)?;
+                // If last/current group keys are the same, we extend the last group:
+                if new_group_row.eq(group_row) {
+                    // Update the end boundary of the group (search right boundary):
+                    *group_end = search_in_slice(
+                        range_columns,
+                        group_row,
+                        check_equality,
+                        *group_end,
+                        length,
+                    )?;
+                }
+            }
             // Start searching from the last group boundary:
             group_start = *group_end;
         }
 
         // Advance groups until `idx` is inside a group:
-        while idx > group_start {
+        while idx >= group_start {
             let group_row = get_row_at_idx(range_columns, group_start)?;
             // Find end boundary of the group (search right boundary):
             let group_end = search_in_slice(
@@ -452,13 +469,13 @@ impl WindowFrameStateGroups {
                 group_start,
                 length,
             )?;
-            self.group_start_indices.push_back((group_row, group_end));
+            self.group_end_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
 
         // Update the group index `idx` belongs to:
-        while self.current_group_idx < self.group_start_indices.len()
-            && idx >= self.group_start_indices[self.current_group_idx].1
+        while self.current_group_idx < self.group_end_indices.len()
+            && idx >= self.group_end_indices[self.current_group_idx].1
         {
             self.current_group_idx += 1;
         }
@@ -475,7 +492,7 @@ impl WindowFrameStateGroups {
         };
 
         // Extend `group_start_indices` until it includes at least `group_idx`:
-        while self.group_start_indices.len() <= group_idx && group_start < length {
+        while self.group_end_indices.len() <= group_idx && group_start < length {
             let group_row = get_row_at_idx(range_columns, group_start)?;
             // Find end boundary of the group (search right boundary):
             let group_end = search_in_slice(
@@ -485,7 +502,7 @@ impl WindowFrameStateGroups {
                 group_start,
                 length,
             )?;
-            self.group_start_indices.push_back((group_row, group_end));
+            self.group_end_indices.push_back((group_row, group_end));
             group_start = group_end;
         }
 
@@ -493,10 +510,10 @@ impl WindowFrameStateGroups {
         Ok(match (SIDE, SEARCH_SIDE) {
             // Window frame start:
             (true, _) => {
-                let group_idx = min(group_idx, self.group_start_indices.len());
+                let group_idx = min(group_idx, self.group_end_indices.len());
                 if group_idx > 0 {
                     // Normally, start at the boundary of the previous group.
-                    self.group_start_indices[group_idx - 1].1
+                    self.group_end_indices[group_idx - 1].1
                 } else {
                     // If previous group is out of the table, start at zero.
                     0
@@ -506,7 +523,7 @@ impl WindowFrameStateGroups {
             (false, true) => {
                 if self.current_group_idx >= delta {
                     let group_idx = self.current_group_idx - delta;
-                    self.group_start_indices[group_idx].1
+                    self.group_end_indices[group_idx].1
                 } else {
                     // Group is out of the table, therefore end at zero.
                     0
@@ -516,9 +533,9 @@ impl WindowFrameStateGroups {
             (false, false) => {
                 let group_idx = min(
                     self.current_group_idx + delta,
-                    self.group_start_indices.len() - 1,
+                    self.group_end_indices.len() - 1,
                 );
-                self.group_start_indices[group_idx].1
+                self.group_end_indices[group_idx].1
             }
         })
     }

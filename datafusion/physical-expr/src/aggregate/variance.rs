@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::aggregate::stats::StatsType;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::Float64Array;
@@ -31,8 +32,7 @@ use arrow::{
     datatypes::Field,
 };
 use datafusion_common::downcast_value;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 /// VAR and VAR_SAMP aggregate expression
@@ -108,6 +108,15 @@ impl AggregateExpr for Variance {
     }
 }
 
+impl PartialEq<dyn Any> for Variance {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.name == x.name && self.expr.eq(&x.expr))
+            .unwrap_or(false)
+    }
+}
+
 impl VariancePop {
     /// Create a new VAR_POP aggregate function
     pub fn new(
@@ -168,6 +177,15 @@ impl AggregateExpr for VariancePop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for VariancePop {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.name == x.name && self.expr.eq(&x.expr))
+            .unwrap_or(false)
     }
 }
 

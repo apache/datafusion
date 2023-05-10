@@ -37,13 +37,14 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
+arrow = { workspace = true }
 arrow-schema = { workspace = true }
-datafusion-common = { path = "../common", version = "20.0.0" }
-datafusion-expr = { path = "../expr", version = "20.0.0" }
+datafusion-common = { path = "../common", version = "24.0.0" }
+datafusion-expr = { path = "../expr", version = "24.0.0" }
 log = "^0.4"
-sqlparser = "0.32"
+sqlparser = "0.33"
 
 [dev-dependencies]
-ctor = "0.1.22"
+ctor = "0.2.0"
 env_logger = "0.10"
-rstest = "0.16"
+rstest = "0.17"

@@ -19,7 +19,15 @@
 //! into a set of partitions.
 
 use ahash::RandomState;
-
+use arrow::array::Array;
+use arrow::array::{
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
+};
+use arrow::datatypes::{ArrowNativeType, DataType};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
         ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
@@ -34,31 +42,29 @@ use arrow::{
     },
     util::bit_util,
 };
-use smallvec::{smallvec, SmallVec};
+use futures::{ready, Stream, StreamExt, TryStreamExt};
+use hashbrown::raw::RawTable;
+use smallvec::smallvec;
+use std::fmt;
 use std::sync::Arc;
+use std::task::Poll;
 use std::{any::Any, usize, vec};
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
-
-use arrow::array::Array;
-use arrow::datatypes::{ArrowNativeType, DataType};
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-
-use arrow::array::{
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
-
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
+use datafusion_execution::memory_pool::MemoryReservation;
 
-use hashbrown::raw::RawTable;
-
+use crate::arrow::array::BooleanBufferBuilder;
+use crate::arrow::datatypes::TimeUnit;
+use crate::error::{DataFusionError, Result};
+use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
+use crate::logical_expr::JoinType;
+use crate::physical_plan::joins::utils::{
+    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+};
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
-    common::{OperatorMemoryReservation, SharedMemoryReservation},
     expressions::Column,
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
@@ -73,46 +79,13 @@ use crate::physical_plan::{
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
-
-use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
-use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
-
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-use crate::physical_plan::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
-};
-use parking_lot::Mutex;
-use std::fmt;
-use std::task::Poll;
+use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 
-// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
-//
-// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
-// to put the indices in a certain bucket.
-// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
-// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
-// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
-// As the key is a hash value, we need to check possible hash collisions in the probe stage
-// During this stage it might be the case that a row is contained the same hashmap value,
-// but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collision check and move away from using a hashbrown HashMap
-// https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
-
-impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
-    }
-}
-
-type JoinLeftData = (JoinHashMap, RecordBatch);
+type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 
 /// Join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -136,8 +109,6 @@ pub struct HashJoinExec {
     schema: SchemaRef,
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
-    /// Operator-level memory reservation for left data
-    reservation: OperatorMemoryReservation,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -186,7 +157,6 @@ impl HashJoinExec {
             join_type: *join_type,
             schema: Arc::new(schema),
             left_fut: Default::default(),
-            reservation: Default::default(),
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -270,7 +240,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         let (left, right) = (children[0], children[1]);
@@ -374,40 +344,21 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-
-        let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
-
-        // Initialization of operator-level reservation
+        let left_partitions = self.left.output_partitioning().partition_count();
+        let right_partitions = self.right.output_partitioning().partition_count();
+        if self.mode == PartitionMode::Partitioned && left_partitions != right_partitions
         {
-            let mut operator_reservation_lock = self.reservation.lock();
-            if operator_reservation_lock.is_none() {
-                *operator_reservation_lock = Some(Arc::new(Mutex::new(
-                    MemoryConsumer::new("HashJoinExec").register(context.memory_pool()),
-                )));
-            };
+            return Err(DataFusionError::Internal(format!(
+                "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+                 consider using RepartitionExec",
+            )));
         }
 
-        let operator_reservation = self.reservation.lock().clone().ok_or_else(|| {
-            DataFusionError::Internal(
-                "Operator-level memory reservation is not initialized".to_string(),
-            )
-        })?;
-
-        // Inititalization of stream-level reservation
-        let reservation = Arc::new(Mutex::new(
-            MemoryConsumer::new(format!("HashJoinStream[{partition}]"))
-                .register(context.memory_pool()),
-        ));
-
-        // Memory reservation for left-side data depends on PartitionMode:
-        // - operator-level for `CollectLeft` mode
-        // - stream-level for partitioned mode
-        //
-        // This approach allows to avoid cases when left data could potentially
-        // outlive its memory reservation and rely on `MemoryReservation` destructors
-        // for releasing memory in pool.
+        let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
+                let reservation =
+                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
                 collect_left_input(
                     None,
                     self.random_state.clone(),
@@ -415,18 +366,24 @@ impl ExecutionPlan for HashJoinExec {
                     on_left.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    operator_reservation.clone(),
+                    reservation,
                 )
             }),
-            PartitionMode::Partitioned => OnceFut::new(collect_left_input(
-                Some(partition),
-                self.random_state.clone(),
-                self.left.clone(),
-                on_left.clone(),
-                context.clone(),
-                join_metrics.clone(),
-                reservation.clone(),
-            )),
+            PartitionMode::Partitioned => {
+                let reservation =
+                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
+                        .register(context.memory_pool());
+
+                OnceFut::new(collect_left_input(
+                    Some(partition),
+                    self.random_state.clone(),
+                    self.left.clone(),
+                    on_left.clone(),
+                    context.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                ))
+            }
             PartitionMode::Auto => {
                 return Err(DataFusionError::Plan(format!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
@@ -434,6 +391,9 @@ impl ExecutionPlan for HashJoinExec {
                 )));
             }
         };
+
+        let reservation = MemoryConsumer::new(format!("HashJoinStream[{partition}]"))
+            .register(context.memory_pool());
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -497,7 +457,7 @@ async fn collect_left_input(
     on_left: Vec<Column>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
-    reservation: SharedMemoryReservation,
+    reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
 
@@ -522,11 +482,11 @@ async fn collect_left_input(
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, reservation) = stream
+    let (batches, num_rows, metrics, mut reservation) = stream
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = batch.get_array_memory_size();
             // Reserve memory for incoming batch
-            acc.3.lock().try_grow(batch_size)?;
+            acc.3.try_grow(batch_size)?;
             // Update metrics
             acc.2.build_mem_used.add(batch_size);
             acc.2.build_input_batches.add(1);
@@ -555,7 +515,7 @@ async fn collect_left_input(
     // + 16 bytes fixed
     let estimated_hastable_size = 32 * estimated_buckets + estimated_buckets + 16;
 
-    reservation.lock().try_grow(estimated_hastable_size)?;
+    reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
 
     let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
@@ -578,7 +538,7 @@ async fn collect_left_input(
     // can directly index into the arrays
     let single_batch = concat_batches(&schema, &batches, num_rows)?;
 
-    Ok((hashmap, single_batch))
+    Ok((hashmap, single_batch, reservation))
 }
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
@@ -647,7 +607,7 @@ struct HashJoinStream {
     /// If null_equals_null is true, null == null else null != null
     null_equals_null: bool,
     /// Memory reservation
-    reservation: SharedMemoryReservation,
+    reservation: MemoryReservation,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -1157,7 +1117,7 @@ impl HashJoinStream {
             // TODO: Replace `ceil` wrapper with stable `div_cell` after
             // https://github.com/rust-lang/rust/issues/88581
             let visited_bitmap_size = bit_util::ceil(left_data.1.num_rows(), 8);
-            self.reservation.lock().try_grow(visited_bitmap_size)?;
+            self.reservation.try_grow(visited_bitmap_size)?;
             self.join_metrics.build_mem_used.add(visited_bitmap_size);
         }
 
@@ -1296,7 +1256,14 @@ impl Stream for HashJoinStream {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use smallvec::smallvec;
+
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::Literal;
+
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
     use crate::prelude::SessionContext;
@@ -1315,13 +1282,8 @@ mod tests {
         test::exec::MockExec,
         test::{build_table_i32, columns},
     };
-    use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::Operator;
 
-    use datafusion_common::ScalarValue;
-    use datafusion_physical_expr::expressions::Literal;
-    use smallvec::smallvec;
+    use super::*;
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -3078,7 +3040,7 @@ mod tests {
             );
 
             // Asserting that operator-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinExec");
+            assert_contains!(err.to_string(), "HashJoinInput");
         }
 
         Ok(())
@@ -3156,7 +3118,7 @@ mod tests {
             );
 
             // Asserting that stream-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinStream[1]");
+            assert_contains!(err.to_string(), "HashJoinInput[1]");
         }
 
         Ok(())

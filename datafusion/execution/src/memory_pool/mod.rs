@@ -142,6 +142,17 @@ impl MemoryReservation {
         }
     }
 
+    /// Try to set the size of this reservation to `capacity`
+    pub fn try_resize(&mut self, capacity: usize) -> Result<()> {
+        use std::cmp::Ordering;
+        match capacity.cmp(&self.size) {
+            Ordering::Greater => self.try_grow(capacity - self.size)?,
+            Ordering::Less => self.shrink(self.size - capacity),
+            _ => {}
+        };
+        Ok(())
+    }
+
     /// Increase the size of this reservation by `capacity` bytes
     pub fn grow(&mut self, capacity: usize) {
         self.policy.grow(self, capacity);

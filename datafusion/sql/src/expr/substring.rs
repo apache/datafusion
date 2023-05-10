@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{BuiltinScalarFunction, Expr};
 use sqlparser::ast::Expr as SQLExpr;
 
@@ -67,9 +68,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        Ok(Expr::ScalarFunction {
-            fun: BuiltinScalarFunction::Substr,
+        Ok(Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::Substr,
             args,
-        })
+        )))
     }
 }
