@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::InSubquery;
+use crate::expr::{Exists, Placeholder};
 ///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -544,8 +546,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the collector sees a
                         // LogicalPlan::Subquery (even though it is
@@ -570,8 +572,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the visitor sees a
                         // LogicalPlan::Subquery (even though it is
@@ -618,7 +620,7 @@ impl LogicalPlan {
         self.apply(&mut |plan| {
             plan.inspect_expressions(|expr| {
                 expr.apply(&mut |expr| {
-                    if let Expr::Placeholder { id, data_type } = expr {
+                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
                         let prev = param_types.get(id);
                         match (prev, data_type) {
                             (Some(Some(prev)), Some(dt)) => {
@@ -652,7 +654,7 @@ impl LogicalPlan {
     ) -> Result<Expr> {
         expr.transform(&|expr| {
             match &expr {
-                Expr::Placeholder { id, data_type } => {
+                Expr::Placeholder(Placeholder { id, data_type }) => {
                     if id.is_empty() || id == "$0" {
                         return Err(DataFusionError::Plan(
                             "Empty placeholder id".to_string(),
@@ -2262,10 +2264,10 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder {
-                id: "".into(),
-                data_type: Some(DataType::Int32),
-            }))
+            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
+                "".into(),
+                Some(DataType::Int32),
+            ))))
             .unwrap()
             .build()
             .unwrap();
@@ -2278,10 +2280,10 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder {
-                id: "$0".into(),
-                data_type: Some(DataType::Int32),
-            }))
+            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
+                "$0".into(),
+                Some(DataType::Int32),
+            ))))
             .unwrap()
             .build()
             .unwrap();

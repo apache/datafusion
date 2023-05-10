@@ -62,8 +62,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
-    Like, TryCast, WindowFunction,
+    self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
+    GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -184,10 +184,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr}[{key}]"))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args)
+        Expr::ScalarFunction(func) => {
+            create_function_physical_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF { fun, args, .. } => {
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             create_function_physical_name(&fun.name, false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
@@ -199,7 +199,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             ..
         }) => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
                     "aggregate expression with filter is not supported".to_string(),
@@ -242,11 +242,11 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             }
         },
 
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
@@ -258,7 +258,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
             "EXISTS is not yet supported in the physical plan".to_string(),
         )),
-        Expr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
+        Expr::InSubquery(_) => Err(DataFusionError::NotImplemented(
             "IN subquery is not yet supported in the physical plan".to_string(),
         )),
         Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
@@ -345,7 +345,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder { .. } => Err(DataFusionError::Internal(
+        Expr::Placeholder(_) => Err(DataFusionError::Internal(
             "Create physical name does not support placeholder".to_string(),
         )),
         Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
@@ -1666,7 +1666,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             );
             Ok((agg_expr?, filter))
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF { fun, args, filter }) => {
             let args = args
                 .iter()
                 .map(|e| {
