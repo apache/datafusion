@@ -23,6 +23,7 @@ use crate::utils::{
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, Column, DataFusionError, Result};
+use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::unnormalize_col;
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::{
@@ -64,11 +65,11 @@ impl DecorrelatePredicateSubquery {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::InSubquery {
+                Expr::InSubquery(InSubquery {
                     expr,
                     subquery,
                     negated,
-                } => {
+                }) => {
                     let subquery_plan = self
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
@@ -80,7 +81,7 @@ impl DecorrelatePredicateSubquery {
                         *negated,
                     ));
                 }
-                Expr::Exists { subquery, negated } => {
+                Expr::Exists(Exists { subquery, negated }) => {
                     let subquery_plan = self
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
