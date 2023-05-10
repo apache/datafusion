@@ -82,18 +82,6 @@ fn get_tableside_at_gt_or_gteq(
         (_, _) => TableSide::None,
     }
 }
-fn get_tableside_at_lt_or_lteq(
-    left_dir: &Monotonicity,
-    right_dir: &Monotonicity,
-    left_tableside: &TableSide,
-    right_tableside: &TableSide,
-) -> TableSide {
-    match (left_dir, right_dir) {
-        (Monotonicity::Desc, Monotonicity::Desc) => *left_tableside,
-        (Monotonicity::Asc, Monotonicity::Asc) => *right_tableside,
-        (_, _) => TableSide::None,
-    }
-}
 fn get_tableside_at_and(
     left_tableside: &TableSide,
     right_tableside: &TableSide,
@@ -167,24 +155,6 @@ impl Monotonicity {
         }
     }
 
-    fn lt_or_lteq(&self, rhs: &Self) -> Self {
-        match (self, rhs) {
-            (Monotonicity::Singleton, rhs) => *rhs,
-            (lhs, Monotonicity::Singleton) => {
-                if *lhs == Monotonicity::Asc {
-                    Monotonicity::Desc
-                } else if *lhs == Monotonicity::Desc {
-                    Monotonicity::Asc
-                } else {
-                    Monotonicity::Unordered
-                }
-            }
-            (Monotonicity::Asc, Monotonicity::Desc) => Monotonicity::Desc,
-            (Monotonicity::Desc, Monotonicity::Asc) => Monotonicity::Asc,
-            (_, _) => Monotonicity::Unordered,
-        }
-    }
-
     fn and(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Monotonicity::Asc, Monotonicity::Asc)
@@ -226,14 +196,6 @@ impl SortInfo {
     fn gt_or_gteq(&self, rhs: &Self) -> Self {
         SortInfo {
             dir: self.dir.gt_or_gteq(&rhs.dir),
-            nulls_first: self.nulls_first || rhs.nulls_first,
-            nulls_last: self.nulls_last || rhs.nulls_last,
-        }
-    }
-
-    fn lt_or_lteq(&self, rhs: &Self) -> Self {
-        SortInfo {
-            dir: self.dir.lt_or_lteq(&rhs.dir),
             nulls_first: self.nulls_first || rhs.nulls_first,
             nulls_last: self.nulls_last || rhs.nulls_last,
         }
@@ -488,8 +450,8 @@ fn comparison_node_order(
             left.1.gt_or_gteq(right.1),
         )),
         Operator::Lt | Operator::LtEq => Ok((
-            get_tableside_at_lt_or_lteq(&left.1.dir, &right.1.dir, left.0, right.0),
-            left.1.lt_or_lteq(right.1),
+            get_tableside_at_gt_or_gteq(&right.1.dir, &left.1.dir, right.0, left.0),
+            right.1.gt_or_gteq(left.1),
         )),
         op => Err(DataFusionError::NotImplemented(format!(
             "Prunability is not supported yet for binary expressions having the {op} operator"
