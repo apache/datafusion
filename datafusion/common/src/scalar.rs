@@ -1923,6 +1923,19 @@ impl ScalarValue {
             ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(-v))),
             ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(-v))),
             ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(-v))),
+            ScalarValue::IntervalYearMonth(Some(v)) => {
+                Ok(ScalarValue::IntervalYearMonth(Some(-v)))
+            }
+            ScalarValue::IntervalDayTime(Some(v)) => {
+                let (days, ms) = IntervalDayTimeType::to_parts(*v);
+                let val = IntervalDayTimeType::make_value(-days, -ms);
+                Ok(ScalarValue::IntervalDayTime(Some(val)))
+            }
+            ScalarValue::IntervalMonthDayNano(Some(v)) => {
+                let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
+                let val = IntervalMonthDayNanoType::make_value(-months, -days, -nanos);
+                Ok(ScalarValue::IntervalMonthDayNano(Some(val)))
+            }
             ScalarValue::Decimal128(Some(v), precision, scale) => {
                 Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
             }
@@ -5427,6 +5440,28 @@ mod tests {
         for (lhs, rhs) in cases {
             let distance = lhs.distance(&rhs);
             assert!(distance.is_none());
+        }
+    }
+
+    #[test]
+    fn test_scalar_interval_negate() {
+        let cases = [
+            (
+                ScalarValue::new_interval_ym(1, 12),
+                ScalarValue::new_interval_ym(-1, -12),
+            ),
+            (
+                ScalarValue::new_interval_dt(1, 999),
+                ScalarValue::new_interval_dt(-1, -999),
+            ),
+            (
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_mdn(-12, -15, -123_456),
+            ),
+        ];
+        for (expr, expected) in cases.iter() {
+            let result = expr.arithmetic_negate().unwrap();
+            assert_eq!(*expected, result, "-expr:{expr:?}");
         }
     }
 
