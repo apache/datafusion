@@ -1928,7 +1928,7 @@ SELECT DISTINCT + col1 FROM tab2 AS cor0 GROUP BY cor0.col1
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
 # Column c has cardinality 100 (unique entries). Column d has cardinality 5.
 statement ok
-CREATE EXTERNAL TABLE annotated_data_finite2 (
+CREATE EXTERNAL TABLE annotated_data_infinite2 (
   a0 INTEGER,
   a INTEGER,
   b INTEGER,
@@ -1938,34 +1938,34 @@ CREATE EXTERNAL TABLE annotated_data_finite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
+OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/window_2.csv';
 
+# test_window_agg_sort
+statement ok
+set datafusion.execution.target_partitions = 1;
 
 # test_source_sorted_groupby
 query TT
 EXPLAIN SELECT a, b,
  SUM(c) as summation1
- FROM annotated_data_finite2
+ FROM annotated_data_infinite2
  GROUP BY b, a
 ----
 logical_plan
-Projection: annotated_data_finite2.a, annotated_data_finite2.b, SUM(annotated_data_finite2.c) AS summation1
-  Aggregate: groupBy=[[annotated_data_finite2.b, annotated_data_finite2.a]], aggr=[[SUM(annotated_data_finite2.c)]]
-    TableScan: annotated_data_finite2 projection=[a, b, c]
+Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, SUM(annotated_data_infinite2.c) AS summation1
+  Aggregate: groupBy=[[annotated_data_infinite2.b, annotated_data_infinite2.a]], aggr=[[SUM(annotated_data_infinite2.c)]]
+    TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
-ProjectionExec: expr=[a@1 as a, b@0 as b, SUM(annotated_data_finite2.c)@2 as summation1]
-  AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[SUM(annotated_data_finite2.c)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }, Column { name: "a", index: 1 }], 4), input_partitions=4
-        AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data_finite2.c)], ordering_mode=FullyOrdered
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
+ProjectionExec: expr=[a@1 as a, b@0 as b, SUM(annotated_data_infinite2.c)@2 as summation1]
+  AggregateExec: mode=Single, gby=[b@1 as b, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 
-query III rowsort
+query III
  SELECT a, b,
  SUM(c) as summation1
- FROM annotated_data_finite2
+ FROM annotated_data_infinite2
  GROUP BY b, a
 ----
 0 0 300
@@ -1979,38 +1979,34 @@ query III rowsort
 query TT
 EXPLAIN SELECT a, d,
  SUM(c) as summation1
- FROM annotated_data_finite2
+ FROM annotated_data_infinite2
  GROUP BY d, a
 ----
 logical_plan
-Projection: annotated_data_finite2.a, annotated_data_finite2.d, SUM(annotated_data_finite2.c) AS summation1
-  Aggregate: groupBy=[[annotated_data_finite2.d, annotated_data_finite2.a]], aggr=[[SUM(annotated_data_finite2.c)]]
-    TableScan: annotated_data_finite2 projection=[a, c, d]
+Projection: annotated_data_infinite2.a, annotated_data_infinite2.d, SUM(annotated_data_infinite2.c) AS summation1
+  Aggregate: groupBy=[[annotated_data_infinite2.d, annotated_data_infinite2.a]], aggr=[[SUM(annotated_data_infinite2.c)]]
+    TableScan: annotated_data_infinite2 projection=[a, c, d]
 physical_plan
-ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data_finite2.c)@2 as summation1]
-  AggregateExec: mode=FinalPartitioned, gby=[d@0 as d, a@1 as a], aggr=[SUM(annotated_data_finite2.c)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([Column { name: "d", index: 0 }, Column { name: "a", index: 1 }], 4), input_partitions=4
-        AggregateExec: mode=Partial, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_finite2.c)], ordering_mode=PartiallyOrdered
-          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+ProjectionExec: expr=[a@1 as a, d@0 as d, SUM(annotated_data_infinite2.c)@2 as summation1]
+  AggregateExec: mode=Single, gby=[d@2 as d, a@0 as a], aggr=[SUM(annotated_data_infinite2.c)], ordering_mode=PartiallyOrdered
+    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
-query III rowsort
+query III
 SELECT a, d,
  SUM(c) as summation1
- FROM annotated_data_finite2
+ FROM annotated_data_infinite2
  GROUP BY d, a
 ----
 0 0 292
-0 1 315
 0 2 196
-0 3 258
+0 1 315
 0 4 164
+0 3 258
 1 0 622
-1 1 1043
-1 2 848
 1 3 299
+1 1 1043
 1 4 913
+1 2 848
 
 statement ok
-drop table annotated_data_finite2;
+drop table annotated_data_infinite2;
