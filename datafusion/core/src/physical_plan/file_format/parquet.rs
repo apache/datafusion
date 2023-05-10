@@ -663,7 +663,7 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 }
 
 #[derive(Debug)]
-struct ParquetSink {
+pub struct ParquetSink {
     fs_path: PathBuf,
     writer_properties: Option<WriterProperties>,
 }
@@ -680,6 +680,7 @@ impl DataSink for ParquetSink {
         Distribution::UnspecifiedDistribution
     }
 
+    /// writes partition to a specific output partition
     fn write_stream(&self, partition: usize, input: SendableRecordBatchStream) -> BoxFuture<Result<u64>> {
         let filename = format!("part-{partition}.parquet");
         let path = self.fs_path.join(filename);
@@ -712,7 +713,7 @@ impl DataSink for ParquetSink {
 }
 
 impl ParquetSink {
-    fn try_new(
+    pub fn try_new(
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<Self> {

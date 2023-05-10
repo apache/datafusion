@@ -18,6 +18,8 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
+use super::copy::CopyExec;
+use super::file_format::ParquetSink;
 use super::unnest::UnnestExec;
 use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
@@ -67,7 +69,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
+use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp, CopyTo};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -1183,12 +1185,13 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: DescribeTable must be root of the plan".to_string(),
                     ))
                 }
-                LogicalPlan::CopyTo(_) => {
-                    // There is no plan for CopyTo statements -- they
-                    // must be handled at a higher level
-                    Err(DataFusionError::NotImplemented(
-                        format!("Unsupported logical plan: CopyTo")
-                    ))
+                LogicalPlan::CopyTo(CopyTo { input, target, options, dummy_schema }) => {
+
+                    let input = self.create_initial_plan(input, session_state).await?;
+                    // TODO parse / plan the options to make the appropriate DatSunk
+                    // TODO create get writer properties
+                    let sink = ParquetSink::try_new(target, None)?;
+                    Ok(Arc::new(CopyExec::new(input, Arc::new(sink))))
                 }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),

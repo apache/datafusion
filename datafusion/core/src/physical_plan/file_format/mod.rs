@@ -27,7 +27,7 @@ mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
-pub(crate) use self::parquet::plan_to_parquet;
+pub(crate) use self::parquet::{plan_to_parquet, ParquetSink};
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
     array::{ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
