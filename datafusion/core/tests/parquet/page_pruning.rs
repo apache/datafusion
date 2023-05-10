@@ -748,7 +748,7 @@ async fn without_pushdown_filter() {
 }
 
 fn cast_count_metric(metric: MetricValue) -> Option<usize> {
-     match metric {
+    match metric {
         MetricValue::Count { count, .. } => Some(count.value()),
         _ => None,
     }
