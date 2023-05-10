@@ -362,10 +362,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
         let FirstAgg {
-            distinct,
             expr,
             order_by,
-            limit,
             within_group,
         } = first_agg;
 
@@ -380,12 +378,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             None
         };
 
-        if let Some(limit) = limit {
-            return Err(DataFusionError::NotImplemented(format!(
-                "LIMIT not supported in FIRST: {limit}"
-            )));
-        }
-
         if within_group {
             return Err(DataFusionError::NotImplemented(
                 "WITHIN GROUP not supported in FIRST".to_string(),
@@ -398,7 +390,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         let fun = AggregateFunction::First;
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None, order_by,
+            fun, args, false, None, order_by,
         )))
     }
 
@@ -410,10 +402,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
         let LastAgg {
-            distinct,
             expr,
             order_by,
-            limit,
             within_group,
         } = last_agg;
 
@@ -428,12 +418,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             None
         };
 
-        if let Some(limit) = limit {
-            return Err(DataFusionError::NotImplemented(format!(
-                "LIMIT not supported in LAST: {limit}"
-            )));
-        }
-
         if within_group {
             return Err(DataFusionError::NotImplemented(
                 "WITHIN GROUP not supported in LAST".to_string(),
@@ -446,7 +430,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         let fun = AggregateFunction::Last;
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None, order_by,
+            fun, args, false, None, order_by,
         )))
     }
 
