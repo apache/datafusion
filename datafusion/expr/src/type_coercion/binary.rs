@@ -19,16 +19,69 @@
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
-use crate::type_coercion::{
-    is_datetime, is_decimal, is_interval, is_numeric, is_timestamp,
-};
+use crate::type_coercion::{is_datetime, is_decimal, is_interval, is_numeric};
 use crate::Operator;
+
+/// Returns the result type of applying mathematics operations such as
+/// `+` to arguments of `lhs_type` and `rhs_type`.
+fn mathematics_temporal_result_type(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    use arrow::datatypes::IntervalUnit::*;
+    use arrow::datatypes::TimeUnit::*;
+
+    if !is_interval(lhs_type)
+        && !is_interval(rhs_type)
+        && !is_datetime(lhs_type)
+        && !is_datetime(rhs_type)
+    {
+        return None;
+    };
+
+    match (lhs_type, rhs_type) {
+        // datetime +/- interval
+        (Interval(_), Timestamp(_, _)) => Some(rhs_type.clone()),
+        (Timestamp(_, _), Interval(_)) => Some(lhs_type.clone()),
+        (Interval(_), Date32) => Some(rhs_type.clone()),
+        (Date32, Interval(_)) => Some(lhs_type.clone()),
+        (Interval(_), Date64) => Some(rhs_type.clone()),
+        (Date64, Interval(_)) => Some(lhs_type.clone()),
+        // interval +/-
+        (Interval(YearMonth), Interval(YearMonth)) => Some(Interval(YearMonth)),
+        (Interval(DayTime), Interval(DayTime)) => Some(Interval(DayTime)),
+        (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
+        // timestamp - timestamp
+        (Timestamp(Second, _), Timestamp(Second, _))
+        | (Timestamp(Millisecond, _), Timestamp(Millisecond, _)) => {
+            Some(Interval(DayTime))
+        }
+        (Timestamp(Microsecond, _), Timestamp(Microsecond, _))
+        | (Timestamp(Nanosecond, _), Timestamp(Nanosecond, _)) => {
+            Some(Interval(MonthDayNano))
+        }
+        (Timestamp(_, _), Timestamp(_, _)) => None,
+        // TODO: date minus date
+        // date - timestamp, timestamp - date
+        (Date32, Timestamp(_, _))
+        | (Timestamp(_, _), Date32)
+        | (Date64, Timestamp(_, _))
+        | (Timestamp(_, _), Date64) => {
+            // TODO: make get_result_type must after coerce type.
+            // if type isn't coerced, we need get common type, and then get result type.
+            let common_type = temporal_coercion(lhs_type, rhs_type);
+            common_type.and_then(|t| mathematics_temporal_result_type(&t, &t))
+        }
+        _ => None,
+    }
+}
 
 /// returns the resulting type of a binary expression evaluating the `op` with the left and right hand types
 pub fn get_result_type(
@@ -67,12 +120,12 @@ pub fn get_result_type(
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => Some(DataType::Boolean),
         Operator::Plus | Operator::Minus
-            if is_datetime(lhs_type)
-                || is_datetime(rhs_type)
-                || is_interval(lhs_type)
-                || is_interval(rhs_type) =>
+            if is_datetime(lhs_type) && is_datetime(rhs_type)
+                || (is_interval(lhs_type) && is_interval(rhs_type))
+                || (is_datetime(lhs_type) && is_interval(rhs_type))
+                || (is_interval(lhs_type) && is_datetime(rhs_type)) =>
         {
-            temporal_add_sub_coercion(lhs_type, rhs_type, op)
+            mathematics_temporal_result_type(lhs_type, rhs_type)
         }
         // following same with `coerce_types`
         Operator::BitwiseAnd
@@ -126,19 +179,13 @@ pub fn coerce_types(
         | Operator::LtEq
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => comparison_coercion(lhs_type, rhs_type),
-        // interval - timestamp is an erroneous case, cannot coerce a type
         Operator::Plus | Operator::Minus
-            if is_datetime(lhs_type)
-                || is_datetime(rhs_type)
-                || is_interval(lhs_type)
-                || is_interval(rhs_type) =>
+            if is_interval(lhs_type) && is_interval(rhs_type) =>
         {
-            if is_interval(lhs_type) && is_datetime(rhs_type) && *op == Operator::Minus {
-                return Err(DataFusionError::Plan(
-                    "interval can't subtract timestamp/date".to_string(),
-                ));
-            }
-            temporal_add_sub_coercion(lhs_type, rhs_type, op)
+            temporal_coercion(lhs_type, rhs_type)
+        }
+        Operator::Minus if is_datetime(lhs_type) && is_datetime(rhs_type) => {
+            temporal_coercion(lhs_type, rhs_type)
         }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
@@ -208,7 +255,10 @@ pub fn math_decimal_coercion(
 
 /// Returns the output type of applying bitwise operations such as
 /// `&`, `|`, or `xor`to arguments of `lhs_type` and `rhs_type`.
-fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataType> {
+pub(crate) fn bitwise_coercion(
+    left_type: &DataType,
+    right_type: &DataType,
+) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     if !both_numeric_or_null_and_numeric(left_type, right_type) {
@@ -260,90 +310,16 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
 }
 
-// This function performs temporal coercion between the two input data types and the provided operator.
-// It returns None (it will convert a Err outside) if the operands are an unsupported/wrong operation.
-// If the coercion is possible, it returns a new data type as Some(DataType).
-pub fn temporal_add_sub_coercion(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-    op: &Operator,
-) -> Option<DataType> {
-    match (lhs_type, rhs_type, op) {
-        // if an interval is being added/subtracted from a date/timestamp, return the date/timestamp data type
-        (lhs, rhs, _) if is_interval(lhs) && is_datetime(rhs) => Some(rhs.clone()),
-        (lhs, rhs, _) if is_interval(rhs) && is_datetime(lhs) => Some(lhs.clone()),
-        // if two timestamps are being subtracted, check their time units and return the corresponding interval data type
-        (lhs, rhs, Operator::Minus) if is_timestamp(lhs) && is_timestamp(rhs) => {
-            handle_timestamp_minus(lhs, rhs)
-        }
-        // if two intervals are being added/subtracted, check their interval units and return the corresponding interval data type
-        (lhs, rhs, _) if is_interval(lhs) && is_interval(rhs) => {
-            handle_interval_addition(lhs, rhs)
-        }
-        (lhs, rhs, Operator::Minus) if is_datetime(lhs) && is_datetime(rhs) => {
-            temporal_coercion(lhs, rhs)
-        }
-        // return None if no coercion is possible
-        _ => None,
-    }
-}
-
-// This function checks if two interval data types have the same interval unit and returns an interval data type
-// representing the sum of them. If the two interval data types have different units, it returns an interval data type
-// with "IntervalUnit::MonthDayNano". If the two interval data types are already "IntervalUnit::YearMonth" or "IntervalUnit::DayTime",
-// it returns an interval data type with the same unit as the operands.
-fn handle_interval_addition(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
-    match (lhs, rhs) {
-        // operation with the same types
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Some(DataType::Interval(IntervalUnit::YearMonth)),
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
-        // operation with MonthDayNano's or different types
-        (_, _) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
-    }
-}
-
-// This function checks if two timestamp data types have the same time unit and returns an interval data type
-// representing the difference between them, either "IntervalUnit::DayTime" if the time unit is second or millisecond,
-// or "IntervalUnit::MonthDayNano" if the time unit is microsecond or nanosecond. If the two timestamp data types have
-// different time units, it returns an error indicating that "The timestamps have different types".
-fn handle_timestamp_minus(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
-    match (lhs, rhs) {
-        (
-            DataType::Timestamp(TimeUnit::Second, _),
-            DataType::Timestamp(TimeUnit::Second, _),
-        )
-        | (
-            DataType::Timestamp(TimeUnit::Millisecond, _),
-            DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => Some(DataType::Interval(IntervalUnit::DayTime)),
-        (
-            DataType::Timestamp(TimeUnit::Microsecond, _),
-            DataType::Timestamp(TimeUnit::Microsecond, _),
-        )
-        | (
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
-        ) => Some(DataType::Interval(IntervalUnit::MonthDayNano)),
-        (_, _) => None,
-    }
-}
-
 /// Returns the output type of applying numeric operations such as `=`
 /// to arguments `lhs_type` and `rhs_type` if one is numeric and one
 /// is `Utf8`/`LargeUtf8`.
 fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (Utf8, _) if DataType::is_numeric(rhs_type) => Some(Utf8),
-        (LargeUtf8, _) if DataType::is_numeric(rhs_type) => Some(LargeUtf8),
-        (_, Utf8) if DataType::is_numeric(lhs_type) => Some(Utf8),
-        (_, LargeUtf8) if DataType::is_numeric(lhs_type) => Some(LargeUtf8),
+        (Utf8, _) if is_numeric(rhs_type) => Some(Utf8),
+        (LargeUtf8, _) if is_numeric(rhs_type) => Some(LargeUtf8),
+        (_, Utf8) if is_numeric(lhs_type) => Some(Utf8),
+        (_, LargeUtf8) if is_numeric(lhs_type) => Some(LargeUtf8),
         _ => None,
     }
 }
@@ -368,7 +344,9 @@ fn comparison_binary_numeric_coercion(
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
         // support decimal data type for comparison operation
-        (d1 @ Decimal128(_, _), d2 @ Decimal128(_, _)) => get_wider_decimal_type(d1, d2),
+        (Decimal128(_, _), Decimal128(_, _)) => {
+            get_wider_decimal_type(lhs_type, rhs_type)
+        }
         (Decimal128(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
         (_, Decimal128(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
@@ -414,23 +392,22 @@ fn get_comparison_common_decimal_type(
     decimal_type: &DataType,
     other_type: &DataType,
 ) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
     let other_decimal_type = &match other_type {
         // This conversion rule is from spark
         // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
-        DataType::Int8 => DataType::Decimal128(3, 0),
-        DataType::Int16 => DataType::Decimal128(5, 0),
-        DataType::Int32 => DataType::Decimal128(10, 0),
-        DataType::Int64 => DataType::Decimal128(20, 0),
-        DataType::Float32 => DataType::Decimal128(14, 7),
-        DataType::Float64 => DataType::Decimal128(30, 15),
+        Int8 => Decimal128(3, 0),
+        Int16 => Decimal128(5, 0),
+        Int32 => Decimal128(10, 0),
+        Int64 => Decimal128(20, 0),
+        Float32 => Decimal128(14, 7),
+        Float64 => Decimal128(30, 15),
         _ => {
             return None;
         }
     };
     match (decimal_type, &other_decimal_type) {
-        (d1 @ DataType::Decimal128(_, _), d2 @ DataType::Decimal128(_, _)) => {
-            get_wider_decimal_type(d1, d2)
-        }
+        (d1 @ Decimal128(_, _), d2 @ Decimal128(_, _)) => get_wider_decimal_type(d1, d2),
         _ => None,
     }
 }
@@ -457,14 +434,15 @@ fn get_wider_decimal_type(
 /// Convert the numeric data type to the decimal data type.
 /// Now, we just support the signed integer type and floating-point type.
 fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
     match numeric_type {
-        DataType::Int8 => Some(DataType::Decimal128(3, 0)),
-        DataType::Int16 => Some(DataType::Decimal128(5, 0)),
-        DataType::Int32 => Some(DataType::Decimal128(10, 0)),
-        DataType::Int64 => Some(DataType::Decimal128(20, 0)),
+        Int8 => Some(Decimal128(3, 0)),
+        Int16 => Some(Decimal128(5, 0)),
+        Int32 => Some(Decimal128(10, 0)),
+        Int64 => Some(Decimal128(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
-        DataType::Float32 => Some(DataType::Decimal128(14, 7)),
-        DataType::Float64 => Some(DataType::Decimal128(30, 15)),
+        Float32 => Some(Decimal128(14, 7)),
+        Float64 => Some(Decimal128(30, 15)),
         _ => None,
     }
 }
@@ -481,16 +459,6 @@ fn mathematics_numerical_coercion(
     if !both_numeric_or_null_and_numeric(lhs_type, rhs_type) {
         return None;
     };
-
-    // same type => all good
-    // TODO: remove this
-    // bug: https://github.com/apache/arrow-datafusion/issues/3387
-    if lhs_type == rhs_type
-        && !(matches!(lhs_type, DataType::Dictionary(_, _))
-            || matches!(rhs_type, DataType::Dictionary(_, _)))
-    {
-        return Some(lhs_type.clone());
-    }
 
     // these are ordered from most informative to least informative so
     // that the coercion removes the least amount of information
@@ -629,48 +597,38 @@ pub fn decimal_op_mathematics_type(
 
 /// Determine if at least of one of lhs and rhs is numeric, and the other must be NULL or numeric
 fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (_, DataType::Null) => is_numeric(lhs_type),
-        (DataType::Null, _) => is_numeric(rhs_type),
-        (
-            DataType::Dictionary(_, lhs_value_type),
-            DataType::Dictionary(_, rhs_value_type),
-        ) => is_numeric(lhs_value_type) && is_numeric(rhs_value_type),
-        (DataType::Dictionary(_, value_type), _) => {
-            is_numeric(value_type) && is_numeric(rhs_type)
+        (_, Null) => is_numeric(lhs_type),
+        (Null, _) => is_numeric(rhs_type),
+        (Dictionary(_, lhs_value_type), Dictionary(_, rhs_value_type)) => {
+            is_numeric(lhs_value_type) && is_numeric(rhs_value_type)
         }
-        (_, DataType::Dictionary(_, value_type)) => {
-            is_numeric(lhs_type) && is_numeric(value_type)
-        }
+        (Dictionary(_, value_type), _) => is_numeric(value_type) && is_numeric(rhs_type),
+        (_, Dictionary(_, value_type)) => is_numeric(lhs_type) && is_numeric(value_type),
         _ => is_numeric(lhs_type) && is_numeric(rhs_type),
     }
 }
 
 /// Determine if at least of one of lhs and rhs is decimal, and the other must be NULL or decimal
 fn both_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (_, DataType::Null) => is_decimal(lhs_type),
-        (DataType::Null, _) => is_decimal(rhs_type),
-        (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => true,
-        (DataType::Dictionary(_, value_type), _) => {
-            is_decimal(value_type) && is_decimal(rhs_type)
-        }
-        (_, DataType::Dictionary(_, value_type)) => {
-            is_decimal(lhs_type) && is_decimal(value_type)
-        }
+        (_, Null) => is_decimal(lhs_type),
+        (Null, _) => is_decimal(rhs_type),
+        (Decimal128(_, _), Decimal128(_, _)) => true,
+        (Dictionary(_, value_type), _) => is_decimal(value_type) && is_decimal(rhs_type),
+        (_, Dictionary(_, value_type)) => is_decimal(lhs_type) && is_decimal(value_type),
         _ => false,
     }
 }
 
 /// Determine if at least of one of lhs and rhs is decimal
 pub fn any_decimal(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
-        (DataType::Dictionary(_, value_type), _) => {
-            is_decimal(value_type) || is_decimal(rhs_type)
-        }
-        (_, DataType::Dictionary(_, value_type)) => {
-            is_decimal(lhs_type) || is_decimal(value_type)
-        }
+        (Dictionary(_, value_type), _) => is_decimal(value_type) || is_decimal(rhs_type),
+        (_, Dictionary(_, value_type)) => is_decimal(lhs_type) || is_decimal(value_type),
         (_, _) => is_decimal(lhs_type) || is_decimal(rhs_type),
     }
 }
@@ -685,21 +643,22 @@ fn dictionary_coercion(
     rhs_type: &DataType,
     preserve_dictionaries: bool,
 ) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (
-            DataType::Dictionary(_lhs_index_type, lhs_value_type),
-            DataType::Dictionary(_rhs_index_type, rhs_value_type),
+            Dictionary(_lhs_index_type, lhs_value_type),
+            Dictionary(_rhs_index_type, rhs_value_type),
         ) => comparison_coercion(lhs_value_type, rhs_value_type),
-        (d @ DataType::Dictionary(_, value_type), other_type)
-        | (other_type, d @ DataType::Dictionary(_, value_type))
+        (d @ Dictionary(_, value_type), other_type)
+        | (other_type, d @ Dictionary(_, value_type))
             if preserve_dictionaries && value_type.as_ref() == other_type =>
         {
             Some(d.clone())
         }
-        (DataType::Dictionary(_index_type, value_type), _) => {
+        (Dictionary(_index_type, value_type), _) => {
             comparison_coercion(value_type, rhs_type)
         }
-        (_, DataType::Dictionary(_index_type, value_type)) => {
+        (_, Dictionary(_index_type, value_type)) => {
             comparison_coercion(lhs_type, value_type)
         }
         _ => None,
@@ -777,9 +736,15 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
 
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
+/// For interval arithmetic, it doesn't handle datetime type +/- interval
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+    use arrow::datatypes::IntervalUnit::*;
     match (lhs_type, rhs_type) {
+        // interval +/-
+        (Interval(YearMonth), Interval(YearMonth)) => Some(Interval(YearMonth)),
+        (Interval(DayTime), Interval(DayTime)) => Some(Interval(DayTime)),
+        (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
         (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
@@ -1055,14 +1020,12 @@ mod tests {
 
     #[test]
     fn test_date_timestamp_arithmetic_error() -> Result<()> {
-        let err = coerce_types(
+        let common_type = coerce_types(
             &DataType::Timestamp(TimeUnit::Nanosecond, None),
             &Operator::Minus,
             &DataType::Timestamp(TimeUnit::Millisecond, None),
-        )
-        .unwrap_err()
-        .to_string();
-        assert_contains!(&err, "Timestamp(Nanosecond, None) - Timestamp(Millisecond, None) can't be evaluated because there isn't a common type to coerce the types to");
+        )?;
+        assert_eq!(common_type.to_string(), "Timestamp(Millisecond, None)");
 
         let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
             .unwrap_err()

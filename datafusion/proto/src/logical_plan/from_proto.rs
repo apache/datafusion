@@ -34,12 +34,13 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
     abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
     cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
     date_bin, date_part, date_trunc, degrees, digest, exp,
-    expr::{self, Sort, WindowFunction},
-    floor, from_unixtime, left, ln, log, log10, log2,
+    expr::{self, InList, Sort, WindowFunction},
+    factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
     regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
@@ -427,6 +428,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Log10 => Self::Log10,
             ScalarFunction::Degrees => Self::Degrees,
             ScalarFunction::Radians => Self::Radians,
+            ScalarFunction::Factorial => Self::Factorial,
+            ScalarFunction::Gcd => Self::Gcd,
+            ScalarFunction::Lcm => Self::Lcm,
             ScalarFunction::Floor => Self::Floor,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
@@ -1119,19 +1123,19 @@ pub fn parse_expr(
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr")?,
         ))),
-        ExprType::InList(in_list) => Ok(Expr::InList {
-            expr: Box::new(parse_required_expr(
+        ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
+            Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
                 registry,
                 "expr",
             )?),
-            list: in_list
+            in_list
                 .list
                 .iter()
                 .map(|expr| parse_expr(expr, registry))
                 .collect::<Result<Vec<_>, _>>()?,
-            negated: in_list.negated,
-        }),
+            in_list.negated,
+        ))),
         ExprType::Wildcard(_) => Ok(Expr::Wildcard),
         ExprType::ScalarFunction(expr) => {
             let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)
@@ -1166,6 +1170,9 @@ pub fn parse_expr(
                 ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Factorial => {
+                    Ok(factorial(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Round => Ok(round(
                     args.to_owned()
@@ -1219,6 +1226,14 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
                 ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Gcd => Ok(gcd(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Lcm => Ok(lcm(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Left => Ok(left(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1354,28 +1369,25 @@ pub fn parse_expr(
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = registry.udf(fun_name.as_str())?;
-            Ok(Expr::ScalarUDF {
-                fun: scalar_fn,
-                args: args
-                    .iter()
+            Ok(Expr::ScalarUDF(expr::ScalarUDF::new(
+                scalar_fn,
+                args.iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-            })
+            )))
         }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
-            Ok(Expr::AggregateUDF {
-                fun: agg_fn,
-                args: pb
-                    .args
+            Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                agg_fn,
+                pb.args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-                filter: parse_optional_expr(pb.filter.as_deref(), registry)?
-                    .map(Box::new),
-                order_by: parse_vec_expr(&pb.order_by, registry)?,
-            })
+                parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
+                parse_vec_expr(&pb.order_by, registry)?,
+            )))
         }
 
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
@@ -1404,14 +1416,11 @@ pub fn parse_expr(
             )))
         }
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
-            None => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: None,
-            }),
-            Some(data_type) => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: Some(data_type.try_into()?),
-            }),
+            None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
+            Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
+                id.clone(),
+                Some(data_type.try_into()?),
+            ))),
         },
     }
 }

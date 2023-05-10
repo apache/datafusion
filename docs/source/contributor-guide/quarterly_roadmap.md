@@ -60,7 +60,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 - Support for multi-scheduler deployments. Initially for resiliency and fault tolerance but ultimately to support sharding for scalability and more efficient caching.
 - Executor deployment grouping based on resource allocation
 
-### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib]))
+### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib))
 
 #### [DataFusion-Python](https://github.com/datafusion-contrib/datafusion-python)
 
