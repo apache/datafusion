@@ -562,6 +562,7 @@ enum AggregateFunction {
   GROUPING = 17;
   MEDIAN = 18;
   FIRST = 19;
+  LAST = 20;
 }
 
 message AggregateExprNode {

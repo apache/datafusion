@@ -264,12 +264,9 @@ async fn test_source_sorted_groupby3() -> Result<()> {
     let session_config = SessionConfig::new().with_target_partitions(1);
     let ctx = get_test_context2(&tmpdir, true, session_config).await?;
 
-    let sql = "SELECT a, FIRST(c ORDER BY a DESC)
+    let sql = "SELECT a, b, FIRST(c ORDER BY a DESC) as first_c
            FROM annotated_data
            GROUP BY a, b";
-    // let sql = "SELECT a, ARRAY_AGG(c ORDER BY a DESC, b DESC)
-    //        FROM annotated_data
-    //        GROUP BY a, b";
 
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -277,7 +274,7 @@ async fn test_source_sorted_groupby3() -> Result<()> {
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let expected = {
         vec![
-            "ProjectionExec: expr=[a@0 as a, FIRST(annotated_data.c) ORDER BY [a DESC NULLS FIRST]@2 as FIRST(annotated_data.c)]",
+            "ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST(annotated_data.c) ORDER BY [a DESC NULLS FIRST]@2 as first_c]",
             "  AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[FIRST(annotated_data.c)], ordering_mode=FullyOrdered",
         ]
     };
@@ -292,14 +289,58 @@ async fn test_source_sorted_groupby3() -> Result<()> {
 
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+---+-------------------------+",
-        "| a | FIRST(annotated_data.c) |",
-        "+---+-------------------------+",
-        "| 0 | 0                       |",
-        "| 0 | 25                      |",
-        "| 1 | 50                      |",
-        "| 1 | 75                      |",
-        "+---+-------------------------+",
+        "+---+---+---------+",
+        "| a | b | first_c |",
+        "+---+---+---------+",
+        "| 0 | 0 | 0       |",
+        "| 0 | 1 | 25      |",
+        "| 1 | 2 | 50      |",
+        "| 1 | 3 | 75      |",
+        "+---+---+---------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_source_sorted_groupby4() -> Result<()> {
+    let tmpdir = TempDir::new().unwrap();
+    let session_config = SessionConfig::new().with_target_partitions(1);
+    let ctx = get_test_context2(&tmpdir, true, session_config).await?;
+
+    let sql = "SELECT a, b, LAST(c ORDER BY a DESC) as last_c
+           FROM annotated_data
+           GROUP BY a, b";
+
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let expected = {
+        vec![
+            "ProjectionExec: expr=[a@0 as a, b@1 as b, LAST(annotated_data.c) ORDER BY [a DESC NULLS FIRST]@2 as last_c]",
+            "  AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[LAST(annotated_data.c)], ordering_mode=FullyOrdered",
+        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---+---+--------+",
+        "| a | b | last_c |",
+        "+---+---+--------+",
+        "| 0 | 0 | 24     |",
+        "| 0 | 1 | 49     |",
+        "| 1 | 2 | 74     |",
+        "| 1 | 3 | 99     |",
+        "+---+---+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

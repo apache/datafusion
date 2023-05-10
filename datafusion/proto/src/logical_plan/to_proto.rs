@@ -383,6 +383,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Grouping => Self::Grouping,
             AggregateFunction::Median => Self::Median,
             AggregateFunction::First => Self::First,
+            AggregateFunction::Last => Self::Last,
         }
     }
 }
@@ -658,6 +659,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                     AggregateFunction::Median => protobuf::AggregateFunction::Median,
                     AggregateFunction::First => protobuf::AggregateFunction::First,
+                    AggregateFunction::Last => protobuf::AggregateFunction::Last,
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {

@@ -2385,6 +2385,7 @@ pub enum AggregateFunction {
     Grouping = 17,
     Median = 18,
     First = 19,
+    Last = 20,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2415,6 +2416,7 @@ impl AggregateFunction {
             AggregateFunction::Grouping => "GROUPING",
             AggregateFunction::Median => "MEDIAN",
             AggregateFunction::First => "FIRST",
+            AggregateFunction::Last => "LAST",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2442,6 +2444,7 @@ impl AggregateFunction {
             "GROUPING" => Some(Self::Grouping),
             "MEDIAN" => Some(Self::Median),
             "FIRST" => Some(Self::First),
+            "LAST" => Some(Self::Last),
             _ => None,
         }
     }

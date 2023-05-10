@@ -34,7 +34,9 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, FirstAgg, TrimWhereField, Value};
+use sqlparser::ast::{
+    ArrayAgg, Expr as SQLExpr, FirstAgg, LastAgg, TrimWhereField, Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -296,7 +298,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, planner_context),
             SQLExpr::FIRST(first_agg) => self.parse_first_agg(first_agg, schema, planner_context),
-            SQLExpr::LAST(_last_agg) => todo!(),
+            SQLExpr::LAST(last_agg) => self.parse_last_agg(last_agg, schema, planner_context),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {sql:?}"
@@ -354,7 +356,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_first_agg(
         &self,
-        array_agg: FirstAgg,
+        first_agg: FirstAgg,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -365,7 +367,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             order_by,
             limit,
             within_group,
-        } = array_agg;
+        } = first_agg;
 
         let order_by = if let Some(order_by) = order_by {
             // TODO: Once sqlparser supports multiple order by clause, handle it
@@ -395,6 +397,54 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // next, aggregate built-ins
         let fun = AggregateFunction::First;
+        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun, args, distinct, None, order_by,
+        )))
+    }
+
+    fn parse_last_agg(
+        &self,
+        last_agg: LastAgg,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
+        let LastAgg {
+            distinct,
+            expr,
+            order_by,
+            limit,
+            within_group,
+        } = last_agg;
+
+        let order_by = if let Some(order_by) = order_by {
+            // TODO: Once sqlparser supports multiple order by clause, handle it
+            Some(vec![self.order_by_to_sort_expr(
+                *order_by,
+                input_schema,
+                planner_context,
+            )?])
+        } else {
+            None
+        };
+
+        if let Some(limit) = limit {
+            return Err(DataFusionError::NotImplemented(format!(
+                "LIMIT not supported in LAST: {limit}"
+            )));
+        }
+
+        if within_group {
+            return Err(DataFusionError::NotImplemented(
+                "WITHIN GROUP not supported in LAST".to_string(),
+            ));
+        }
+
+        let args =
+            vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
+
+        // next, aggregate built-ins
+        let fun = AggregateFunction::Last;
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
             fun, args, distinct, None, order_by,
         )))

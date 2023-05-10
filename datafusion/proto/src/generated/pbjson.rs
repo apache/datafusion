@@ -459,6 +459,7 @@ impl serde::Serialize for AggregateFunction {
             Self::Grouping => "GROUPING",
             Self::Median => "MEDIAN",
             Self::First => "FIRST",
+            Self::Last => "LAST",
         };
         serializer.serialize_str(variant)
     }
@@ -490,6 +491,7 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "GROUPING",
             "MEDIAN",
             "FIRST",
+            "LAST",
         ];
 
         struct GeneratedVisitor;
@@ -552,6 +554,7 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "GROUPING" => Ok(AggregateFunction::Grouping),
                     "MEDIAN" => Ok(AggregateFunction::Median),
                     "FIRST" => Ok(AggregateFunction::First),
+                    "LAST" => Ok(AggregateFunction::Last),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

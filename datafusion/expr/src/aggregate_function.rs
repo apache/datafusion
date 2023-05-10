@@ -44,6 +44,8 @@ pub enum AggregateFunction {
     ArrayAgg,
     /// first
     First,
+    /// last
+    Last,
     /// Variance (Sample)
     Variance,
     /// Variance (Population)
@@ -157,7 +159,6 @@ pub fn return_type(
             coerced_data_types[0].clone(),
             true,
         )))),
-        AggregateFunction::First => Ok(coerced_data_types[0].clone()),
         AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
         AggregateFunction::ApproxPercentileContWithWeight => {
             Ok(coerced_data_types[0].clone())
@@ -166,6 +167,9 @@ pub fn return_type(
             Ok(coerced_data_types[0].clone())
         }
         AggregateFunction::Grouping => Ok(DataType::Int32),
+        AggregateFunction::First | AggregateFunction::Last => {
+            Ok(coerced_data_types[0].clone())
+        }
     }
 }
 
@@ -209,7 +213,8 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::StddevPop
         | AggregateFunction::Median
         | AggregateFunction::ApproxMedian
-        | AggregateFunction::First => {
+        | AggregateFunction::First
+        | AggregateFunction::Last => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
         AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
