@@ -22,7 +22,7 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::{DFSchemaRef, OwnedTableReference};
+use datafusion_common::{DFSchemaRef, OwnedTableReference, ScalarValue};
 
 use crate::LogicalPlan;
 
@@ -70,7 +70,7 @@ pub struct CopyTo {
     pub target: String,
 
     /// User supplied name/value pairs that are interpreted for each targe type
-    pub options: HashMap<String, String>,
+    pub options: HashMap<String, ScalarValue>,
 
     /// output schema (is empty)
     pub dummy_schema: DFSchemaRef,

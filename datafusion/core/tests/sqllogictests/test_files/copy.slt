@@ -46,6 +46,10 @@ statement ok
 drop table new_table;
 
 
+# TODO error cases:
+# incomplete statement
+# pass non literal to COPY options
+
 
 
 

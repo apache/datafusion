@@ -18,7 +18,7 @@
 //! DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::{OrderByExpr, Query};
+use sqlparser::ast::{OrderByExpr, Query, Value};
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
@@ -71,7 +71,7 @@ pub struct CopyToStatement {
     /// The URL to where the data is heading
     pub target: String,
     /// Target specific options
-    pub options: HashMap<String, String>,
+    pub options: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,10 +307,8 @@ impl<'a> DFParser<'a> {
         let target = self.parser.parse_literal_string()?;
 
         // check for options in parens
-        let options = if self.parser.consume_token(&Token::LParen) {
-            let options = self.parse_options()?;
-            self.parser.expect_token(&Token::RParen)?;
-            options
+        let options = if self.parser.peek_token().token == Token::LParen {
+            self.parse_value_options()?
         } else {
             HashMap::new()
         };
@@ -537,7 +535,7 @@ impl<'a> DFParser<'a> {
                 builder.table_partition_cols = Some(self.parse_partitions()?)
             } else if self.parser.parse_keyword(Keyword::OPTIONS) {
                 ensure_not_set(&builder.options, "OPTIONS")?;
-                builder.options = Some(self.parse_options()?);
+                builder.options = Some(self.parse_string_options()?);
             } else {
                 break;
             }
@@ -593,14 +591,39 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    fn parse_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
-        let mut options: HashMap<String, String> = HashMap::new();
+    /// Parses (key value) style options, but values can only be literal strings
+    /// TODO maybe change this to be real expressions
+    fn parse_string_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
+        let mut options = HashMap::new();
         self.parser.expect_token(&Token::LParen)?;
 
         loop {
             let key = self.parser.parse_literal_string()?;
             let value = self.parser.parse_literal_string()?;
-            options.insert(key.to_string(), value.to_string());
+            options.insert(key, value);
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after option definition",
+                    self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(options)
+    }
+
+    /// parses (foo bar) style options into a map of String --> [`Value`]
+    fn parse_value_options(&mut self) -> Result<HashMap<String, Value>, ParserError> {
+        let mut options = HashMap::new();
+        self.parser.expect_token(&Token::LParen)?;
+
+        loop {
+            let key = self.parser.parse_literal_string()?;
+            let value = self.parser.parse_value()?;
+            options.insert(key, value);
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard
@@ -640,7 +663,7 @@ mod tests {
             1,
             "Expected to parse exactly one statement"
         );
-        assert_eq!(statements[0], expected);
+        assert_eq!(statements[0], expected, "actual:\n{:#?}", statements[0]);
         Ok(())
     }
 
@@ -1062,16 +1085,58 @@ mod tests {
     }
 
     #[test]
-    fn copy_to() -> Result<(), ParserError> {
+    fn copy_to_table_to_table() -> Result<(), ParserError> {
         // positive case
         let sql = "COPY foo TO bar";
         let expected = Statement::CopyTo(CopyToStatement {
-            source: CopyToSource::Relation(ObjectName(vec![Ident::new("foo")])),
+            source: object_name("foo"),
+            target: "bar".to_string(),
+            options: HashMap::new(),
+        });
+
+        expect_parse_ok(sql, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn copy_to_query_to_table() -> Result<(), ParserError> {
+        let mut statements = Parser::parse_sql(&GenericDialect {}, "select 1")?;
+        assert_eq!(statements.len(), 1);
+        let statement = statements.pop().unwrap();
+        let query = if let SQLStatement::Query(query) = statement {
+            *query
+        } else {
+            panic!("Expected query, got {statement:?}");
+        };
+
+        let sql = "COPY (select 1) TO bar";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: CopyToSource::Query(query),
             target: "bar".to_string(),
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
-
         Ok(())
+    }
+
+    #[test]
+    fn copy_to_options() -> Result<(), ParserError> {
+        let sql = "COPY foo TO bar (row_group_size 55)";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: object_name("foo"),
+            target: "bar".to_string(),
+            options: HashMap::from([(
+                "row_group_size".to_string(),
+                Value::Number("55".to_string(), false),
+            )]),
+        });
+        expect_parse_ok(sql, expected)?;
+        Ok(())
+    }
+
+    // For error cases, see: `copy.slt`
+
+    fn object_name(name: &str) -> CopyToSource {
+        CopyToSource::Relation(ObjectName(vec![Ident::new(name)]))
     }
 }

@@ -559,6 +559,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }?;
 
+        // convert options
+        let options = options
+            .into_iter()
+            .map(|(k, v)| {
+                let scalar = match self.parse_value(v, &[])? {
+                    datafusion_expr::Expr::Literal(scalar) => Ok(scalar),
+                    expr => Err(DataFusionError::Plan(format!(
+                        "COPY options expects a literal for {k}, got {expr}"
+                    ))),
+                }?;
+                Ok((k, scalar))
+            })
+            // check for errors
+            .collect::<Result<Vec<_>>>()?
+            // collect into hashMap
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+
         Ok(LogicalPlan::CopyTo(CopyTo {
             input: Arc::new(input),
             target,
