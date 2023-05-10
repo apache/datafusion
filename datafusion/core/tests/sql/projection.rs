@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion::datasource::provider_as_source;
-use datafusion::test_util::{get_test_context2, scan_empty};
+use datafusion::test_util::scan_empty;
 use datafusion_expr::{when, LogicalPlanBuilder, UNNAMED_TABLE};
 use tempfile::TempDir;
 
@@ -373,33 +373,5 @@ async fn project_columns_in_memory_without_propagation() -> Result<()> {
     let expected = vec!["+---+", "| a |", "+---+", "| 2 |", "+---+"];
     assert_batches_sorted_eq!(expected, &actual);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_source_projection() -> Result<()> {
-    let session_config = SessionConfig::new().with_target_partitions(1);
-    // Source is ordered by a, b, c
-    // Source is finite.
-    let tmpdir1 = TempDir::new()?;
-    let ctx = get_test_context2(&tmpdir1, false, session_config).await?;
-    let sql = "SELECT a FROM annotated_data
-        ORDER BY a
-        LIMIT 5";
-
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-    // Final plan shouldn't include SortExec.
-    let expected: Vec<&str> = { vec!["GlobalLimitExec: skip=0, fetch=5"] };
-
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    let actual_len = actual.len();
-    let actual_trim_last = &actual[..actual_len - 1];
-    assert_eq!(
-        expected, actual_trim_last,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
     Ok(())
 }

@@ -97,7 +97,6 @@ pub mod references;
 pub mod select;
 pub mod timestamp;
 pub mod udf;
-pub mod window;
 
 pub mod explain;
 pub mod information_schema;
