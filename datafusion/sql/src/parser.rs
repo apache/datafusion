@@ -592,7 +592,8 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parses (key value) style options, but values can only be literal strings
-    /// TODO maybe change this to be real expressions
+    /// TODO maybe change this to be real expressions rather than just strings
+    /// the reason
     fn parse_string_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
         let mut options = HashMap::new();
         self.parser.expect_token(&Token::LParen)?;
