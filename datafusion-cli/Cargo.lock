@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1077,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-execution"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "dashmap",
  "datafusion-common",
@@ -1106,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "23.0.0"
+version = "24.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",

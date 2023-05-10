@@ -17,6 +17,7 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
@@ -49,7 +50,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::ScalarFunction { fun, args });
+            return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
         // then, window function
@@ -120,19 +121,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Some(fm) = self.schema_provider.get_function_meta(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::ScalarUDF { fun: fm, args });
+            return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
         }
 
         // User defined aggregate functions
         if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::AggregateUDF {
-                fun: fm,
-                args,
-                filter: None,
-                order_by: None,
-            });
+            return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                fm, args, None, None,
+            )));
         }
 
         // Special case arrow_cast (as its type is dependent on its argument value)
@@ -154,7 +152,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let args = vec![self.sql_expr_to_logical_expr(expr, schema, planner_context)?];
-        Ok(Expr::ScalarFunction { fun, args })
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
     pub(super) fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
