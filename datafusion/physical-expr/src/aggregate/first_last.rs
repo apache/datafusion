@@ -85,7 +85,13 @@ impl AggregateExpr for FirstAgg {
         true
     }
 
-    // TODO: Add support for reverse expr
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(LastAgg::new(
+            self.expr.clone(),
+            self.name.clone(),
+            self.data_type.clone(),
+        )))
+    }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(FirstAccumulator::try_new(&self.data_type)?))
@@ -143,7 +149,7 @@ impl Accumulator for FirstAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // FIRST(first1, first2, first3, ...) = sum1 + sum2 + sum3 + ...
+        // FIRST(first1, first2, first3, ...)
         self.update_batch(states)
     }
 
@@ -218,7 +224,13 @@ impl AggregateExpr for LastAgg {
         true
     }
 
-    // TODO: Add support for reverse expr
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(FirstAgg::new(
+            self.expr.clone(),
+            self.name.clone(),
+            self.data_type.clone(),
+        )))
+    }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(LastAccumulator::try_new(&self.data_type)?))
@@ -245,7 +257,7 @@ struct LastAccumulator {
 }
 
 impl LastAccumulator {
-    /// new First accumulator
+    /// new Last accumulator
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
@@ -277,7 +289,7 @@ impl Accumulator for LastAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // FIRST(first1, first2, first3, ...) = sum1 + sum2 + sum3 + ...
+        // LAST(last1, last2, last3, ...)
         self.update_batch(states)
     }
 
