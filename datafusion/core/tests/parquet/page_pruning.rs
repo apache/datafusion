@@ -23,6 +23,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
@@ -713,4 +714,42 @@ async fn prune_decimal_in_list() {
         6,
     )
     .await;
+}
+
+#[tokio::test]
+async fn without_pushdown_filter() {
+    let mut context = ContextWithParquet::new(Scenario::Timestamps, Page).await;
+
+    let output1 = context.query("SELECT * FROM t").await;
+
+    let mut context = ContextWithParquet::new(Scenario::Timestamps, Page).await;
+
+    let output2 = context
+        .query("SELECT * FROM t where nanos < to_timestamp('2023-01-02 01:01:11Z')")
+        .await;
+
+    let bytes_scanned_without_filter = cast_count_metric(
+        output1
+            .parquet_metrics
+            .sum_by_name("bytes_scanned")
+            .unwrap(),
+    )
+    .unwrap();
+    let bytes_scanned_with_filter = cast_count_metric(
+        output2
+            .parquet_metrics
+            .sum_by_name("bytes_scanned")
+            .unwrap(),
+    )
+    .unwrap();
+
+    // Without filter will not read pageIndex.
+    assert!(bytes_scanned_with_filter > bytes_scanned_without_filter);
+}
+
+fn cast_count_metric(metric: MetricValue) -> Option<usize> {
+    return match metric {
+        MetricValue::Count { count, .. } => Some(count.value()),
+        _ => None,
+    };
 }
