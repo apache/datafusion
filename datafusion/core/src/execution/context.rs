@@ -114,6 +114,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
+use crate::execution::options::ArrowReadOptions;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
@@ -844,6 +845,20 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
+    /// Creates a [`DataFrame`] for reading an Arrow data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_arrow<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        options: ArrowReadOptions<'_>,
+    ) -> Result<DataFrame> {
+        self._read_type(table_paths, options).await
+    }
+
     /// Creates an empty DataFrame.
     pub fn read_empty(&self) -> Result<DataFrame> {
         Ok(DataFrame::new(
@@ -1020,6 +1035,27 @@ impl SessionContext {
         name: &str,
         table_path: &str,
         options: AvroReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options = options.to_listing_options(&self.copied_config());
+
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Registers an Arrow file as a table that can be referenced from
+    /// SQL statements executed against this context.
+    pub async fn register_arrow(
+        &self,
+        name: &str,
+        table_path: &str,
+        options: ArrowReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.copied_config());
 

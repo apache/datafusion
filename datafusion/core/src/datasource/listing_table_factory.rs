@@ -27,6 +27,7 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
 
 use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
@@ -81,6 +82,7 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
+            FileType::ARROW => Arc::new(ArrowFormat::default()),
         };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
