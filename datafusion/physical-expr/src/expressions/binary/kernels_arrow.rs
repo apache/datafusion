@@ -684,9 +684,9 @@ pub(crate) fn modulus_decimal_dyn_scalar(
 
 #[cfg(test)]
 mod tests {
-    use datafusion_expr::Operator;
     use super::*;
     use datafusion_expr::type_coercion::binary::decimal_op_mathematics_type;
+    use datafusion_expr::Operator;
 
     fn create_decimal_array(
         array: &[Option<i128>],
