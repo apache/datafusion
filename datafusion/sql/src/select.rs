@@ -35,7 +35,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{self, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
-use sqlparser::ast::{Select, SelectItem, TableWithJoins};
+use sqlparser::ast::{IdentWindow, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -78,10 +78,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 alias: _,
             } = proj
             {
-                for window in select.named_window.iter() {
-                    if let Some(WindowType::NamedWindow(ident)) = f.over.clone() {
-                        if ident == window.0 {
-                            f.over = Some(WindowType::WindowSpec(window.1.clone()))
+                for IdentWindow(window_ident, window_spec) in select.named_window.iter() {
+                    if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                        if ident.eq(window_ident) {
+                            f.over = Some(WindowType::WindowSpec(window_spec.clone()))
                         }
                     }
                 }
