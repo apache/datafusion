@@ -581,7 +581,10 @@ fn should_enable_page_index(
 ) -> bool {
     enable_page_index
         && page_pruning_predicate.is_some()
-        && page_pruning_predicate.as_ref().unwrap().filter_number() > 0
+        && page_pruning_predicate
+            .as_ref()
+            .map(|p| p.filter_number() > 0)
+            .unwrap_or(false)
 }
 
 /// Factory of parquet file readers.
