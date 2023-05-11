@@ -149,19 +149,15 @@ impl FileOpener for ArrowOpener {
         Ok(Box::pin(async move {
             match object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
-                    let arrow_reader = arrow::ipc::reader::FileReader::try_new(
-                        file,
-                        projection,
-                    )?;
+                    let arrow_reader =
+                        arrow::ipc::reader::FileReader::try_new(file, projection)?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
                 r @ GetResult::Stream(_) => {
                     let bytes = r.bytes().await?;
                     let cursor = std::io::Cursor::new(bytes);
-                    let arrow_reader = arrow::ipc::reader::FileReader::try_new(
-                        cursor,
-                        projection,
-                    )?;
+                    let arrow_reader =
+                        arrow::ipc::reader::FileReader::try_new(cursor, projection)?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
             }
