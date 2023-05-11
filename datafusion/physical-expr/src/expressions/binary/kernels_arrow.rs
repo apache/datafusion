@@ -469,24 +469,8 @@ pub(crate) fn multiply_decimal_dyn_scalar(
     result_type: &DataType,
 ) -> Result<ArrayRef> {
     let (precision, scale) = get_precision_scale(result_type)?;
-
-    let op_type = decimal_op_mathematics_type(
-        &Operator::Multiply,
-        left.data_type(),
-        left.data_type(),
-    )
-    .unwrap();
-    let (_, op_scale) = get_precision_scale(&op_type)?;
-
     let array = multiply_scalar_dyn::<Decimal128Type>(left, right)?;
-
-    if op_scale > scale {
-        let div = 10_i128.pow((op_scale - scale) as u32);
-        let array = divide_scalar_dyn::<Decimal128Type>(&array, div)?;
-        decimal_array_with_precision_scale(array, precision, scale)
-    } else {
-        decimal_array_with_precision_scale(array, precision, scale)
-    }
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn divide_decimal_dyn_scalar(
