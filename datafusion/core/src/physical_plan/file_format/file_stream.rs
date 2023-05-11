@@ -717,7 +717,7 @@ mod tests {
             },
             opener: TestWriterOpener {
                 object_store: memory.clone(),
-                writer_mode: config.writer_mode.clone(),
+                writer_mode: config.writer_mode,
             },
             schema: config.output_schema.clone(),
             file_stream_metrics: FileSinkStreamMetrics::new(&metrics, 0),

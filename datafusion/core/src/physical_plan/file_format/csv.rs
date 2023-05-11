@@ -48,8 +48,6 @@ use crate::physical_plan::common::AbortOnDropSingle;
 use arrow::csv::WriterBuilder;
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::PhysicalExpr;
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
@@ -328,7 +326,7 @@ impl FileOpener for CsvOpener {
     }
 }
 
-/// A [`FileWriter`] that opens a CSV file and yields a [`Box<dyn AsyncWrite + Unpin + Send>`]
+/// A [`FileWriterExt`] that opens a CSV file and yields a [`Box<dyn AsyncWrite + Unpin + Send>`]
 pub struct CsvWriterOpener {
     writer_mode: FileWriterMode,
     object_store: Arc<dyn ObjectStore>,
