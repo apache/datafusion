@@ -33,7 +33,7 @@ async fn arrow_query() {
     let mut ctx = SessionContext::new();
     register_arrow(&mut ctx).await;
     let sql = "SELECT * FROM arrow_simple";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+-----+-------+",
         "| f0 | f1  | f2    |",
@@ -53,7 +53,7 @@ async fn arrow_explain() {
     let mut ctx = SessionContext::new();
     register_arrow(&mut ctx).await;
     let sql = "EXPLAIN SELECT * FROM arrow_simple";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
     let expected = vec![
         vec![
