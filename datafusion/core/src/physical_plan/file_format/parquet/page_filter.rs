@@ -222,6 +222,11 @@ impl PagePruningPredicate {
         file_metrics.page_index_rows_filtered.add(total_skip);
         Ok(Some(final_selection))
     }
+
+    /// Returns the number of filters in the [`PagePruningPredicate`]
+    pub fn filter_number(&self) -> usize {
+        self.predicates.len()
+    }
 }
 
 /// Returns the column index in the row group metadata for the single
