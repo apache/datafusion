@@ -21,6 +21,7 @@ use super::SendableRecordBatchStream;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::MemoryReservation;
+use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
@@ -129,6 +130,31 @@ pub(crate) fn spawn_execution(
             }
         }
     })
+}
+
+/// If running in a tokio context spawns the execution of `stream` to a separate task
+/// allowing it to execute in parallel with an intermediate buffer of size `buffer`
+pub(crate) fn spawn_buffered(
+    mut input: SendableRecordBatchStream,
+    buffer: usize,
+) -> SendableRecordBatchStream {
+    // Use tokio only if running from a tokio context (#2201)
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle,
+        Err(_) => return input,
+    };
+
+    let schema = input.schema();
+    let (sender, receiver) = mpsc::channel(buffer);
+    let join = handle.spawn(async move {
+        while let Some(item) = input.next().await {
+            if sender.send(item).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    RecordBatchReceiverStream::create(&schema, receiver, join)
 }
 
 /// Computes the statistics for an in-memory RecordBatch
