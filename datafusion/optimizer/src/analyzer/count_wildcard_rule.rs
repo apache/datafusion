@@ -18,9 +18,9 @@
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, DFField, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, InSubquery};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_expr::Expr::{Exists, InSubquery, ScalarSubquery};
+use datafusion_expr::Expr::ScalarSubquery;
 use datafusion_expr::{
     aggregate_function, count, expr, lit, window_function, Aggregate, Expr, Filter,
     LogicalPlan, Projection, Sort, Subquery, Window,
@@ -191,40 +191,40 @@ impl TreeNodeRewriter for CountWildcardRewriter {
                     outer_ref_columns,
                 })
             }
-            InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => {
+            }) => {
                 let new_plan = subquery
                     .subquery
                     .as_ref()
                     .clone()
                     .transform_down(&analyze_internal)?;
 
-                InSubquery {
+                Expr::InSubquery(InSubquery::new(
                     expr,
-                    subquery: Subquery {
+                    Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                     },
                     negated,
-                }
+                ))
             }
-            Exists { subquery, negated } => {
+            Expr::Exists(expr::Exists { subquery, negated }) => {
                 let new_plan = subquery
                     .subquery
                     .as_ref()
                     .clone()
                     .transform_down(&analyze_internal)?;
 
-                Exists {
+                Expr::Exists(expr::Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                     },
                     negated,
-                }
+                })
             }
             _ => old_expr,
         };

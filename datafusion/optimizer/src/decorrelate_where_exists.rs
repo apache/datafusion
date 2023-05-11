@@ -21,6 +21,7 @@ use crate::utils::{
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_expr::expr::Exists;
 use datafusion_expr::{
     logical_plan::{Distinct, Filter, JoinType, Subquery},
     Expr, LogicalPlan, LogicalPlanBuilder,
@@ -57,7 +58,7 @@ impl DecorrelateWhereExists {
         let mut others = vec![];
         for it in filters.iter() {
             match it {
-                Expr::Exists { subquery, negated } => {
+                Expr::Exists(Exists { subquery, negated }) => {
                     let subquery_plan = self
                         .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)

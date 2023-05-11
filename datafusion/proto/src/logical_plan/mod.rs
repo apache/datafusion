@@ -1416,7 +1416,8 @@ mod roundtrip_tests {
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
     use datafusion_expr::expr::{
-        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
+        ScalarUDF, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
     use datafusion_expr::{
@@ -2438,11 +2439,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_inlist() {
-        let test_expr = Expr::InList {
-            expr: Box::new(lit(1.0_f32)),
-            list: vec![lit(2.0_f32)],
-            negated: true,
-        };
+        let test_expr = Expr::InList(InList::new(
+            Box::new(lit(1.0_f32)),
+            vec![lit(2.0_f32)],
+            true,
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2458,10 +2459,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_sqrt() {
-        let test_expr = Expr::ScalarFunction {
-            fun: Sqrt,
-            args: vec![col("col")],
-        };
+        let test_expr = Expr::ScalarFunction(ScalarFunction::new(Sqrt, vec![col("col")]));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
@@ -2604,11 +2602,11 @@ mod roundtrip_tests {
             Arc::new(vec![DataType::Float64, DataType::UInt32]),
         );
 
-        let test_expr = Expr::AggregateUDF {
-            fun: Arc::new(dummy_agg.clone()),
-            args: vec![lit(1.0_f64)],
-            filter: Some(Box::new(lit(true))),
-        };
+        let test_expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(dummy_agg.clone()),
+            vec![lit(1.0_f64)],
+            Some(Box::new(lit(true))),
+        ));
 
         let ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
@@ -2630,10 +2628,8 @@ mod roundtrip_tests {
             scalar_fn,
         );
 
-        let test_expr = Expr::ScalarUDF {
-            fun: Arc::new(udf.clone()),
-            args: vec![lit("")],
-        };
+        let test_expr =
+            Expr::ScalarUDF(ScalarUDF::new(Arc::new(udf.clone()), vec![lit("")]));
 
         let ctx = SessionContext::new();
         ctx.register_udf(udf);
@@ -2672,16 +2668,16 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_substr() {
         // substr(string, position)
-        let test_expr = Expr::ScalarFunction {
-            fun: Substr,
-            args: vec![col("col"), lit(1_i64)],
-        };
+        let test_expr = Expr::ScalarFunction(ScalarFunction::new(
+            Substr,
+            vec![col("col"), lit(1_i64)],
+        ));
 
         // substr(string, position, count)
-        let test_expr_with_count = Expr::ScalarFunction {
-            fun: Substr,
-            args: vec![col("col"), lit(1_i64), lit(1_i64)],
-        };
+        let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new(
+            Substr,
+            vec![col("col"), lit(1_i64), lit(1_i64)],
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx.clone());

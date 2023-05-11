@@ -221,23 +221,21 @@ impl CsvConfig {
 }
 
 impl CsvConfig {
-    fn open<R: std::io::Read>(&self, reader: R) -> csv::Reader<R> {
-        let datetime_format = None;
-        csv::Reader::new(
-            reader,
-            Arc::clone(&self.file_schema),
-            self.has_header,
-            Some(self.delimiter),
-            self.batch_size,
-            None,
-            self.file_projection.clone(),
-            datetime_format,
-        )
+    fn open<R: std::io::Read>(&self, reader: R) -> Result<csv::Reader<R>> {
+        let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
+            .has_header(self.has_header)
+            .with_delimiter(self.delimiter)
+            .with_batch_size(self.batch_size);
+
+        if let Some(p) = &self.file_projection {
+            builder = builder.with_projection(p.clone());
+        }
+
+        Ok(builder.build(reader)?)
     }
 
     fn builder(&self) -> csv::ReaderBuilder {
-        let mut builder = csv::ReaderBuilder::new()
-            .with_schema(self.file_schema.clone())
+        let mut builder = csv::ReaderBuilder::new(self.file_schema.clone())
             .with_delimiter(self.delimiter)
             .with_batch_size(self.batch_size)
             .has_header(self.has_header);
@@ -277,7 +275,7 @@ impl FileOpener for CsvOpener {
             match config.object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
-                    Ok(futures::stream::iter(config.open(decoder)).boxed())
+                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
                 GetResult::Stream(s) => {
                     let mut decoder = config.builder().build_decoder();

@@ -88,7 +88,6 @@ pub mod expr;
 pub mod functions;
 pub mod group_by;
 pub mod joins;
-pub mod json;
 pub mod limit;
 pub mod order;
 pub mod parquet;
@@ -98,15 +97,12 @@ pub mod references;
 pub mod select;
 pub mod timestamp;
 pub mod udf;
-pub mod window;
 
 pub mod explain;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
 pub mod subqueries;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where

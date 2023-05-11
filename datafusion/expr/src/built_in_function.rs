@@ -58,8 +58,14 @@ pub enum BuiltinScalarFunction {
     Digest,
     /// exp
     Exp,
+    /// factorial
+    Factorial,
     /// floor
     Floor,
+    /// gcd, Greatest common divisor
+    Gcd,
+    /// lcm, Least common multiple
+    Lcm,
     /// ln, Natural logarithm
     Ln,
     /// log, same as log10
@@ -228,7 +234,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cosh => Volatility::Immutable,
             BuiltinScalarFunction::Degrees => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
+            BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
+            BuiltinScalarFunction::Gcd => Volatility::Immutable,
+            BuiltinScalarFunction::Lcm => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
             BuiltinScalarFunction::Log => Volatility::Immutable,
             BuiltinScalarFunction::Log10 => Volatility::Immutable,
@@ -331,7 +340,10 @@ impl FromStr for BuiltinScalarFunction {
             "cosh" => BuiltinScalarFunction::Cosh,
             "degrees" => BuiltinScalarFunction::Degrees,
             "exp" => BuiltinScalarFunction::Exp,
+            "factorial" => BuiltinScalarFunction::Factorial,
             "floor" => BuiltinScalarFunction::Floor,
+            "gcd" => BuiltinScalarFunction::Gcd,
+            "lcm" => BuiltinScalarFunction::Lcm,
             "ln" => BuiltinScalarFunction::Ln,
             "log" => BuiltinScalarFunction::Log,
             "log10" => BuiltinScalarFunction::Log10,

@@ -17,7 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
+    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -61,7 +62,7 @@ impl ExprSchemable for Expr {
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
             Expr::Alias(expr, name) => match &**expr {
-                Expr::Placeholder { data_type, .. } => match &data_type {
+                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
                 },
@@ -94,14 +95,14 @@ impl ExprSchemable for Expr {
             }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::ScalarUDF { fun, args } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
-            Expr::ScalarFunction { fun, args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -122,7 +123,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 aggregate_function::return_type(fun, &data_types)
             }
-            Expr::AggregateUDF { fun, args, .. } => {
+            Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -132,7 +133,7 @@ impl ExprSchemable for Expr {
             Expr::Not(_)
             | Expr::IsNull(_)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -153,9 +154,13 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
-            Expr::Placeholder { data_type, .. } => data_type.clone().ok_or_else(|| {
-                DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
-            }),
+            Expr::Placeholder(Placeholder { data_type, .. }) => {
+                data_type.clone().ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Placeholder type could not be resolved".to_owned(),
+                    )
+                })
+            }
             Expr::Wildcard => {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -191,7 +196,7 @@ impl ExprSchemable for Expr {
             | Expr::Not(expr)
             | Expr::Negative(expr)
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InList { expr, .. } => expr.nullable(input_schema),
+            | Expr::InList(InList { expr, .. }) => expr.nullable(input_schema),
             Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),
@@ -216,8 +221,8 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
+            | Expr::ScalarFunction(..)
+            | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. } => Ok(true),
@@ -230,8 +235,8 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. }
-            | Expr::Placeholder { .. } => Ok(true),
-            Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
+            | Expr::Placeholder(_) => Ok(true),
+            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }

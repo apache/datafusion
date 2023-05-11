@@ -2167,6 +2167,9 @@ pub enum ScalarFunction {
     Pi = 80,
     Degrees = 81,
     Radians = 82,
+    Factorial = 83,
+    Lcm = 84,
+    Gcd = 85,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2258,6 +2261,9 @@ impl ScalarFunction {
             ScalarFunction::Pi => "Pi",
             ScalarFunction::Degrees => "Degrees",
             ScalarFunction::Radians => "Radians",
+            ScalarFunction::Factorial => "Factorial",
+            ScalarFunction::Lcm => "Lcm",
+            ScalarFunction::Gcd => "Gcd",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2346,6 +2352,9 @@ impl ScalarFunction {
             "Pi" => Some(Self::Pi),
             "Degrees" => Some(Self::Degrees),
             "Radians" => Some(Self::Radians),
+            "Factorial" => Some(Self::Factorial),
+            "Lcm" => Some(Self::Lcm),
+            "Gcd" => Some(Self::Gcd),
             _ => None,
         }
     }
