@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Apache Arrow format abstractions
+
 use crate::datasource::file_format::FileFormat;
 use crate::error::Result;
 use crate::execution::context::SessionState;
