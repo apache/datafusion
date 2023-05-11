@@ -41,7 +41,7 @@ use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map,
-    utils::{convert_to_expr, get_indices_of_matching_exprs},
+    utils::{convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy_concrete},
     AggregateExpr, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
@@ -56,7 +56,6 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::utils::ordering_satisfy_concrete;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -362,7 +361,8 @@ fn get_finest_requirement<
                 &eq_properties,
                 &ordering_eq_properties,
             ) {
-                // do not update result, result already satisfies the requirement for current function
+                // Do not update the result as it already satisfies current
+                // function's requirement:
                 continue;
             }
             if ordering_satisfy_concrete(
@@ -371,12 +371,14 @@ fn get_finest_requirement<
                 &eq_properties,
                 &ordering_eq_properties,
             ) {
-                // update result with fn_reqs, fn_reqs satisfy the existing requirement and itself.
+                // Update result with current function's requirements, as it is
+                // a finer requirement than what we currently have.
                 *result = fn_reqs.clone();
                 continue;
             }
-            // If either of the requirements satisfy the other, this means that requirements are conflicting.
-            // Currently we do not have support for this functionality.
+            // If either of the requirements satisfy the other, this means
+            // requirements are conflicting. Currently, we do not support
+            // conflicting requirements.
             return Err(DataFusionError::Plan(
                 "Conflicting ordering requirements in aggregate functions".to_string(),
             ));
