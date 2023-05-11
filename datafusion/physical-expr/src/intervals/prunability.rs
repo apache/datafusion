@@ -18,8 +18,6 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 use petgraph::visit::DfsPostOrder;
@@ -29,26 +27,49 @@ use crate::expressions::{BinaryExpr, Column};
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Operator;
+
 /// This object implements a directed acyclic expression graph (DAEG) that
-/// is used to determine a [PhysicalExpr] is prunable or not, with some [PhysicalSortExpr].
-/// If it is so, prunable table side can be inferred. Non-prunability implies that the overall
-/// binary expression may be monotonically increasing or decreasing. Null placement of binary
-/// expression can be examined, too.
+/// is used to determine whether a [`PhysicalExpr`] is prunable given some
+/// [`PhysicalSortExpr`]. If so, the prunable table side can be inferred.
+/// To decide prunability, we consider monotonicity properties of expressions
+/// as well as their orderings and their null placement properties.
 #[derive(Clone)]
 pub struct ExprPrunabilityGraph {
     graph: StableGraph<ExprPrunabilityGraphNode, usize>,
     root: NodeIndex,
 }
 
-/// This object is stored in nodes to move the prunable table side information to the root node.
-/// The column leafs are assigned with TableSide info. If there is not any prunability blocking
-/// conditions at the parent nodes, this info reaches the root node having overall expression.
+/// This object acts as a propagator of monotonicity information as we traverse
+/// the DAEG bottom-up.
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum Monotonicity {
+    Asc,
+    Desc,
+    Unordered,
+    Singleton,
+}
+
+/// This object acts as a propagator of "prunable table side" information
+/// as we traverse the DAEG bottom-up. Column leaves are assigned a `TableSide`,
+/// and we carry this information upwards according to expression properties.
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum TableSide {
     None,
     Left,
     Right,
     Both,
+}
+
+/// This object encapsulates monotonicity properties together with NULL
+/// placement and acts as a joint propagator during bottom-up traversals
+/// of the DAEG.
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub struct SortInfo {
+    dir: Monotonicity,
+    nulls_first: bool,
+    nulls_last: bool,
 }
 
 fn get_tableside_at_numeric(
@@ -94,16 +115,6 @@ fn get_tableside_at_and(
         (TableSide::Right, _) | (_, TableSide::Right) => TableSide::Right,
         (_, _) => TableSide::None,
     }
-}
-
-/// This object is stored in nodes to find the root binary expression's
-/// monotonicity according to the columns on its leaf nodes.
-#[derive(PartialEq, Debug, Clone, Copy)]
-pub enum Monotonicity {
-    Asc,
-    Desc,
-    Unordered,
-    Singleton,
 }
 
 impl Monotonicity {
@@ -169,47 +180,26 @@ impl Monotonicity {
     }
 }
 
-#[derive(PartialEq, Debug, Clone, Copy)]
-pub struct SortInfo {
-    dir: Monotonicity,
-    nulls_first: bool,
-    nulls_last: bool,
+macro_rules! sortinfo_op {
+    ($OP_NAME:ident) => {
+        fn $OP_NAME(&self, rhs: &Self) -> Self {
+            SortInfo {
+                dir: self.dir.$OP_NAME(&rhs.dir),
+                nulls_first: self.nulls_first || rhs.nulls_first,
+                nulls_last: self.nulls_last || rhs.nulls_last,
+            }
+        }
+    };
 }
 
 impl SortInfo {
-    fn add(&self, rhs: &Self) -> Self {
-        SortInfo {
-            dir: self.dir.add(&rhs.dir),
-            nulls_first: self.nulls_first || rhs.nulls_first,
-            nulls_last: self.nulls_last || rhs.nulls_last,
-        }
-    }
-
-    fn sub(&self, rhs: &Self) -> Self {
-        SortInfo {
-            dir: self.dir.sub(&rhs.dir),
-            nulls_first: self.nulls_first || rhs.nulls_first,
-            nulls_last: self.nulls_last || rhs.nulls_last,
-        }
-    }
-
-    fn gt_or_gteq(&self, rhs: &Self) -> Self {
-        SortInfo {
-            dir: self.dir.gt_or_gteq(&rhs.dir),
-            nulls_first: self.nulls_first || rhs.nulls_first,
-            nulls_last: self.nulls_last || rhs.nulls_last,
-        }
-    }
-
-    fn and(&self, rhs: &Self) -> Self {
-        SortInfo {
-            dir: self.dir.and(&rhs.dir),
-            nulls_first: self.nulls_first || rhs.nulls_first,
-            nulls_last: self.nulls_last || rhs.nulls_last,
-        }
-    }
+    sortinfo_op!(add);
+    sortinfo_op!(sub);
+    sortinfo_op!(gt_or_gteq);
+    sortinfo_op!(and);
 }
 
+/// This object represents a node in the DAEG we use for monotonicity analysis.
 #[derive(Clone, Debug)]
 pub struct ExprPrunabilityGraphNode {
     expr: Arc<dyn PhysicalExpr>,
@@ -228,7 +218,7 @@ impl Display for ExprPrunabilityGraphNode {
 }
 
 impl ExprPrunabilityGraphNode {
-    /// Constructs a new DAEG node with an unordered SortInfo.
+    /// Constructs a new DAEG node with an unordered [`SortInfo`].
     pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         ExprPrunabilityGraphNode {
             expr,
@@ -241,10 +231,9 @@ impl ExprPrunabilityGraphNode {
         }
     }
 
-    /// This function creates a DAEG node from Datafusion's [ExprTreeNode] object.
+    /// This function creates a DAEG node from Datafusion's [`ExprTreeNode`] object.
     pub fn make_node(node: &ExprTreeNode<NodeIndex>) -> ExprPrunabilityGraphNode {
-        let expr = node.expression().clone();
-        ExprPrunabilityGraphNode::new(expr)
+        ExprPrunabilityGraphNode::new(node.expression().clone())
     }
 }
 
@@ -263,15 +252,15 @@ impl ExprPrunabilityGraph {
         Ok(Self { graph, root })
     }
 
-    /// This function traverse the whole graph. It returns the prunable table sides,
-    /// and sort information of binary expression that builds the graph.
+    /// This function traverses the whole graph. It returns prunable table sides
+    /// and sort information of the binary expression that generates the graph.
     pub fn analyze_prunability(
         &mut self,
         left_sort_expr: &Option<PhysicalSortExpr>,
         right_sort_expr: &Option<PhysicalSortExpr>,
     ) -> Result<(TableSide, SortInfo)> {
         let mut includes_filter = false;
-        // Dfs Post Order traversal is used, since the children nodes determine the parent's order.
+        // Since children nodes determine their parent's properties, we use DFS:
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             let children = self.graph.neighbors_directed(node, Outgoing);
@@ -281,13 +270,12 @@ impl ExprPrunabilityGraph {
                 })
                 .collect::<Vec<_>>();
 
-            // Leaf nodes
+            // Handle leaf nodes:
             if children_prunability.is_empty() {
-                // Set initially as unordered column with undefined table side
+                // Initialize as an unordered column with an undefined table side:
                 self.graph[node].table_side = TableSide::None;
                 self.graph[node].sort_info.dir = Monotonicity::Unordered;
-                // By convention we set nulls_first and nulls_last to the false.
-                // These parameters are used in the Monotonicity::ASC and Monotonicity::DESC cases.
+                // By convention, we initially set nulls_first and nulls_last to false.
                 self.graph[node].sort_info.nulls_first = true;
                 self.graph[node].sort_info.nulls_last = false;
 
@@ -297,95 +285,89 @@ impl ExprPrunabilityGraph {
                     node,
                 );
             }
-            // intermediate nodes
+            // Handle intermediate nodes:
             else {
-                // Children are indexed as 1.->right child, 2.->left child.
-                // To have more natural placement, they are reversed.
+                // The graph library gives children in the reverse order, so we
+                // "fix" the order by the following reversal:
                 children_prunability.reverse();
-                let physical_expr = self.graph[node].expr.clone();
-                let binary_expr = physical_expr.as_any().downcast_ref::<BinaryExpr>().ok_or_else(|| {
-                        DataFusionError::Internal("PhysicalExpr under investigation for prunability should be BinaryExpr.".to_string())
-                    })?;
-                if binary_expr.op().is_numerical_operators() {
-                    (self.graph[node].table_side, self.graph[node].sort_info) =
+                let binary_expr = self.graph[node].expr.as_any().downcast_ref::<BinaryExpr>().ok_or_else(|| {
+                    DataFusionError::Internal("PhysicalExpr under investigation for prunability should be BinaryExpr.".to_string())
+                })?;
+                (self.graph[node].table_side, self.graph[node].sort_info) =
+                    if binary_expr.op().is_numerical_operators() {
                         numeric_node_order(
                             &children_prunability,
                             binary_expr,
                             left_sort_expr,
                             right_sort_expr,
-                        )?;
-                } else if binary_expr.op().is_comparison_operator() {
-                    includes_filter = true;
-                    (self.graph[node].table_side, self.graph[node].sort_info) =
-                        comparison_node_order(&children_prunability, binary_expr.op())?;
-                } else if *binary_expr.op() == Operator::And {
-                    (self.graph[node].table_side, self.graph[node].sort_info) =
-                        logical_node_order(&children_prunability);
-                } else {
-                    return Err(DataFusionError::NotImplemented(format!(
+                        )?
+                    } else if binary_expr.op().is_comparison_operator() {
+                        includes_filter = true;
+                        comparison_node_order(&children_prunability, binary_expr.op())?
+                    } else if *binary_expr.op() == Operator::And {
+                        logical_node_order(&children_prunability)
+                    } else {
+                        return Err(DataFusionError::NotImplemented(format!(
                         "Prunability is not supported yet for the logical operator {}",
                         *binary_expr.op()
                     )));
-                }
+                    };
             }
         }
-        if includes_filter {
-            Ok((
+        Ok(if includes_filter {
+            (
                 self.graph[self.root].table_side,
                 self.graph[self.root].sort_info,
-            ))
+            )
         } else {
-            Ok((TableSide::None, self.graph[self.root].sort_info))
-        }
+            (TableSide::None, self.graph[self.root].sort_info)
+        })
     }
 
-    /// This function takes a node index, possibly there is a column at that node.
-    /// Then, it scans the PhysicalSortExpr's if there is a match with that column.
-    /// If a match is found, TableSide and SortInfo of the node is set accordingly.
+    /// This function takes the index of a leaf node, which may contain a column
+    /// or a literal. If it does contain a column, it scans the `PhysicalSortExpr`s
+    /// and checks if there is a match with that column. If so, `TableSide` and
+    /// `SortInfo` of the node is set accordingly.
     fn update_node_with_sort_information(
         &mut self,
         left_sort_expr: &Option<PhysicalSortExpr>,
         right_sort_expr: &Option<PhysicalSortExpr>,
         node: NodeIndex,
     ) {
-        if let Some(column) = &mut self.graph[node].expr.as_any().downcast_ref::<Column>()
-        {
+        let current = &mut self.graph[node];
+        if let Some(column) = current.expr.as_any().downcast_ref::<Column>() {
             for (table_side, sort_expr) in [
                 (TableSide::Left, left_sort_expr),
                 (TableSide::Right, right_sort_expr),
             ]
             .into_iter()
             {
-                // SortExpr's in the form of BinaryExpr is handled in intermediate nodes.
-                // We need only to check Column-wise SortExpr's.
+                // We handle non-column sort expressions in intermediate nodes.
+                // Thus, we need only to check column sort expressions:
                 if let Some(sort_expr) = sort_expr {
                     if let Some(sorted) = sort_expr.expr.as_any().downcast_ref::<Column>()
                     {
-                        if *column == sorted {
-                            self.graph[node].table_side = table_side;
-                            let dir = if sort_expr.options.descending {
+                        if column == sorted {
+                            current.table_side = table_side;
+                            current.sort_info.dir = if sort_expr.options.descending {
                                 Monotonicity::Desc
                             } else {
                                 Monotonicity::Asc
                             };
-                            self.graph[node].sort_info = SortInfo {
-                                dir,
-                                nulls_first: sort_expr.options.nulls_first,
-                                nulls_last: !sort_expr.options.nulls_first,
-                            };
+                            let nulls_first = sort_expr.options.nulls_first;
+                            current.sort_info.nulls_first = nulls_first;
+                            current.sort_info.nulls_last = !nulls_first;
                             break;
                         }
                     }
                 }
             }
         } else {
-            // If the leaf node is not a column, it must be a literal.
-            // Its table side is initialized as None, no need to change it.
-            self.graph[node].sort_info = SortInfo {
-                dir: Monotonicity::Singleton,
-                nulls_first: false,
-                nulls_last: false,
-            };
+            // If the leaf node is not a column, it must be a literal. Its
+            // table side is already initialized as None, no need to change it.
+            current.sort_info.dir = Monotonicity::Singleton;
+            current.sort_info.nulls_first = false;
+            current.sort_info.nulls_last = false;
         }
     }
 }
@@ -396,8 +378,8 @@ fn numeric_node_order(
     left_sort_expr: &Option<PhysicalSortExpr>,
     right_sort_expr: &Option<PhysicalSortExpr>,
 ) -> Result<(TableSide, SortInfo)> {
-    // There may be SortOptions for BinaryExpr's like (a + b) sorted.
-    // This part handles such expressions.
+    // There may be SortOptions for BinaryExpr's like a + b. We handle such
+    // situations here:
     for (table_side, sort_expr) in [
         (TableSide::Left, left_sort_expr),
         (TableSide::Right, right_sort_expr),
@@ -427,15 +409,14 @@ fn numeric_node_order(
             }
         }
     }
-    let (left, right) = (children[0], children[1]);
-    let from = get_tableside_at_numeric(&left.1.dir, &right.1.dir, left.0, right.0);
+    let ((left_ts, left_si), (right_ts, right_si)) = (children[0], children[1]);
+    let from = get_tableside_at_numeric(&left_si.dir, &right_si.dir, left_ts, right_ts);
     match binary_expr.op() {
-        Operator::Plus => Ok((from, left.1.add(right.1))),
-        Operator::Minus => Ok((from, left.1.sub(right.1))),
+        Operator::Plus => Ok((from, left_si.add(right_si))),
+        Operator::Minus => Ok((from, left_si.sub(right_si))),
         op => Err(DataFusionError::NotImplemented(format!(
             "Prunability is not supported yet for binary expressions having the {op} operator"
-                ),
-        ))
+        )))
     }
 }
 
@@ -443,15 +424,15 @@ fn comparison_node_order(
     children: &[(&TableSide, &SortInfo)],
     binary_expr_op: &Operator,
 ) -> Result<(TableSide, SortInfo)> {
-    let (left, right) = (children[0], children[1]);
+    let ((left_ts, left_si), (right_ts, right_si)) = (children[0], children[1]);
     match binary_expr_op {
         Operator::Gt | Operator::GtEq => Ok((
-            get_tableside_at_gt_or_gteq(&left.1.dir, &right.1.dir, left.0, right.0),
-            left.1.gt_or_gteq(right.1),
+            get_tableside_at_gt_or_gteq(&left_si.dir, &right_si.dir, left_ts, right_ts),
+            left_si.gt_or_gteq(right_si),
         )),
         Operator::Lt | Operator::LtEq => Ok((
-            get_tableside_at_gt_or_gteq(&right.1.dir, &left.1.dir, right.0, left.0),
-            right.1.gt_or_gteq(left.1),
+            get_tableside_at_gt_or_gteq(&right_si.dir, &left_si.dir, right_ts, left_ts),
+            right_si.gt_or_gteq(left_si),
         )),
         op => Err(DataFusionError::NotImplemented(format!(
             "Prunability is not supported yet for binary expressions having the {op} operator"
@@ -461,8 +442,11 @@ fn comparison_node_order(
 }
 
 fn logical_node_order(children: &[(&TableSide, &SortInfo)]) -> (TableSide, SortInfo) {
-    let (left, right) = (children[0], children[1]);
-    (get_tableside_at_and(left.0, right.0), left.1.and(right.1))
+    let ((left_ts, left_si), (right_ts, right_si)) = (children[0], children[1]);
+    (
+        get_tableside_at_and(left_ts, right_ts),
+        left_si.and(right_si),
+    )
 }
 
 #[cfg(test)]
