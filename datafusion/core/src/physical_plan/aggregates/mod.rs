@@ -376,7 +376,7 @@ fn get_finest_requirement<
                 *result = fn_reqs.clone();
                 continue;
             }
-            // If either of the requirements satisfy the other, this means
+            // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
             // conflicting requirements.
             return Err(DataFusionError::Plan(
