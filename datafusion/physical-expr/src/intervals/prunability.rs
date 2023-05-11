@@ -276,7 +276,7 @@ impl ExprPrunabilityGraph {
                 self.graph[node].table_side = TableSide::None;
                 self.graph[node].sort_info.dir = Monotonicity::Unordered;
                 // By convention, we initially set nulls_first and nulls_last to false.
-                self.graph[node].sort_info.nulls_first = true;
+                self.graph[node].sort_info.nulls_first = false;
                 self.graph[node].sort_info.nulls_last = false;
 
                 self.update_node_with_sort_information(
@@ -628,7 +628,7 @@ mod tests {
                 TableSide::Left,
                 SortInfo {
                     dir: Monotonicity::Unordered,
-                    nulls_first: true,
+                    nulls_first: false,
                     nulls_last: true
                 }
             ),

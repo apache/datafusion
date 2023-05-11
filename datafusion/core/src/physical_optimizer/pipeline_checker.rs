@@ -27,6 +27,7 @@ use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::intervals::prunability::{ExprPrunabilityGraph, TableSide};
 use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
 use std::sync::Arc;
 
@@ -162,14 +163,33 @@ pub fn check_finiteness_requirements(
 /// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
-    join.filter().map_or(false, |filter| {
-        check_support(filter.expression())
-            && filter
-                .schema()
-                .fields()
-                .iter()
-                .all(|f| is_datatype_supported(f.data_type()))
-    })
+    if let Some(filter) = join.filter() {
+        if let Ok(mut graph) =
+            ExprPrunabilityGraph::try_new((*filter.expression()).clone())
+        {
+            if let Some(left_sort_expr) = join.left().output_ordering() {
+                if let Some(right_sort_expr) = join.right().output_ordering() {
+                    let left_sort_expr = left_sort_expr.get(0).map(|s| (*s).clone());
+                    let right_sort_expr = right_sort_expr.get(0).map(|s| (*s).clone());
+                    if let Ok((table_side, _)) =
+                        graph.analyze_prunability(&left_sort_expr, &right_sort_expr)
+                    {
+                        if table_side == TableSide::Both {
+                            return join.filter().map_or(false, |filter| {
+                                check_support(filter.expression())
+                                    && filter
+                                        .schema()
+                                        .fields()
+                                        .iter()
+                                        .all(|f| is_datatype_supported(f.data_type()))
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
