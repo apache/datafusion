@@ -18,14 +18,13 @@
 //! Execution plan for reading Arrow files
 use crate::error::Result;
 use crate::physical_plan::file_format::{
-    AvroExec, FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
+    FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
 };
 use arrow_schema::SchemaRef;
-use bytes::Buf;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -146,12 +145,13 @@ pub struct ArrowOpener {
 impl FileOpener for ArrowOpener {
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let object_store = self.object_store.clone();
+        let projection = self.projection.clone();
         Ok(Box::pin(async move {
             match object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                         file,
-                        self.projection.clone(),
+                        projection,
                     )?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
@@ -160,7 +160,7 @@ impl FileOpener for ArrowOpener {
                     let cursor = std::io::Cursor::new(bytes);
                     let arrow_reader = arrow::ipc::reader::FileReader::try_new(
                         cursor,
-                        self.projection.clone(),
+                        projection,
                     )?;
                     Ok(futures::stream::iter(arrow_reader).boxed())
                 }
