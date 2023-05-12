@@ -97,7 +97,6 @@ pub mod select;
 pub mod timestamp;
 pub mod udf;
 
-pub mod explain;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
