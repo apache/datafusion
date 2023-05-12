@@ -244,7 +244,6 @@ config_namespace! {
         /// If true, reads the Parquet data page level metadata (the
         /// Page Index), if present, to reduce the I/O and number of
         /// rows decoded.
-        pub enable_page_index: bool, default = false
 
         /// If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
