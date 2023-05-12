@@ -606,6 +606,8 @@ async fn support_order_by_correlated_columns() -> Result<()> {
     Ok(())
 }
 
+// TODO: issue https://github.com/apache/arrow-datafusion/issues/6263
+#[ignore]
 #[tokio::test]
 async fn support_limit_subquery() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;

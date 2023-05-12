@@ -686,3 +686,51 @@ select "INT32" from case_sensitive_table;
 3
 4
 5
+
+# Columns in the table are a,b,c,d. Source is CsvExec which is ordered by
+# a,b,c column. Column a has cardinality 2, column b has cardinality 4.
+# Column c has cardinality 100 (unique entries). Column d has cardinality 5.
+statement ok
+CREATE EXTERNAL TABLE annotated_data_finite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION 'tests/data/window_2.csv';
+
+# test_source_projection
+
+
+#  Final plan shouldn't include SortExec.
+query TT
+EXPLAIN SELECT a FROM annotated_data_finite2
+        ORDER BY a
+        LIMIT 5
+----
+logical_plan
+Limit: skip=0, fetch=5
+  Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
+    TableScan: annotated_data_finite2 projection=[a]
+physical_plan
+GlobalLimitExec: skip=0, fetch=5
+  CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+
+query I
+SELECT a FROM annotated_data_finite2
+        ORDER BY a
+        LIMIT 5
+----
+0
+0
+0
+0
+0
+
+
+statement ok
+drop table annotated_data_finite2;
