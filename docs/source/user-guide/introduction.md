@@ -85,6 +85,7 @@ Here are some of the projects known to use DataFusion:
 - [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
+- [bdt](https://github.com/andygrove/bdt) Boring Data Tool
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
