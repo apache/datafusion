@@ -208,18 +208,6 @@ where
     }
 }
 
-// Bit and/Bit or/Bit xor aggregation can take Dictionary encode input but always produces unpacked
-// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
-// The reason bit and/bit or/bit xor aggregate produces unpacked output because there is only one
-// bit and/bit or/bit xor value per group; there is no needs to keep them Dictionary encode
-fn bit_and_or_xor_aggregate_data_type(input_type: DataType) -> DataType {
-    if let DataType::Dictionary(_, value_type) = input_type {
-        *value_type
-    } else {
-        input_type
-    }
-}
-
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
 macro_rules! typed_bit_and_or_xor_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident) => {{
@@ -242,7 +230,9 @@ macro_rules! bit_and_or_xor_batch {
             DataType::Int16 => {
                 typed_bit_and_or_xor_batch!($VALUES, Int16Array, Int16, $OP)
             }
-            DataType::Int8 => typed_bit_and_or_xor_batch!($VALUES, Int8Array, Int8, $OP),
+            DataType::Int8 => {
+                typed_bit_and_or_xor_batch!($VALUES, Int8Array, Int8, $OP)
+            }
             DataType::UInt64 => {
                 typed_bit_and_or_xor_batch!($VALUES, UInt64Array, UInt64, $OP)
             }
@@ -280,18 +270,6 @@ fn bit_xor_batch(values: &ArrayRef) -> Result<ScalarValue> {
 }
 
 // bit_and/bit_or/bit_xor of two scalar values.
-macro_rules! typed_bit_and_or_xor {
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
-        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(*a),
-            (None, Some(b)) => Some(*b),
-            (Some(a), Some(b)) => Some((*a).$OP(*b)),
-        })
-    }};
-}
-
-// bit_and/bit_or/bit_xor of two scalar values.
 macro_rules! typed_bit_and_or_xor_v2 {
     ($INDEX:ident, $ACC:ident, $SCALAR:expr, $TYPE:ident, $OP:ident) => {{
         paste::item! {
@@ -300,44 +278,6 @@ macro_rules! typed_bit_and_or_xor_v2 {
                 Some(v) => $ACC.[<$OP _ $TYPE>]($INDEX, *v as $TYPE)
             }
         }
-    }};
-}
-
-// bit_and/bit_or/bit_xor of two scalar values of the same type
-macro_rules! bit_and_or_xor {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
-        Ok(match ($VALUE, $DELTA) {
-            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, UInt64, $OP)
-            }
-            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, UInt32, $OP)
-            }
-            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, UInt16, $OP)
-            }
-            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, UInt8, $OP)
-            }
-            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, Int64, $OP)
-            }
-            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, Int32, $OP)
-            }
-            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, Int16, $OP)
-            }
-            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
-                typed_bit_and_or_xor!(lhs, rhs, Int8, $OP)
-            }
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "BIT AND/BIT OR/BIT XOR is not expected to receive scalars of incompatible types {:?}",
-                    e
-                )))
-            }
-        })
     }};
 }
 
@@ -381,11 +321,6 @@ macro_rules! bit_and_or_xor_v2 {
     }};
 }
 
-/// the bit_and of two scalar values
-pub fn compute_bit_and(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    bit_and_or_xor!(lhs, rhs, bitand)
-}
-
 pub fn bit_and_row(
     index: usize,
     accessor: &mut RowAccessor,
@@ -394,22 +329,12 @@ pub fn bit_and_row(
     bit_and_or_xor_v2!(index, accessor, s, bitand)
 }
 
-/// the bit_or of two scalar values
-pub fn compute_bit_or(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    bit_and_or_xor!(lhs, rhs, bitor)
-}
-
 pub fn bit_or_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
 ) -> Result<()> {
     bit_and_or_xor_v2!(index, accessor, s, bitor)
-}
-
-/// the bit_xor of two scalar values
-pub fn compute_bit_xor(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    bit_and_or_xor!(lhs, rhs, bitxor)
 }
 
 pub fn bit_xor_row(
@@ -439,7 +364,7 @@ impl BitAnd {
         Self {
             name: name.into(),
             expr,
-            data_type: bit_and_or_xor_aggregate_data_type(data_type),
+            data_type,
             nullable: true,
         }
     }
@@ -483,10 +408,6 @@ impl AggregateExpr for BitAnd {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -499,10 +420,6 @@ impl AggregateExpr for BitAnd {
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BitAndAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -538,7 +455,7 @@ impl Accumulator for BitAndAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &bit_and_batch(values)?;
-        self.bit_and = compute_bit_and(&self.bit_and, delta)?;
+        self.bit_and = self.bit_and.bitand(delta)?;
         Ok(())
     }
 
@@ -637,7 +554,7 @@ impl BitOr {
         Self {
             name: name.into(),
             expr,
-            data_type: bit_and_or_xor_aggregate_data_type(data_type),
+            data_type,
             nullable: true,
         }
     }
@@ -681,10 +598,6 @@ impl AggregateExpr for BitOr {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -697,10 +610,6 @@ impl AggregateExpr for BitOr {
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BitOrAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -740,7 +649,7 @@ impl Accumulator for BitOrAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &bit_or_batch(values)?;
-        self.bit_or = compute_bit_or(&self.bit_or, delta)?;
+        self.bit_or = self.bit_or.bitor(delta)?;
         Ok(())
     }
 
@@ -880,10 +789,6 @@ impl AggregateExpr for BitXor {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -896,10 +801,6 @@ impl AggregateExpr for BitXor {
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
-    }
-
-    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(BitXorAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -938,8 +839,8 @@ impl Accumulator for BitXorAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        let delta = bit_xor_batch(values)?;
-        self.bit_xor = compute_bit_xor(&self.bit_xor, &delta)?;
+        let delta = &bit_xor_batch(values)?;
+        self.bit_xor = self.bit_xor.bitxor(delta)?;
         Ok(())
     }
 

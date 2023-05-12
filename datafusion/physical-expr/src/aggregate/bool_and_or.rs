@@ -37,8 +37,6 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use datafusion_row::accessor::RowAccessor;
-use std::ops::BitAnd as BitAndImplementation;
-use std::ops::BitOr as BitOrImplementation;
 
 fn bool_and(array: &BooleanArray) -> Option<bool> {
     if array.null_count() == array.len() {
@@ -52,18 +50,6 @@ fn bool_or(array: &BooleanArray) -> Option<bool> {
         return None;
     }
     Some(array.true_count() != 0)
-}
-
-// Bool and/Bool or aggregation can take Dictionary encode input but always produces unpacked
-// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
-// The reason bool and/bool or aggregate produces unpacked output because there is only one
-// bool and/bool or value per group; there is no needs to keep them Dictionary encode
-fn bool_and_or_aggregate_data_type(input_type: DataType) -> DataType {
-    if let DataType::Dictionary(_, value_type) = input_type {
-        *value_type
-    } else {
-        input_type
-    }
 }
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
@@ -102,18 +88,6 @@ fn bool_or_batch(values: &ArrayRef) -> Result<ScalarValue> {
 }
 
 // bool_and/bool_or of two scalar values.
-macro_rules! typed_bool_and_or {
-    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident) => {{
-        ScalarValue::$SCALAR(match ($VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(*a),
-            (None, Some(b)) => Some(*b),
-            (Some(a), Some(b)) => Some((*a).$OP(*b)),
-        })
-    }};
-}
-
-// bool_and/bool_or of two scalar values.
 macro_rules! typed_bool_and_or_v2 {
     ($INDEX:ident, $ACC:ident, $SCALAR:expr, $TYPE:ident, $OP:ident) => {{
         paste::item! {
@@ -122,23 +96,6 @@ macro_rules! typed_bool_and_or_v2 {
                 Some(v) => $ACC.[<$OP _ $TYPE>]($INDEX, *v as $TYPE)
             }
         }
-    }};
-}
-
-// bool_and/bool_or of two scalar values of the same type
-macro_rules! bool_and_or {
-    ($VALUE:expr, $DELTA:expr, $OP:ident) => {{
-        Ok(match ($VALUE, $DELTA) {
-            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
-                typed_bool_and_or!(lhs, rhs, Boolean, $OP)
-            }
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "BOOL AND/BOOL OR is not expected to receive scalars of incompatible types {:?}",
-                    e
-                )))
-            }
-        })
     }};
 }
 
@@ -161,22 +118,12 @@ macro_rules! bool_and_or_v2 {
     }};
 }
 
-/// the bool_and of two scalar values
-pub fn booland(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    bool_and_or!(lhs, rhs, bitand)
-}
-
 pub fn bool_and_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
 ) -> Result<()> {
     bool_and_or_v2!(index, accessor, s, bitand)
-}
-
-/// the bool_or of two scalar values
-pub fn boolor(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    bool_and_or!(lhs, rhs, bitor)
 }
 
 pub fn bool_or_row(
@@ -206,7 +153,7 @@ impl BoolAnd {
         Self {
             name: name.into(),
             expr,
-            data_type: bool_and_or_aggregate_data_type(data_type),
+            data_type,
             nullable: true,
         }
     }
@@ -248,10 +195,6 @@ impl AggregateExpr for BoolAnd {
 
     fn row_accumulator_supported(&self) -> bool {
         is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn create_row_accumulator(
@@ -305,7 +248,7 @@ impl Accumulator for BoolAndAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &bool_and_batch(values)?;
-        self.bool_and = booland(&self.bool_and, delta)?;
+        self.bool_and = self.bool_and.and(delta)?;
         Ok(())
     }
 
@@ -404,7 +347,7 @@ impl BoolOr {
         Self {
             name: name.into(),
             expr,
-            data_type: bool_and_or_aggregate_data_type(data_type),
+            data_type,
             nullable: true,
         }
     }
@@ -446,10 +389,6 @@ impl AggregateExpr for BoolOr {
 
     fn row_accumulator_supported(&self) -> bool {
         is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn create_row_accumulator(
@@ -507,7 +446,7 @@ impl Accumulator for BoolOrAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = bool_or_batch(values)?;
-        self.bool_or = boolor(&self.bool_or, &delta)?;
+        self.bool_or = self.bool_or.or(&delta)?;
         Ok(())
     }
 
