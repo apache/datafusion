@@ -409,31 +409,23 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .filter_expr
                     .iter()
                     .map(|expr| {
-                        let x = expr
-                            .expr
+                        expr.expr
                             .as_ref()
-                            .map(|e| parse_physical_expr(e, registry, &physical_schema));
-                        x.transpose()
+                            .map(|e| parse_physical_expr(e, registry, &physical_schema))
+                            .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let physical_order_by_expr = hash_agg
                     .order_by_expr
                     .iter()
                     .map(|expr| {
-                        let x = expr
-                            .sort_expr
+                        expr.sort_expr
                             .iter()
                             .map(|e| {
                                 parse_physical_sort_expr(e, registry, &physical_schema)
                             })
-                            .collect::<Result<Vec<_>>>();
-                        match x {
-                            Ok(exprs) => {
-                                // Convert empty vec to None.
-                                Ok((!exprs.is_empty()).then_some(exprs))
-                            }
-                            Err(e) => Err(e),
-                        }
+                            .collect::<Result<Vec<_>>>()
+                            .map(|exprs| (!exprs.is_empty()).then_some(exprs))
                     })
                     .collect::<Result<Vec<_>>>()?;
 

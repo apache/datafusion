@@ -124,10 +124,10 @@ sum(expression)
 
 ### `array_agg`
 
-Returns an array created from the expression elements.
+Returns an array created from the expression elements. If ordering requirement is given, elements are inserted in the order of required ordering.
 
 ```
-array_agg(expression)
+array_agg(expression [ORDER BY expression])
 ```
 
 #### Arguments

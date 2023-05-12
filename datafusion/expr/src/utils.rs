@@ -268,12 +268,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     inspect_expr_pre(expr, |expr| {
         match expr {
             Expr::Column(qc) => {
-                // Insert if not already inserted
-                if !accum.contains(qc) {
-                    accum.insert(qc.clone())
-                } else {
-                    false
-                };
+                accum.insert(qc.clone());
             }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds

@@ -334,7 +334,7 @@ impl TreeNode for Expr {
                     fun,
                     transform_vec(args, &mut transform)?,
                     transform_option_box(filter, &mut transform)?,
-                    order_by,
+                    transform_option_vec(order_by, &mut transform)?,
                 ))
             }
             Expr::InList(InList {
@@ -387,6 +387,7 @@ where
         .transpose()
 }
 
+/// &mut transform a Option<`Vec` of `Expr`s>
 fn transform_option_vec<F>(
     option_box: Option<Vec<Expr>>,
     transform: &mut F,
