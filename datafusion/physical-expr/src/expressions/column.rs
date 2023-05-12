@@ -60,11 +60,6 @@ impl Column {
     pub fn index(&self) -> usize {
         self.index
     }
-
-    // Set the column index
-    pub fn set_index(&mut self, index: usize) {
-        self.index = index;
-    }
 }
 
 impl std::fmt::Display for Column {
