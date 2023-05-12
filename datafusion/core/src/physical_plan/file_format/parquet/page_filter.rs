@@ -145,8 +145,8 @@ impl PagePruningPredicate {
             return Ok(None);
         }
 
-        let file_offset_indexes = file_metadata.offset_indexes();
-        let file_page_indexes = file_metadata.page_indexes();
+        let file_offset_indexes = file_metadata.offset_index();
+        let file_page_indexes = file_metadata.column_index();
         let (file_offset_indexes, file_page_indexes) =
             match (file_offset_indexes, file_page_indexes) {
                 (Some(o), Some(i)) => (o, i),
@@ -221,6 +221,11 @@ impl PagePruningPredicate {
             );
         file_metrics.page_index_rows_filtered.add(total_skip);
         Ok(Some(final_selection))
+    }
+
+    /// Returns the number of filters in the [`PagePruningPredicate`]
+    pub fn filter_number(&self) -> usize {
+        self.predicates.len()
     }
 }
 
