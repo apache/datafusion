@@ -910,6 +910,7 @@ mod tests {
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::repartition::RepartitionExec;
+    use crate::physical_plan::repartition::sort_preserving_repartition::SortPreservingRepartitionExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::windows::create_window_expr;
@@ -1952,6 +1953,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sort_preserved_repartition_HR() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let source1 = parquet_exec(&schema);
+        let sort_exprs1 = vec![sort_expr("nullable_col", &schema)];
+        let sort1 = sort_exec(sort_exprs1, source1.clone());
+        let sort_exprs2 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let repartition = repartition_exec(sort1);
+        let repartition_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let preserving_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let spr = sort_preserving_repartition_exec(repartition_sort_exprs, repartition);
+        let physical_plan = sort_preserving_merge_exec(preserving_sort_exprs, spr);
+
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "    SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"nullable_col\", index: 0 }], 2), input_partitions=2",
+            "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "        SortExec: expr=[nullable_col@0 ASC]",
+            "           ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "   RepartitionExec: partitioning=Hash([Column { name: \"nullable_col\", index: 0 }], 2), input_partitions=2",
+            "    SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
+            "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "        SortExec: expr=[nullable_col@0 ASC]",
+            "           ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_preserved_repartition_RR() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let source1 = parquet_exec(&schema);
+        let sort_exprs1 = vec![sort_expr("nullable_col", &schema)];
+        let sort1 = sort_exec(sort_exprs1, source1.clone());
+        let sort_exprs2 = vec![
+            sort_expr("nullable_col", &schema),
+            sort_expr("non_nullable_col", &schema),
+        ];
+        let repartition = repartition_exec(sort1);
+        let repartition_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let preserving_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let spr = sort_preserving_repartition_exec(repartition_sort_exprs, repartition);
+        let physical_plan = sort_preserving_merge_exec(preserving_sort_exprs, spr);
+
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "    SortPreservingRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        SortExec: expr=[nullable_col@0 ASC]",
+            "           ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "   RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
+            "    SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        SortExec: expr=[nullable_col@0 ASC]",
+            "           ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_window_multi_path_sort() -> Result<()> {
         let schema = create_test_schema()?;
 
@@ -2607,6 +2682,12 @@ mod tests {
     fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         Arc::new(
             RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap(),
+        )
+    }
+
+    fn sort_preserving_repartition_exec(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            SortPreservingRepartitionExec::new(expr, input, Partitioning::RoundRobinBatch(10)).unwrap(),
         )
     }
 

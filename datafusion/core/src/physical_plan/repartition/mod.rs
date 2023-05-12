@@ -50,16 +50,17 @@ use hashbrown::HashMap;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
-mod distributor_channels;
+pub(crate) mod distributor_channels;
+pub(crate) mod sort_preserving_repartition;
 
 type MaybeBatch = Option<Result<RecordBatch>>;
 
 /// Inner state of [`RepartitionExec`].
 #[derive(Debug)]
-struct RepartitionExecState {
+pub(crate) struct RepartitionExecState {
     /// Channels for sending batches from input partitions to output partitions.
     /// Key is the partition number.
-    channels: HashMap<
+    pub(crate) channels: HashMap<
         usize,
         (
             DistributionSender<MaybeBatch>,
@@ -69,7 +70,7 @@ struct RepartitionExecState {
     >,
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<AbortOnDropMany<()>>,
+    pub(crate) abort_helper: Arc<AbortOnDropMany<()>>,
 }
 
 /// A utility that can be used to partition batches based on [`Partitioning`]
@@ -144,7 +145,7 @@ impl BatchPartitioner {
     /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
     /// and one that works w/ async. Using an iterator as an intermediate representation was the best way to achieve
     /// this (so we don't need to clone the entire implementation).
-    fn partition_iter(
+    pub(crate) fn partition_iter(
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
@@ -240,13 +241,13 @@ pub struct RepartitionExec {
 }
 
 #[derive(Debug, Clone)]
-struct RepartitionMetrics {
+pub(crate) struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches
-    fetch_time: metrics::Time,
+    pub(crate) fetch_time: metrics::Time,
     /// Time in nanos to perform repartitioning
-    repart_time: metrics::Time,
+    pub(crate) repart_time: metrics::Time,
     /// Time in nanos for sending resulting batches to channels
-    send_time: metrics::Time,
+    pub(crate) send_time: metrics::Time,
 }
 
 impl RepartitionMetrics {
@@ -585,25 +586,25 @@ impl RepartitionExec {
     }
 }
 
-struct RepartitionStream {
+pub(crate) struct RepartitionStream {
     /// Number of input partitions that will be sending batches to this output channel
-    num_input_partitions: usize,
+    pub(crate) num_input_partitions: usize,
 
     /// Number of input partitions that have finished sending batches to this output channel
-    num_input_partitions_processed: usize,
+    pub(crate) num_input_partitions_processed: usize,
 
     /// Schema wrapped by Arc
-    schema: SchemaRef,
+    pub(crate) schema: SchemaRef,
 
     /// channel containing the repartitioned batches
-    input: DistributionReceiver<MaybeBatch>,
+    pub(crate) input: DistributionReceiver<MaybeBatch>,
 
     /// Handle to ensure background tasks are killed when no longer needed.
     #[allow(dead_code)]
-    drop_helper: Arc<AbortOnDropMany<()>>,
+    pub(crate) drop_helper: Arc<AbortOnDropMany<()>>,
 
     /// Memory reservation.
-    reservation: SharedMemoryReservation,
+    pub(crate) reservation: SharedMemoryReservation,
 }
 
 impl Stream for RepartitionStream {
