@@ -275,14 +275,13 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 } else if let Value::Array(n) = value {
                     n.iter()
                         .map(resolve_string)
-                        .collect::<ArrowResult<Vec<String>>>()?
+                        .collect::<ArrowResult<Vec<Option<String>>>>()?
                         .into_iter()
-                        .map(Some)
                         .collect::<Vec<Option<String>>>()
                 } else if let Value::Null = value {
                     vec![None]
                 } else if !matches!(value, Value::Record(_)) {
-                    vec![Some(resolve_string(value)?)]
+                    vec![resolve_string(value)?]
                 } else {
                     return Err(SchemaError(
                         "Only scalars are currently supported in Avro arrays".to_string(),
@@ -351,7 +350,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
             self.build_string_dictionary_builder(rows.len());
         for row in rows {
             if let Some(value) = self.field_lookup(col_name, row) {
-                if let Ok(str_v) = resolve_string(value) {
+                if let Ok(Some(str_v)) = resolve_string(value) {
                     builder.append(str_v).map(drop)?
                 } else {
                     builder.append_null()
@@ -689,7 +688,10 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                         rows.iter()
                             .map(|row| {
                                 let maybe_value = self.field_lookup(field.name(), row);
-                                maybe_value.map(resolve_string).transpose()
+                                match maybe_value {
+                                    None => Ok(None),
+                                    Some(v) => resolve_string(v),
+                                }
                             })
                             .collect::<ArrowResult<StringArray>>()?,
                     )
@@ -841,12 +843,12 @@ fn flatten_string_values(values: &[&Value]) -> Vec<Option<String>> {
             if let Value::Array(values) = row {
                 values
                     .iter()
-                    .map(|s| resolve_string(s).ok())
+                    .map(|s| resolve_string(s).ok().flatten())
                     .collect::<Vec<Option<_>>>()
             } else if let Value::Null = row {
                 vec![]
             } else {
-                vec![resolve_string(row).ok()]
+                vec![resolve_string(row).ok().flatten()]
             }
         })
         .collect::<Vec<Option<_>>>()
@@ -855,13 +857,14 @@ fn flatten_string_values(values: &[&Value]) -> Vec<Option<String>> {
 /// Reads an Avro value as a string, regardless of its type.
 /// This is useful if the expected datatype is a string, in which case we preserve
 /// all the values regardless of they type.
-fn resolve_string(v: &Value) -> ArrowResult<String> {
+fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     let v = if let Value::Union(_, b) = v { b } else { v };
     match v {
-        Value::String(s) => Ok(s.clone()),
-        Value::Bytes(bytes) => {
-            String::from_utf8(bytes.to_vec()).map_err(AvroError::ConvertToUtf8)
-        }
+        Value::String(s) => Ok(Some(s.clone())),
+        Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
+            .map_err(AvroError::ConvertToUtf8)
+            .map(Some),
+        Value::Null => Ok(None),
         other => Err(AvroError::GetString(other.into())),
     }
     .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))

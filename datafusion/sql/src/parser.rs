@@ -434,16 +434,16 @@ impl<'a> DFParser<'a> {
             } else if self.parser.parse_keyword(Keyword::LOCATION) {
                 ensure_not_set(&builder.location, "LOCATION")?;
                 builder.location = Some(self.parser.parse_literal_string()?);
-            } else if self
-                .parser
-                .parse_keywords(&[Keyword::WITH, Keyword::HEADER])
-            {
-                self.parser.expect_keyword(Keyword::ROW)?;
-                ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
-                builder.has_header = Some(true);
-            } else if self.parser.parse_keywords(&[Keyword::WITH, Keyword::ORDER]) {
-                ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
-                builder.order_exprs = Some(self.parse_order_by_exprs()?);
+            } else if self.parser.parse_keyword(Keyword::WITH) {
+                if self.parser.parse_keyword(Keyword::ORDER) {
+                    ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
+                    builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                } else {
+                    self.parser.expect_keyword(Keyword::HEADER)?;
+                    self.parser.expect_keyword(Keyword::ROW)?;
+                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                    builder.has_header = Some(true);
+                }
             } else if self.parser.parse_keyword(Keyword::DELIMITER) {
                 ensure_not_set(&builder.delimiter, "DELIMITER")?;
                 builder.delimiter = Some(self.parse_delimiter()?);

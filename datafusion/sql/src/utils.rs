@@ -23,7 +23,8 @@ use sqlparser::ast::Ident;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, ScalarFunction, ScalarUDF, WindowFunction,
+    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF,
+    WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -413,10 +414,9 @@ where
                     )))
                 }
             },
-            Expr::Placeholder { id, data_type } => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: data_type.clone(),
-            }),
+            Expr::Placeholder(Placeholder { id, data_type }) => Ok(Expr::Placeholder(
+                Placeholder::new(id.clone(), data_type.clone()),
+            )),
         },
     }
 }

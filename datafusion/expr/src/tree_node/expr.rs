@@ -19,8 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, ScalarFunction, ScalarUDF, Sort, TryCast,
-    WindowFunction,
+    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -67,7 +67,7 @@ impl TreeNode for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder { .. } => vec![],
+            | Expr::Placeholder (_) => vec![],
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 vec![left.as_ref().clone(), right.as_ref().clone()]
             }
@@ -340,7 +340,9 @@ impl TreeNode for Expr {
                     key,
                 ))
             }
-            Expr::Placeholder { id, data_type } => Expr::Placeholder { id, data_type },
+            Expr::Placeholder(Placeholder { id, data_type }) => {
+                Expr::Placeholder(Placeholder { id, data_type })
+            }
         })
     }
 }

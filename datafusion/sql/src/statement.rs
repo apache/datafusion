@@ -48,6 +48,7 @@ use sqlparser::ast::{
     TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
+use datafusion_expr::expr::Placeholder;
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -902,16 +903,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         for (col_name, expr) in values.into_iter() {
             let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
             let expr = match expr {
-                datafusion_expr::Expr::Placeholder {
+                datafusion_expr::Expr::Placeholder(Placeholder {
                     ref id,
                     ref data_type,
-                } => match data_type {
+                }) => match data_type {
                     None => {
                         let dt = table_schema.data_type(&Column::from_name(&col_name))?;
-                        datafusion_expr::Expr::Placeholder {
-                            id: id.clone(),
-                            data_type: Some(dt.clone()),
-                        }
+                        datafusion_expr::Expr::Placeholder(Placeholder::new(
+                            id.clone(),
+                            Some(dt.clone()),
+                        ))
                     }
                     Some(_) => expr,
                 },

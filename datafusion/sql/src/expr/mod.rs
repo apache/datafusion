@@ -30,8 +30,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -500,7 +500,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 // modifies expr if it is a placeholder with datatype of right
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder { id: _, data_type } = expr {
+    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
         if data_type.is_none() {
             let other_dt = other.get_type(schema);
             match other_dt {
