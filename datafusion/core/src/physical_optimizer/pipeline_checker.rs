@@ -22,7 +22,7 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::joins::utils::JoinFilter;
+use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use arrow_schema::Fields;
@@ -217,12 +217,12 @@ fn get_sort_expr_in_filter_schema(
     let left_sort_expr = left_sort_exprs.get(0).map(|s| (*s).clone());
     let right_sort_expr = right_sort_exprs.get(0).map(|s| (*s).clone());
     let left_sorted_column_index_in_filter =
-        match find_left_index_in_filter(filter.schema().fields(), &left_sort_expr) {
+        match find_index_in_filter(filter, &left_sort_expr, JoinSide::Left) {
             Some(index) => index,
             None => return None,
         };
     let right_sorted_column_index_in_filter =
-        match find_right_index_in_filter(filter.schema().fields(), &right_sort_expr) {
+        match find_index_in_filter(filter, &right_sort_expr, JoinSide::Right) {
             Some(index) => index,
             None => return None,
         };
@@ -265,30 +265,22 @@ fn get_sort_expr_in_filter_schema(
     Some((new_left_sort, new_right_sort))
 }
 
-fn find_right_index_in_filter(
-    fields: &Fields,
-    right_sort_expr: &Option<PhysicalSortExpr>,
-) -> Option<usize> {
-    for (i, field) in fields.iter().rev().enumerate() {
-        if let Some(physical_sort) = right_sort_expr {
-            if let Some(column) = physical_sort.expr.as_any().downcast_ref::<Column>() {
-                if column.name() == field.name() {
-                    return Some(i);
-                }
-            }
-        }
-    }
-    None
-}
-fn find_left_index_in_filter(
-    fields: &Fields,
+fn find_index_in_filter(
+    join_filter: &JoinFilter,
     left_sort_expr: &Option<PhysicalSortExpr>,
+    join_side: JoinSide,
 ) -> Option<usize> {
-    for (i, field) in fields.iter().enumerate() {
+    for (i, (field, column_index)) in join_filter
+        .schema()
+        .fields()
+        .iter()
+        .zip(join_filter.column_indices())
+        .enumerate()
+    {
         if let Some(physical_sort) = left_sort_expr {
             if let Some(column) = physical_sort.expr.as_any().downcast_ref::<Column>() {
-                if column.name() == field.name() {
-                    return Some(fields.len() - 1 - i);
+                if column.name() == field.name() && column_index.side == join_side {
+                    return Some(i);
                 }
             }
         }
