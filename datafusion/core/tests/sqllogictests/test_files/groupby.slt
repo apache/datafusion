@@ -2008,9 +2008,6 @@ SELECT a, d,
 1 4 913
 1 2 848
 
-statement ok
-set datafusion.optimizer.skip_failed_rules = true;
-
 # test_source_sorted_groupby3
 
 query TT
@@ -2019,13 +2016,13 @@ EXPLAIN SELECT a, b, FIRST(c ORDER BY a DESC) as first_c
   GROUP BY a, b
 ----
 logical_plan
-Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, FIRST(annotated_data_infinite2.c) ORDER BY [a DESC NULLS FIRST] AS first_c
-  Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[FIRST(annotated_data_infinite2.c) ORDER BY [a DESC NULLS FIRST]]]
-    TableScan: annotated_data_infinite2
+Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, FIRST(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST] AS first_c
+  Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[FIRST(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]]]
+    TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
-ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST(annotated_data_infinite2.c) ORDER BY [a DESC NULLS FIRST]@2 as first_c]
-  AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[FIRST(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
-    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+ProjectionExec: expr=[a@0 as a, b@1 as b, FIRST(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as first_c]
+  AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[FIRST(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
 SELECT a, b, FIRST(c ORDER BY a DESC) as first_c
@@ -2045,13 +2042,13 @@ EXPLAIN SELECT a, b, LAST(c ORDER BY a DESC) as last_c
   GROUP BY a, b
 ----
 logical_plan
-Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST(annotated_data_infinite2.c) ORDER BY [a DESC NULLS FIRST] AS last_c
-  Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[LAST(annotated_data_infinite2.c) ORDER BY [a DESC NULLS FIRST]]]
-    TableScan: annotated_data_infinite2
+Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, LAST(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST] AS last_c
+  Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[LAST(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]]]
+    TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
-ProjectionExec: expr=[a@0 as a, b@1 as b, LAST(annotated_data_infinite2.c) ORDER BY [a DESC NULLS FIRST]@2 as last_c]
-  AggregateExec: mode=Single, gby=[a@1 as a, b@2 as b], aggr=[LAST(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
-    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], infinite_source=true, output_ordering=[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], has_header=true
+ProjectionExec: expr=[a@0 as a, b@1 as b, LAST(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]@2 as last_c]
+  AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[LAST(annotated_data_infinite2.c)], ordering_mode=FullyOrdered
+    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
 SELECT a, b, LAST(c ORDER BY a DESC) as last_c
