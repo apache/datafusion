@@ -192,6 +192,7 @@ SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name
 88 NULL NULL
 
 # left_join_null_filter_on_join_column
+#    // Again, since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
 query IIT nosort
 SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NULL ORDER BY t1_id
 ----
