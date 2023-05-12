@@ -80,6 +80,8 @@ CREATE TABLE b(a INT, b INT, c INT) AS VALUES
 (4, 400, 800)
 
 # issue_3002
+#    // repro case for https://github.com/apache/arrow-datafusion/issues/3002
+
 query II
 select a.a, b.b from a join b on a.a = b.b
 ----
