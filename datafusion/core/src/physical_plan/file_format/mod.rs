@@ -57,7 +57,7 @@ use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
-use file_stream::FileSinkState;
+use file_stream::FileSinkStream;
 use futures::StreamExt;
 use log::{debug, info, warn};
 use object_store::path::Path;
@@ -293,7 +293,7 @@ pub fn build_file_sink_stream<
     S: BatchSerializer + 'static,
     O: FileWriterFactory + 'static,
 >(
-    state: FileSinkState<S, O>,
+    state: FileSinkStream<S, O>,
 ) -> Result<SendableRecordBatchStream> {
     let schema = state.schema.clone();
     let stream = futures::stream::unfold(state, |mut this| async move {

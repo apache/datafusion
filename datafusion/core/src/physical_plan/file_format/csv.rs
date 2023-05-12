@@ -22,7 +22,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
-    FileOpenFuture, FileOpener, FileSinkState, FileSinkStreamMetrics, FileStream,
+    FileOpenFuture, FileOpener, FileSinkStream, FileSinkStreamMetrics, FileStream,
     FileWriterFactory,
 };
 use crate::physical_plan::file_format::{
@@ -373,24 +373,26 @@ impl FileWriterFactory for CsvWriterOpener {
                     object.clone(),
                     self.object_store.clone(),
                 ));
-                let converted =
-                    self.file_compression_type.convert_async_writer(writer)?;
-                let sa = Box::new(AsyncPut::new(converted));
-                Ok(sa)
+                let writer = Box::new(AsyncPut::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                )) as Box<dyn FileWriterExt>;
+                Ok(writer)
             }
             // If the mode is put multipart, call the store's put_multipart method and
             // return the writer wrapped in a ready poll or return an error wrapped
             // in a custom error type if it fails
             FileWriterMode::PutMultipart => {
-                match self.object_store.put_multipart(&object.location).await {
-                    Ok((multipart_id, writer)) => Ok(Box::new(AsyncPutMultipart::new(
-                        self.file_compression_type.convert_async_writer(writer)?,
-                        self.object_store.clone(),
-                        multipart_id,
-                        object.location.clone(),
-                    ))),
-                    Err(e) => Err(DataFusionError::ObjectStore(e)),
-                }
+                let (multipart_id, writer) = self
+                    .object_store
+                    .put_multipart(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                Ok(Box::new(AsyncPutMultipart::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                    self.object_store.clone(),
+                    multipart_id,
+                    object.location.clone(),
+                )))
             }
         }
     }
@@ -557,7 +559,7 @@ impl ExecutionPlan for CsvWriterExec {
         let metrics = ExecutionPlanMetricsSet::new();
         let input = self.input.execute(partition, context)?;
 
-        let state = FileSinkState {
+        let state = FileSinkStream {
             input,
             serializer,
             opener,

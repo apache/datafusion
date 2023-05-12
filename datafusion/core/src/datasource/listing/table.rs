@@ -768,7 +768,8 @@ impl TableProvider for ListingTable {
         // Check that the schema of the plan matches the schema of this table.
         if !input.schema().eq(&self.schema()) {
             return Err(DataFusionError::Plan(
-                "Inserting query must have the same schema with the table.".to_string(), // Return an error if schema of the input query does not match with the table schema.
+                // Return an error if schema of the input query does not match with the table schema.
+                "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
 

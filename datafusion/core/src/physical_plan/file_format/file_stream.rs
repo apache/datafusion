@@ -429,7 +429,7 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 }
 
 /// `FileSinkStream` struct handles writing record batches to a file-like output.
-pub struct FileSinkState<S: BatchSerializer, O: FileWriterFactory> {
+pub struct FileSinkStream<S: BatchSerializer, O: FileWriterFactory> {
     /// Input stream providing record batches to be written
     pub(crate) input: SendableRecordBatchStream,
     /// Serializer responsible for converting record batches into a suitable file format
@@ -443,7 +443,7 @@ pub struct FileSinkState<S: BatchSerializer, O: FileWriterFactory> {
     pub(crate) file: PartitionedFile,
 }
 
-impl<S: BatchSerializer, O: FileWriterFactory> FileSinkState<S, O> {
+impl<S: BatchSerializer, O: FileWriterFactory> FileSinkStream<S, O> {
     pub fn new(
         config: &FileSinkConfig,
         partition: usize,
@@ -710,7 +710,7 @@ mod tests {
         };
         let metrics = ExecutionPlanMetricsSet::new();
 
-        let state = FileSinkState {
+        let state = FileSinkStream {
             input,
             serializer: TestSerializer {
                 bytes: Bytes::from(vec![0; batch_serialize_size]),

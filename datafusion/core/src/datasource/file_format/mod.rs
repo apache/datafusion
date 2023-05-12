@@ -125,7 +125,7 @@ pub struct AsyncPutWriter {
 }
 
 impl AsyncPutWriter {
-    /// Define a constructor for the AsyncPut struct
+    /// Define a constructor for the `AsyncPutWriter` struct
     pub fn new(object_meta: ObjectMeta, store: Arc<dyn ObjectStore>) -> Self {
         Self {
             object_meta,
@@ -136,7 +136,7 @@ impl AsyncPutWriter {
         }
     }
 
-    /// Separate implementation function that unpins the [`AsyncPut`] so
+    /// Separate implementation function that unpins the [`AsyncPutWriter`] so
     /// that partial borrows work correctly
     fn poll_shutdown_inner(
         &mut self,
@@ -177,7 +177,7 @@ enum AsyncPutState {
 }
 
 impl AsyncWrite for AsyncPutWriter {
-    // Define the implementation of the AsyncWrite trait for the AsyncPut struct
+    // Define the implementation of the AsyncWrite trait for the `AsyncPutWriter` struct
     fn poll_write(
         mut self: Pin<&mut Self>,
         _: &mut Context<'_>,
