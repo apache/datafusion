@@ -47,166 +47,96 @@ use std::ops::BitAnd as BitAndImplementation;
 use std::ops::BitOr as BitOrImplementation;
 use std::ops::BitXor as BitXorImplementation;
 
-fn bit_and<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: BitAndImplementation<Output = T::Native> + ArrowNativeTypeOp,
-{
-    let null_count = array.null_count();
+// TODO: remove this macro rules after implementation in arrow-rs
+// https://github.com/apache/arrow-rs/pull/4210
+macro_rules! bit_operation {
+    ($NAME:ident, $OP:ident, $NATIVE:ident, $DEFAULT:expr, $DOC:expr) => {
+        #[doc = $DOC]
+        ///
+        /// Returns `None` if the array is empty or only contains null values.
+        fn $NAME<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
+        where
+            T: ArrowNumericType,
+            T::Native: $NATIVE<Output = T::Native> + ArrowNativeTypeOp,
+        {
+            let default;
+            if $DEFAULT == -1 {
+                default = T::Native::ONE.neg_wrapping();
+            } else {
+                default = T::default_value();
+            }
 
-    if null_count == array.len() {
-        return None;
-    }
+            let null_count = array.null_count();
 
-    let data: &[T::Native] = array.values();
+            if null_count == array.len() {
+                return None;
+            }
 
-    match array.nulls() {
-        None => {
-            let bit_and = data
-                .iter()
-                .fold(T::Native::ONE.neg_wrapping(), |accumulator, value| {
-                    accumulator & *value
-                });
+            let data: &[T::Native] = array.values();
 
-            Some(bit_and)
-        }
-        Some(nulls) => {
-            let mut bit_and = T::Native::ONE.neg_wrapping();
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
+            match array.nulls() {
+                None => {
+                    let result = data
+                        .iter()
+                        .fold(default, |accumulator, value| accumulator.$OP(*value));
 
-            let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            bit_and = bit_and & *value;
-                        }
-                        index_mask <<= 1;
-                    });
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    bit_and = bit_and & *value;
+                    Some(result)
                 }
-            });
+                Some(nulls) => {
+                    let mut result = default;
+                    let data_chunks = data.chunks_exact(64);
+                    let remainder = data_chunks.remainder();
 
-            Some(bit_and)
+                    let bit_chunks = nulls.inner().bit_chunks();
+                    data_chunks
+                        .zip(bit_chunks.iter())
+                        .for_each(|(chunk, mask)| {
+                            // index_mask has value 1 << i in the loop
+                            let mut index_mask = 1;
+                            chunk.iter().for_each(|value| {
+                                if (mask & index_mask) != 0 {
+                                    result = result.$OP(*value);
+                                }
+                                index_mask <<= 1;
+                            });
+                        });
+
+                    let remainder_bits = bit_chunks.remainder_bits();
+
+                    remainder.iter().enumerate().for_each(|(i, value)| {
+                        if remainder_bits & (1 << i) != 0 {
+                            result = result.$OP(*value);
+                        }
+                    });
+
+                    Some(result)
+                }
+            }
         }
-    }
+    };
 }
 
-fn bit_or<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: BitOrImplementation<Output = T::Native> + ArrowNativeTypeOp,
-{
-    let null_count = array.null_count();
-
-    if null_count == array.len() {
-        return None;
-    }
-
-    let data: &[T::Native] = array.values();
-
-    match array.nulls() {
-        None => {
-            let bit_or = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator | *value
-            });
-
-            Some(bit_or)
-        }
-        Some(nulls) => {
-            let mut bit_or = T::default_value();
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
-
-            let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            bit_or = bit_or | *value;
-                        }
-                        index_mask <<= 1;
-                    });
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    bit_or = bit_or | *value;
-                }
-            });
-
-            Some(bit_or)
-        }
-    }
-}
-
-fn bit_xor<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-where
-    T: ArrowNumericType,
-    T::Native: BitXorImplementation<Output = T::Native> + ArrowNativeTypeOp,
-{
-    let null_count = array.null_count();
-
-    if null_count == array.len() {
-        return None;
-    }
-
-    let data: &[T::Native] = array.values();
-
-    match array.nulls() {
-        None => {
-            let bit_xor = data.iter().fold(T::default_value(), |accumulator, value| {
-                accumulator ^ *value
-            });
-
-            Some(bit_xor)
-        }
-        Some(nulls) => {
-            let mut bit_xor = T::default_value();
-            let data_chunks = data.chunks_exact(64);
-            let remainder = data_chunks.remainder();
-
-            let bit_chunks = nulls.inner().bit_chunks();
-            data_chunks
-                .zip(bit_chunks.iter())
-                .for_each(|(chunk, mask)| {
-                    // index_mask has value 1 << i in the loop
-                    let mut index_mask = 1;
-                    chunk.iter().for_each(|value| {
-                        if (mask & index_mask) != 0 {
-                            bit_xor = bit_xor ^ *value;
-                        }
-                        index_mask <<= 1;
-                    });
-                });
-
-            let remainder_bits = bit_chunks.remainder_bits();
-
-            remainder.iter().enumerate().for_each(|(i, value)| {
-                if remainder_bits & (1 << i) != 0 {
-                    bit_xor = bit_xor ^ *value;
-                }
-            });
-
-            Some(bit_xor)
-        }
-    }
-}
+bit_operation!(
+    bit_and,
+    bitand,
+    BitAndImplementation,
+    -1,
+    "Returns the bitwise and of all non-null input values."
+);
+bit_operation!(
+    bit_or,
+    bitor,
+    BitOrImplementation,
+    0,
+    "Returns the bitwise or of all non-null input values."
+);
+bit_operation!(
+    bit_xor,
+    bitxor,
+    BitXorImplementation,
+    0,
+    "Returns the bitwise xor of all non-null input values."
+);
 
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
 macro_rules! typed_bit_and_or_xor_batch {
