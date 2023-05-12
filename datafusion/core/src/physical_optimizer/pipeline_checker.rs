@@ -25,7 +25,6 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use arrow_schema::Fields;
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::DataFusionError;
@@ -180,28 +179,25 @@ fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> boo
             if let Ok(mut graph) =
                 ExprPrunabilityGraph::try_new((*filter.expression()).clone())
             {
-                if let (Some(left_sort_exprs), Some(right_sort_exprs)) = (
-                    join.left().output_ordering(),
-                    join.right().output_ordering(),
+                let left_sort_expr = join.left().output_ordering().map(|s| s[0].clone());
+                let right_sort_expr =
+                    join.right().output_ordering().map(|s| s[0].clone());
+                let (new_left_sort, new_right_sort) = match get_sort_expr_in_filter_schema(
+                    &left_sort_expr,
+                    &right_sort_expr,
+                    filter,
                 ) {
-                    let (new_left_sort, new_right_sort) =
-                        match get_sort_expr_in_filter_schema(
-                            left_sort_exprs,
-                            right_sort_exprs,
-                            filter,
-                        ) {
-                            Some(sorts) => sorts,
-                            None => return false,
-                        };
-                    if let Ok((table_side, _)) =
-                        graph.analyze_prunability(&new_left_sort, &new_right_sort)
-                    {
-                        return prunability_for_unbounded_tables(
-                            &children_unbounded.first(),
-                            &children_unbounded.get(1),
-                            &table_side,
-                        );
-                    }
+                    Some(sorts) => sorts,
+                    None => return false,
+                };
+                if let Ok((table_side, _)) =
+                    graph.analyze_prunability(&new_left_sort, &new_right_sort)
+                {
+                    return prunability_for_unbounded_tables(
+                        &children_unbounded.first(),
+                        &children_unbounded.get(1),
+                        &table_side,
+                    );
                 }
             }
         }
@@ -210,19 +206,17 @@ fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> boo
 }
 
 fn get_sort_expr_in_filter_schema(
-    left_sort_exprs: &[PhysicalSortExpr],
-    right_sort_exprs: &[PhysicalSortExpr],
+    left_sort_expr: &Option<PhysicalSortExpr>,
+    right_sort_expr: &Option<PhysicalSortExpr>,
     filter: &JoinFilter,
 ) -> Option<(Option<PhysicalSortExpr>, Option<PhysicalSortExpr>)> {
-    let left_sort_expr = left_sort_exprs.get(0).map(|s| (*s).clone());
-    let right_sort_expr = right_sort_exprs.get(0).map(|s| (*s).clone());
     let left_sorted_column_index_in_filter =
-        match find_index_in_filter(filter, &left_sort_expr, JoinSide::Left) {
+        match find_index_in_filter(filter, left_sort_expr, JoinSide::Left) {
             Some(index) => index,
             None => return None,
         };
     let right_sorted_column_index_in_filter =
-        match find_index_in_filter(filter, &right_sort_expr, JoinSide::Right) {
+        match find_index_in_filter(filter, right_sort_expr, JoinSide::Right) {
             Some(index) => index,
             None => return None,
         };
