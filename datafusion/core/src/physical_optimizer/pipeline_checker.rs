@@ -22,13 +22,17 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::joins::utils::JoinFilter;
 use crate::physical_plan::joins::SymmetricHashJoinExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use arrow_schema::Fields;
 use datafusion_common::config::OptimizerOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::prunability::{ExprPrunabilityGraph, TableSide};
 use datafusion_physical_expr::intervals::{check_support, is_datatype_supported};
+use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
 /// The PipelineChecker rule rejects non-runnable query plans that use
@@ -139,7 +143,8 @@ pub fn check_finiteness_requirements(
 ) -> Result<Transformed<PipelineStatePropagator>> {
     if let Some(exec) = input.plan.as_any().downcast_ref::<SymmetricHashJoinExec>() {
         if !(optimizer_options.allow_symmetric_joins_without_pruning
-            || (exec.check_if_order_information_available()? && is_prunable(exec)))
+            || (exec.check_if_order_information_available()?
+                && is_prunable(exec, &input.children_unbounded)))
         {
             const MSG: &str = "Join operation cannot operate on a non-prunable stream without enabling \
                                the 'allow_symmetric_joins_without_pruning' configuration flag";
@@ -162,34 +167,155 @@ pub fn check_finiteness_requirements(
 ///
 /// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
 /// [`Operator`]: datafusion_expr::Operator
-fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
-    if let Some(filter) = join.filter() {
-        if let Ok(mut graph) =
-            ExprPrunabilityGraph::try_new((*filter.expression()).clone())
-        {
-            if let Some(left_sort_expr) = join.left().output_ordering() {
-                if let Some(right_sort_expr) = join.right().output_ordering() {
-                    let left_sort_expr = left_sort_expr.get(0).map(|s| (*s).clone());
-                    let right_sort_expr = right_sort_expr.get(0).map(|s| (*s).clone());
+fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> bool {
+    if join.filter().map_or(false, |filter| {
+        check_support(filter.expression())
+            && filter
+                .schema()
+                .fields()
+                .iter()
+                .all(|f| is_datatype_supported(f.data_type()))
+    }) {
+        if let Some(filter) = join.filter() {
+            if let Ok(mut graph) =
+                ExprPrunabilityGraph::try_new((*filter.expression()).clone())
+            {
+                if let (Some(left_sort_exprs), Some(right_sort_exprs)) = (
+                    join.left().output_ordering(),
+                    join.right().output_ordering(),
+                ) {
+                    let (new_left_sort, new_right_sort) =
+                        match get_sort_expr_in_filter_schema(
+                            left_sort_exprs,
+                            right_sort_exprs,
+                            filter,
+                        ) {
+                            Some(sorts) => sorts,
+                            None => return false,
+                        };
                     if let Ok((table_side, _)) =
-                        graph.analyze_prunability(&left_sort_expr, &right_sort_expr)
+                        graph.analyze_prunability(&new_left_sort, &new_right_sort)
                     {
-                        if table_side == TableSide::Both {
-                            return join.filter().map_or(false, |filter| {
-                                check_support(filter.expression())
-                                    && filter
-                                        .schema()
-                                        .fields()
-                                        .iter()
-                                        .all(|f| is_datatype_supported(f.data_type()))
-                            });
-                        }
+                        return prunability_for_unbounded_tables(
+                            &children_unbounded.first(),
+                            &children_unbounded.get(1),
+                            &table_side,
+                        );
                     }
                 }
             }
         }
     }
     false
+}
+
+fn get_sort_expr_in_filter_schema(
+    left_sort_exprs: &[PhysicalSortExpr],
+    right_sort_exprs: &[PhysicalSortExpr],
+    filter: &JoinFilter,
+) -> Option<(Option<PhysicalSortExpr>, Option<PhysicalSortExpr>)> {
+    let left_sort_expr = left_sort_exprs.get(0).map(|s| (*s).clone());
+    let right_sort_expr = right_sort_exprs.get(0).map(|s| (*s).clone());
+    let left_sorted_column_index_in_filter =
+        match find_left_index_in_filter(filter.schema().fields(), &left_sort_expr) {
+            Some(index) => index,
+            None => return None,
+        };
+    let right_sorted_column_index_in_filter =
+        match find_right_index_in_filter(filter.schema().fields(), &right_sort_expr) {
+            Some(index) => index,
+            None => return None,
+        };
+    let new_left_sort = left_sort_expr.as_ref().and_then(|left_sort| {
+        left_sort
+            .expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .map(|left_column| {
+                let left_sort_name = left_column.name();
+                let left_sort_options = left_sort.options;
+                let left_expr = Arc::new(Column::new(
+                    left_sort_name,
+                    left_sorted_column_index_in_filter,
+                ));
+                PhysicalSortExpr {
+                    expr: left_expr,
+                    options: left_sort_options,
+                }
+            })
+    });
+    let new_right_sort = right_sort_expr.as_ref().and_then(|right_sort| {
+        right_sort
+            .expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .map(|right_column| {
+                let right_sort_name = right_column.name();
+                let right_sort_options = right_sort.options;
+                let right_expr = Arc::new(Column::new(
+                    right_sort_name,
+                    right_sorted_column_index_in_filter,
+                ));
+                PhysicalSortExpr {
+                    expr: right_expr,
+                    options: right_sort_options,
+                }
+            })
+    });
+    Some((new_left_sort, new_right_sort))
+}
+
+fn find_right_index_in_filter(
+    fields: &Fields,
+    right_sort_expr: &Option<PhysicalSortExpr>,
+) -> Option<usize> {
+    for (i, field) in fields.iter().rev().enumerate() {
+        if let Some(physical_sort) = right_sort_expr {
+            if let Some(column) = physical_sort.expr.as_any().downcast_ref::<Column>() {
+                if column.name() == field.name() {
+                    return Some(i);
+                }
+            }
+        }
+    }
+    None
+}
+fn find_left_index_in_filter(
+    fields: &Fields,
+    left_sort_expr: &Option<PhysicalSortExpr>,
+) -> Option<usize> {
+    for (i, field) in fields.iter().enumerate() {
+        if let Some(physical_sort) = left_sort_expr {
+            if let Some(column) = physical_sort.expr.as_any().downcast_ref::<Column>() {
+                if column.name() == field.name() {
+                    return Some(fields.len() - 1 - i);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn prunability_for_unbounded_tables(
+    left_table: &Option<&bool>,
+    right_table: &Option<&bool>,
+    table_side: &TableSide,
+) -> bool {
+    match (left_table, right_table) {
+        (Some(true), Some(true)) if *table_side == TableSide::Both => true,
+        (Some(true), Some(false))
+            if *table_side == TableSide::Left || *table_side == TableSide::Both =>
+        {
+            true
+        }
+        (Some(false), Some(true))
+            if *table_side == TableSide::Right || *table_side == TableSide::Both =>
+        {
+            true
+        }
+        (Some(false), Some(false)) => true,
+        (_, _) => false,
+    }
 }
 
 #[cfg(test)]
