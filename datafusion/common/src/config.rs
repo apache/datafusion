@@ -243,7 +243,7 @@ config_namespace! {
     pub struct ParquetOptions {
         /// If true, uses parquet data page level metadata (Page Index) statistics
         /// to reduce the number of rows decoded.
-        pub enable_page_index: bool, default = false
+        pub enable_page_index: bool, default = true
 
         /// If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
