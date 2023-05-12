@@ -364,7 +364,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
         let FirstAgg {
             expr,
             order_by,
@@ -404,7 +403,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
         let LastAgg {
             expr,
             order_by,
