@@ -239,14 +239,13 @@ impl CsvFormat {
         pin_mut!(stream);
 
         while let Some(chunk) = stream.next().await.transpose()? {
+            let format = arrow::csv::reader::Format::default()
+                .with_header(self.has_header && first_chunk)
+                .with_delimiter(self.delimiter);
+
             let (Schema { fields, .. }, records_read) =
-                arrow::csv::reader::infer_reader_schema(
-                    chunk.reader(),
-                    self.delimiter,
-                    Some(records_to_read),
-                    // only consider header for first chunk
-                    self.has_header && first_chunk,
-                )?;
+                format.infer_schema(chunk.reader(), Some(records_to_read))?;
+
             records_to_read -= records_read;
             total_records_read += records_read;
 
