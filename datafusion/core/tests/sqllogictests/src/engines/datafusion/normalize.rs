@@ -95,15 +95,13 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         let new_lines: Vec<_> = lines
             .into_iter()
             .map(|l| {
-                // Add a prefix "|" so that `sqllogictest --complete` doesn't
-                // strip the leading space
                 // replace any leading spaces with '-' as
                 // `sqllogictest` ignores whitespace differences
                 //
                 // See https://github.com/apache/arrow-datafusion/issues/6328
                 let content = l.trim_start();
                 let new_prefix = "-".repeat(l.len() - content.len());
-                vec![format!("|{new_prefix}{content}")]
+                vec![format!("{new_prefix}{content}")]
             })
             .collect();
 
