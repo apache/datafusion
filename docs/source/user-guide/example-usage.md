@@ -166,7 +166,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 [dependencies]
 datafusion = { version = "22.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
-snmalloc-rs = "0.2"
+snmalloc-rs = "0.3"
 
 [profile.release]
 lto = true
