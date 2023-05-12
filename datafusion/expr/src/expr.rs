@@ -1068,11 +1068,15 @@ impl fmt::Debug for Expr {
                 fun,
                 ref args,
                 filter,
+                order_by,
                 ..
             }) => {
                 fmt_function(f, &fun.name, false, args, false)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
+                }
+                if let Some(ob) = order_by {
+                    write!(f, " ORDER BY {:?}", ob)?;
                 }
                 Ok(())
             }

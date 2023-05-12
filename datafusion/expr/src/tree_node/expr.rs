@@ -301,7 +301,7 @@ impl TreeNode for Expr {
                 transform_vec(args, &mut transform)?,
                 distinct,
                 transform_option_box(filter, &mut transform)?,
-                order_by,
+                transform_option_vec(order_by, &mut transform)?,
             )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
@@ -334,7 +334,7 @@ impl TreeNode for Expr {
                     fun,
                     transform_vec(args, &mut transform)?,
                     transform_option_box(filter, &mut transform)?,
-                    order_by,
+                    transform_option_vec(order_by, &mut transform)?,
                 ))
             }
             Expr::InList(InList {
@@ -385,6 +385,21 @@ where
     option_box
         .map(|expr| transform_boxed(expr, transform))
         .transpose()
+}
+
+/// &mut transform a Option<`Vec` of `Expr`s>
+fn transform_option_vec<F>(
+    option_box: Option<Vec<Expr>>,
+    transform: &mut F,
+) -> Result<Option<Vec<Expr>>>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    Ok(if let Some(exprs) = option_box {
+        Some(transform_vec(exprs, transform)?)
+    } else {
+        None
+    })
 }
 
 /// &mut transform a `Vec` of `Expr`s
