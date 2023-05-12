@@ -25,6 +25,7 @@ pub mod file_format;
 pub mod listing;
 pub mod listing_table_factory;
 pub mod memory;
+pub mod sink;
 pub mod streaming;
 pub mod view;
 

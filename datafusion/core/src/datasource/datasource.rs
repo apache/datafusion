@@ -31,6 +31,8 @@ use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::ExecutionPlan;
 
+use super::sink::DataSink;
+
 /// Source table
 #[async_trait]
 pub trait TableProvider: Sync + Send {
@@ -98,12 +100,11 @@ pub trait TableProvider: Sync + Send {
         None
     }
 
-    /// Insert into this table
-    async fn insert_into(
-        &self,
-        _state: &SessionState,
-        _input: Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Return a [`DataSink`] suitable for writing to this table
+    ///
+    /// Each insert or other DML plan will call this function. Each
+    /// returned value can be unique.
+    async fn write_to(&self) -> Result<Arc<dyn DataSink>> {
         let msg = "Insertion not implemented for this table".to_owned();
         Err(DataFusionError::NotImplemented(msg))
     }

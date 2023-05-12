@@ -19,6 +19,7 @@
 
 use futures::StreamExt;
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -30,12 +31,13 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::common;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::memory::MemoryWriteExec;
 use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+
+use super::sink::DataSink;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -164,50 +166,58 @@ impl TableProvider for MemTable {
         )?))
     }
 
-    /// Inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
-    /// The [`ExecutionPlan`] must have the same schema as this [`MemTable`].
-    ///
-    /// # Arguments
-    ///
-    /// * `state` - The [`SessionState`] containing the context for executing the plan.
-    /// * `input` - The [`ExecutionPlan`] to execute and insert.
-    ///
-    /// # Returns
-    ///
-    /// * A `Result` indicating success or failure.
-    async fn insert_into(
-        &self,
-        _state: &SessionState,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Create a physical plan from the logical plan.
-        // Check that the schema of the plan matches the schema of this table.
-        if !input.schema().eq(&self.schema) {
-            return Err(DataFusionError::Plan(
-                "Inserting query must have the same schema with the table.".to_string(),
-            ));
-        }
-
+    async fn write_to(&self) -> Result<Arc<dyn DataSink>> {
         if self.batches.is_empty() {
-            return Err(DataFusionError::Plan(
-                "The table must have partitions.".to_string(),
+            return Err(DataFusionError::Internal(
+                "Can not insert into table without partitions.".to_string(),
             ));
         }
+        Ok(Arc::new(MemSink::new(self.batches.clone())))
+    }
+}
 
-        let input = if self.batches.len() > 1 {
-            Arc::new(RepartitionExec::try_new(
-                input,
-                Partitioning::RoundRobinBatch(self.batches.len()),
-            )?)
-        } else {
-            input
-        };
+/// Implements for writing to a [`MemTable`]
+struct MemSink {
+    /// Target locations for writing data
+    batches: Vec<PartitionData>,
+}
 
-        Ok(Arc::new(MemoryWriteExec::try_new(
-            input,
-            self.batches.clone(),
-            self.schema.clone(),
-        )?))
+impl Debug for MemSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemSink")
+            .field("num_partitions", &self.batches.len())
+            .finish()
+    }
+}
+
+impl MemSink {
+    fn new(batches: Vec<PartitionData>) -> Self {
+        Self { batches }
+    }
+}
+
+#[async_trait]
+impl DataSink for MemSink {
+    async fn write_all(&self, mut data: SendableRecordBatchStream) -> Result<u64> {
+        let num_partitions = self.batches.len();
+
+        // buffer up the data round robin stle into num_partitions new buffers
+        let mut new_batches = vec![vec![]; num_partitions];
+        let mut i = 0;
+        let mut row_count = 0;
+        while let Some(batch) = data.next().await.transpose()? {
+            row_count += batch.num_rows();
+            new_batches[i].push(batch);
+            i = (i + 1) % num_partitions;
+        }
+
+        // write the outputs into
+        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+            // Append all the new batches in one go to minimize locking overhead
+            target.write().await.append(&mut batches);
+        }
+
+        Ok(row_count as u64)
     }
 }
 

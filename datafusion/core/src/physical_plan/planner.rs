@@ -18,6 +18,7 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
+use super::insert::InsertExec;
 use super::unnest::UnnestExec;
 use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
@@ -543,8 +544,10 @@ impl DefaultPhysicalPlanner {
                     let name = table_name.table();
                     let schema = session_state.schema_for_ref(table_name)?;
                     if let Some(provider) = schema.table(name).await {
-                        let input_exec = self.create_initial_plan(input, session_state).await?;
-                        provider.insert_into(session_state, input_exec).await
+                        Ok(Arc::new(InsertExec::new(
+                            self.create_initial_plan(input, session_state).await?,
+                            provider.write_to().await?,
+                        )))
                     } else {
                         return Err(DataFusionError::Execution(format!(
                             "Table '{table_name}' does not exist"
