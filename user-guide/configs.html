@@ -392,7 +392,7 @@ Environment variables are read during <code class="docutils literal notranslate"
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.enable_page_index</p></td>
 <td><p>true</p></td>
-<td><p>If true, uses parquet data page level metadata (Page Index) statistics to reduce the number of rows decoded.</p></td>
+<td><p>If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.pruning</p></td>
 <td><p>true</p></td>
