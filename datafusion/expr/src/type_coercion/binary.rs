@@ -514,7 +514,7 @@ pub fn coercion_decimal_mathematics_type(
                 left_decimal_type,
                 right_decimal_type,
             ),
-            Operator::Multiply | Operator::Divide | Operator::Modulo => {
+            Operator::Divide | Operator::Modulo => {
                 get_wider_decimal_type(left_decimal_type, right_decimal_type)
             }
             _ => None,
@@ -946,7 +946,7 @@ mod tests {
             &left_decimal_type,
             &right_decimal_type,
         );
-        assert_eq!(DataType::Decimal128(20, 4), result.unwrap());
+        assert_eq!(None, result);
         let result =
             decimal_op_mathematics_type(&op, &left_decimal_type, &right_decimal_type);
         assert_eq!(DataType::Decimal128(31, 7), result.unwrap());
@@ -1232,7 +1232,7 @@ mod tests {
         mathematics_op: Operator,
         expected_lhs_type: Option<DataType>,
         expected_rhs_type: Option<DataType>,
-        expected_coerced_type: DataType,
+        expected_coerced_type: Option<DataType>,
         expected_output_type: DataType,
     ) {
         // The coerced types for lhs and rhs, if any of them is not decimal
@@ -1245,8 +1245,7 @@ mod tests {
 
         // The coerced type of decimal math expression, applied during expression evaluation
         let coerced_type =
-            coercion_decimal_mathematics_type(&mathematics_op, &lhs_type, &rhs_type)
-                .unwrap();
+            coercion_decimal_mathematics_type(&mathematics_op, &lhs_type, &rhs_type);
         assert_eq!(coerced_type, expected_coerced_type);
 
         // The output type of decimal math expression
@@ -1263,7 +1262,7 @@ mod tests {
             Operator::Plus,
             None,
             None,
-            DataType::Decimal128(11, 2),
+            Some(DataType::Decimal128(11, 2)),
             DataType::Decimal128(11, 2),
         );
 
@@ -1273,7 +1272,7 @@ mod tests {
             Operator::Plus,
             Some(DataType::Decimal128(10, 0)),
             None,
-            DataType::Decimal128(13, 2),
+            Some(DataType::Decimal128(13, 2)),
             DataType::Decimal128(13, 2),
         );
 
@@ -1283,7 +1282,7 @@ mod tests {
             Operator::Minus,
             Some(DataType::Decimal128(10, 0)),
             None,
-            DataType::Decimal128(13, 2),
+            Some(DataType::Decimal128(13, 2)),
             DataType::Decimal128(13, 2),
         );
 
@@ -1293,7 +1292,7 @@ mod tests {
             Operator::Multiply,
             Some(DataType::Decimal128(10, 0)),
             None,
-            DataType::Decimal128(12, 2),
+            None,
             DataType::Decimal128(21, 2),
         );
 
@@ -1303,7 +1302,7 @@ mod tests {
             Operator::Divide,
             Some(DataType::Decimal128(10, 0)),
             None,
-            DataType::Decimal128(12, 2),
+            Some(DataType::Decimal128(12, 2)),
             DataType::Decimal128(23, 11),
         );
 
@@ -1313,7 +1312,7 @@ mod tests {
             Operator::Modulo,
             Some(DataType::Decimal128(10, 0)),
             None,
-            DataType::Decimal128(12, 2),
+            Some(DataType::Decimal128(12, 2)),
             DataType::Decimal128(10, 2),
         );
 
