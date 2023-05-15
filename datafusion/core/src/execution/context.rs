@@ -69,7 +69,11 @@ use crate::logical_expr::{
     LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
-use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement},
+    planner::ParserOptions,
+    ResolvedTableReference, TableReference,
+};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
@@ -1649,45 +1653,58 @@ impl SessionState {
         // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
+        struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
+
+        impl<'a> RelationVisitor<'a> {
+            /// Record that `relation` was used in this statement
+            fn insert(&mut self, relation: &ObjectName) {
+                self.0.get_or_insert_with(relation, |_| relation.clone());
+            }
+        }
+
+        impl<'a> Visitor for RelationVisitor<'a> {
+            type Break = ();
+
+            fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
+                self.insert(relation);
+                ControlFlow::Continue(())
+            }
+
+            fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
+                if let Statement::ShowCreate {
+                    obj_type: ShowCreateObject::Table | ShowCreateObject::View,
+                    obj_name,
+                } = statement
+                {
+                    self.insert(obj_name)
+                }
+                ControlFlow::Continue(())
+            }
+        }
+
+        let mut visitor = RelationVisitor(&mut relations);
         match statement {
             DFStatement::Statement(s) => {
-                struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
-
-                impl<'a> Visitor for RelationVisitor<'a> {
-                    type Break = ();
-
-                    fn pre_visit_relation(
-                        &mut self,
-                        relation: &ObjectName,
-                    ) -> ControlFlow<()> {
-                        self.0.get_or_insert_with(relation, |_| relation.clone());
-                        ControlFlow::Continue(())
-                    }
-
-                    fn pre_visit_statement(
-                        &mut self,
-                        statement: &Statement,
-                    ) -> ControlFlow<()> {
-                        if let Statement::ShowCreate {
-                            obj_type: ShowCreateObject::Table | ShowCreateObject::View,
-                            obj_name,
-                        } = statement
-                        {
-                            self.0.get_or_insert_with(obj_name, |_| obj_name.clone());
-                        }
-                        ControlFlow::Continue(())
-                    }
-                }
-                let mut visitor = RelationVisitor(&mut relations);
                 let _ = s.as_ref().visit(&mut visitor);
             }
             DFStatement::CreateExternalTable(table) => {
-                relations.insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+                visitor
+                    .0
+                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
             }
-            DFStatement::DescribeTableStmt(table) => {
-                relations
-                    .get_or_insert_with(&table.table_name, |_| table.table_name.clone());
-            }
+            DFStatement::DescribeTableStmt(table) => visitor.insert(&table.table_name),
+            DFStatement::CopyTo(CopyToStatement {
+                source,
+                target: _,
+                options: _,
+            }) => match source {
+                CopyToSource::Relation(table_name) => {
+                    visitor.insert(table_name);
+                }
+                CopyToSource::Query(query) => {
+                    query.visit(&mut visitor);
+                }
+            },
         }
 
         // Always include information_schema if available
