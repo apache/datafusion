@@ -64,6 +64,16 @@ pub enum AggregateFunction {
     ApproxMedian,
     /// Grouping
     Grouping,
+    /// Bit And
+    BitAnd,
+    /// Bit Or
+    BitOr,
+    /// Bit Xor
+    BitXor,
+    /// Bool And
+    BoolAnd,
+    /// Bool Or
+    BoolOr,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -79,6 +89,11 @@ impl FromStr for AggregateFunction {
         Ok(match name {
             // general
             "avg" => AggregateFunction::Avg,
+            "bit_and" => AggregateFunction::BitAnd,
+            "bit_or" => AggregateFunction::BitOr,
+            "bit_xor" => AggregateFunction::BitXor,
+            "bool_and" => AggregateFunction::BoolAnd,
+            "bool_or" => AggregateFunction::BoolOr,
             "count" => AggregateFunction::Count,
             "max" => AggregateFunction::Max,
             "mean" => AggregateFunction::Avg,
@@ -140,6 +155,10 @@ pub fn return_type(
             Ok(coerced_data_types[0].clone())
         }
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
+        AggregateFunction::BitAnd
+        | AggregateFunction::BitOr
+        | AggregateFunction::BitXor => Ok(coerced_data_types[0].clone()),
+        AggregateFunction::BoolAnd | AggregateFunction::BoolOr => Ok(DataType::Boolean),
         AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::Covariance => covariance_return_type(&coerced_data_types[0]),
@@ -197,6 +216,14 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .cloned()
                 .collect::<Vec<_>>();
             Signature::uniform(1, valid, Volatility::Immutable)
+        }
+        AggregateFunction::BitAnd
+        | AggregateFunction::BitOr
+        | AggregateFunction::BitXor => {
+            Signature::uniform(1, INTEGERS.to_vec(), Volatility::Immutable)
+        }
+        AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
+            Signature::uniform(1, vec![DataType::Boolean], Volatility::Immutable)
         }
         AggregateFunction::Avg
         | AggregateFunction::Sum

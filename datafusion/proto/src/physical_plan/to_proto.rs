@@ -37,7 +37,8 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 
 use datafusion::physical_plan::expressions::{
-    Avg, BinaryExpr, Column, LikeExpr, Max, Min, Sum,
+    Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Column, LikeExpr, Max, Min,
+    Sum,
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
@@ -70,6 +71,16 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             Ok(AggregateFunction::Sum.into())
         } else if a.as_any().downcast_ref::<Count>().is_some() {
             Ok(AggregateFunction::Count.into())
+        } else if a.as_any().downcast_ref::<BitAnd>().is_some() {
+            Ok(AggregateFunction::BitAnd.into())
+        } else if a.as_any().downcast_ref::<BitOr>().is_some() {
+            Ok(AggregateFunction::BitOr.into())
+        } else if a.as_any().downcast_ref::<BitXor>().is_some() {
+            Ok(AggregateFunction::BitXor.into())
+        } else if a.as_any().downcast_ref::<BoolAnd>().is_some() {
+            Ok(AggregateFunction::BoolAnd.into())
+        } else if a.as_any().downcast_ref::<BoolOr>().is_some() {
+            Ok(AggregateFunction::BoolOr.into())
         } else if a.as_any().downcast_ref::<DistinctCount>().is_some() {
             distinct = true;
             Ok(AggregateFunction::Count.into())

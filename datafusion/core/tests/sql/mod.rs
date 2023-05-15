@@ -82,7 +82,6 @@ pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
 pub mod create_drop;
-pub mod errors;
 pub mod explain_analyze;
 pub mod expr;
 pub mod functions;
@@ -98,7 +97,6 @@ pub mod select;
 pub mod timestamp;
 pub mod udf;
 
-pub mod explain;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
