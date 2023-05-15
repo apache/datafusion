@@ -46,17 +46,18 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
 
 /// DataFusion extension DDL for `COPY`
 ///
-/// Syntax:
+/// # Syntax:
 ///
 /// ```text
 /// COPY <table_name | (<query>)>
 /// TO
 /// <destination_url>
 /// (key_value_list)
-///
 /// ```
-/// Examples
-/// ``sql
+///
+/// # Examples
+///
+/// ```sql
 /// COPY lineitem  TO 'lineitem'
 ///  (format parquet,
 ///   partitions 16,
