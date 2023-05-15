@@ -964,8 +964,8 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 <section id="array-agg">
 <h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Permalink to this heading">¶</a></h3>
-<p>Returns an array created from the expression elements.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<p>Returns an array created from the expression elements. If ordering requirement is given, elements are inserted in the order of required ordering.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id11">

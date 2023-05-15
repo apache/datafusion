@@ -558,6 +558,12 @@ right side of the join.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="k">MAX</span><span class="p">(</span><span class="k">c</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span>
 </pre></div>
 </div>
+<p>Some aggregation functions accept optional ordering requirement, such as <code class="docutils literal notranslate"><span class="pre">ARRAY_AGG</span></code>. If a requirement is given,
+aggregation is calculated in the order of the requirement.</p>
+<p>Example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">ARRAY_AGG</span><span class="p">(</span><span class="k">c</span><span class="p">,</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">d</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">b</span>
+</pre></div>
+</div>
 </section>
 <section id="having-clause">
 <h2>HAVING clause<a class="headerlink" href="#having-clause" title="Permalink to this heading">¶</a></h2>
