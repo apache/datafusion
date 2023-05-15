@@ -912,31 +912,46 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <tr class="row-even"><td><p>approx_percentile_cont_with_weight(expr, weight_expr, percentile)</p></td>
 <td><p>Calculates an approximation of the specified <code class="docutils literal notranslate"><span class="pre">percentile</span></code> for <code class="docutils literal notranslate"><span class="pre">expr</span></code> and <code class="docutils literal notranslate"><span class="pre">weight_expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>count(expr)</p></td>
+<tr class="row-odd"><td><p>bit_and(expr)</p></td>
+<td><p>Computes the bitwise AND of all non-null input values for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>bit_or(expr)</p></td>
+<td><p>Computes the bitwise OR of all non-null input values for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>bit_xor(expr)</p></td>
+<td><p>Computes the bitwise exclusive OR of all non-null input values for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>bool_and(expr)</p></td>
+<td><p>Returns true if all non-null input values (<code class="docutils literal notranslate"><span class="pre">expr</span></code>) are true, otherwise false.</p></td>
+</tr>
+<tr class="row-odd"><td><p>bool_or(expr)</p></td>
+<td><p>Returns true if any non-null input value (<code class="docutils literal notranslate"><span class="pre">expr</span></code>) is true, otherwise false.</p></td>
+</tr>
+<tr class="row-even"><td><p>count(expr)</p></td>
 <td><p>Returns the number of rows for <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>count_distinct</p></td>
+<tr class="row-odd"><td><p>count_distinct</p></td>
 <td><p>Creates an expression to represent the count(distinct) aggregate function</p></td>
 </tr>
-<tr class="row-odd"><td><p>cube(exprs)</p></td>
+<tr class="row-even"><td><p>cube(exprs)</p></td>
 <td><p>Creates a grouping set for all combination of <code class="docutils literal notranslate"><span class="pre">exprs</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>grouping_set(exprs)</p></td>
+<tr class="row-odd"><td><p>grouping_set(exprs)</p></td>
 <td><p>Create a grouping set.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max(expr)</p></td>
+<tr class="row-even"><td><p>max(expr)</p></td>
 <td><p>Finds the maximum value of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>median(expr)</p></td>
+<tr class="row-odd"><td><p>median(expr)</p></td>
 <td><p>Сalculates the median of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>min(expr)</p></td>
+<tr class="row-even"><td><p>min(expr)</p></td>
 <td><p>Finds the minimum value of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>rollup(exprs)</p></td>
+<tr class="row-odd"><td><p>rollup(exprs)</p></td>
 <td><p>Creates a grouping set for rollup sets.</p></td>
 </tr>
-<tr class="row-odd"><td><p>sum(expr)</p></td>
+<tr class="row-even"><td><p>sum(expr)</p></td>
 <td><p>Сalculates the sum of <code class="docutils literal notranslate"><span class="pre">expr</span></code>.</p></td>
 </tr>
 </tbody>
