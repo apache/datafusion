@@ -463,7 +463,10 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::COMPRESSION => {
                         self.parser.expect_keyword(Keyword::TYPE)?;
-                        ensure_not_set(&builder.file_compression_type, "COMPRESSION")?;
+                        ensure_not_set(
+                            &builder.file_compression_type,
+                            "COMPRESSION TYPE",
+                        )?;
                         builder.file_compression_type =
                             Some(self.parse_file_compression_type()?);
                     }
@@ -482,11 +485,11 @@ impl<'a> DFParser<'a> {
                 }
             } else {
                 let token = self.parser.next_token();
-                if token == Token::EOF {
+                if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
                     return Err(ParserError::ParserError(format!(
-                        "Unexpected token {:?}",
+                        "Unexpected token {}",
                         token
                     )));
                 }
@@ -632,6 +635,41 @@ mod tests {
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: "t".into(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: leading space
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'     ";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(None))],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: leading space + semicolon
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'      ;";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(None))],
             file_type: "CSV".to_string(),
             has_header: false,
             delimiter: ',',
