@@ -321,11 +321,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             within_group,
         } = array_agg;
 
-        if let Some(order_by) = order_by {
-            return Err(DataFusionError::NotImplemented(format!(
-                "ORDER BY not supported in ARRAY_AGG: {order_by}"
-            )));
-        }
+        let order_by = if let Some(order_by) = order_by {
+            // TODO: Once sqlparser supports multiple order by clause, handle it
+            //       see issue: https://github.com/sqlparser-rs/sqlparser-rs/issues/875
+            Some(vec![self.order_by_to_sort_expr(
+                *order_by,
+                input_schema,
+                planner_context,
+            )?])
+        } else {
+            None
+        };
 
         if let Some(limit) = limit {
             return Err(DataFusionError::NotImplemented(format!(
@@ -341,11 +347,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let args =
             vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
+
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
-
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None,
+            fun, args, distinct, None, order_by,
         )))
     }
 
@@ -479,6 +485,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fun,
                 args,
                 distinct,
+                order_by,
                 ..
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
@@ -489,6 +496,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema,
                     planner_context,
                 )?)),
+                order_by,
             ))),
             _ => Err(DataFusionError::Internal(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
