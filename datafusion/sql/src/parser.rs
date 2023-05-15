@@ -401,7 +401,10 @@ impl<'a> DFParser<'a> {
         })
     }
 
-    fn parse_create_external_table(&mut self, unbounded: bool) -> Result<Statement, ParserError> {
+    fn parse_create_external_table(
+        &mut self,
+        unbounded: bool,
+    ) -> Result<Statement, ParserError> {
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
