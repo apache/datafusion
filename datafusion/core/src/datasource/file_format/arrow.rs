@@ -16,6 +16,8 @@
 // under the License.
 
 //! Apache Arrow format abstractions
+//!
+//! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
 use crate::datasource::file_format::FileFormat;
 use crate::error::Result;
