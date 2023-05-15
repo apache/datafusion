@@ -588,6 +588,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             file_compression_type,
             order_exprs,
+            unbounded,
             options,
         } = statement;
 
@@ -629,6 +630,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 definition,
                 file_compression_type,
                 order_exprs: ordered_exprs,
+                unbounded,
                 options,
             },
         )))

@@ -89,6 +89,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
     pub file_compression_type: CompressionTypeVariant,
+    /// Infinite streams?
+    pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -245,7 +247,10 @@ impl<'a> DFParser<'a> {
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external_table()
+            self.parse_create_external_table(false)
+        } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
+            self.parser.expect_keyword(Keyword::EXTERNAL)?;
+            self.parse_create_external_table(true)
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
@@ -396,7 +401,7 @@ impl<'a> DFParser<'a> {
         })
     }
 
-    fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_external_table(&mut self, unbounded: bool) -> Result<Statement, ParserError> {
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
@@ -521,6 +526,7 @@ impl<'a> DFParser<'a> {
             file_compression_type: builder
                 .file_compression_type
                 .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
+            unbounded,
             options: builder.options.unwrap_or(HashMap::new()),
         };
         Ok(Statement::CreateExternalTable(create))
@@ -643,6 +649,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -660,6 +667,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -678,6 +686,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -696,6 +705,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -714,6 +724,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -735,6 +746,7 @@ mod tests {
                 order_exprs: vec![],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
+                unbounded: false,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -761,6 +773,7 @@ mod tests {
                 file_compression_type: CompressionTypeVariant::from_str(
                     file_compression_type,
                 )?,
+                unbounded: false,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -779,6 +792,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -796,6 +810,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -813,6 +828,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -831,6 +847,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: true,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -854,6 +871,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::from([("k1".into(), "v1".into())]),
         });
         expect_parse_ok(sql, expected)?;
@@ -872,6 +890,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::from([
                 ("k1".into(), "v1".into()),
                 ("k2".into(), "v2".into()),
@@ -919,6 +938,7 @@ mod tests {
                 }],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
+                unbounded: false,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -958,6 +978,7 @@ mod tests {
             ],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -993,13 +1014,14 @@ mod tests {
             }],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
         // Most complete CREATE EXTERNAL TABLE statement possible
         let sql = "
-            CREATE EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
+            CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
             STORED AS PARQUET
             DELIMITER '*'
             WITH HEADER ROW
@@ -1037,6 +1059,7 @@ mod tests {
             }],
             if_not_exists: true,
             file_compression_type: CompressionTypeVariant::ZSTD,
+            unbounded: true,
             options: HashMap::from([
                 ("ROW_GROUP_SIZE".into(), "1024".into()),
                 ("TRUNCATE".into(), "NO".into()),

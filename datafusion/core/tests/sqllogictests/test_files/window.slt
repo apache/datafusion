@@ -2368,15 +2368,15 @@ SELECT c9, rn1 FROM (SELECT c9,
 
 
 # invalid window frame. null as preceding
-statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. null as preceding
-statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. negative as following
-statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
 
 # This test shows that ordering satisfy considers ordering equivalences,
@@ -2451,7 +2451,7 @@ LOCATION 'tests/data/window_1.csv'
 # Source is CsvExec which is ordered by ts column.
 # Infinite source
 statement ok
-CREATE EXTERNAL TABLE annotated_data_infinite (
+CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite (
   ts INTEGER,
   inc_col INTEGER,
   desc_col INTEGER,
@@ -2459,7 +2459,6 @@ CREATE EXTERNAL TABLE annotated_data_infinite (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (ts ASC)
-OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/window_1.csv';
 
 # test_source_sorted_aggregate
