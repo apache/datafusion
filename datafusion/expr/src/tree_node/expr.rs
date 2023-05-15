@@ -97,12 +97,15 @@ impl TreeNode for Expr {
                 }
                 expr_vec
             }
-            Expr::AggregateFunction(AggregateFunction { args, filter, .. })
-            | Expr::AggregateUDF(AggregateUDF { args, filter, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. })
+            | Expr::AggregateUDF(AggregateUDF { args, filter, order_by, .. }) => {
                 let mut expr_vec = args.clone();
 
                 if let Some(f) = filter {
                     expr_vec.push(f.as_ref().clone());
+                }
+                if let Some(o) = order_by {
+                    expr_vec.extend(o.clone());
                 }
 
                 expr_vec
@@ -292,11 +295,13 @@ impl TreeNode for Expr {
                 fun,
                 distinct,
                 filter,
+                order_by,
             }) => Expr::AggregateFunction(AggregateFunction::new(
                 fun,
                 transform_vec(args, &mut transform)?,
                 distinct,
                 transform_option_box(filter, &mut transform)?,
+                transform_option_vec(order_by, &mut transform)?,
             )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => Expr::GroupingSet(GroupingSet::Rollup(
@@ -314,11 +319,22 @@ impl TreeNode for Expr {
                     ))
                 }
             },
-            Expr::AggregateUDF(AggregateUDF { args, fun, filter }) => {
+            Expr::AggregateUDF(AggregateUDF {
+                args,
+                fun,
+                filter,
+                order_by,
+            }) => {
+                let order_by = if let Some(order_by) = order_by {
+                    Some(transform_vec(order_by, &mut transform)?)
+                } else {
+                    None
+                };
                 Expr::AggregateUDF(AggregateUDF::new(
                     fun,
                     transform_vec(args, &mut transform)?,
                     transform_option_box(filter, &mut transform)?,
+                    transform_option_vec(order_by, &mut transform)?,
                 ))
             }
             Expr::InList(InList {
@@ -369,6 +385,21 @@ where
     option_box
         .map(|expr| transform_boxed(expr, transform))
         .transpose()
+}
+
+/// &mut transform a Option<`Vec` of `Expr`s>
+fn transform_option_vec<F>(
+    option_box: Option<Vec<Expr>>,
+    transform: &mut F,
+) -> Result<Option<Vec<Expr>>>
+where
+    F: FnMut(Expr) -> Result<Expr>,
+{
+    Ok(if let Some(exprs) = option_box {
+        Some(transform_vec(exprs, transform)?)
+    } else {
+        None
+    })
 }
 
 /// &mut transform a `Vec` of `Expr`s
