@@ -304,7 +304,7 @@ pub fn ordering_satisfy<
 
 /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
-fn ordering_satisfy_concrete<
+pub fn ordering_satisfy_concrete<
     F: FnOnce() -> EquivalenceProperties,
     F2: FnOnce() -> OrderingEquivalenceProperties,
 >(

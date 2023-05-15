@@ -1161,6 +1161,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 lit(!negated)
             }
 
+            // a IS NOT NULL --> true, if a is not nullable
+            Expr::IsNotNull(expr) if !info.nullable(&expr)? => lit(true),
+
+            // a IS NULL --> false, if a is not nullable
+            Expr::IsNull(expr) if !info.nullable(&expr)? => lit(false),
+
             // no additional rewrites possible
             expr => expr,
         };
@@ -2593,6 +2599,34 @@ mod tests {
         assert_eq!(
             simplify(lit(ScalarValue::Boolean(None)).eq(col("c2"))),
             lit(ScalarValue::Boolean(None)),
+        );
+    }
+
+    #[test]
+    fn simplify_expr_is_not_null() {
+        assert_eq!(
+            simplify(Expr::IsNotNull(Box::new(col("c1")))),
+            Expr::IsNotNull(Box::new(col("c1")))
+        );
+
+        // 'c1_non_null IS NOT NULL' is always true
+        assert_eq!(
+            simplify(Expr::IsNotNull(Box::new(col("c1_non_null")))),
+            lit(true)
+        );
+    }
+
+    #[test]
+    fn simplify_expr_is_null() {
+        assert_eq!(
+            simplify(Expr::IsNull(Box::new(col("c1")))),
+            Expr::IsNull(Box::new(col("c1")))
+        );
+
+        // 'c1_non_null IS NULL' is always false
+        assert_eq!(
+            simplify(Expr::IsNull(Box::new(col("c1_non_null")))),
+            lit(false)
         );
     }
 

@@ -576,12 +576,14 @@ message AggregateExprNode {
   repeated LogicalExprNode expr = 2;
   bool distinct = 3;
   LogicalExprNode filter = 4;
+  repeated LogicalExprNode order_by = 5;
 }
 
 message AggregateUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
   LogicalExprNode filter = 3;
+  repeated LogicalExprNode order_by = 4;
 }
 
 message ScalarUDFExprNode {
@@ -1284,6 +1286,10 @@ message MaybeFilter {
   PhysicalExprNode expr = 1;
 }
 
+message MaybePhysicalSortExprs {
+  repeated PhysicalSortExprNode sort_expr = 1;
+}
+
 message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
@@ -1296,6 +1302,7 @@ message AggregateExecNode {
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
+  repeated MaybePhysicalSortExprs order_by_expr = 11;
 }
 
 message GlobalLimitExecNode {
