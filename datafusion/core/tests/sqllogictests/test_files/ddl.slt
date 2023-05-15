@@ -310,6 +310,18 @@ DROP TABLE my_table;
 statement ok
 DROP TABLE aggregate_simple
 
+# Arrow format
+statement ok
+CREATE external table arrow_simple STORED as ARROW LOCATION 'tests/data/example.arrow';
+
+query ITB rowsort
+SELECT * FROM arrow_simple order by f1 LIMIT 1
+----
+2 bar NULL
+
+statement ok
+DROP TABLE arrow_simple
+
 # create_table_with_schema_as_select_mismatch
 statement error table 'datafusion.public.aggregate_simple' not found
 CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * FROM aggregate_simple;
