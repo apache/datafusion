@@ -2368,15 +2368,15 @@ SELECT c9, rn1 FROM (SELECT c9,
 
 
 # invalid window frame. null as preceding
-statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. null as preceding
-statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. negative as following
-statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers 
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
 
 # This test shows that ordering satisfy considers ordering equivalences,
