@@ -427,39 +427,69 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if self.parser.parse_keyword(Keyword::STORED) {
-                self.parser.expect_keyword(Keyword::AS)?;
-                ensure_not_set(&builder.file_type, "STORED AS")?;
-                builder.file_type = Some(self.parse_file_format()?);
-            } else if self.parser.parse_keyword(Keyword::LOCATION) {
-                ensure_not_set(&builder.location, "LOCATION")?;
-                builder.location = Some(self.parser.parse_literal_string()?);
-            } else if self.parser.parse_keyword(Keyword::WITH) {
-                if self.parser.parse_keyword(Keyword::ORDER) {
-                    ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
-                    builder.order_exprs = Some(self.parse_order_by_exprs()?);
-                } else {
-                    self.parser.expect_keyword(Keyword::HEADER)?;
-                    self.parser.expect_keyword(Keyword::ROW)?;
-                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
-                    builder.has_header = Some(true);
+            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
+                Keyword::STORED,
+                Keyword::LOCATION,
+                Keyword::WITH,
+                Keyword::DELIMITER,
+                Keyword::COMPRESSION,
+                Keyword::PARTITIONED,
+                Keyword::OPTIONS,
+            ]) {
+                match keyword {
+                    Keyword::STORED => {
+                        self.parser.expect_keyword(Keyword::AS)?;
+                        ensure_not_set(&builder.file_type, "STORED AS")?;
+                        builder.file_type = Some(self.parse_file_format()?);
+                    }
+                    Keyword::LOCATION => {
+                        ensure_not_set(&builder.location, "LOCATION")?;
+                        builder.location = Some(self.parser.parse_literal_string()?);
+                    }
+                    Keyword::WITH => {
+                        if self.parser.parse_keyword(Keyword::ORDER) {
+                            ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
+                            builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                        } else {
+                            self.parser.expect_keyword(Keyword::HEADER)?;
+                            self.parser.expect_keyword(Keyword::ROW)?;
+                            ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                            builder.has_header = Some(true);
+                        }
+                    }
+                    Keyword::DELIMITER => {
+                        ensure_not_set(&builder.delimiter, "DELIMITER")?;
+                        builder.delimiter = Some(self.parse_delimiter()?);
+                    }
+                    Keyword::COMPRESSION => {
+                        self.parser.expect_keyword(Keyword::TYPE)?;
+                        ensure_not_set(&builder.file_compression_type, "COMPRESSION")?;
+                        builder.file_compression_type =
+                            Some(self.parse_file_compression_type()?);
+                    }
+                    Keyword::PARTITIONED => {
+                        self.parser.expect_keyword(Keyword::BY)?;
+                        ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                        builder.table_partition_cols = Some(self.parse_partitions()?);
+                    }
+                    Keyword::OPTIONS => {
+                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        builder.options = Some(self.parse_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
                 }
-            } else if self.parser.parse_keyword(Keyword::DELIMITER) {
-                ensure_not_set(&builder.delimiter, "DELIMITER")?;
-                builder.delimiter = Some(self.parse_delimiter()?);
-            } else if self.parser.parse_keyword(Keyword::COMPRESSION) {
-                self.parser.expect_keyword(Keyword::TYPE)?;
-                ensure_not_set(&builder.file_compression_type, "COMPRESSION TYPE")?;
-                builder.file_compression_type = Some(self.parse_file_compression_type()?);
-            } else if self.parser.parse_keyword(Keyword::PARTITIONED) {
-                self.parser.expect_keyword(Keyword::BY)?;
-                ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
-                builder.table_partition_cols = Some(self.parse_partitions()?)
-            } else if self.parser.parse_keyword(Keyword::OPTIONS) {
-                ensure_not_set(&builder.options, "OPTIONS")?;
-                builder.options = Some(self.parse_options()?);
             } else {
-                break;
+                let token = self.parser.next_token();
+                if token == Token::EOF {
+                    break;
+                } else {
+                    return Err(ParserError::ParserError(format!(
+                        "Unexpected token {:?}",
+                        token
+                    )));
+                }
             }
         }
 
