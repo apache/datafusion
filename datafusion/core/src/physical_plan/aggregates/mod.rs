@@ -455,12 +455,10 @@ impl AggregateExec {
                     } else {
                         vec![]
                     };
-                let mut requirement = requirement_prefix
-                    .into_iter()
-                    .map(PhysicalSortRequirement::from)
-                    .collect::<Vec<_>>();
+                let mut requirement =
+                    PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
                 for req in aggregator_requirement {
-                    if requirement.iter().all(|item| req.expr().ne(item.expr())) {
+                    if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                         requirement.push(req);
                     }
                 }
