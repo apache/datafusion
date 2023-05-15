@@ -228,8 +228,8 @@ mod tests {
     use crate::from_slice::FromSlice;
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{AsArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow::error::ArrowError;
     use datafusion_expr::LogicalPlanBuilder;
     use futures::StreamExt;
@@ -467,6 +467,11 @@ mod tests {
         initial_data: Vec<Vec<RecordBatch>>,
         inserted_data: Vec<Vec<RecordBatch>>,
     ) -> Result<Vec<Vec<RecordBatch>>> {
+        let expected_count: u64 = inserted_data
+            .iter()
+            .flat_map(|batches| batches.iter().map(|batch| batch.num_rows() as u64))
+            .sum();
+
         // Create a new session context
         let session_ctx = SessionContext::new();
         // Create and register the initial table with the provided schema and data
@@ -490,8 +495,8 @@ mod tests {
 
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Ensure the result is empty after the insert operation
-        assert!(res.is_empty());
+        assert_eq!(extract_count(res), expected_count);
+
         // Read the data from the initial table and store it in a vector of partitions
         let mut partitions = vec![];
         for partition in initial_table.batches.iter() {
@@ -499,6 +504,32 @@ mod tests {
             partitions.push(part);
         }
         Ok(partitions)
+    }
+
+    /// Returns the value of results:
+    ///
+    /// "+-------+",
+    /// "| count |",
+    /// "+-------+",
+    /// "| 6     |",
+    /// "+-------+",
+    fn extract_count(res: Vec<RecordBatch>) -> u64 {
+        assert_eq!(res.len(), 1, "expected one batch, got {}", res.len());
+        let batch = &res[0];
+        assert_eq!(
+            batch.num_columns(),
+            1,
+            "expected 1 column, got {}",
+            batch.num_columns()
+        );
+        let col = batch.column(0).as_primitive::<UInt64Type>();
+        assert_eq!(col.len(), 1, "expected 1 row, got {}", col.len());
+        let val = col
+            .iter()
+            .next()
+            .expect("had value")
+            .expect("expected non null");
+        val
     }
 
     // Test inserting a single batch of data into a single partition
