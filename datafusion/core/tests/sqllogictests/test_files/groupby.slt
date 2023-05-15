@@ -2109,7 +2109,7 @@ SELECT ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
   GROUP BY s.country
 
 # test_ordering_sensitive_aggregation4
-# If aggregators can work with bounded memory (FullyOrdered or PartiallyOrdered mode), we should be append requirement to
+# If aggregators can work with bounded memory (FullyOrdered or PartiallyOrdered mode), we should append requirement to
 # the existing ordering. This enables us to still work with bounded memory, and also satisfy aggregation requirement.
 # This test checks for whether we can satisfy aggregation requirement in FullyOrdered mode.
 query TT
