@@ -145,7 +145,7 @@ impl ExecutionPlan for InsertExec {
             )));
         }
 
-        let data = self.input.execute(0, context.clone())?;
+        let data = self.input.execute(0, context)?;
         let schema = self.schema.clone();
         let sink = self.sink.clone();
 
