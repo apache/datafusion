@@ -30,6 +30,7 @@ use arrow_array::Array;
 use arrow_schema::Fields;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use log::debug;
 
 use crate::{error::Result, scalar::ScalarValue};
 
