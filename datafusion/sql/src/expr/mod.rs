@@ -566,3 +566,124 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         plan_key(key)?,
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use sqlparser::dialect::GenericDialect;
+    use sqlparser::parser::Parser;
+
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::logical_plan::builder::LogicalTableSource;
+    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
+
+    use crate::TableReference;
+
+    struct TestSchemaProvider {
+        options: ConfigOptions,
+        tables: HashMap<String, Arc<dyn TableSource>>,
+    }
+
+    impl TestSchemaProvider {
+        pub fn new() -> Self {
+            let mut tables = HashMap::new();
+            tables.insert(
+                "table1".to_string(),
+                create_table_source(vec![Field::new(
+                    "column1".to_string(),
+                    DataType::Utf8,
+                    false,
+                )]),
+            );
+
+            Self {
+                options: Default::default(),
+                tables,
+            }
+        }
+    }
+
+    impl ContextProvider for TestSchemaProvider {
+        fn get_table_provider(
+            &self,
+            name: TableReference,
+        ) -> Result<Arc<dyn TableSource>> {
+            match self.tables.get(name.table()) {
+                Some(table) => Ok(table.clone()),
+                _ => Err(DataFusionError::Plan(format!(
+                    "Table not found: {}",
+                    name.table()
+                ))),
+            }
+        }
+
+        fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
+            None
+        }
+
+        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
+            None
+        }
+
+        fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+            None
+        }
+
+        fn options(&self) -> &ConfigOptions {
+            &self.options
+        }
+    }
+
+    fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
+        Arc::new(LogicalTableSource::new(Arc::new(
+            Schema::new_with_metadata(fields, HashMap::new()),
+        )))
+    }
+
+    macro_rules! test_stack_overflow {
+        ($num_expr:expr) => {
+            paste::item! {
+                #[test]
+                fn [<test_stack_overflow_ $num_expr>]() {
+                    let schema = DFSchema::empty();
+                    let mut planner_context = PlannerContext::default();
+
+                    let expr_str = (0..$num_expr)
+                        .map(|i| format!("column1 = 'value{:?}'", i))
+                        .collect::<Vec<String>>()
+                        .join(" OR ");
+
+                    let dialect = GenericDialect{};
+                    let mut parser = Parser::new(&dialect)
+                        .try_with_sql(expr_str.as_str())
+                        .unwrap();
+                    let sql_expr = parser.parse_expr().unwrap();
+
+                    let schema_provider = TestSchemaProvider::new();
+                    let sql_to_rel = SqlToRel::new(&schema_provider);
+
+                    // Should not stack overflow
+                    sql_to_rel.sql_expr_to_logical_expr(
+                        sql_expr,
+                        &schema,
+                        &mut planner_context,
+                    ).unwrap();
+                }
+            }
+        };
+    }
+
+    test_stack_overflow!(64);
+    test_stack_overflow!(128);
+    test_stack_overflow!(256);
+    test_stack_overflow!(512);
+    test_stack_overflow!(1024);
+    test_stack_overflow!(2048);
+    test_stack_overflow!(4096);
+    test_stack_overflow!(8192);
+}
