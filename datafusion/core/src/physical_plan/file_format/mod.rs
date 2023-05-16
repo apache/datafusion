@@ -57,6 +57,7 @@ use datafusion_physical_expr::expressions::Column;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
+use std::fmt::Debug;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -119,7 +120,7 @@ pub fn get_scan_files(
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FileScanConfig {
     /// Object store URL, used to get an [`ObjectStore`] instance from
     /// [`RuntimeEnv::object_store`]
@@ -234,6 +235,16 @@ impl FileScanConfig {
     }
 }
 
+impl Debug for FileScanConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "object_store_url={:?}", self.object_store_url)?;
+
+        write!(f, "statistics={:?}", self.statistics)?;
+
+        Display::fmt(self, f)
+    }
+}
+
 impl Display for FileScanConfig {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         let (schema, _, ordering) = self.project();
@@ -275,7 +286,9 @@ impl<'a> Display for FileGroupsDisplay<'a> {
         let mut first_group = true;
         let groups = if self.0.len() == 1 { "group" } else { "groups" };
         write!(f, "{{{} {}: [", self.0.len(), groups)?;
-        for group in self.0 {
+        // To avoid showing too many partitions
+        let max_groups = 5;
+        for group in self.0.iter().take(max_groups) {
             if !first_group {
                 write!(f, ", ")?;
             }
@@ -296,6 +309,9 @@ impl<'a> Display for FileGroupsDisplay<'a> {
                 }
             }
             write!(f, "]")?;
+        }
+        if self.0.len() > max_groups {
+            write!(f, ", ...")?;
         }
         write!(f, "]}}")?;
         Ok(())
