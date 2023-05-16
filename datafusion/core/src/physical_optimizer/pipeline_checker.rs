@@ -205,6 +205,25 @@ fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> boo
     false
 }
 
+// Updates index of the column with the new index (if PhysicalExpr is Column)
+fn update_column_index(
+    sort_expr: &Option<PhysicalSortExpr>,
+    updated_idx: usize,
+) -> Option<PhysicalSortExpr> {
+    sort_expr.as_ref().and_then(|sort_expr| {
+        sort_expr
+            .expr
+            .as_any()
+            .downcast_ref::<Column>()
+            .map(|column| {
+                let sort_name = column.name();
+                let options = sort_expr.options;
+                let expr = Arc::new(Column::new(sort_name, updated_idx));
+                PhysicalSortExpr { expr, options }
+            })
+    })
+}
+
 fn get_sort_expr_in_filter_schema(
     left_sort_expr: &Option<PhysicalSortExpr>,
     right_sort_expr: &Option<PhysicalSortExpr>,
@@ -220,42 +239,10 @@ fn get_sort_expr_in_filter_schema(
             Some(index) => index,
             None => return None,
         };
-    let new_left_sort = left_sort_expr.as_ref().and_then(|left_sort| {
-        left_sort
-            .expr
-            .as_any()
-            .downcast_ref::<Column>()
-            .map(|left_column| {
-                let left_sort_name = left_column.name();
-                let left_sort_options = left_sort.options;
-                let left_expr = Arc::new(Column::new(
-                    left_sort_name,
-                    left_sorted_column_index_in_filter,
-                ));
-                PhysicalSortExpr {
-                    expr: left_expr,
-                    options: left_sort_options,
-                }
-            })
-    });
-    let new_right_sort = right_sort_expr.as_ref().and_then(|right_sort| {
-        right_sort
-            .expr
-            .as_any()
-            .downcast_ref::<Column>()
-            .map(|right_column| {
-                let right_sort_name = right_column.name();
-                let right_sort_options = right_sort.options;
-                let right_expr = Arc::new(Column::new(
-                    right_sort_name,
-                    right_sorted_column_index_in_filter,
-                ));
-                PhysicalSortExpr {
-                    expr: right_expr,
-                    options: right_sort_options,
-                }
-            })
-    });
+    let new_left_sort =
+        update_column_index(left_sort_expr, left_sorted_column_index_in_filter);
+    let new_right_sort =
+        update_column_index(right_sort_expr, right_sorted_column_index_in_filter);
     Some((new_left_sort, new_right_sort))
 }
 
