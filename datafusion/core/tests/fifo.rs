@@ -21,7 +21,7 @@
 #[cfg(test)]
 mod unix_test {
     use arrow::array::Array;
-    use arrow::csv::Reader;
+    use arrow::csv::ReaderBuilder;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::test_util::register_unbounded_file_with_ordering;
     use datafusion::{
@@ -379,8 +379,13 @@ mod unix_test {
                 Field::new("a1", DataType::Utf8, false),
                 Field::new("a2", DataType::UInt32, false),
             ]));
-            let mut reader =
-                Reader::new(file, schema, true, None, TEST_BATCH_SIZE, None, None, None);
+
+            let mut reader = ReaderBuilder::new(schema)
+                .has_header(true)
+                .with_batch_size(TEST_BATCH_SIZE)
+                .build(file)
+                .map_err(|e| DataFusionError::Internal(e.to_string()))
+                .unwrap();
 
             while let Some(Ok(_)) = reader.next() {
                 waiting_thread.store(false, Ordering::SeqCst);

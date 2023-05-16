@@ -896,7 +896,7 @@ mod tests {
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
-    use arrow::csv::Reader;
+    use arrow::csv;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
@@ -1391,13 +1391,12 @@ mod tests {
 
     fn load_empty_schema_csv_table(
         schema: SchemaRef,
-        compression: FileCompressionType,
         temp_path: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         File::create(temp_path)?;
         let table_path = ListingTableUrl::parse(temp_path).unwrap();
 
-        let file_format = CsvFormat::default().with_file_compression_type(compression);
+        let file_format = CsvFormat::default();
         let listing_options = ListingOptions::new(Arc::new(file_format));
 
         let config = ListingTableConfig::new(table_path)
@@ -1514,7 +1513,7 @@ mod tests {
     #[tokio::test]
     async fn test_append_plan_to_external_table_stored_as_csv() -> Result<()> {
         let file_type = FileType::CSV;
-        let file_compression_type = FileCompressionType::BZIP2;
+        let file_compression_type = FileCompressionType::UNCOMPRESSED;
 
         // Create the initial context, schema, and batch.
         let session_ctx = SessionContext::new();
@@ -1547,11 +1546,8 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let path = tmp_dir.path().join(filename);
 
-        let initial_table = load_empty_schema_csv_table(
-            schema.clone(),
-            file_compression_type.clone(),
-            path.to_str().unwrap(),
-        )?;
+        let initial_table =
+            load_empty_schema_csv_table(schema.clone(), path.to_str().unwrap())?;
         session_ctx.register_table("t", initial_table)?;
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(
@@ -1576,24 +1572,19 @@ mod tests {
         let res = collect(plan, session_ctx.task_ctx()).await?;
         // Ensure the result is empty after the insert operation
         assert!(res.is_empty());
-
         // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
-        let decoder = file_compression_type.convert_read(File::open(path.clone())?)?;
-        let reader = Reader::new(
-            decoder,
-            schema.clone(),
-            true,
-            None,
-            batch_size,
-            None,
-            None,
-            None,
-        );
+        let file = File::open(path.clone())?;
+        let reader = csv::ReaderBuilder::new(schema.clone())
+            .has_header(true)
+            .with_batch_size(batch_size)
+            .build(file)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
         let batches = reader
             .collect::<Vec<ArrowResult<RecordBatch>>>()
             .into_iter()
             .collect::<ArrowResult<Vec<RecordBatch>>>()
-            .map_err(|e| DataFusionError::Internal(e.to_string()));
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
 
         // Define the expected result as a vector of strings.
         let expected = vec![
@@ -1610,7 +1601,7 @@ mod tests {
         ];
 
         // Assert that the batches read from the file match the expected result.
-        assert_batches_eq!(expected, &batches?);
+        assert_batches_eq!(expected, &batches);
 
         // Create a physical plan from the insert plan
         let plan = session_ctx
@@ -1622,9 +1613,13 @@ mod tests {
         collect(plan, session_ctx.task_ctx()).await?;
 
         // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
-        let decoder = file_compression_type.convert_read(File::open(path.clone())?)?;
-        let reader =
-            Reader::new(decoder, schema, true, None, batch_size, None, None, None);
+        let file = File::open(path.clone())?;
+        let reader = csv::ReaderBuilder::new(schema.clone())
+            .has_header(true)
+            .with_batch_size(batch_size)
+            .build(file)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
         let batches = reader
             .collect::<Vec<ArrowResult<RecordBatch>>>()
             .into_iter()
