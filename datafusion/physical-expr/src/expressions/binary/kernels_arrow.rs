@@ -35,9 +35,7 @@ use arrow_schema::DataType;
 use datafusion_common::cast::{as_date32_array, as_date64_array, as_decimal128_array};
 use datafusion_common::scalar::{date32_add, date64_add};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::decimal_op_mathematics_type;
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::Operator;
 use std::cmp::min;
 use std::sync::Arc;
 
@@ -469,24 +467,8 @@ pub(crate) fn multiply_decimal_dyn_scalar(
     result_type: &DataType,
 ) -> Result<ArrayRef> {
     let (precision, scale) = get_precision_scale(result_type)?;
-
-    let op_type = decimal_op_mathematics_type(
-        &Operator::Multiply,
-        left.data_type(),
-        left.data_type(),
-    )
-    .unwrap();
-    let (_, op_scale) = get_precision_scale(&op_type)?;
-
     let array = multiply_scalar_dyn::<Decimal128Type>(left, right)?;
-
-    if op_scale > scale {
-        let div = 10_i128.pow((op_scale - scale) as u32);
-        let array = divide_scalar_dyn::<Decimal128Type>(&array, div)?;
-        decimal_array_with_precision_scale(array, precision, scale)
-    } else {
-        decimal_array_with_precision_scale(array, precision, scale)
-    }
+    decimal_array_with_precision_scale(array, precision, scale)
 }
 
 pub(crate) fn divide_decimal_dyn_scalar(
@@ -703,6 +685,8 @@ pub(crate) fn modulus_decimal_dyn_scalar(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_expr::type_coercion::binary::decimal_op_mathematics_type;
+    use datafusion_expr::Operator;
 
     fn create_decimal_array(
         array: &[Option<i128>],

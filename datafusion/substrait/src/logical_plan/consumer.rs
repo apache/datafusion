@@ -278,6 +278,8 @@ pub async fn from_substrait_rel(
                                 input.schema(),
                                 extensions,
                                 filter,
+                                // TODO: Add parsing of order_by also
+                                None,
                                 distinct,
                             )
                             .await
@@ -549,6 +551,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
     filter: Option<Box<Expr>>,
+    order_by: Option<Vec<Expr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let mut args: Vec<Expr> = vec![];
@@ -579,6 +582,7 @@ pub async fn from_substrait_agg_func(
         args,
         distinct,
         filter,
+        order_by,
     })))
 }
 
