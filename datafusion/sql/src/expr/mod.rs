@@ -56,7 +56,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // produces expressions in postfix notations, i.e. `a + b` => `a b +`.
         let mut stack: Box<Vec<StackEntry>> =
             Box::new(vec![StackEntry::SQLExpr(Box::new(sql))]);
-        let mut eval_stack = Box::new(vec![]);
+        let mut eval_stack = Box::<Vec<Expr>>::default();
 
         while let Some(entry) = stack.pop() {
             match entry {
