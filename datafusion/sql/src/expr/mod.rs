@@ -46,27 +46,56 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // Workaround for https://github.com/apache/arrow-datafusion/issues/4065
-        //
-        // Minimize stack space required in debug builds to plan
-        // deeply nested binary operators by keeping the stack space
-        // needed for sql_expr_to_logical_expr minimal for BinaryOp
-        //
-        // The reason this reduces stack size in debug builds is
-        // explained in the "Technical Backstory" heading of
-        // https://github.com/apache/arrow-datafusion/pull/1047
-        //
-        // A likely better way to support deeply nested expressions
-        // would be to avoid recursion all together and use an
-        // iterative algorithm.
-        match sql {
-            SQLExpr::BinaryOp { left, op, right } => {
-                self.parse_sql_binary_op(*left, op, *right, schema, planner_context)
-            }
-            // since this function requires more space per frame
-            // avoid calling it for binary ops
-            _ => self.sql_expr_to_logical_expr_internal(sql, schema, planner_context),
+        enum StackEntry {
+            SQLExpr(Box<SQLExpr>),
+            Operator(Operator),
         }
+
+        // Virtual stack machine to convert SQLExpr to Expr
+        // This allows visiting the expr tree in a depth-first manner which
+        // produces expressions in postfix notations, i.e. `a + b` => `a b +`.
+        let mut stack: Box<Vec<StackEntry>> =
+            Box::new(vec![StackEntry::SQLExpr(Box::new(sql))]);
+        let mut eval_stack = Box::new(vec![]);
+
+        while let Some(entry) = stack.pop() {
+            match entry {
+                StackEntry::SQLExpr(sql_expr) => {
+                    match *sql_expr {
+                        SQLExpr::BinaryOp { left, op, right } => {
+                            // Note the order that we push the entries to the stack
+                            // is important. We want to visit the left node first.
+                            let op = self.parse_sql_binary_op(op)?;
+                            stack.push(StackEntry::Operator(op));
+                            stack.push(StackEntry::SQLExpr(right));
+                            stack.push(StackEntry::SQLExpr(left));
+                        }
+                        _ => {
+                            let expr = self.sql_expr_to_logical_expr_internal(
+                                *sql_expr,
+                                schema,
+                                planner_context,
+                            )?;
+                            eval_stack.push(expr);
+                        }
+                    }
+                }
+                StackEntry::Operator(op) => {
+                    let right = eval_stack.pop().unwrap();
+                    let left = eval_stack.pop().unwrap();
+                    let expr = Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
+                        op,
+                        Box::new(right),
+                    ));
+                    eval_stack.push(expr);
+                }
+            }
+        }
+
+        assert_eq!(1, eval_stack.len());
+        let expr = eval_stack.pop().unwrap();
+        Ok(expr)
     }
 
     /// Generate a relational expression from a SQL expression
