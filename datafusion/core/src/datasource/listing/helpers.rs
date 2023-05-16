@@ -132,6 +132,9 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
     is_applicable
 }
 
+/// The maximum number of concurrent listing requests
+const CONCURRENCY_LIMIT: usize = 10;
+
 /// Partition the list of files into `n` groups
 pub fn split_files(
     partitioned_files: Vec<PartitionedFile>,
@@ -177,10 +180,16 @@ async fn list_partitions(
     };
 
     let mut out = Vec::with_capacity(64);
+
+    let mut pending = vec![];
     let mut futures = FuturesUnordered::new();
     futures.push(partition.list(store));
 
     while let Some((partition, paths)) = futures.next().await.transpose()? {
+        if let Some(next) = pending.pop() {
+            futures.push(next)
+        }
+
         let depth = partition.depth;
         out.push(partition);
         for path in paths {
@@ -190,7 +199,10 @@ async fn list_partitions(
                 files: None,
             };
             match depth < max_depth {
-                true => futures.push(child.list(store)),
+                true => match futures.len() < CONCURRENCY_LIMIT {
+                    true => futures.push(child.list(store)),
+                    false => pending.push(child.list(store)),
+                },
                 false => out.push(child),
             }
         }
@@ -356,7 +368,7 @@ pub async fn pruned_partition_list<'a>(
 
             Ok::<_, DataFusionError>(stream)
         })
-        .buffer_unordered(10)
+        .buffer_unordered(CONCURRENCY_LIMIT)
         .try_flatten()
         .boxed();
     Ok(stream)
