@@ -26,6 +26,7 @@ pub mod parsers;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 pub mod scalar;
+mod schema_reference;
 pub mod stats;
 mod table_reference;
 pub mod test_util;
@@ -39,6 +40,7 @@ pub use error::{
     SharedResult,
 };
 pub use scalar::{ScalarType, ScalarValue};
+pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
 

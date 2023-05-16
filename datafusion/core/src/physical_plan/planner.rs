@@ -62,8 +62,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
-    Like, TryCast, WindowFunction,
+    self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
+    GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -74,7 +74,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use itertools::Itertools;
+use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -184,10 +184,10 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{expr}[{key}]"))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_physical_name(&fun.to_string(), false, args)
+        Expr::ScalarFunction(func) => {
+            create_function_physical_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF { fun, args, .. } => {
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             create_function_physical_name(&fun.name, false, args)
         }
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
@@ -199,10 +199,21 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             args,
             ..
         }) => create_function_physical_name(&fun.to_string(), *distinct, args),
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        }) => {
+            // TODO: Add support for filter and order by in AggregateUDF
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
                     "aggregate expression with filter is not supported".to_string(),
+                ));
+            }
+            if order_by.is_some() {
+                return Err(DataFusionError::Execution(
+                    "aggregate expression with order_by is not supported".to_string(),
                 ));
             }
             let mut names = Vec::with_capacity(args.len());
@@ -242,11 +253,11 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             }
         },
 
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => {
+        }) => {
             let expr = create_physical_name(expr, false)?;
             let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
@@ -258,7 +269,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
             "EXISTS is not yet supported in the physical plan".to_string(),
         )),
-        Expr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
+        Expr::InSubquery(_) => Err(DataFusionError::NotImplemented(
             "IN subquery is not yet supported in the physical plan".to_string(),
         )),
         Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
@@ -345,7 +356,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder { .. } => Err(DataFusionError::Internal(
+        Expr::Placeholder(_) => Err(DataFusionError::Internal(
             "Create physical name does not support placeholder".to_string(),
         )),
         Expr::OuterReferenceColumn(_, _) => Err(DataFusionError::Internal(
@@ -464,6 +475,51 @@ impl DefaultPhysicalPlanner {
         extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>>,
     ) -> Self {
         Self { extension_planners }
+    }
+
+    /// Create a physical plans for multiple logical plans.
+    ///
+    /// This is the same as [`create_initial_plan`](Self::create_initial_plan) but runs the planning concurrently.
+    ///
+    /// The result order is the same as the input order.
+    fn create_initial_plan_multi<'a>(
+        &'a self,
+        logical_plans: impl IntoIterator<Item = &'a LogicalPlan> + Send + 'a,
+        session_state: &'a SessionState,
+    ) -> BoxFuture<'a, Result<Vec<Arc<dyn ExecutionPlan>>>> {
+        async move {
+            // First build futures with as little references as possible, then performing some stream magic.
+            // Otherwise rustc bails out w/:
+            //
+            //   error: higher-ranked lifetime error
+            //   ...
+            //   note: could not prove `[async block@...]: std::marker::Send`
+            let futures = logical_plans
+                .into_iter()
+                .enumerate()
+                .map(|(idx, lp)| async move {
+                    let plan = self.create_initial_plan(lp, session_state).await?;
+                    Ok((idx, plan)) as Result<_>
+                })
+                .collect::<Vec<_>>();
+
+            let mut physical_plans = futures::stream::iter(futures)
+                .buffer_unordered(
+                    session_state
+                        .config_options()
+                        .execution
+                        .planning_concurrency,
+                )
+                .try_collect::<Vec<(usize, Arc<dyn ExecutionPlan>)>>()
+                .await?;
+            physical_plans.sort_by_key(|(idx, _plan)| *idx);
+            let physical_plans = physical_plans
+                .into_iter()
+                .map(|(_idx, plan)| plan)
+                .collect::<Vec<_>>();
+            Ok(physical_plans)
+        }
+        .boxed()
     }
 
     /// Create a physical plan from a logical plan
@@ -658,13 +714,15 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    let (aggregates, filters): (Vec<_>, Vec<_>) = agg_filter.into_iter().unzip();
+
+                    let (aggregates, filters, order_bys) : (Vec<_>, Vec<_>, Vec<_>) = multiunzip(agg_filter.into_iter());
 
                     let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
                         filters.clone(),
+                        order_bys.clone(),
                         input_exec,
                         physical_input_schema.clone(),
                     )?);
@@ -701,6 +759,7 @@ impl DefaultPhysicalPlanner {
                         final_grouping_set,
                         aggregates,
                         filters,
+                        order_bys,
                         initial_aggr,
                         physical_input_schema.clone(),
                     )?))
@@ -771,10 +830,8 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
                 }
                 LogicalPlan::Union(Union { inputs, schema }) => {
-                    let physical_plans = futures::stream::iter(inputs)
-                        .then(|lp| self.create_initial_plan(lp, session_state))
-                        .try_collect::<Vec<_>>()
-                        .await?;
+                    let physical_plans = self.create_initial_plan_multi(inputs.iter().map(|lp| lp.as_ref()), session_state).await?;
+
                     if schema.fields().len() < physical_plans[0].schema().fields().len() {
                         // `schema` could be a subset of the child schema. For example
                         // for query "select count(*) from (select a from t union all select a from t)"
@@ -824,25 +881,12 @@ impl DefaultPhysicalPlanner {
                     let input_dfschema = input.as_ref().schema();
                     let sort_expr = expr
                         .iter()
-                        .map(|e| match e {
-                            Expr::Sort(expr::Sort {
-                                expr,
-                                asc,
-                                nulls_first,
-                            }) => create_physical_sort_expr(
-                                expr,
-                                input_dfschema,
-                                &input_schema,
-                                SortOptions {
-                                    descending: !*asc,
-                                    nulls_first: *nulls_first,
-                                },
-                                session_state.execution_props(),
-                            ),
-                            _ => Err(DataFusionError::Plan(
-                                "Sort only accepts sort expressions".to_string(),
-                            )),
-                        })
+                        .map(|e| create_physical_sort_expr(
+                            e,
+                            input_dfschema,
+                            &input_schema,
+                            session_state.execution_props(),
+                        ))
                         .collect::<Result<Vec<_>>>()?;
                     let new_sort = SortExec::new(sort_expr, physical_input)
                         .with_fetch(*fetch);
@@ -929,10 +973,10 @@ impl DefaultPhysicalPlanner {
                     }
 
                     // All equi-join keys are columns now, create physical join plan
+                    let left_right = self.create_initial_plan_multi([left.as_ref(), right.as_ref()], session_state).await?;
+                    let [physical_left, physical_right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     let left_df_schema = left.schema();
-                    let physical_left = self.create_initial_plan(left, session_state).await?;
                     let right_df_schema = right.schema();
-                    let physical_right = self.create_initial_plan(right, session_state).await?;
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
@@ -1064,8 +1108,8 @@ impl DefaultPhysicalPlanner {
                     }
                 }
                 LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                    let left = self.create_initial_plan(left, session_state).await?;
-                    let right = self.create_initial_plan(right, session_state).await?;
+                    let left_right = self.create_initial_plan_multi([left.as_ref(), right.as_ref()], session_state).await?;
+                    let [left, right]: [Arc<dyn ExecutionPlan>; 2] = left_right.try_into().map_err(|_| DataFusionError::Internal("`create_initial_plan_multi` is broken".to_string()))?;
                     Ok(Arc::new(CrossJoinExec::new(left, right)))
                 }
                 LogicalPlan::Subquery(_) => todo!(),
@@ -1122,24 +1166,6 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
-                LogicalPlan::DropTable(_) => {
-                    // There is no default plan for "DROP TABLE".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropTable".to_string(),
-                    ))
-                }
-                LogicalPlan::DropView(_) => {
-                    // There is no default plan for "DROP VIEW".
-                    // It must be handled at a higher level (so
-                    // that the schema can be registered with
-                    // the context)
-                    Err(DataFusionError::NotImplemented(
-                        "Unsupported logical plan: DropView".to_string(),
-                    ))
-                }
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     Err(DataFusionError::NotImplemented(
@@ -1172,10 +1198,7 @@ impl DefaultPhysicalPlanner {
                     Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
                 }
                 LogicalPlan::Extension(e) => {
-                    let physical_inputs = futures::stream::iter(e.node.inputs())
-                        .then(|lp| self.create_initial_plan(lp, session_state))
-                        .try_collect::<Vec<_>>()
-                        .await?;
+                    let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
                     let mut maybe_plan = None;
                     for planner in &self.extension_planners {
@@ -1532,24 +1555,13 @@ pub fn create_window_expr_with_name(
                 .collect::<Result<Vec<_>>>()?;
             let order_by = order_by
                 .iter()
-                .map(|e| match e {
-                    Expr::Sort(expr::Sort {
-                        expr,
-                        asc,
-                        nulls_first,
-                    }) => create_physical_sort_expr(
-                        expr,
+                .map(|e| {
+                    create_physical_sort_expr(
+                        e,
                         logical_input_schema,
                         physical_input_schema,
-                        SortOptions {
-                            descending: !*asc,
-                            nulls_first: *nulls_first,
-                        },
                         execution_props,
-                    ),
-                    _ => Err(DataFusionError::Plan(
-                        "Sort only accepts sort expressions".to_string(),
-                    )),
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             if !is_window_valid(window_frame) {
@@ -1570,7 +1582,7 @@ pub fn create_window_expr_with_name(
                 physical_input_schema,
             )
         }
-        other => Err(DataFusionError::Internal(format!(
+        other => Err(DataFusionError::Plan(format!(
             "Invalid window expression '{other:?}'"
         ))),
     }
@@ -1597,8 +1609,13 @@ pub fn create_window_expr(
     )
 }
 
-type AggregateExprWithOptionalFilter =
-    (Arc<dyn AggregateExpr>, Option<Arc<dyn PhysicalExpr>>);
+type AggregateExprWithOptionalArgs = (
+    Arc<dyn AggregateExpr>,
+    // The filter clause, if any
+    Option<Arc<dyn PhysicalExpr>>,
+    // Ordering requirements, if any
+    Option<Vec<PhysicalSortExpr>>,
+);
 
 /// Create an aggregate expression with a name from a logical expression
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
@@ -1607,13 +1624,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<AggregateExprWithOptionalFilter> {
+) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             filter,
+            order_by,
         }) => {
             let args = args
                 .iter()
@@ -1641,10 +1659,30 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 &args,
                 physical_input_schema,
                 name,
-            );
-            Ok((agg_expr?, filter))
+            )?;
+            let order_by = match order_by {
+                Some(e) => Some(
+                    e.iter()
+                        .map(|expr| {
+                            create_physical_sort_expr(
+                                expr,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                None => None,
+            };
+            Ok((agg_expr, filter, order_by))
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        }) => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1666,10 +1704,25 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
+            let order_by = match order_by {
+                Some(e) => Some(
+                    e.iter()
+                        .map(|expr| {
+                            create_physical_sort_expr(
+                                expr,
+                                logical_input_schema,
+                                physical_input_schema,
+                                execution_props,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                None => None,
+            };
 
             let agg_expr =
                 udaf::create_aggregate_expr(fun, &args, physical_input_schema, name);
-            Ok((agg_expr?, filter))
+            Ok((agg_expr?, filter, order_by))
         }
         other => Err(DataFusionError::Internal(format!(
             "Invalid aggregate expression '{other:?}'"
@@ -1683,7 +1736,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
-) -> Result<AggregateExprWithOptionalFilter> {
+) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
         Expr::Alias(sub_expr, alias) => (alias.clone(), sub_expr.as_ref()),
@@ -1704,13 +1757,31 @@ pub fn create_physical_sort_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
     input_schema: &Schema,
-    options: SortOptions,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    Ok(PhysicalSortExpr {
-        expr: create_physical_expr(e, input_dfschema, input_schema, execution_props)?,
-        options,
-    })
+    if let Expr::Sort(expr::Sort {
+        expr,
+        asc,
+        nulls_first,
+    }) = e
+    {
+        Ok(PhysicalSortExpr {
+            expr: create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?,
+            options: SortOptions {
+                descending: !asc,
+                nulls_first: *nulls_first,
+            },
+        })
+    } else {
+        Err(DataFusionError::Internal(
+            "Expects a sort expression".to_string(),
+        ))
+    }
 }
 
 impl DefaultPhysicalPlanner {
@@ -2071,10 +2142,7 @@ mod tests {
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
-            let message = format!(
-                "Expression {case:?} expected to error due to impossible coercion"
-            );
-            assert!(logical_plan.is_err(), "{}", message);
+            assert!(logical_plan.is_ok());
         }
         Ok(())
     }

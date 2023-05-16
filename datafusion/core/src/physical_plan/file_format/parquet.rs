@@ -28,7 +28,6 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::config::ConfigOptions;
-use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
@@ -49,15 +48,14 @@ use crate::{
 use arrow::error::ArrowError;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::debug;
-use object_store::{ObjectMeta, ObjectStore};
+use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
-use parquet::errors::ParquetError;
 use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 
@@ -88,7 +86,7 @@ pub struct ParquetExec {
     /// Override for `Self::with_enable_page_index`. If None, uses
     /// values from base_config
     enable_page_index: Option<bool>,
-    /// Base configuraton for this scan
+    /// Base configuration for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
@@ -421,20 +419,10 @@ impl ExecutionPlan for ParquetExec {
                     .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
                     .unwrap_or_default();
 
-                let output_ordering_string = self
-                    .output_ordering()
-                    .map(make_output_ordering_string)
-                    .unwrap_or_default();
-
                 write!(
                     f,
-                    "ParquetExec: limit={:?}, partitions={}{}{}{}, projection={}",
-                    self.base_config.limit,
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                    predicate_string,
-                    pruning_predicate_string,
-                    output_ordering_string,
-                    super::ProjectSchemaDisplay(&self.projected_schema),
+                    "ParquetExec: {}{}{}",
+                    self.base_config, predicate_string, pruning_predicate_string,
                 )
             }
         }
@@ -447,20 +435,6 @@ impl ExecutionPlan for ParquetExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
-}
-
-fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
-    use std::fmt::Write;
-    let mut w: String = ", output_ordering=[".into();
-
-    for (i, e) in ordering.iter().enumerate() {
-        if i > 0 {
-            write!(&mut w, ", ").unwrap()
-        }
-        write!(&mut w, "{e}").unwrap()
-    }
-    write!(&mut w, "]").unwrap();
-    w
 }
 
 /// Implements [`FileOpener`] for a parquet file
@@ -508,7 +482,10 @@ impl FileOpener for ParquetOpener {
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
-        let enable_page_index = self.enable_page_index;
+        let enable_page_index = should_enable_page_index(
+            self.enable_page_index,
+            &self.page_pruning_predicate,
+        );
         let limit = self.limit;
 
         Ok(Box::pin(async move {
@@ -598,6 +575,18 @@ impl FileOpener for ParquetOpener {
     }
 }
 
+fn should_enable_page_index(
+    enable_page_index: bool,
+    page_pruning_predicate: &Option<Arc<PagePruningPredicate>>,
+) -> bool {
+    enable_page_index
+        && page_pruning_predicate.is_some()
+        && page_pruning_predicate
+            .as_ref()
+            .map(|p| p.filter_number() > 0)
+            .unwrap_or(false)
+}
+
 /// Factory of parquet file readers.
 ///
 /// Provides means to implement custom data access interface.
@@ -625,10 +614,8 @@ impl DefaultParquetFileReaderFactory {
 
 /// Implements [`AsyncFileReader`] for a parquet file in object storage
 struct ParquetFileReader {
-    store: Arc<dyn ObjectStore>,
-    meta: ObjectMeta,
     file_metrics: ParquetFileMetrics,
-    metadata_size_hint: Option<usize>,
+    inner: ParquetObjectReader,
 }
 
 impl AsyncFileReader for ParquetFileReader {
@@ -637,13 +624,7 @@ impl AsyncFileReader for ParquetFileReader {
         range: Range<usize>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         self.file_metrics.bytes_scanned.add(range.end - range.start);
-
-        self.store
-            .get_range(&self.meta.location, range)
-            .map_err(|e| {
-                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}"))
-            })
-            .boxed()
+        self.inner.get_bytes(range)
     }
 
     fn get_byte_ranges(
@@ -655,37 +636,13 @@ impl AsyncFileReader for ParquetFileReader {
     {
         let total = ranges.iter().map(|r| r.end - r.start).sum();
         self.file_metrics.bytes_scanned.add(total);
-
-        async move {
-            self.store
-                .get_ranges(&self.meta.location, &ranges)
-                .await
-                .map_err(|e| {
-                    ParquetError::General(format!(
-                        "AsyncChunkReader::get_byte_ranges error: {e}"
-                    ))
-                })
-        }
-        .boxed()
+        self.inner.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
         &mut self,
     ) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        Box::pin(async move {
-            let metadata = fetch_parquet_metadata(
-                self.store.as_ref(),
-                &self.meta,
-                self.metadata_size_hint,
-            )
-            .await
-            .map_err(|e| {
-                ParquetError::General(format!(
-                    "AsyncChunkReader::get_metadata error: {e}"
-                ))
-            })?;
-            Ok(Arc::new(metadata))
-        })
+        self.inner.get_metadata()
     }
 }
 
@@ -702,11 +659,15 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
             file_meta.location().as_ref(),
             metrics,
         );
+        let store = Arc::clone(&self.store);
+        let mut inner = ParquetObjectReader::new(store, file_meta.object_meta);
+
+        if let Some(hint) = metadata_size_hint {
+            inner = inner.with_footer_size_hint(hint)
+        };
 
         Ok(Box::new(ParquetFileReader {
-            meta: file_meta.object_meta,
-            store: Arc::clone(&self.store),
-            metadata_size_hint,
+            inner,
             file_metrics,
         }))
     }
@@ -994,7 +955,7 @@ mod tests {
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
-        let df = ctx.read_csv("tests/csv/corrupt.csv", options).await?;
+        let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let e = df

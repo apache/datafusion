@@ -29,6 +29,8 @@ use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::expr::Exists;
+use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
@@ -119,8 +121,8 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
         for expr in plan.expressions().iter() {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| match expr {
-                Expr::Exists { subquery, .. }
-                | Expr::InSubquery { subquery, .. }
+                Expr::Exists(Exists { subquery, .. })
+                | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
                     check_subquery_expr(plan, &subquery.subquery, expr)
                 }

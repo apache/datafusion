@@ -30,6 +30,8 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -121,13 +123,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(value) => {
                 self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::DatePart,
-                args: vec![
+            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction (ScalarFunction::new(
+                BuiltinScalarFunction::DatePart,
+                 vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ],
-            }),
+            ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval {
@@ -138,6 +140,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             } => self.sql_interval_to_expr(
                 *value,
+                schema,
+                planner_context,
                 leading_field,
                 leading_precision,
                 last_field,
@@ -317,11 +321,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             within_group,
         } = array_agg;
 
-        if let Some(order_by) = order_by {
-            return Err(DataFusionError::NotImplemented(format!(
-                "ORDER BY not supported in ARRAY_AGG: {order_by}"
-            )));
-        }
+        let order_by = if let Some(order_by) = order_by {
+            // TODO: Once sqlparser supports multiple order by clause, handle it
+            //       see issue: https://github.com/sqlparser-rs/sqlparser-rs/issues/875
+            Some(vec![self.order_by_to_sort_expr(
+                *order_by,
+                input_schema,
+                planner_context,
+            )?])
+        } else {
+            None
+        };
 
         if let Some(limit) = limit {
             return Err(DataFusionError::NotImplemented(format!(
@@ -337,11 +347,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let args =
             vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
+
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
-
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None,
+            fun, args, distinct, None, order_by,
         )))
     }
 
@@ -358,15 +368,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::InList {
-            expr: Box::new(self.sql_expr_to_logical_expr(
-                expr,
-                schema,
-                planner_context,
-            )?),
-            list: list_expr,
+        Ok(Expr::InList(InList::new(
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+            list_expr,
             negated,
-        })
+        )))
     }
 
     fn sql_like_to_expr(
@@ -464,7 +470,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg],
         };
-        Ok(Expr::ScalarFunction { fun, args })
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
     fn sql_agg_with_filter_to_expr(
@@ -479,6 +485,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fun,
                 args,
                 distinct,
+                order_by,
                 ..
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
@@ -489,6 +496,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema,
                     planner_context,
                 )?)),
+                order_by,
             ))),
             _ => Err(DataFusionError::Internal(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
@@ -500,7 +508,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 // modifies expr if it is a placeholder with datatype of right
 fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
-    if let Expr::Placeholder { id: _, data_type } = expr {
+    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
         if data_type.is_none() {
             let other_dt = other.get_type(schema);
             match other_dt {

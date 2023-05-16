@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::InSubquery;
+use crate::expr::{Exists, Placeholder};
 ///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -91,10 +93,6 @@ pub enum LogicalPlan {
     Limit(Limit),
     /// [`Statement`]
     Statement(Statement),
-    /// Drops a table.
-    DropTable(DropTable),
-    /// Drops a view.
-    DropView(DropView),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -148,8 +146,6 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
-            LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
                 dummy_schema
             }
@@ -218,10 +214,7 @@ impl LogicalPlan {
                 self.inputs().iter().map(|p| p.schema()).collect()
             }
             // return empty
-            LogicalPlan::Statement(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
-            | LogicalPlan::DescribeTable(_) => vec![],
+            LogicalPlan::Statement(_) | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -336,8 +329,6 @@ impl LogicalPlan {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
@@ -381,8 +372,6 @@ impl LogicalPlan {
             | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
@@ -536,8 +525,6 @@ impl LogicalPlan {
             LogicalPlan::Values(v) => Some(v.values.len()),
             LogicalPlan::Unnest(_) => None,
             LogicalPlan::Ddl(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
@@ -559,8 +546,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the collector sees a
                         // LogicalPlan::Subquery (even though it is
@@ -585,8 +572,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the visitor sees a
                         // LogicalPlan::Subquery (even though it is
@@ -633,7 +620,7 @@ impl LogicalPlan {
         self.apply(&mut |plan| {
             plan.inspect_expressions(|expr| {
                 expr.apply(&mut |expr| {
-                    if let Expr::Placeholder { id, data_type } = expr {
+                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
                         let prev = param_types.get(id);
                         match (prev, data_type) {
                             (Some(Some(prev)), Some(dt)) => {
@@ -667,7 +654,7 @@ impl LogicalPlan {
     ) -> Result<Expr> {
         expr.transform(&|expr| {
             match &expr {
-                Expr::Placeholder { id, data_type } => {
+                Expr::Placeholder(Placeholder { id, data_type }) => {
                     if id.is_empty() || id == "$0" {
                         return Err(DataFusionError::Plan(
                             "Empty placeholder id".to_string(),
@@ -1103,16 +1090,6 @@ impl LogicalPlan {
                     LogicalPlan::Statement(statement) => {
                         write!(f, "{}", statement.display())
                     }
-                    LogicalPlan::DropTable(DropTable {
-                        name, if_exists, ..
-                    }) => {
-                        write!(f, "DropTable: {name:?} if not exist:={if_exists}")
-                    }
-                    LogicalPlan::DropView(DropView {
-                        name, if_exists, ..
-                    }) => {
-                        write!(f, "DropView: {name:?} if not exist:={if_exists}")
-                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -1221,28 +1198,6 @@ pub enum JoinConstraint {
     On,
     /// Join USING
     Using,
-}
-
-/// Drops a table.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DropTable {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// If the table exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
-/// Drops a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DropView {
-    /// The view name
-    pub name: OwnedTableReference,
-    /// If the view exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
 }
 
 /// Produces no rows: An empty relation with an empty schema
@@ -2309,10 +2264,10 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder {
-                id: "".into(),
-                data_type: Some(DataType::Int32),
-            }))
+            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
+                "".into(),
+                Some(DataType::Int32),
+            ))))
             .unwrap()
             .build()
             .unwrap();
@@ -2325,10 +2280,10 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder {
-                id: "$0".into(),
-                data_type: Some(DataType::Int32),
-            }))
+            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
+                "$0".into(),
+                Some(DataType::Int32),
+            ))))
             .unwrap()
             .build()
             .unwrap();

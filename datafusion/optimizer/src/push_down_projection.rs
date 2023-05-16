@@ -1056,6 +1056,7 @@ mod tests {
             vec![col("b")],
             false,
             Some(Box::new(col("c").gt(lit(42)))),
+            None,
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)

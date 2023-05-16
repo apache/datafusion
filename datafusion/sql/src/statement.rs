@@ -26,7 +26,7 @@ use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, TableReference, ToDFSchema,
+    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -35,8 +35,8 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropTable, DropView, EmptyRelation, Explain,
-    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
+    Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
     SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     WriteOp,
@@ -48,6 +48,7 @@ use sqlparser::ast::{
     TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
+use datafusion_expr::expr::Placeholder;
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -242,7 +243,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 object_type,
                 if_exists,
                 mut names,
-                cascade: _,
+                cascade,
                 restrict: _,
                 purge: _,
             } => {
@@ -258,18 +259,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }?;
 
                 match object_type {
-                    ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
-                        name,
-                        if_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
-                    ObjectType::View => Ok(LogicalPlan::DropView(DropView {
-                        name,
-                        if_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
+                    ObjectType::Table => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
+                            name,
+                            if_exists,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))
+                    }
+                    ObjectType::View => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                            name,
+                            if_exists,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))
+                    }
+                    ObjectType::Schema => {
+                        let name = match name {
+                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table } ) ,
+                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table,catalog: schema }),
+                            TableReference::Full { catalog: _, schema: _, table: _ } => {
+                                Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
+                            },
+                        }?;
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
+                            name,
+                            if_exists,
+                            cascade,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))},
                     _ => Err(DataFusionError::NotImplemented(
-                        "Only `DROP TABLE/VIEW  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
                             .to_string(),
                     )),
                 }
@@ -884,16 +903,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         for (col_name, expr) in values.into_iter() {
             let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
             let expr = match expr {
-                datafusion_expr::Expr::Placeholder {
+                datafusion_expr::Expr::Placeholder(Placeholder {
                     ref id,
                     ref data_type,
-                } => match data_type {
+                }) => match data_type {
                     None => {
                         let dt = table_schema.data_type(&Column::from_name(&col_name))?;
-                        datafusion_expr::Expr::Placeholder {
-                            id: id.clone(),
-                            data_type: Some(dt.clone()),
-                        }
+                        datafusion_expr::Expr::Placeholder(Placeholder::new(
+                            id.clone(),
+                            Some(dt.clone()),
+                        ))
                     }
                     Some(_) => expr,
                 },

@@ -25,7 +25,6 @@ use arrow::datatypes::{
 use arrow::record_batch::RecordBatch;
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion::scheduler::Scheduler;
 use futures::stream::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
@@ -196,8 +195,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     let config = SessionConfig::new().with_target_partitions(partitions);
     let context = SessionContext::with_config(config);
 
-    let scheduler = Scheduler::new(partitions);
-
     let local_rt = tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap();
@@ -247,22 +244,6 @@ fn criterion_benchmark(c: &mut Criterion) {
                 local_rt.block_on(async {
                     while receiver.next().await.transpose().unwrap().is_some() {}
                 })
-            });
-        });
-
-        c.bench_function(&format!("scheduled: {query}"), |b| {
-            b.iter(|| {
-                let query = query.clone();
-                let context = context.clone();
-
-                local_rt.block_on(async {
-                    let query = context.sql(&query).await.unwrap();
-                    let plan = query.create_physical_plan().await.unwrap();
-                    let results = scheduler.schedule(plan, context.task_ctx()).unwrap();
-
-                    let mut stream = results.stream();
-                    while stream.next().await.transpose().unwrap().is_some() {}
-                });
             });
         });
     }

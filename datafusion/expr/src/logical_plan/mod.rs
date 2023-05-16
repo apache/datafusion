@@ -29,15 +29,14 @@ pub use builder::{
 };
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CreateView, DdlStatement,
+    CreateView, DdlStatement, DropCatalogSchema, DropTable, DropView,
 };
 pub use dml::{DmlStatement, WriteOp};
 pub use plan::{
-    Aggregate, Analyze, CrossJoin, DescribeTable, Distinct, DropTable, DropView,
-    EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
-    LogicalPlan, Partitioning, PlanType, Prepare, Projection, Repartition, Sort,
-    StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
-    Unnest, Values, Window,
+    Aggregate, Analyze, CrossJoin, DescribeTable, Distinct, EmptyRelation, Explain,
+    Extension, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
+    PlanType, Prepare, Projection, Repartition, Sort, StringifiedPlan, Subquery,
+    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
 };
 pub use statement::{
     SetVariable, Statement, TransactionAccessMode, TransactionConclusion, TransactionEnd,

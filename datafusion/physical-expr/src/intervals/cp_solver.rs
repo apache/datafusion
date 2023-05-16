@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::coerce_types;
+use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
@@ -260,7 +260,7 @@ fn comparison_operator_target(
     op: &Operator,
     right_datatype: &DataType,
 ) -> Result<Interval> {
-    let datatype = coerce_types(left_datatype, &Operator::Minus, right_datatype)?;
+    let datatype = get_result_type(left_datatype, &Operator::Minus, right_datatype)?;
     let unbounded = IntervalBound::make_unbounded(&datatype)?;
     let zero = ScalarValue::new_zero(&datatype)?;
     Ok(match *op {
