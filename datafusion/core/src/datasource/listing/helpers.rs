@@ -30,7 +30,7 @@ use arrow_array::Array;
 use arrow_schema::Fields;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, info, trace};
 
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -156,6 +156,7 @@ struct Partition {
 
 impl Partition {
     async fn list(mut self, store: &dyn ObjectStore) -> Result<(Self, Vec<Path>)> {
+        trace!("Listing partition {}", self.path);
         let prefix = Some(&self.path).filter(|p| !p.as_ref().is_empty());
         let result = store.list_with_delimiter(prefix).await?;
         self.files = Some(result.objects);
@@ -308,8 +309,12 @@ pub async fn pruned_partition_list<'a>(
     }
 
     let partitions = list_partitions(store, table_path, partition_cols.len()).await?;
+    info!("Listed {} partitions", partitions.len());
+
     let pruned =
         prune_partitions(table_path, partitions, filters, partition_cols).await?;
+
+    info!("Pruning yielded {} partitions", pruned.len());
 
     let stream = futures::stream::iter(pruned)
         .map(move |partition: Partition| async move {
@@ -328,6 +333,7 @@ pub async fn pruned_partition_list<'a>(
             let files = match partition.files {
                 Some(files) => files,
                 None => {
+                    trace!("Recursively listing partition {}", partition.path);
                     let s = store.list(Some(&partition.path)).await?;
                     s.try_collect().await?
                 }
