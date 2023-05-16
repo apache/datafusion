@@ -133,7 +133,7 @@ pub fn expr_applicable_for_cols(col_names: &[String], expr: &Expr) -> bool {
 }
 
 /// The maximum number of concurrent listing requests
-const CONCURRENCY_LIMIT: usize = 10;
+const CONCURRENCY_LIMIT: usize = 100;
 
 /// Partition the list of files into `n` groups
 pub fn split_files(
