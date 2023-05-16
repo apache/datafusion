@@ -213,6 +213,7 @@ impl Hash for CreateExternalTable {
         self.definition.hash(state);
         self.file_compression_type.hash(state);
         self.order_exprs.hash(state);
+        self.unbounded.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
 }
