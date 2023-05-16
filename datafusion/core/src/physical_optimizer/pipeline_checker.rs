@@ -269,11 +269,9 @@ fn prunability_for_unbounded_tables(
         TableSide::Both => (true, true),
         TableSide::None => (false, false),
     };
-    // If one side is unbounded and is not prunable, return false (Cannot do calculations with bounded memory)
-    if (left_unbounded && !left_prunable) || (right_unbounded && !right_prunable) {
-        return false;
-    }
-    true
+    // If both sides are either bounded or prunable, return true (Can do calculations with bounded memory)
+    // Otherwise return false (Cannot do calculations with bounded memory)
+    (!left_unbounded || left_prunable) && (!right_unbounded || right_prunable)
 }
 
 #[cfg(test)]
