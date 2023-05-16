@@ -2434,6 +2434,21 @@ mod tests {
         // single word
         assert_change(regex_match(col("c1"), lit("foo")), like(col("c1"), "%foo%"));
 
+        // regular expressions that match an exact literal
+        assert_change(regex_match(col("c1"), lit("^$")), col("c1").eq(lit("")));
+        assert_change(
+            regex_not_match(col("c1"), lit("^$")),
+            col("c1").not_eq(lit("")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^foo$")),
+            col("c1").eq(lit("foo")),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^foo$")),
+            col("c1").not_eq(lit("foo")),
+        );
+
         // OR-chain
         assert_change(
             regex_match(col("c1"), lit("foo|bar|baz")),
