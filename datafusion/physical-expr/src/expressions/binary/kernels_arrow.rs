@@ -28,20 +28,27 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION,
 };
 use arrow::{array::*, datatypes::ArrowNumericType, downcast_dictionary_array};
-use arrow_array::types::{ArrowDictionaryKeyType, DecimalType};
+use arrow_array::temporal_conversions::{MILLISECONDS_IN_DAY, NANOSECONDS_IN_DAY};
+use arrow_array::types::{
+    ArrowDictionaryKeyType, DecimalType, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalYearMonthType,
+};
 use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, IntervalUnit};
+use chrono::{Days, Duration, Months, NaiveDate};
 use datafusion_common::cast::{as_date32_array, as_date64_array, as_decimal128_array};
 use datafusion_common::scalar::{date32_add, date64_add};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use std::cmp::min;
+use std::ops::{Add, Sub};
 use std::sync::Arc;
 
 use super::{
-    interval_array_op, interval_scalar_interval_op, ts_array_op, ts_interval_array_op,
-    ts_scalar_interval_op, ts_scalar_ts_op,
+    interval_array_op, interval_sub_scalar_interval, scalar_interval_sub_interval,
+    scalar_ts_sub_interval, scalar_ts_sub_ts, ts_array_op, ts_interval_array_op,
+    ts_sub_scalar_interval, ts_sub_scalar_ts,
 };
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
@@ -311,11 +318,12 @@ pub(crate) fn add_dyn_temporal(left: &ArrayRef, right: &ArrayRef) -> Result<Arra
     }
 }
 
-pub(crate) fn add_dyn_temporal_scalar(
+pub(crate) fn add_dyn_temporal_right_scalar(
     left: &ArrayRef,
     right: &ScalarValue,
 ) -> Result<ColumnarValue> {
     match (left.data_type(), right.get_datatype()) {
+        // Date32 + Interval
         (DataType::Date32, DataType::Interval(..)) => {
             let left = as_date32_array(&left)?;
             let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
@@ -323,6 +331,7 @@ pub(crate) fn add_dyn_temporal_scalar(
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
+        // Date64 + Interval
         (DataType::Date64, DataType::Interval(..)) => {
             let left = as_date64_array(&left)?;
             let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
@@ -330,15 +339,55 @@ pub(crate) fn add_dyn_temporal_scalar(
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
+        // Interval + Interval
         (DataType::Interval(..), DataType::Interval(..)) => {
-            interval_scalar_interval_op(left, 1, right)
+            interval_sub_scalar_interval(left, 1, right)
         }
+        // Timestamp + Interval
         (DataType::Timestamp(..), DataType::Interval(..)) => {
-            ts_scalar_interval_op(left, 1, right)
+            ts_sub_scalar_interval(left, 1, right)
         }
         _ => {
             // fall back to kernels in arrow-rs
             Ok(ColumnarValue::Array(add_dyn(left, &right.to_array())?))
+        }
+    }
+}
+
+pub(crate) fn add_dyn_temporal_left_scalar(
+    left: &ScalarValue,
+    right: &ArrayRef,
+) -> Result<ColumnarValue> {
+    match (left.get_datatype(), right.data_type()) {
+        // Date32 + Interval
+        (DataType::Date32, DataType::Interval(..)) => {
+            if let ScalarValue::Date32(Some(left)) = left {
+                return scalar_date32_array_interval_op(*left, right, 1);
+            }
+            Err(DataFusionError::Internal(
+                "Date32 value is None".to_string(),
+            ))
+        }
+        // Date64 + Interval
+        (DataType::Date64, DataType::Interval(..)) => {
+            if let ScalarValue::Date64(Some(left)) = left {
+                return scalar_date64_array_interval_op(*left, right, 1);
+            }
+            Err(DataFusionError::Internal(
+                "Date64 value is None".to_string(),
+            ))
+        }
+        // Interval + Interval
+        (DataType::Interval(..), DataType::Interval(..)) => {
+            scalar_interval_sub_interval(left, right)
+        }
+        // Timestamp + Interval
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
+            scalar_ts_sub_interval(left, right)
+        }
+        _ => {
+            // fall back to kernels in arrow-rs
+            Ok(ColumnarValue::Array(add_dyn(&left.to_array(), right)?))
         }
     }
 }
@@ -376,11 +425,12 @@ pub(crate) fn subtract_dyn_temporal(
     }
 }
 
-pub(crate) fn subtract_dyn_temporal_scalar(
+pub(crate) fn subtract_dyn_temporal_right_scalar(
     left: &ArrayRef,
     right: &ScalarValue,
 ) -> Result<ColumnarValue> {
     match (left.data_type(), right.get_datatype()) {
+        // Date32 - Interval
         (DataType::Date32, DataType::Interval(..)) => {
             let left = as_date32_array(&left)?;
             let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
@@ -388,6 +438,7 @@ pub(crate) fn subtract_dyn_temporal_scalar(
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
+        // Date64 - Interval
         (DataType::Date64, DataType::Interval(..)) => {
             let left = as_date64_array(&left)?;
             let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
@@ -395,19 +446,229 @@ pub(crate) fn subtract_dyn_temporal_scalar(
             })?) as ArrayRef;
             Ok(ColumnarValue::Array(ret))
         }
+        // Timestamp - Timestamp
         (DataType::Timestamp(..), DataType::Timestamp(..)) => {
-            ts_scalar_ts_op(left, right)
+            ts_sub_scalar_ts(left, right)
         }
+        // Interval - Interval
         (DataType::Interval(..), DataType::Interval(..)) => {
-            interval_scalar_interval_op(left, -1, right)
+            interval_sub_scalar_interval(left, -1, right)
         }
+        // Timestamp - Interval
         (DataType::Timestamp(..), DataType::Interval(..)) => {
-            ts_scalar_interval_op(left, -1, right)
+            ts_sub_scalar_interval(left, -1, right)
         }
         _ => {
             // fall back to kernels in arrow-rs
             Ok(ColumnarValue::Array(subtract_dyn(left, &right.to_array())?))
         }
+    }
+}
+
+pub(crate) fn subtract_dyn_temporal_left_scalar(
+    left: &ScalarValue,
+    right: &ArrayRef,
+) -> Result<ColumnarValue> {
+    match (left.get_datatype(), right.data_type()) {
+        // Date32 - Interval
+        (DataType::Date32, DataType::Interval(..)) => {
+            if let ScalarValue::Date32(Some(left)) = left {
+                return scalar_date32_array_interval_op(*left, right, -1);
+            }
+            Err(DataFusionError::Internal(
+                "Date32 value is None".to_string(),
+            ))
+        }
+        // Date64 - Interval
+        (DataType::Date64, DataType::Interval(..)) => {
+            if let ScalarValue::Date64(Some(left)) = left {
+                return scalar_date64_array_interval_op(*left, right, -1);
+            }
+            Err(DataFusionError::Internal(
+                "Date64 value is None".to_string(),
+            ))
+        }
+        // Timestamp - Timestamp
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => {
+            scalar_ts_sub_ts(left, right)
+        }
+        // Interval - Interval
+        (DataType::Interval(..), DataType::Interval(..)) => {
+            scalar_interval_sub_interval(left, right)
+        }
+        // Timestamp - Interval
+        (DataType::Timestamp(..), DataType::Interval(..)) => {
+            scalar_ts_sub_interval(left, right)
+        }
+        _ => {
+            // fall back to kernels in arrow-rs
+            Ok(ColumnarValue::Array(subtract_dyn(&left.to_array(), right)?))
+        }
+    }
+}
+
+fn scalar_date32_array_interval_op(
+    left: i32,
+    right: &ArrayRef,
+    sign: i32,
+) -> Result<ColumnarValue> {
+    let ops: (
+        fn(NaiveDate, Days) -> Option<NaiveDate>,
+        fn(NaiveDate, Months) -> Option<NaiveDate>,
+    ) = if sign == -1 {
+        (NaiveDate::checked_sub_days, NaiveDate::checked_sub_months)
+    } else {
+        (NaiveDate::checked_add_days, NaiveDate::checked_add_months)
+    };
+
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let prior = epoch.add(Duration::days(left as i64));
+    match right.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let right: &PrimitiveArray<IntervalYearMonthType> = right.as_primitive();
+            let ret = Arc::new(try_unary::<IntervalYearMonthType, _, Date32Type>(
+                right,
+                |ym| {
+                    let months = Months::new(ym.try_into().map_err(cast_err)?);
+                    Ok(ops.1(prior, months)
+                        .ok_or_else(out_of_range)?
+                        .sub(epoch)
+                        .num_days() as i32)
+                },
+            )?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let right: &PrimitiveArray<IntervalDayTimeType> = right.as_primitive();
+            let ret = Arc::new(try_unary::<IntervalDayTimeType, _, Date32Type>(
+                right,
+                |dt| {
+                    let (days, millis) = IntervalDayTimeType::to_parts(dt);
+                    let days = Days::new(days.try_into().map_err(cast_err)?);
+                    Ok((ops.0(prior, days)
+                        .ok_or_else(out_of_range)?
+                        .sub(epoch)
+                        .num_days()
+                        - millis as i64 / MILLISECONDS_IN_DAY)
+                        as i32)
+                },
+            )?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let right: &PrimitiveArray<IntervalMonthDayNanoType> = right.as_primitive();
+            let ret = Arc::new(try_unary::<IntervalMonthDayNanoType, _, Date32Type>(
+                right,
+                |mdn| {
+                    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(mdn);
+                    let month_diff =
+                        ops.1(prior, Months::new(months.try_into().map_err(cast_err)?))
+                            .ok_or_else(out_of_range)?;
+                    Ok(
+                        (ops.0(month_diff, Days::new(days.try_into().map_err(cast_err)?))
+                            .ok_or_else(out_of_range)?
+                            .sub(epoch)
+                            .num_days()
+                            - nanos / NANOSECONDS_IN_DAY) as i32,
+                    )
+                },
+            )?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        _ => Err(DataFusionError::Internal(format!(
+            "Expected type is an interval, but {} is found",
+            right.data_type()
+        ))),
+    }
+}
+
+fn scalar_date64_array_interval_op(
+    left: i64,
+    right: &ArrayRef,
+    sign: i32,
+) -> Result<ColumnarValue> {
+    let ops: (
+        fn(NaiveDate, Days) -> Option<NaiveDate>,
+        fn(NaiveDate, Months) -> Option<NaiveDate>,
+    ) = if sign == -1 {
+        (NaiveDate::checked_sub_days, NaiveDate::checked_sub_months)
+    } else {
+        (NaiveDate::checked_add_days, NaiveDate::checked_add_months)
+    };
+
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let prior = epoch.add(Duration::milliseconds(left));
+    match right.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            let right: &PrimitiveArray<IntervalYearMonthType> = right.as_primitive();
+            let ret = Arc::new(try_unary::<IntervalYearMonthType, _, Date64Type>(
+                right,
+                |ym| {
+                    Ok(prior
+                        .checked_sub_months(Months::new(ym.try_into().map_err(cast_err)?))
+                        .ok_or_else(out_of_range)?
+                        .sub(epoch)
+                        .num_milliseconds())
+                },
+            )?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let right: &PrimitiveArray<IntervalDayTimeType> = right.as_primitive();
+            let ret = Arc::new(try_unary::<IntervalDayTimeType, _, Date64Type>(
+                right,
+                |dt| {
+                    let (days, millis) = IntervalDayTimeType::to_parts(dt);
+                    Ok(prior
+                        .checked_sub_days(Days::new(days.try_into().map_err(cast_err)?))
+                        .ok_or_else(out_of_range)?
+                        .sub(epoch)
+                        .num_milliseconds()
+                        - millis as i64)
+                },
+            )?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let right: &PrimitiveArray<IntervalMonthDayNanoType> = right.as_primitive();
+            let ret = Arc::new(try_unary::<IntervalMonthDayNanoType, _, Date64Type>(
+                right,
+                |mdn| {
+                    let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(mdn);
+                    Ok(prior
+                        .checked_sub_months(Months::new(
+                            months.try_into().map_err(cast_err)?,
+                        ))
+                        .ok_or_else(out_of_range)?
+                        .checked_sub_days(Days::new(days.try_into().map_err(cast_err)?))
+                        .ok_or_else(out_of_range)?
+                        .sub(epoch)
+                        .num_milliseconds()
+                        - nanos / 1_000_000)
+                },
+            )?) as ArrayRef;
+            Ok(ColumnarValue::Array(ret))
+        }
+        _ => Err(DataFusionError::Internal(format!(
+            "Expected type is an interval, but {} is found",
+            right.data_type()
+        ))),
     }
 }
 

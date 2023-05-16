@@ -1344,7 +1344,7 @@ where
 }
 
 // Can remove once chrono:0.4.23 is released
-fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
+pub fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
 where
     D: Datelike + Add<Duration, Output = D>,
 {
@@ -1358,7 +1358,7 @@ where
 }
 
 // Can remove once chrono:0.4.23 is released
-fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
+pub fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
 where
     D: Datelike + Add<Duration, Output = D>,
 {
