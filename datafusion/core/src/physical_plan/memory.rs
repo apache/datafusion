@@ -327,43 +327,29 @@ impl ExecutionPlan for MemoryWriteExec {
         let batch_count = self.batches.len();
         let data = self.input.execute(partition, context)?;
         let schema = self.schema.clone();
-        let state = (data, self.batches[partition % batch_count].clone());
-
-        let adapter = if batch_count >= self.input.output_partitioning().partition_count()
-        {
-            // If the number of input partitions matches the number of MemTable partitions,
-            // use a lightweight implementation that doesn't utilize as many locks.
-            let stream = futures::stream::unfold(state, |mut state| async move {
-                // hold lock during the entire write
-                let mut locked = state.1.write().await;
-                loop {
-                    let batch = match state.0.next().await {
-                        Some(Ok(batch)) => batch,
-                        Some(Err(e)) => {
-                            drop(locked);
-                            return Some((Err(e), state));
-                        }
-                        None => return None,
-                    };
-                    locked.push(batch)
-                }
-            });
-            Box::pin(RecordBatchStreamAdapter::new(schema, stream))
-                as SendableRecordBatchStream
-        } else {
-            let stream = futures::stream::unfold(state, |mut state| async move {
-                loop {
-                    let batch = match state.0.next().await {
-                        Some(Ok(batch)) => batch,
-                        Some(Err(e)) => return Some((Err(e), state)),
-                        None => return None,
-                    };
-                    state.1.write().await.push(batch)
-                }
-            });
-            Box::pin(RecordBatchStreamAdapter::new(schema, stream))
-                as SendableRecordBatchStream
+        let state = StreamState {
+            data,
+            buffer: vec![],
+            batch: self.batches[partition % batch_count].clone(),
         };
+
+        let stream = futures::stream::unfold(state, |mut state| async move {
+            loop {
+                match state.data.next().await {
+                    Some(Ok(batch)) => state.buffer.push(batch),
+                    Some(Err(e)) => return Some((Err(e), state)),
+                    None => {
+                        // stream is done, transfer all data to target PartitionData
+                        state.batch.write().await.append(&mut state.buffer);
+                        return None;
+                    }
+                };
+            }
+        });
+
+        let adapter = Box::pin(RecordBatchStreamAdapter::new(schema, stream))
+            as SendableRecordBatchStream;
+
         Ok(adapter)
     }
 
@@ -387,6 +373,15 @@ impl ExecutionPlan for MemoryWriteExec {
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
+}
+
+struct StreamState {
+    /// Input stream
+    data: SendableRecordBatchStream,
+    /// Data is buffered here until complete
+    buffer: Vec<RecordBatch>,
+    /// target
+    batch: PartitionData,
 }
 
 impl MemoryWriteExec {

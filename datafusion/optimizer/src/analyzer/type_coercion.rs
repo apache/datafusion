@@ -24,7 +24,10 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
+use datafusion_expr::expr::{
+    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
+    ScalarUDF, WindowFunction,
+};
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
@@ -131,21 +134,21 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     outer_ref_columns,
                 }))
             }
-            Expr::Exists { subquery, negated } => {
+            Expr::Exists(Exists { subquery, negated }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
-                Ok(Expr::Exists {
+                Ok(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                     },
                     negated,
-                })
+                }))
             }
-            Expr::InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => {
+            }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
                 let expr_type = expr.get_type(&self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
@@ -158,11 +161,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
-                Ok(Expr::InSubquery {
-                    expr: Box::new(expr.cast_to(&common_type, &self.schema)?),
-                    subquery: cast_subquery(new_subquery, &common_type)?,
+                Ok(Expr::InSubquery(InSubquery::new(
+                    Box::new(expr.cast_to(&common_type, &self.schema)?),
+                    cast_subquery(new_subquery, &common_type)?,
                     negated,
-                })
+                )))
             }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
@@ -329,11 +332,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr_data_type = expr.get_type(&self.schema)?;
                 let list_data_types = list
                     .iter()
@@ -354,11 +357,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                                 list_expr.cast_to(&coerced_type, &self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let expr = Expr::InList {
-                            expr: Box::new(cast_expr),
-                            list: cast_list_expr,
+                        let expr = Expr::InList(InList ::new(
+                             Box::new(cast_expr),
+                             cast_list_expr,
                             negated,
-                        };
+                        ));
                         Ok(expr)
                     }
                 }
@@ -367,28 +370,22 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let case = coerce_case_expression(case, &self.schema)?;
                 Ok(Expr::Case(case))
             }
-            Expr::ScalarUDF { fun, args } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                };
+                let expr = Expr::ScalarUDF(ScalarUDF::new(fun, new_expr));
                 Ok(expr)
             }
-            Expr::ScalarFunction { fun, args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let nex_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &function::signature(&fun),
                 )?;
-                let expr = Expr::ScalarFunction {
-                    fun,
-                    args: nex_expr,
-                };
+                let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
                 Ok(expr)
             }
             Expr::AggregateFunction(expr::AggregateFunction {
@@ -396,6 +393,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 args,
                 distinct,
                 filter,
+                order_by,
             }) => {
                 let new_expr = coerce_agg_exprs_for_signature(
                     &fun,
@@ -404,21 +402,24 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     &aggregate_function::signature(&fun),
                 )?;
                 let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, new_expr, distinct, filter,
+                    fun, new_expr, distinct, filter, order_by,
                 ));
                 Ok(expr)
             }
-            Expr::AggregateUDF { fun, args, filter } => {
+            Expr::AggregateUDF(expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            }) => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::AggregateUDF {
-                    fun,
-                    args: new_expr,
-                    filter,
-                };
+                let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+                    fun, new_expr, filter, order_by,
+                ));
                 Ok(expr)
             }
             Expr::WindowFunction(WindowFunction {
@@ -563,9 +564,8 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    let right_type = DataType::Boolean;
-    let coerced_type = coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
-    expr.clone().cast_to(&coerced_type, schema)
+    coerce_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    expr.clone().cast_to(&DataType::Boolean, schema)
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -746,7 +746,7 @@ mod test {
 
     use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, Like};
+    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
@@ -816,15 +816,15 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation =
             Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Expr::ScalarUDF {
-            fun: Arc::new(ScalarUDF::new(
+        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
+            Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
                 &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
                 &return_type,
                 &fun,
             )),
-            args: vec![lit(123_i32)],
-        };
+            vec![lit(123_i32)],
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -837,15 +837,15 @@ mod test {
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation = Arc::new(move |_| unimplemented!());
-        let udf = Expr::ScalarUDF {
-            fun: Arc::new(ScalarUDF::new(
+        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
+            Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
                 &Signature::uniform(1, vec![DataType::Int32], Volatility::Stable),
                 &return_type,
                 &fun,
             )),
-            args: vec![lit("Apple")],
-        };
+            vec![lit("Apple")],
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
@@ -862,10 +862,8 @@ mod test {
         let empty = empty();
         let lit_expr = lit(10i64);
         let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
-        let scalar_function_expr = Expr::ScalarFunction {
-            fun,
-            args: vec![lit_expr],
-        };
+        let scalar_function_expr =
+            Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,
@@ -890,11 +888,12 @@ mod test {
             }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
-        let udaf = Expr::AggregateUDF {
-            fun: Arc::new(my_avg),
-            args: vec![lit(10i64)],
-            filter: None,
-        };
+        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(my_avg),
+            vec![lit(10i64)],
+            None,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
@@ -920,11 +919,12 @@ mod test {
             &accumulator,
             &state_type,
         );
-        let udaf = Expr::AggregateUDF {
-            fun: Arc::new(my_avg),
-            args: vec![lit("10")],
-            filter: None,
-        };
+        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(my_avg),
+            vec![lit("10")],
+            None,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
@@ -945,6 +945,7 @@ mod test {
             vec![lit(12i64)],
             false,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
@@ -956,6 +957,7 @@ mod test {
             fun,
             vec![col("a")],
             false,
+            None,
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -972,6 +974,7 @@ mod test {
             fun,
             vec![lit("1")],
             false,
+            None,
             None,
         ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
@@ -1461,14 +1464,14 @@ mod test {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int64)?);
         // add cast for subquery
         let expected = "\
@@ -1486,14 +1489,14 @@ mod test {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int32)?);
         // add cast for subquery
         let expected = "\
@@ -1510,14 +1513,14 @@ mod test {
         let empty_inside = empty_with_type(DataType::Decimal128(10, 5));
         let empty_outside = empty_with_type(DataType::Decimal128(8, 8));
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_outside)?);
         // add cast for subquery
         let expected = "Filter: CAST(a AS Decimal128(13, 8)) IN (<subquery>)\

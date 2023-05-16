@@ -241,9 +241,10 @@ config_namespace! {
 config_namespace! {
     /// Options related to reading of parquet files
     pub struct ParquetOptions {
-        /// If true, uses parquet data page level metadata (Page Index) statistics
-        /// to reduce the number of rows decoded.
-        pub enable_page_index: bool, default = false
+        /// If true, reads the Parquet data page level metadata (the
+        /// Page Index), if present, to reduce the I/O and number of
+        /// rows decoded.
+        pub enable_page_index: bool, default = true
 
         /// If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
@@ -353,7 +354,7 @@ config_namespace! {
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail
-        pub skip_failed_rules: bool, default = true
+        pub skip_failed_rules: bool, default = false
 
         /// Number of times that the optimizer will attempt to optimize the plan
         pub max_passes: usize, default = 3

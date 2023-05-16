@@ -482,7 +482,10 @@ impl FileOpener for ParquetOpener {
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
-        let enable_page_index = self.enable_page_index;
+        let enable_page_index = should_enable_page_index(
+            self.enable_page_index,
+            &self.page_pruning_predicate,
+        );
         let limit = self.limit;
 
         Ok(Box::pin(async move {
@@ -570,6 +573,18 @@ impl FileOpener for ParquetOpener {
             Ok(adapted.boxed())
         }))
     }
+}
+
+fn should_enable_page_index(
+    enable_page_index: bool,
+    page_pruning_predicate: &Option<Arc<PagePruningPredicate>>,
+) -> bool {
+    enable_page_index
+        && page_pruning_predicate.is_some()
+        && page_pruning_predicate
+            .as_ref()
+            .map(|p| p.filter_number() > 0)
+            .unwrap_or(false)
 }
 
 /// Factory of parquet file readers.

@@ -231,7 +231,7 @@ fn optimize_partitions(
             && stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
     }
 
-    // don't reparititon root of the plan
+    // don't repartition root of the plan
     if is_root {
         could_repartition = false;
     }
@@ -478,10 +478,12 @@ mod tests {
                 PhysicalGroupBy::default(),
                 vec![],
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         PhysicalGroupBy::default(),
+                        vec![],
                         vec![],
                         vec![],
                         input,

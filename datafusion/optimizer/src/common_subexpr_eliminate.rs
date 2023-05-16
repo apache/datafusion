@@ -21,7 +21,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-
 use datafusion_common::tree_node::{
     RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
 };
@@ -869,16 +868,19 @@ mod test {
         let accumulator: AccumulatorFunctionImplementation =
             Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
-        let udf_agg = |inner: Expr| Expr::AggregateUDF {
-            fun: Arc::new(AggregateUDF::new(
-                "my_agg",
-                &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
-                &return_type,
-                &accumulator,
-                &state_type,
-            )),
-            args: vec![inner],
-            filter: None,
+        let udf_agg = |inner: Expr| {
+            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
+                Arc::new(AggregateUDF::new(
+                    "my_agg",
+                    &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
+                    &return_type,
+                    &accumulator,
+                    &state_type,
+                )),
+                vec![inner],
+                None,
+                None,
+            ))
         };
 
         // test: common aggregates

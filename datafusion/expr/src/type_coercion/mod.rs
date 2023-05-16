@@ -37,7 +37,7 @@ pub mod functions;
 pub mod other;
 
 use arrow::datatypes::DataType;
-/// Determine whether the given data type `dt` represents unsigned numeric values.
+/// Determine whether the given data type `dt` represents signed numeric values.
 pub fn is_signed_numeric(dt: &DataType) -> bool {
     matches!(
         dt,

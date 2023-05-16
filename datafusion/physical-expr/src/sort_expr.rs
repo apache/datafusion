@@ -100,15 +100,26 @@ impl PhysicalSortExpr {
 #[derive(Clone, Debug)]
 pub struct PhysicalSortRequirement {
     /// Physical expression representing the column to sort
-    expr: Arc<dyn PhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// Option to specify how the given column should be sorted.
     /// If unspecified, there are no constraints on sort options.
-    options: Option<SortOptions>,
+    pub options: Option<SortOptions>,
 }
 
 impl From<PhysicalSortRequirement> for PhysicalSortExpr {
+    /// If options is `None`, the default sort options `ASC, NULLS LAST` is used.
+    ///
+    /// The default is picked to be consistent with
+    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>    
     fn from(value: PhysicalSortRequirement) -> Self {
-        value.into_sort_expr()
+        let options = value.options.unwrap_or(SortOptions {
+            descending: false,
+            nulls_first: false,
+        });
+        PhysicalSortExpr {
+            expr: value.expr,
+            options,
+        }
     }
 }
 
@@ -151,22 +162,6 @@ impl PhysicalSortRequirement {
         self
     }
 
-    /// Converts the `PhysicalSortRequirement` to `PhysicalSortExpr`.
-    /// If required ordering is `None` for an entry, the default
-    /// ordering `ASC, NULLS LAST` is used.
-    ///
-    /// The default is picked to be consistent with
-    /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>
-    pub fn into_sort_expr(self) -> PhysicalSortExpr {
-        let Self { expr, options } = self;
-
-        let options = options.unwrap_or(SortOptions {
-            descending: false,
-            nulls_first: false,
-        });
-        PhysicalSortExpr { expr, options }
-    }
-
     /// Returns whether this requirement is equal or more specific than `other`.
     pub fn compatible(&self, other: &PhysicalSortRequirement) -> bool {
         self.expr.eq(&other.expr)
@@ -197,7 +192,7 @@ impl PhysicalSortRequirement {
     ///
     /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
     /// for each entry in the input. If required ordering is None for an entry
-    /// default ordering `ASC, NULLS LAST` if given (see [`Self::into_sort_expr`])
+    /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
     pub fn to_sort_exprs(
         requirements: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> Vec<PhysicalSortExpr> {
@@ -205,16 +200,6 @@ impl PhysicalSortRequirement {
             .into_iter()
             .map(PhysicalSortExpr::from)
             .collect()
-    }
-
-    /// Returns the expr for this requirement
-    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.expr
-    }
-
-    /// Returns the required options, for this requirement
-    pub fn options(&self) -> Option<SortOptions> {
-        self.options
     }
 }
 

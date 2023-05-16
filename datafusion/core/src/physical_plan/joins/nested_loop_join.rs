@@ -197,12 +197,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
-        // Initialization of operator-level reservation
-        let operator_reservation =
-            MemoryConsumer::new("NestedLoopJoinExec").register(context.memory_pool());
+        // Initialization reservation for load of inner table
+        let load_reservation =
+            MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
+                .register(context.memory_pool());
 
         // Initialization of stream-level reservation
-        let stream_reservation =
+        let reservation =
             MemoryConsumer::new(format!("NestedLoopJoinStream[{partition}]"))
                 .register(context.memory_pool());
 
@@ -214,7 +215,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     self.left.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    stream_reservation,
+                    load_reservation,
                 )
             });
             let outer_table = self.right.execute(partition, context)?;
@@ -227,7 +228,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     self.right.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    stream_reservation,
+                    load_reservation,
                 )
             });
             let outer_table = self.left.execute(partition, context)?;
@@ -244,7 +245,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             visited_left_side: None,
             column_indices: self.column_indices.clone(),
             join_metrics,
-            reservation: operator_reservation,
+            reservation,
         }))
     }
 
@@ -1163,7 +1164,7 @@ mod tests {
                 err.to_string(),
                 "External error: Resources exhausted: Failed to allocate additional"
             );
-            assert_contains!(err.to_string(), "NestedLoopJoinStream[0]");
+            assert_contains!(err.to_string(), "NestedLoopJoinLoad[0]");
         }
 
         Ok(())

@@ -821,7 +821,7 @@ impl From<ObjectMeta> for FileMeta {
 /// run against 1000s of files and not try to open them all
 /// concurrently.
 ///
-/// However, it means if we assign more than one file to a partitition
+/// However, it means if we assign more than one file to a partition
 /// the output sort order will not be preserved as illustrated in the
 /// following diagrams:
 ///
