@@ -650,6 +650,21 @@ macro_rules! primitive_right {
             "Can not divide an uninitialized value to a non-floating point value",
         )))
     };
+    ($TERM:expr, &, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, |, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, ^, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, &&, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, ||, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
 }
 
 macro_rules! unsigned_subtraction_error {
@@ -754,6 +769,74 @@ macro_rules! impl_op {
                 tz_rhs.as_deref(),
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
+        }
+    };
+    ($LHS:expr, $RHS:expr, &) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, &)
+    };
+    ($LHS:expr, $RHS:expr, |) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, |)
+    };
+    ($LHS:expr, $RHS:expr, ^) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, ^)
+    };
+    ($LHS:expr, $RHS:expr, &&) => {
+        impl_bool_op_arithmetic!($LHS, $RHS, &&)
+    };
+    ($LHS:expr, $RHS:expr, ||) => {
+        impl_bool_op_arithmetic!($LHS, $RHS, ||)
+    };
+}
+
+macro_rules! impl_bit_op_arithmetic {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
+        match ($LHS, $RHS) {
+            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
+                primitive_op!(lhs, rhs, UInt64, $OPERATION)
+            }
+            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
+                primitive_op!(lhs, rhs, Int64, $OPERATION)
+            }
+            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
+                primitive_op!(lhs, rhs, UInt32, $OPERATION)
+            }
+            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
+                primitive_op!(lhs, rhs, Int32, $OPERATION)
+            }
+            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
+                primitive_op!(lhs, rhs, UInt16, $OPERATION)
+            }
+            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
+                primitive_op!(lhs, rhs, Int16, $OPERATION)
+            }
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                primitive_op!(lhs, rhs, UInt8, $OPERATION)
+            }
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                primitive_op!(lhs, rhs, Int8, $OPERATION)
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
+        }
+    };
+}
+
+macro_rules! impl_bool_op_arithmetic {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
+        match ($LHS, $RHS) {
+            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
+                primitive_op!(lhs, rhs, Boolean, $OPERATION)
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
         }
     };
 }
@@ -1963,6 +2046,31 @@ impl ScalarValue {
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_checked_op!(self, rhs, checked_sub, -)
+    }
+
+    pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, &&)
+    }
+
+    pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, ||)
+    }
+
+    pub fn bitand<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, &)
+    }
+
+    pub fn bitor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, |)
+    }
+
+    pub fn bitxor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, ^)
     }
 
     pub fn is_unsigned(&self) -> bool {

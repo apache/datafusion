@@ -90,6 +90,7 @@ impl AggregateUDF {
             fun: Arc::new(self.clone()),
             args,
             filter: None,
+            order_by: None,
         })
     }
 }

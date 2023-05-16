@@ -37,7 +37,8 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 
 use datafusion::physical_plan::expressions::{
-    Avg, BinaryExpr, Column, LikeExpr, Max, Min, Sum,
+    Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Column, LikeExpr, Max, Min,
+    Sum,
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
@@ -45,7 +46,7 @@ use crate::protobuf;
 use crate::protobuf::{physical_aggregate_expr_node, PhysicalSortExprNode, ScalarValue};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
-use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_common::{DataFusionError, Result};
@@ -70,6 +71,16 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             Ok(AggregateFunction::Sum.into())
         } else if a.as_any().downcast_ref::<Count>().is_some() {
             Ok(AggregateFunction::Count.into())
+        } else if a.as_any().downcast_ref::<BitAnd>().is_some() {
+            Ok(AggregateFunction::BitAnd.into())
+        } else if a.as_any().downcast_ref::<BitOr>().is_some() {
+            Ok(AggregateFunction::BitOr.into())
+        } else if a.as_any().downcast_ref::<BitXor>().is_some() {
+            Ok(AggregateFunction::BitXor.into())
+        } else if a.as_any().downcast_ref::<BoolAnd>().is_some() {
+            Ok(AggregateFunction::BoolAnd.into())
+        } else if a.as_any().downcast_ref::<BoolOr>().is_some() {
+            Ok(AggregateFunction::BoolOr.into())
         } else if a.as_any().downcast_ref::<DistinctCount>().is_some() {
             distinct = true;
             Ok(AggregateFunction::Count.into())
@@ -528,5 +539,33 @@ impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
                 expr: Some(expr.try_into()?),
             }),
         }
+    }
+}
+
+impl TryFrom<Option<Vec<PhysicalSortExpr>>> for protobuf::MaybePhysicalSortExprs {
+    type Error = DataFusionError;
+
+    fn try_from(sort_exprs: Option<Vec<PhysicalSortExpr>>) -> Result<Self, Self::Error> {
+        match sort_exprs {
+            None => Ok(protobuf::MaybePhysicalSortExprs { sort_expr: vec![] }),
+            Some(sort_exprs) => Ok(protobuf::MaybePhysicalSortExprs {
+                sort_expr: sort_exprs
+                    .into_iter()
+                    .map(|sort_expr| sort_expr.try_into())
+                    .collect::<Result<Vec<_>>>()?,
+            }),
+        }
+    }
+}
+
+impl TryFrom<PhysicalSortExpr> for protobuf::PhysicalSortExprNode {
+    type Error = DataFusionError;
+
+    fn try_from(sort_expr: PhysicalSortExpr) -> std::result::Result<Self, Self::Error> {
+        Ok(PhysicalSortExprNode {
+            expr: Some(Box::new(sort_expr.expr.try_into()?)),
+            asc: !sort_expr.options.descending,
+            nulls_first: sort_expr.options.nulls_first,
+        })
     }
 }
