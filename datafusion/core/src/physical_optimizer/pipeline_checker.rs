@@ -196,8 +196,8 @@ fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> boo
                     graph.analyze_prunability(&new_left_sort, &new_right_sort)
                 {
                     return prunability_for_unbounded_tables(
-                        &children_unbounded.first(),
-                        &children_unbounded.get(1),
+                        children_unbounded[0],
+                        children_unbounded[1],
                         &table_side,
                     );
                 }
@@ -259,25 +259,21 @@ fn find_index_in_filter(
 }
 
 fn prunability_for_unbounded_tables(
-    left_table: &Option<&bool>,
-    right_table: &Option<&bool>,
+    left_unbounded: bool,
+    right_unbounded: bool,
     table_side: &TableSide,
 ) -> bool {
-    match (left_table, right_table) {
-        (Some(true), Some(true)) if *table_side == TableSide::Both => true,
-        (Some(true), Some(false))
-            if *table_side == TableSide::Left || *table_side == TableSide::Both =>
-        {
-            true
-        }
-        (Some(false), Some(true))
-            if *table_side == TableSide::Right || *table_side == TableSide::Both =>
-        {
-            true
-        }
-        (Some(false), Some(false)) => true,
-        (_, _) => false,
+    let (left_prunable, right_prunable) = match table_side {
+        TableSide::Left => (true, false),
+        TableSide::Right => (false, true),
+        TableSide::Both => (true, true),
+        TableSide::None => (false, false),
+    };
+    // If one side is unbounded and is not prunable, return false (Cannot do calculations with bounded memory)
+    if (left_unbounded && !left_prunable) || (right_unbounded && !right_prunable) {
+        return false;
     }
+    true
 }
 
 #[cfg(test)]
