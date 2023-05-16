@@ -52,8 +52,8 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         }
     }
 
-    /// Add new equal conditions into the EquivalenceProperties, the new equal conditions are usually comming from the
-    /// equality predicates in Join or Filter
+    /// Adds new equal conditions into the EquivalenceProperties. New equal
+    /// conditions usually come from equality predicates in a join/filter.
     pub fn add_equal_conditions(&mut self, new_conditions: (&T, &T)) {
         let mut idx1: Option<usize> = None;
         let mut idx2: Option<usize> = None;
@@ -153,7 +153,7 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     }
 
     pub fn insert(&mut self, col: T) -> bool {
-        self.others.insert(col)
+        self.head != col && self.others.insert(col)
     }
 
     pub fn remove(&mut self, col: &T) -> bool {
@@ -168,7 +168,7 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
                 false
             }
         } else {
-            true
+            removed
         }
     }
 

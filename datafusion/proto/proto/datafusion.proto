@@ -564,8 +564,13 @@ enum AggregateFunction {
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
   MEDIAN = 18;
-  FIRST = 19;
-  LAST = 20;
+  BIT_AND = 19;
+  BIT_OR = 20;
+  BIT_XOR = 21;
+  BOOL_AND = 22;
+  BOOL_OR = 23;
+  FIRST = 24;
+  LAST = 25;
 }
 
 message AggregateExprNode {

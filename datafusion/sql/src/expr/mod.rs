@@ -327,6 +327,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let order_by = if let Some(order_by) = order_by {
             // TODO: Once sqlparser supports multiple order by clause, handle it
+            //       see issue: https://github.com/sqlparser-rs/sqlparser-rs/issues/875
             Some(vec![self.order_by_to_sort_expr(
                 *order_by,
                 input_schema,

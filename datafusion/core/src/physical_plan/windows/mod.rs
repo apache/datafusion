@@ -212,7 +212,7 @@ pub(crate) fn calc_requirements<
         .collect::<Vec<_>>();
     for element in orderby_sort_exprs.into_iter() {
         let PhysicalSortExpr { expr, options } = element.borrow();
-        if !sort_reqs.iter().any(|e| e.expr().eq(expr)) {
+        if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs.push(PhysicalSortRequirement::new(expr.clone(), Some(*options)));
         }
     }

@@ -2393,8 +2393,13 @@ pub enum AggregateFunction {
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
     Median = 18,
-    First = 19,
-    Last = 20,
+    BitAnd = 19,
+    BitOr = 20,
+    BitXor = 21,
+    BoolAnd = 22,
+    BoolOr = 23,
+    First = 24,
+    Last = 25,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2424,6 +2429,11 @@ impl AggregateFunction {
             }
             AggregateFunction::Grouping => "GROUPING",
             AggregateFunction::Median => "MEDIAN",
+            AggregateFunction::BitAnd => "BIT_AND",
+            AggregateFunction::BitOr => "BIT_OR",
+            AggregateFunction::BitXor => "BIT_XOR",
+            AggregateFunction::BoolAnd => "BOOL_AND",
+            AggregateFunction::BoolOr => "BOOL_OR",
             AggregateFunction::First => "FIRST",
             AggregateFunction::Last => "LAST",
         }
@@ -2452,6 +2462,11 @@ impl AggregateFunction {
             }
             "GROUPING" => Some(Self::Grouping),
             "MEDIAN" => Some(Self::Median),
+            "BIT_AND" => Some(Self::BitAnd),
+            "BIT_OR" => Some(Self::BitOr),
+            "BIT_XOR" => Some(Self::BitXor),
+            "BOOL_AND" => Some(Self::BoolAnd),
+            "BOOL_OR" => Some(Self::BoolOr),
             "FIRST" => Some(Self::First),
             "LAST" => Some(Self::Last),
             _ => None,

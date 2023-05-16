@@ -379,8 +379,8 @@ fn get_finest_requirement<
             // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
             // conflicting requirements.
-            return Err(DataFusionError::Plan(
-                "Conflicting ordering requirements in aggregate functions".to_string(),
+            return Err(DataFusionError::NotImplemented(
+                "Conflicting ordering requirements in aggregate functions is not supported".to_string(),
             ));
         } else {
             result = Some(fn_reqs.clone());
@@ -419,12 +419,8 @@ impl AggregateExec {
                 || input.equivalence_properties(),
                 || input.ordering_equivalence_properties(),
             )?;
-            aggregator_requirement = requirement.map(|exprs| {
-                exprs
-                    .into_iter()
-                    .map(PhysicalSortRequirement::from)
-                    .collect::<Vec<_>>()
-            });
+            aggregator_requirement = requirement
+                .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
         }
 
         // construct a map from the input columns to the output columns of the Aggregation
@@ -459,12 +455,10 @@ impl AggregateExec {
                     } else {
                         vec![]
                     };
-                let mut requirement = requirement_prefix
-                    .into_iter()
-                    .map(PhysicalSortRequirement::from)
-                    .collect::<Vec<_>>();
+                let mut requirement =
+                    PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
                 for req in aggregator_requirement {
-                    if requirement.iter().all(|item| req.expr().ne(item.expr())) {
+                    if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                         requirement.push(req);
                     }
                 }
