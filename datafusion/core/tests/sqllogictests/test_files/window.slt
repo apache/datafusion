@@ -2865,7 +2865,7 @@ LOCATION 'tests/data/window_2.csv';
 # a,b,c column. Column a has cardinality 2, column b has cardinality 4.
 # Column c has cardinality 100 (unique entries). Column d has cardinality 5.
 statement ok
-CREATE EXTERNAL TABLE annotated_data_infinite2 (
+CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
   a0 INTEGER,
   a INTEGER,
   b INTEGER,
@@ -2875,7 +2875,6 @@ CREATE EXTERNAL TABLE annotated_data_infinite2 (
 STORED AS CSV
 WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
-OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/window_2.csv';
 
 
