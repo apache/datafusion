@@ -182,14 +182,16 @@ fn is_prunable(join: &SymmetricHashJoinExec, children_unbounded: &[bool]) -> boo
                 let left_sort_expr = join.left().output_ordering().map(|s| s[0].clone());
                 let right_sort_expr =
                     join.right().output_ordering().map(|s| s[0].clone());
-                let (new_left_sort, new_right_sort) = match get_sort_expr_in_filter_schema(
+                let new_left_sort = get_sort_expr_in_filter_schema(
                     &left_sort_expr,
+                    filter,
+                    JoinSide::Left,
+                );
+                let new_right_sort = get_sort_expr_in_filter_schema(
                     &right_sort_expr,
                     filter,
-                ) {
-                    Some(sorts) => sorts,
-                    None => return false,
-                };
+                    JoinSide::Right,
+                );
                 if let Ok((table_side, _)) =
                     graph.analyze_prunability(&new_left_sort, &new_right_sort)
                 {
@@ -225,25 +227,12 @@ fn update_column_index(
 }
 
 fn get_sort_expr_in_filter_schema(
-    left_sort_expr: &Option<PhysicalSortExpr>,
-    right_sort_expr: &Option<PhysicalSortExpr>,
+    sort_expr: &Option<PhysicalSortExpr>,
     filter: &JoinFilter,
-) -> Option<(Option<PhysicalSortExpr>, Option<PhysicalSortExpr>)> {
-    let left_sorted_column_index_in_filter =
-        match find_index_in_filter(filter, left_sort_expr, JoinSide::Left) {
-            Some(index) => index,
-            None => return None,
-        };
-    let right_sorted_column_index_in_filter =
-        match find_index_in_filter(filter, right_sort_expr, JoinSide::Right) {
-            Some(index) => index,
-            None => return None,
-        };
-    let new_left_sort =
-        update_column_index(left_sort_expr, left_sorted_column_index_in_filter);
-    let new_right_sort =
-        update_column_index(right_sort_expr, right_sorted_column_index_in_filter);
-    Some((new_left_sort, new_right_sort))
+    side: JoinSide,
+) -> Option<PhysicalSortExpr> {
+    let sorted_column_index_in_filter = find_index_in_filter(filter, sort_expr, side);
+    sorted_column_index_in_filter.and_then(|idx| update_column_index(sort_expr, idx))
 }
 
 fn find_index_in_filter(
