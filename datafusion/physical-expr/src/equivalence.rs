@@ -223,22 +223,24 @@ pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
 impl OrderingEquivalentClass {
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         for (column, columns) in columns_map {
-            for ordering in vec![self.head.clone()]
-                .iter()
-                .chain(self.others.clone().iter())
-            {
+            let mut to_insert = vec![];
+            for ordering in vec![&self.head].into_iter().chain(self.others.iter()) {
                 for (idx, elem) in ordering.iter().enumerate() {
                     if elem.col.eq(column) {
-                        let mut normalized = self.head.clone();
                         for col in columns {
+                            let mut normalized = self.head.clone();
+                            // Change the corresponding entry in the head, with the alias column
                             normalized[idx] = OrderedColumn {
                                 col: col.clone(),
                                 options: elem.options,
                             };
-                            self.insert(normalized.clone());
+                            to_insert.push(normalized);
                         }
                     }
                 }
+            }
+            for elems in to_insert {
+                self.insert(elems);
             }
         }
     }
