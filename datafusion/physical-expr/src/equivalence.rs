@@ -218,22 +218,6 @@ impl From<OrderedColumn> for PhysicalSortRequirement {
     }
 }
 
-trait ColumnAccessor {
-    fn column(&self) -> &Column;
-}
-
-impl ColumnAccessor for Column {
-    fn column(&self) -> &Column {
-        self
-    }
-}
-
-impl ColumnAccessor for OrderedColumn {
-    fn column(&self) -> &Column {
-        &self.col
-    }
-}
-
 pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
 
 impl OrderingEquivalentClass {
@@ -270,10 +254,10 @@ pub fn project_equivalence_properties(
     alias_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut EquivalenceProperties,
 ) {
-    let mut ec_classes = input_eq.classes().to_vec();
+    let mut eq_classes = input_eq.classes().to_vec();
     for (column, columns) in alias_map {
         let mut find_match = false;
-        for class in ec_classes.iter_mut() {
+        for class in eq_classes.iter_mut() {
             if class.contains(column) {
                 for col in columns {
                     class.insert(col.clone());
@@ -283,12 +267,29 @@ pub fn project_equivalence_properties(
             }
         }
         if !find_match {
-            ec_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
+            eq_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
         }
     }
 
-    prune_columns_to_remove(output_eq, &mut ec_classes);
-    output_eq.extend(ec_classes);
+    // Prune columns that no longer is in the schema from from the EquivalenceProperties.
+    let schema = output_eq.schema();
+    let fields = schema.fields();
+    for class in eq_classes.iter_mut() {
+        let columns_to_remove = class
+            .iter()
+            .filter(|column| {
+                let idx = column.index();
+                idx >= fields.len() || fields[idx].name() != column.name()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for column in columns_to_remove {
+            class.remove(&column);
+        }
+    }
+    eq_classes.retain(|props| props.len() > 1);
+
+    output_eq.extend(eq_classes);
 }
 
 /// This function applies the given projection to the given ordering
@@ -303,29 +304,22 @@ pub fn project_ordering_equivalence_properties(
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
-    let mut ec_classes = input_eq.classes().to_vec();
-    for class in ec_classes.iter_mut() {
+    let mut eq_classes = input_eq.classes().to_vec();
+    for class in eq_classes.iter_mut() {
         class.update_with_aliases(columns_map);
     }
 
-    // prune_columns_to_remove(output_eq, &mut ec_classes);
-    // TODO: Add pruning
-    output_eq.extend(ec_classes);
-}
-
-fn prune_columns_to_remove<T: Eq + Hash + Clone + ColumnAccessor>(
-    eq_properties: &EquivalenceProperties<T>,
-    eq_classes: &mut Vec<EquivalentClass<T>>,
-) {
-    let schema = eq_properties.schema();
+    // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
+    let schema = output_eq.schema();
     let fields = schema.fields();
     for class in eq_classes.iter_mut() {
         let columns_to_remove = class
             .iter()
-            .filter(|elem| {
-                let column = elem.column();
-                let idx = column.index();
-                idx >= fields.len() || fields[idx].name() != column.name()
+            .filter(|columns| {
+                columns.iter().any(|column| {
+                    let idx = column.col.index();
+                    idx >= fields.len() || fields[idx].name() != column.col.name()
+                })
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -334,6 +328,8 @@ fn prune_columns_to_remove<T: Eq + Hash + Clone + ColumnAccessor>(
         }
     }
     eq_classes.retain(|props| props.len() > 1);
+
+    output_eq.extend(eq_classes);
 }
 
 #[cfg(test)]
