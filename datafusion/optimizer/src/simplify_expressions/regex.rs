@@ -180,7 +180,6 @@ fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
 }
 
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
-    println!("Considering hir kind: mode {mode:?} hir: {hir:?}");
     match hir.kind() {
         HirKind::Empty => {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
