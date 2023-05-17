@@ -43,7 +43,7 @@ use datafusion_common::ScalarValue;
 use futures::stream;
 use futures::stream::BoxStream;
 use object_store::{
-    path::Path, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    path::Path, GetOptions, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
 };
 use tokio::io::AsyncWrite;
 use url::Url;
@@ -640,7 +640,11 @@ impl ObjectStore for MirroringObjectStore {
         unimplemented!()
     }
 
-    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+    async fn get_opts(
+        &self,
+        location: &Path,
+        _options: GetOptions,
+    ) -> object_store::Result<GetResult> {
         self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let file = File::open(&path).unwrap();
@@ -671,6 +675,7 @@ impl ObjectStore for MirroringObjectStore {
             location: location.clone(),
             last_modified: Utc.timestamp_nanos(0),
             size: self.file_size as usize,
+            e_tag: None,
         })
     }
 
@@ -696,6 +701,7 @@ impl ObjectStore for MirroringObjectStore {
                         location: location.clone(),
                         last_modified: Utc.timestamp_nanos(0),
                         size: self.file_size as usize,
+                        e_tag: None,
                     })
                 })
             },
@@ -732,6 +738,7 @@ impl ObjectStore for MirroringObjectStore {
                     location: k.clone(),
                     last_modified: Utc.timestamp_nanos(0),
                     size: self.file_size as usize,
+                    e_tag: None,
                 };
                 objects.push(object);
             }

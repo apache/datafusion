@@ -185,6 +185,7 @@ async fn store_parquet_in_memory(
                     .expect("creating path"),
                 last_modified: chrono::DateTime::from(SystemTime::now()),
                 size: buf.len(),
+                e_tag: None,
             };
 
             (meta, Bytes::from(buf))

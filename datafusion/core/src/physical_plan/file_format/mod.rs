@@ -1370,6 +1370,7 @@ mod tests {
             location: object_store::path::Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
+            e_tag: None,
         };
 
         PartitionedFile {
