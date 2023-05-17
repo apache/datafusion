@@ -723,10 +723,9 @@ DROP SCHEMA empty_schema;
 
 # external table with infinite source
 statement ok
-CREATE external table t(c1 integer, c2 integer, c3 integer)
+CREATE UNBOUNDED external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
 WITH HEADER ROW
-OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/empty.csv';
 
 # should see infinite_source=true in the explain
@@ -745,7 +744,6 @@ statement ok
 CREATE external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
 WITH HEADER ROW
-OPTIONS('infinite_source' 'false')
 LOCATION 'tests/data/empty.csv';
 
 # expect to see no infinite_source in the explain
@@ -757,20 +755,3 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 
 statement ok
 drop table t;
-
-
-# error conditions
-statement error DataFusion error: Error during planning: Unknown value for infinite_source: FALSE\. Expected 'true' or 'false'
-CREATE external table t(c1 integer, c2 integer, c3 integer)
-STORED as CSV
-WITH HEADER ROW
-OPTIONS('infinite_source' 'FALSE')
-LOCATION 'tests/data/empty.csv';
-
-# error conditions
-statement error DataFusion error: Error during planning: Unknown value for infinite_source: g\. Expected 'true' or 'false'
-CREATE external table t(c1 integer, c2 integer, c3 integer)
-STORED as CSV
-WITH HEADER ROW
-OPTIONS('infinite_source' 'g')
-LOCATION 'tests/data/empty.csv';
