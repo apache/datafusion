@@ -174,7 +174,6 @@ fn normalize_sort_expr_with_equivalence_properties(
     sort_expr
 }
 
-
 fn normalize_sort_requirement_with_equivalence_properties(
     mut sort_requirement: PhysicalSortRequirement,
     eq_properties: &[EquivalentClass],

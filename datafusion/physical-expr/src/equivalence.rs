@@ -249,7 +249,7 @@ impl OrderingEquivalentClass {
                         for col in columns {
                             normalized[idx] = OrderedColumn {
                                 col: col.clone(),
-                                options: self.head[idx].options,
+                                options: elem.options,
                             };
                             self.insert(normalized.clone());
                         }

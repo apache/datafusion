@@ -223,6 +223,7 @@ impl ExecutionPlan for ProjectionExec {
             &self.columns_map,
             &mut new_properties,
         );
+        println!("new properties: {:?}", new_properties);
         println!("self schema:{:?}", self.schema);
         println!("proj output ordering: {:?}", self.output_ordering);
         new_properties

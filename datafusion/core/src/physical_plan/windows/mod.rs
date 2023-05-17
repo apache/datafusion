@@ -308,6 +308,7 @@ pub(crate) fn window_ordering_equivalence(
             }
         }
     }
+    println!("window result:{:?}", result);
     result
 }
 #[cfg(test)]

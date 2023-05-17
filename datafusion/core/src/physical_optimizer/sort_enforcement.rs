@@ -49,7 +49,9 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
-use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan, displayable};
+use crate::physical_plan::{
+    displayable, with_new_children_if_necessary, Distribution, ExecutionPlan,
+};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::utils::{get_at_indices, longest_consecutive_prefix};
@@ -444,7 +446,7 @@ fn parallelize_sorts(
     }))
 }
 
-fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()>{
+fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
     let formatted = displayable(plan.as_ref()).indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     println!("{:#?}", actual);
@@ -2903,131 +2905,5 @@ mod tests {
             )
             .unwrap(),
         )
-    }
-}
-
-
-mod tmp_tests{
-    use tempfile::TempDir;
-    use datafusion_common::Result;
-    use datafusion_execution::config::SessionConfig;
-    use crate::assert_batches_eq;
-    use crate::physical_plan::{collect, displayable};
-    use crate::prelude::SessionContext;
-
-    #[tokio::test]
-    async fn test_source_rn_ordered() -> Result<()> {
-        let config = SessionConfig::new()
-            .with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
-        ctx.sql("CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite (
-              ts INTEGER,
-              inc_col INTEGER,
-              desc_col INTEGER,
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (ts ASC)
-            LOCATION 'tests/data/window_1.csv'").await?;
-
-        let sql = "SELECT ts, rn1 FROM (SELECT ts, inc_col,
-       ROW_NUMBER() OVER() as rn1
-       FROM annotated_data_infinite
-       ORDER BY ts ASC)
-       ORDER BY rn1
-       LIMIT 5";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-        let expected = {
-            vec![
-                "GlobalLimitExec: skip=0, fetch=5",
-                "  ProjectionExec: expr=[ts@0 as ts, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
-                "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]",
-            ]
-        };
-
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        let actual_len = actual.len();
-        let actual_trim_last = &actual[..actual_len - 1];
-        assert_eq!(
-            expected, actual_trim_last,
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-        let actual = collect(physical_plan, ctx.task_ctx()).await?;
-        let expected = vec![
-            "+----+-----+",
-            "| ts | rn1 |",
-            "+----+-----+",
-            "| 1  | 1   |",
-            "| 1  | 2   |",
-            "| 5  | 3   |",
-            "| 9  | 4   |",
-            "| 10 | 5   |",
-            "+----+-----+",
-        ];
-        assert_batches_eq!(expected, &actual);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_source_rn_ordered2() -> Result<()> {
-        let config = SessionConfig::new()
-            .with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
-        ctx.sql("CREATE EXTERNAL TABLE annotated_data_finite (
-              ts INTEGER,
-              inc_col INTEGER,
-              desc_col INTEGER,
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            WITH ORDER (ts ASC)
-            LOCATION 'tests/data/window_1.csv'").await?;
-
-        let sql = "SELECT ts, rn1 FROM (SELECT ts, inc_col,
-       ROW_NUMBER() OVER(ORDER BY ts DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as rn1
-       FROM annotated_data_finite
-       ORDER BY ts DESC)
-       ORDER BY rn1 ASC
-       LIMIT 5";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-        let expected = {
-            vec![
-                "GlobalLimitExec: skip=0, fetch=5",
-                "  ProjectionExec: expr=[ts@0 as ts, ROW_NUMBER() ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING@1 as rn1]",
-                "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(1)) }], mode=[Sorted]",
-                "      SortExec: expr=[ts@0 DESC]",
-            ]
-        };
-
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        let actual_len = actual.len();
-        let actual_trim_last = &actual[..actual_len - 1];
-        assert_eq!(
-            expected, actual_trim_last,
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-
-        let actual = collect(physical_plan, ctx.task_ctx()).await?;
-        let expected = vec![
-            "+-----+-----+",
-            "| ts  | rn1 |",
-            "+-----+-----+",
-            "| 264 | 1   |",
-            "| 264 | 2   |",
-            "| 262 | 3   |",
-            "| 258 | 4   |",
-            "| 254 | 5   |",
-            "+-----+-----+",
-        ];
-        assert_batches_eq!(expected, &actual);
-        Ok(())
     }
 }
