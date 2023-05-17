@@ -200,20 +200,20 @@ impl OrderedColumn {
     }
 }
 
-impl Into<PhysicalSortExpr> for OrderedColumn {
-    fn into(self) -> PhysicalSortExpr {
+impl From<OrderedColumn> for PhysicalSortExpr {
+    fn from(value: OrderedColumn) -> Self {
         PhysicalSortExpr {
-            expr: Arc::new(self.col) as _,
-            options: self.options,
+            expr: Arc::new(value.col) as _,
+            options: value.options,
         }
     }
 }
 
-impl Into<PhysicalSortRequirement> for OrderedColumn {
-    fn into(self) -> PhysicalSortRequirement {
+impl From<OrderedColumn> for PhysicalSortRequirement {
+    fn from(value: OrderedColumn) -> Self {
         PhysicalSortRequirement {
-            expr: Arc::new(self.col) as _,
-            options: Some(self.options),
+            expr: Arc::new(value.col) as _,
+            options: Some(value.options),
         }
     }
 }

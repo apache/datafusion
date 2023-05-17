@@ -16,14 +16,13 @@
 // under the License.
 
 use crate::equivalence::{
-    EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
+    EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,
     OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
 use arrow::datatypes::SchemaRef;
-use arrow_schema::SortOptions;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRewriter, VisitRecursion,
 };
@@ -366,14 +365,10 @@ pub fn ordering_satisfy_concrete<
     let ordering_eq_classes = oeq_properties.classes();
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
-    let mut required_normalized =
+    let required_normalized =
         normalize_sort_expr2(required, eq_classes, ordering_eq_classes);
-    // TODO: Add collapse procedure
-    let mut provided_normalized =
+    let provided_normalized =
         normalize_sort_expr2(provided, eq_classes, ordering_eq_classes);
-    // TODO: Add collapse procedure
-    println!("required_normalized: {:?}", required_normalized);
-    println!("provided_normalized: {:?}", provided_normalized);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -421,9 +416,9 @@ pub fn ordering_satisfy_requirement_concrete<
     let ordering_eq_classes = oeq_properties.classes();
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
-    let mut required_normalized =
+    let required_normalized =
         normalize_sort_requirements2(required, eq_classes, ordering_eq_classes);
-    let mut provided_normalized =
+    let provided_normalized =
         normalize_sort_expr2(provided, eq_classes, ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
@@ -739,7 +734,7 @@ pub fn reassign_predicate_columns(
 mod tests {
     use super::*;
     use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::PhysicalSortExpr;
+    use crate::{OrderedColumn, PhysicalSortExpr};
     use arrow::compute::SortOptions;
     use datafusion_common::{Result, ScalarValue};
     use std::fmt::{Display, Formatter};
@@ -1312,30 +1307,26 @@ mod tests {
     #[test]
     fn test_normalize_expr_with_equivalence() -> Result<()> {
         let col_a = &Column::new("a", 0);
-        let _col_b = &Column::new("b", 1);
+        let col_b = &Column::new("b", 1);
         let col_c = &Column::new("c", 2);
-        let col_d = &Column::new("d", 3);
-        let col_e = &Column::new("e", 4);
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let option2 = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        // Assume schema satisfies ordering a ASC NULLS LAST
-        // and d ASC NULLS LAST and e DESC NULLS FIRST
+        let _col_d = &Column::new("d", 3);
+        let _col_e = &Column::new("e", 4);
         // Assume that column a and c are aliases.
-        let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
+        let (_test_schema, eq_properties, _ordering_eq_properties) =
+            create_test_params()?;
 
         let col_a_expr = Arc::new(col_a.clone()) as Arc<dyn PhysicalExpr>;
+        let col_b_expr = Arc::new(col_b.clone()) as Arc<dyn PhysicalExpr>;
         let col_c_expr = Arc::new(col_c.clone()) as Arc<dyn PhysicalExpr>;
-        let col_d_expr = Arc::new(col_d.clone()) as Arc<dyn PhysicalExpr>;
-        let col_e_expr = Arc::new(col_e.clone()) as Arc<dyn PhysicalExpr>;
         // Test cases for equivalence normalization,
         // First entry in the tuple is argument, second entry is expected result after normalization.
-        let expressions = vec![(&col_a_expr, &col_a_expr), (&col_c_expr, &col_a_expr)];
+        let expressions = vec![
+            // Normalized version of the column a and c should go to a (since a is head)
+            (&col_a_expr, &col_a_expr),
+            (&col_c_expr, &col_a_expr),
+            // Cannot normalize column b
+            (&col_b_expr, &col_b_expr),
+        ];
         for (expr, expected_eq) in expressions {
             assert!(
                 expected_eq.eq(&normalize_expr_with_equivalence_properties(
@@ -1346,26 +1337,6 @@ mod tests {
             );
         }
 
-        // // Test cases for ordering equivalence normalization
-        // // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
-        // let expressions = vec![
-        //     (&col_d_expr, option1, option1, &col_a_expr),
-        //     (&col_e_expr, option2, option1, &col_a_expr),
-        //     // Cannot normalize, hence should return itself.
-        //     (&col_e_expr, option1, option1, &col_e_expr),
-        // ];
-        // for (expr, sort_options, expected_options, expected_ordering_eq) in expressions {
-        //     let (normalized_expr, options) =
-        //         normalize_expr_with_ordering_equivalence_properties(
-        //             expr.clone(),
-        //             sort_options,
-        //             ordering_eq_properties.classes(),
-        //         );
-        //     assert!(
-        //         normalized_expr.eq(expected_ordering_eq) && (expected_options == options),
-        //         "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
-        //     );
-        // }
         Ok(())
     }
 
