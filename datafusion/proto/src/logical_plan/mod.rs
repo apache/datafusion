@@ -527,6 +527,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     if_not_exists: create_extern_table.if_not_exists,
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
+                    unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
                 })))
             }
@@ -1184,6 +1185,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     definition,
                     file_compression_type,
                     order_exprs,
+                    unbounded,
                     options,
                 },
             )) => Ok(protobuf::LogicalPlanNode {
@@ -1203,6 +1205,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .collect::<Result<Vec<_>, to_proto::Error>>()?,
                         definition: definition.clone().unwrap_or_default(),
                         file_compression_type: file_compression_type.to_string(),
+                        unbounded: *unbounded,
                         options: options.clone(),
                     },
                 )),

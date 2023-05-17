@@ -135,15 +135,7 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         // look for 'infinite' as an option
-        let infinite_source = match cmd.options.get("infinite_source").map(|s| s.as_str())
-        {
-            None => false,
-            Some("true") => true,
-            Some("false") => false,
-            Some(value) => {
-                return Err(DataFusionError::Plan(format!("Unknown value for infinite_source: {value}. Expected 'true' or 'false'")));
-            }
-        };
+        let infinite_source = cmd.unbounded;
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
@@ -210,6 +202,7 @@ mod tests {
             file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
             definition: None,
             order_exprs: vec![],
+            unbounded: false,
             options: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
