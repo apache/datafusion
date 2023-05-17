@@ -468,9 +468,9 @@ fn requirements_compatible_concrete<
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
 
-    let mut required_normalized =
+    let required_normalized =
         normalize_sort_requirements2(required, eq_classes, ordering_eq_classes);
-    let mut provided_normalized =
+    let provided_normalized =
         normalize_sort_requirements2(provided, eq_classes, ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
@@ -1346,19 +1346,14 @@ mod tests {
         let _col_b = &Column::new("b", 1);
         let col_c = &Column::new("c", 2);
         let col_d = &Column::new("d", 3);
-        let col_e = &Column::new("e", 4);
+        let _col_e = &Column::new("e", 4);
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option2 = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        // Assume schema satisfies ordering a ASC NULLS LAST
-        // and d ASC NULLS LAST and e DESC NULLS FIRST
         // Assume that column a and c are aliases.
-        let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
+        let (_test_schema, eq_properties, _ordering_eq_properties) =
+            create_test_params()?;
 
         // Test cases for equivalence normalization
         // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
@@ -1388,31 +1383,6 @@ mod tests {
             );
         }
 
-        // // Test cases for ordering equivalence normalization
-        // // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
-        // let expressions = vec![
-        //     (&col_d, option1, &col_a, option1),
-        //     (&col_e, option2, &col_a, option1),
-        // ];
-        // for (expr, sort_options, expected_col, expected_options) in
-        //     expressions.into_iter()
-        // {
-        //     let expected = PhysicalSortExpr {
-        //         expr: Arc::new((*expected_col).clone()) as _,
-        //         options: expected_options,
-        //     };
-        //     let arg = PhysicalSortExpr {
-        //         expr: Arc::new((*expr).clone()) as _,
-        //         options: sort_options,
-        //     };
-        //     assert!(
-        //         expected.eq(&normalize_sort_expr_with_ordering_equivalence_properties(
-        //             arg.clone(),
-        //             ordering_eq_properties.classes()
-        //         )),
-        //         "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
-        //     );
-        // }
         Ok(())
     }
 
@@ -1422,19 +1392,16 @@ mod tests {
         let _col_b = &Column::new("b", 1);
         let col_c = &Column::new("c", 2);
         let col_d = &Column::new("d", 3);
-        let col_e = &Column::new("e", 4);
+        let _col_e = &Column::new("e", 4);
         let option1 = SortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option2 = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
         // Assume schema satisfies ordering a ASC NULLS LAST
         // and d ASC NULLS LAST and e DESC NULLS FIRST
         // Assume that column a and c are aliases.
-        let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
+        let (_test_schema, eq_properties, _ordering_eq_properties) =
+            create_test_params()?;
 
         // Test cases for equivalence normalization
         // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
