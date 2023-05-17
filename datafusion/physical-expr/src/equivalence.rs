@@ -22,6 +22,8 @@ use arrow_schema::SortOptions;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::sync::Arc;
+use crate::PhysicalSortExpr;
 
 /// Equivalence Properties is a vec of EquivalentClass.
 #[derive(Debug, Clone)]
@@ -118,6 +120,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
 pub type OrderingEquivalenceProperties = EquivalenceProperties<OrderedColumn>;
+pub type OrderingEquivalenceProperties2 = EquivalenceProperties<Vec<OrderedColumn>>;
 
 /// EquivalentClass is a set of [`Column`]s or [`OrderedColumn`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -185,6 +188,67 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct EquivalentClass2<T = Vec<Column>> {
+    /// First element in the EquivalentClass
+    head: T,
+    /// Other equal columns
+    others: HashSet<T>,
+}
+
+impl<T: Eq + Hash + Clone> EquivalentClass2<T> {
+    pub fn new(head: T, others: Vec<T>) -> EquivalentClass2<T> {
+        EquivalentClass2 {
+            head,
+            others: HashSet::from_iter(others),
+        }
+    }
+
+    pub fn head(&self) -> &T {
+        &self.head
+    }
+
+    pub fn others(&self) -> &HashSet<T> {
+        &self.others
+    }
+
+    pub fn contains(&self, col: &T) -> bool {
+        self.head == *col || self.others.contains(col)
+    }
+
+    pub fn insert(&mut self, col: T) -> bool {
+        self.head != col && self.others.insert(col)
+    }
+
+    pub fn remove(&mut self, col: &T) -> bool {
+        let removed = self.others.remove(col);
+        if !removed && *col == self.head {
+            let one_col = self.others.iter().next().cloned();
+            if let Some(col) = one_col {
+                let removed = self.others.remove(&col);
+                self.head = col;
+                removed
+            } else {
+                false
+            }
+        } else {
+            removed
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'_ T> {
+        std::iter::once(&self.head).chain(self.others.iter())
+    }
+
+    pub fn len(&self) -> usize {
+        self.others.len() + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// This object represents a [`Column`] with a definite ordering.
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct OrderedColumn {
@@ -197,6 +261,16 @@ impl OrderedColumn {
         Self { col, options }
     }
 }
+
+impl Into<PhysicalSortExpr> for OrderedColumn{
+    fn into(self) -> PhysicalSortExpr {
+        PhysicalSortExpr{
+            expr: Arc::new(self.col) as _,
+            options: self.options
+        }
+    }
+}
+
 
 trait ColumnAccessor {
     fn column(&self) -> &Column;
@@ -215,6 +289,7 @@ impl ColumnAccessor for OrderedColumn {
 }
 
 pub type OrderingEquivalentClass = EquivalentClass<OrderedColumn>;
+pub type OrderingEquivalentClass2 = EquivalentClass<Vec<OrderedColumn>>;
 
 impl OrderingEquivalentClass {
     /// Finds the matching column inside the `OrderingEquivalentClass`.
@@ -228,6 +303,30 @@ impl OrderingEquivalentClass {
                 }
             }
             None
+        }
+    }
+
+    fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
+        for (column, columns) in columns_map {
+            if self.head.col.eq(column) {
+                for col in columns {
+                    self.insert(OrderedColumn {
+                        col: col.clone(),
+                        options: self.head.options,
+                    });
+                }
+            } else {
+                for item in self.others.clone() {
+                    if item.col.eq(column) {
+                        for col in columns {
+                            self.insert(OrderedColumn {
+                                col: col.clone(),
+                                options: item.options,
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -276,19 +375,8 @@ pub fn project_ordering_equivalence_properties(
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
     let mut ec_classes = input_eq.classes().to_vec();
-    for (column, columns) in columns_map {
-        for class in ec_classes.iter_mut() {
-            if let Some(OrderedColumn { options, .. }) = class.get_matching_column(column)
-            {
-                for col in columns {
-                    class.insert(OrderedColumn {
-                        col: col.clone(),
-                        options,
-                    });
-                }
-                break;
-            }
-        }
+    for class in ec_classes.iter_mut() {
+        class.update_with_aliases(columns_map);
     }
 
     prune_columns_to_remove(output_eq, &mut ec_classes);
