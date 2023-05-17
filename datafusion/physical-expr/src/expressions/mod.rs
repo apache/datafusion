@@ -128,7 +128,7 @@ pub(crate) mod tests {
 
             assert_eq!(expected, actual);
 
-            Ok(())
+            Ok(()) as Result<(), DataFusionError>
         }};
     }
 
