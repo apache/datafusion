@@ -19,7 +19,7 @@
 
 use futures::StreamExt;
 use std::any::Any;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -201,10 +201,17 @@ struct MemSink {
 }
 
 impl Debug for MemSink {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MemSink")
             .field("num_partitions", &self.batches.len())
             .finish()
+    }
+}
+
+impl Display for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let partition_count = self.batches.len();
+        write!(f, "MemoryTable (partitions={partition_count})")
     }
 }
 

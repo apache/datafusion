@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use core::fmt;
 use futures::StreamExt;
 use std::any::Any;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use crate::execution::context::TaskContext;
@@ -38,9 +39,12 @@ use crate::physical_plan::Distribution;
 use datafusion_common::DataFusionError;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
-/// destinations.
+/// user defined destinations.
+///
+/// The `Display` impl is used to format the sink for explain plan
+/// output.
 #[async_trait]
-pub trait DataSink: std::fmt::Debug + Send + Sync {
+pub trait DataSink: Display + Debug + Send + Sync {
     // TODO add desired input ordering
     // How does this sink want its input ordered?
 
@@ -164,11 +168,7 @@ impl ExecutionPlan for InsertExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "InsertExec: input_partition_count={}",
-                    self.input.output_partitioning().partition_count()
-                )
+                write!(f, "InsertExec: sink={}", self.sink)
             }
         }
     }
