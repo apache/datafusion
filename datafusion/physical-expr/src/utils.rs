@@ -173,18 +173,25 @@ fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement
 }
 
-// Searches `section` inside the `to_search`. Returns each range `section` found inside the `to_search`.
-fn get_ranges_inside<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range<usize>> {
+// Searches `section` inside the `searched`. Returns each range where `section` is compatible with the corresponding slice in the `searched`.
+fn get_compatible_ranges(
+    searched: &[PhysicalSortRequirement],
+    section: &[PhysicalSortRequirement],
+) -> Vec<Range<usize>> {
     let n_section = section.len();
-    let n_end = if to_search.len() >= n_section {
-        to_search.len() - n_section + 1
+    let n_end = if searched.len() >= n_section {
+        searched.len() - n_section + 1
     } else {
         0
     };
     let mut res = vec![];
     for idx in 0..n_end {
         let end = idx + n_section;
-        if to_search[idx..end].eq(section) {
+        let matches = searched[idx..end]
+            .iter()
+            .zip(section)
+            .all(|(req, given)| given.compatible(req));
+        if matches {
             res.push(Range { start: idx, end });
         }
     }
@@ -218,15 +225,15 @@ pub fn normalize_sort_exprs(
 }
 
 pub fn normalize_sort_requirements(
-    sort_exprs: &[PhysicalSortRequirement],
+    sort_reqs: &[PhysicalSortRequirement],
     eq_properties: &[EquivalentClass],
     ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Vec<PhysicalSortRequirement> {
-    let mut normalized_exprs = sort_exprs
+    let mut normalized_exprs = sort_reqs
         .iter()
-        .map(|sort_expr| {
+        .map(|sort_req| {
             normalize_sort_requirement_with_equivalence_properties(
-                sort_expr.clone(),
+                sort_req.clone(),
                 eq_properties,
             )
         })
@@ -238,7 +245,7 @@ pub fn normalize_sort_requirements(
                 .into_iter()
                 .map(|elem| elem.into())
                 .collect::<Vec<_>>();
-            let ranges = get_ranges_inside(&normalized_exprs, &elem);
+            let ranges = get_compatible_ranges(&normalized_exprs, &elem);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
                 let head: Vec<PhysicalSortRequirement> = ordering_eq_class
@@ -247,12 +254,21 @@ pub fn normalize_sort_requirements(
                     .into_iter()
                     .map(|elem| elem.into())
                     .collect::<Vec<_>>();
-                let updated_start: i64 = start as i64 + offset;
-                let updated_end: i64 = end as i64 + offset;
+                let updated_start = (start as i64 + offset) as usize;
+                let updated_end = (end as i64 + offset) as usize;
                 let range = end - start;
                 offset += head.len() as i64 - range as i64;
-                normalized_exprs
-                    .splice(updated_start as usize..updated_end as usize, head);
+                let all_none = normalized_exprs[updated_start..updated_end]
+                    .iter()
+                    .all(|elem| elem.options.is_none());
+                let head = if all_none {
+                    head.into_iter()
+                        .map(|elem| PhysicalSortRequirement::new(elem.expr, None))
+                        .collect::<Vec<_>>()
+                } else {
+                    head
+                };
+                normalized_exprs.splice(updated_start..updated_end, head);
             }
         }
     }
@@ -1156,6 +1172,71 @@ mod tests {
         Ok(())
     }
 
+    fn convert_to_requirement(
+        in_data: &[(&Column, Option<SortOptions>)],
+    ) -> Vec<PhysicalSortRequirement> {
+        in_data
+            .iter()
+            .map(|(col, options)| {
+                PhysicalSortRequirement::new(Arc::new((*col).clone()) as _, *options)
+            })
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn test_normalize_sort_reqs() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let col_c = &Column::new("c", 2);
+        let col_d = &Column::new("d", 3);
+        let col_e = &Column::new("e", 4);
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let option2 = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
+        let requirements = vec![
+            (vec![(col_a, Some(option1))], vec![(col_a, Some(option1))]),
+            (vec![(col_a, None)], vec![(col_a, None)]),
+            // Test whether equivalence works as expected
+            (vec![(col_c, Some(option1))], vec![(col_a, Some(option1))]),
+            (vec![(col_c, None)], vec![(col_a, None)]),
+            // Test whether ordering equivalence works as expected
+            (
+                vec![(col_d, Some(option1)), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+            ),
+            (vec![(col_d, None), (col_b, None)], vec![(col_a, None)]),
+            (
+                vec![(col_e, Some(option2)), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+            ),
+            // We should be able to normalize in compatible requirements also (not exactly equal)
+            (
+                vec![(col_e, Some(option2)), (col_b, None)],
+                vec![(col_a, Some(option1))],
+            ),
+            (vec![(col_e, None), (col_b, None)], vec![(col_a, None)]),
+        ];
+        let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
+        let eq_classes = eq_properties.classes();
+        let ordering_eq_classes = ordering_eq_properties.classes();
+        for (reqs, expected_normalized) in requirements.into_iter() {
+            let req = convert_to_requirement(&reqs);
+            let expected_normalized = convert_to_requirement(&expected_normalized);
+
+            assert_eq!(
+                normalize_sort_requirements(&req, eq_classes, ordering_eq_classes),
+                expected_normalized
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn test_reassign_predicate_columns_in_list() {
         let int_field = Field::new("should_not_matter", DataType::Int64, true);
@@ -1362,22 +1443,43 @@ mod tests {
     }
 
     #[test]
-    fn test_get_range_inside() -> Result<()> {
-        let empty_vec: Vec<Range<usize>> = Vec::new();
-        assert_eq!(
-            get_ranges_inside(&[1, 2, 3], &[1, 2]),
-            vec![Range { start: 0, end: 2 }]
-        );
-        assert_eq!(
-            get_ranges_inside(&[1, 2, 3], &[2, 3]),
-            vec![Range { start: 1, end: 3 }]
-        );
-        assert_eq!(get_ranges_inside(&[1, 2, 3], &[1, 3]), empty_vec);
-        assert_eq!(
-            get_ranges_inside(&[1, 2, 3], &[1, 2, 3]),
-            vec![Range { start: 0, end: 3 }]
-        );
-        assert_eq!(get_ranges_inside(&[1, 2, 3], &[3, 2]), empty_vec);
+    fn test_get_compatible_ranges() -> Result<()> {
+        let col_a = &Column::new("a", 0);
+        let col_b = &Column::new("b", 1);
+        let option1 = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let test_data = vec![
+            (
+                vec![(col_a, Some(option1)), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1)],
+            ),
+            (
+                vec![(col_a, None), (col_b, Some(option1))],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1)],
+            ),
+            (
+                vec![
+                    (col_a, None),
+                    (col_b, Some(option1)),
+                    (col_a, Some(option1)),
+                ],
+                vec![(col_a, Some(option1))],
+                vec![(0, 1), (2, 3)],
+            ),
+        ];
+        for (searched, to_search, expected) in test_data {
+            let searched = convert_to_requirement(&searched);
+            let to_search = convert_to_requirement(&to_search);
+            let expected = expected
+                .into_iter()
+                .map(|(start, end)| Range { start, end })
+                .collect::<Vec<_>>();
+            assert_eq!(get_compatible_ranges(&searched, &to_search), expected);
+        }
         Ok(())
     }
 
