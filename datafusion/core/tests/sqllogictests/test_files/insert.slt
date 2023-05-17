@@ -84,6 +84,25 @@ ORDER by c1
 ----
 100
 
+# verify there is data now in the table
+query I
+SELECT COUNT(*) from table_without_values;
+----
+100
+
+# verify there is data now in the table
+query II
+SELECT *
+FROM table_without_values
+ORDER BY field1, field2
+LIMIT 5;
+----
+-70111 3
+-65362 3
+-62295 3
+-56721 3
+-55414 3
+
 statement ok
 drop table table_without_values;
 
