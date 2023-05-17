@@ -324,6 +324,7 @@ pub fn project_ordering_equivalence_properties(
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
+    println!("project_ordering_equivalence_properties is called");
     let mut ec_classes = input_eq.classes().to_vec();
     for class in ec_classes.iter_mut() {
         class.update_with_aliases(columns_map);
