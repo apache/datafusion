@@ -382,13 +382,13 @@ async fn aggregated_correlated_scalar_subquery() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: t1.t1_id, (<subquery>) AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
-        "  Subquery: [SUM(t2.t2_int):UInt64;N]",
-        "    Projection: SUM(t2.t2_int) [SUM(t2.t2_int):UInt64;N]",
-        "      Aggregate: groupBy=[[]], aggr=[[SUM(t2.t2_int)]] [SUM(t2.t2_int):UInt64;N]",
-        "        Filter: t2.t2_id = outer_ref(t1.t1_id) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "          TableScan: t2 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "  TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "Projection: t1.t1_id, __scalar_sq_1.__value AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
+        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, __value:UInt64;N]",
+        "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "    SubqueryAlias: __scalar_sq_1 [t2_id:UInt32;N, __value:UInt64;N]",
+        "      Projection: t2.t2_id, SUM(t2.t2_int) AS __value [t2_id:UInt32;N, __value:UInt64;N]",
+        "        Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, SUM(t2.t2_int):UInt64;N]",
+        "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -429,13 +429,13 @@ async fn aggregated_correlated_scalar_subquery_with_extra_group_by_constant() ->
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: t1.t1_id, (<subquery>) AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
-        "  Subquery: [SUM(t2.t2_int):UInt64;N]",
-        "    Projection: SUM(t2.t2_int) [SUM(t2.t2_int):UInt64;N]",
-        "      Aggregate: groupBy=[[t2.t2_id, Utf8(\"a\")]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, Utf8(\"a\"):Utf8, SUM(t2.t2_int):UInt64;N]",
-        "        Filter: t2.t2_id = outer_ref(t1.t1_id) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "          TableScan: t2 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "  TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "Projection: t1.t1_id, __scalar_sq_1.__value AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
+        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, __value:UInt64;N]",
+        "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "    SubqueryAlias: __scalar_sq_1 [t2_id:UInt32;N, __value:UInt64;N]",
+        "      Projection: t2.t2_id, SUM(t2.t2_int) AS __value [t2_id:UInt32;N, __value:UInt64;N]",
+        "        Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, SUM(t2.t2_int):UInt64;N]",
+        "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
