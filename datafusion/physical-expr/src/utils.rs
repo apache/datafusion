@@ -266,24 +266,7 @@ pub fn normalize_sort_expr(
     )
 }
 
-// fn get_ranges_inside(to_search: &[PhysicalSortExpr], section: &[PhysicalSortExpr]) -> Vec<Range<usize>> {
-//     let n_section = section.len();
-//     let n_end = if to_search.len() >= n_section {
-//         to_search.len() - n_section + 1
-//     } else {
-//         0
-//     };
-//     let mut res = vec![];
-//     for idx in 0..n_end {
-//         let end = idx + n_section;
-//         if to_search[idx..end].eq(section){
-//             res.push(Range{start:idx, end});
-//         }
-//     }
-//     res
-// }
-
-fn get_ranges_inside2<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range<usize>> {
+fn get_ranges_inside<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range<usize>> {
     let n_section = section.len();
     let n_end = if to_search.len() >= n_section {
         to_search.len() - n_section + 1
@@ -299,17 +282,6 @@ fn get_ranges_inside2<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range
     }
     res
 }
-
-// fn get_range_inside2<T: Eq>(to_search: &[T], section: &[T]) -> Option<Range<usize>> {
-//     let n_section = section.len();
-//     for idx in 0..to_search.len() - n_section + 1{
-//         let end = idx + n_section;
-//         if to_search[idx..end].eq(section){
-//             return Some(Range{start:idx, end});
-//         }
-//     }
-//     None
-// }
 
 fn collapse_vec<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
     let mut out_data = vec![];
@@ -344,7 +316,7 @@ pub fn normalize_sort_expr2(
                 .collect::<Vec<_>>();
             println!("normalized_exprs: {:?}", normalized_exprs);
             println!("elem: {:?}", elem);
-            let ranges = get_ranges_inside2(&normalized_exprs, &elem);
+            let ranges = get_ranges_inside(&normalized_exprs, &elem);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
                 println!("start:{:?}, end:{:?}", start, end);
@@ -396,7 +368,7 @@ pub fn normalize_sort_requirements2(
                 .collect::<Vec<_>>();
             println!("normalized_exprs: {:?}", normalized_exprs);
             println!("elem: {:?}", elem);
-            let ranges = get_ranges_inside2(&normalized_exprs, &elem);
+            let ranges = get_ranges_inside(&normalized_exprs, &elem);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
                 println!("start:{:?}, end:{:?}", start, end);
@@ -440,28 +412,6 @@ pub fn normalize_sort_requirement(
     )
 }
 
-// /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
-// pub fn ordering_satisfy<
-//     F: FnOnce() -> EquivalenceProperties,
-//     F2: FnOnce() -> OrderingEquivalenceProperties,
-// >(
-//     provided: Option<&[PhysicalSortExpr]>,
-//     required: Option<&[PhysicalSortExpr]>,
-//     equal_properties: F,
-//     ordering_equal_properties: F2,
-// ) -> bool {
-//     match (provided, required) {
-//         (_, None) => true,
-//         (None, Some(_)) => false,
-//         (Some(provided), Some(required)) => ordering_satisfy_concrete(
-//             provided,
-//             required,
-//             equal_properties,
-//             ordering_equal_properties,
-//         ),
-//     }
-// }
-
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<
     F: FnOnce() -> EquivalenceProperties,
@@ -483,41 +433,6 @@ pub fn ordering_satisfy<
         ),
     }
 }
-
-// /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
-// /// provided [`PhysicalSortExpr`]s.
-// pub fn ordering_satisfy_concrete<
-//     F: FnOnce() -> EquivalenceProperties,
-//     F2: FnOnce() -> OrderingEquivalenceProperties,
-// >(
-//     provided: &[PhysicalSortExpr],
-//     required: &[PhysicalSortExpr],
-//     equal_properties: F,
-//     ordering_equal_properties: F2,
-// ) -> bool {
-//     let oeq_properties = ordering_equal_properties();
-//     let ordering_eq_classes = oeq_properties.classes();
-//     let eq_properties = equal_properties();
-//     let eq_classes = eq_properties.classes();
-//     let mut required_normalized = Vec::new();
-//     for expr in required {
-//         let item = normalize_sort_expr(expr.clone(), eq_classes, ordering_eq_classes);
-//         if !required_normalized.contains(&item) {
-//             required_normalized.push(item);
-//         }
-//     }
-//     let provided_normalized = provided
-//         .iter()
-//         .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
-//         .collect::<Vec<_>>();
-//     if required_normalized.len() > provided_normalized.len() {
-//         return false;
-//     }
-//     required_normalized
-//         .into_iter()
-//         .zip(provided_normalized)
-//         .all(|(req, given)| given == req)
-// }
 
 /// Checks whether the required [`PhysicalSortExpr`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
@@ -551,29 +466,6 @@ pub fn ordering_satisfy_concrete<
         .all(|(req, given)| given == req)
 }
 
-// /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
-// /// provided [`PhysicalSortExpr`]s.
-// pub fn ordering_satisfy_requirement<
-//     F: FnOnce() -> EquivalenceProperties,
-//     F2: FnOnce() -> OrderingEquivalenceProperties,
-// >(
-//     provided: Option<&[PhysicalSortExpr]>,
-//     required: Option<&[PhysicalSortRequirement]>,
-//     equal_properties: F,
-//     ordering_equal_properties: F2,
-// ) -> bool {
-//     match (provided, required) {
-//         (_, None) => true,
-//         (None, Some(_)) => false,
-//         (Some(provided), Some(required)) => ordering_satisfy_requirement_concrete(
-//             provided,
-//             required,
-//             equal_properties,
-//             ordering_equal_properties,
-//         ),
-//     }
-// }
-
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement<
@@ -596,42 +488,6 @@ pub fn ordering_satisfy_requirement<
         ),
     }
 }
-
-// /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
-// /// provided [`PhysicalSortExpr`]s.
-// pub fn ordering_satisfy_requirement_concrete<
-//     F: FnOnce() -> EquivalenceProperties,
-//     F2: FnOnce() -> OrderingEquivalenceProperties,
-// >(
-//     provided: &[PhysicalSortExpr],
-//     required: &[PhysicalSortRequirement],
-//     equal_properties: F,
-//     ordering_equal_properties: F2,
-// ) -> bool {
-//     let oeq_properties = ordering_equal_properties();
-//     let ordering_eq_classes = oeq_properties.classes();
-//     let eq_properties = equal_properties();
-//     let eq_classes = eq_properties.classes();
-//     let mut required_normalized = Vec::new();
-//     for req in required {
-//         let item =
-//             normalize_sort_requirement(req.clone(), eq_classes, ordering_eq_classes);
-//         if !required_normalized.contains(&item) {
-//             required_normalized.push(item);
-//         }
-//     }
-//     let provided_normalized = provided
-//         .iter()
-//         .map(|e| normalize_sort_expr(e.clone(), eq_classes, ordering_eq_classes))
-//         .collect::<Vec<_>>();
-//     if required_normalized.len() > provided_normalized.len() {
-//         return false;
-//     }
-//     required_normalized
-//         .into_iter()
-//         .zip(provided_normalized)
-//         .all(|(req, given)| given.satisfy(&req))
-// }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are satisfied by the
 /// provided [`PhysicalSortExpr`]s.
@@ -661,29 +517,6 @@ pub fn ordering_satisfy_requirement_concrete<
         .all(|(req, given)| given.satisfy(&req))
 }
 
-// /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
-// /// specific than the provided [`PhysicalSortRequirement`]s.
-// pub fn requirements_compatible<
-//     F: FnOnce() -> OrderingEquivalenceProperties,
-//     F2: FnOnce() -> EquivalenceProperties,
-// >(
-//     provided: Option<&[PhysicalSortRequirement]>,
-//     required: Option<&[PhysicalSortRequirement]>,
-//     ordering_equal_properties: F,
-//     equal_properties: F2,
-// ) -> bool {
-//     match (provided, required) {
-//         (_, None) => true,
-//         (None, Some(_)) => false,
-//         (Some(provided), Some(required)) => requirements_compatible_concrete(
-//             provided,
-//             required,
-//             ordering_equal_properties,
-//             equal_properties,
-//         ),
-//     }
-// }
-
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
 pub fn requirements_compatible<
@@ -706,42 +539,6 @@ pub fn requirements_compatible<
         ),
     }
 }
-
-// /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
-// /// specific than the provided [`PhysicalSortRequirement`]s.
-// fn requirements_compatible_concrete<
-//     F: FnOnce() -> OrderingEquivalenceProperties,
-//     F2: FnOnce() -> EquivalenceProperties,
-// >(
-//     provided: &[PhysicalSortRequirement],
-//     required: &[PhysicalSortRequirement],
-//     ordering_equal_properties: F,
-//     equal_properties: F2,
-// ) -> bool {
-//     let oeq_properties = ordering_equal_properties();
-//     let ordering_eq_classes = oeq_properties.classes();
-//     let eq_properties = equal_properties();
-//     let eq_classes = eq_properties.classes();
-//     let mut required_normalized = Vec::new();
-//     for req in required {
-//         let item =
-//             normalize_sort_requirement(req.clone(), eq_classes, ordering_eq_classes);
-//         if !required_normalized.contains(&item) {
-//             required_normalized.push(item);
-//         }
-//     }
-//     let provided_normalized = provided
-//         .iter()
-//         .map(|e| normalize_sort_requirement(e.clone(), eq_classes, ordering_eq_classes))
-//         .collect::<Vec<_>>();
-//     if required_normalized.len() > provided_normalized.len() {
-//         return false;
-//     }
-//     required_normalized
-//         .into_iter()
-//         .zip(provided_normalized)
-//         .all(|(req, given)| given.compatible(&req))
-// }
 
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
@@ -1899,19 +1696,19 @@ mod tests {
     fn test_get_range_inside() -> Result<()> {
         let empty_vec: Vec<Range<usize>> = Vec::new();
         assert_eq!(
-            get_ranges_inside2(&[1, 2, 3], &[1, 2]),
+            get_ranges_inside(&[1, 2, 3], &[1, 2]),
             vec![Range { start: 0, end: 2 }]
         );
         assert_eq!(
-            get_ranges_inside2(&[1, 2, 3], &[2, 3]),
+            get_ranges_inside(&[1, 2, 3], &[2, 3]),
             vec![Range { start: 1, end: 3 }]
         );
-        assert_eq!(get_ranges_inside2(&[1, 2, 3], &[1, 3]), empty_vec);
+        assert_eq!(get_ranges_inside(&[1, 2, 3], &[1, 3]), empty_vec);
         assert_eq!(
-            get_ranges_inside2(&[1, 2, 3], &[1, 2, 3]),
+            get_ranges_inside(&[1, 2, 3], &[1, 2, 3]),
             vec![Range { start: 0, end: 3 }]
         );
-        assert_eq!(get_ranges_inside2(&[1, 2, 3], &[3, 2]), empty_vec);
+        assert_eq!(get_ranges_inside(&[1, 2, 3], &[3, 2]), empty_vec);
         Ok(())
     }
 
