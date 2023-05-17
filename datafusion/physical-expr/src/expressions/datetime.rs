@@ -118,13 +118,20 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             // interval + interval, timestamp + interval, and interval + timestamp. It takes one array and one scalar as input
             // and an integer sign representing the operation (+1 for addition and -1 for subtraction).
             (ColumnarValue::Array(array_lhs), ColumnarValue::Scalar(array_rhs)) => {
-                resolve_temporal_op_scalar(&array_lhs, sign, &array_rhs, false)
+                Ok(ColumnarValue::Array(resolve_temporal_op_scalar(
+                    &array_lhs, sign, &array_rhs, false,
+                )?))
             }
             // This function evaluates operations between a scalar value and an array of temporal
             // values. One example is calculating the duration between a scalar timestamp and an
             // array of timestamps (i.e. `now() - some_column`).
             (ColumnarValue::Scalar(scalar_lhs), ColumnarValue::Array(array_rhs)) => {
-                resolve_temporal_op_scalar(&array_rhs, sign, &scalar_lhs, true)
+                Ok(ColumnarValue::Array(resolve_temporal_op_scalar(
+                    &array_rhs,
+                    sign,
+                    &scalar_lhs,
+                    true,
+                )?))
             }
             // This function evaluates temporal array operations, such as timestamp - timestamp, interval + interval,
             // timestamp + interval, and interval + timestamp. It takes two arrays as input and an integer sign representing
@@ -593,59 +600,49 @@ mod tests {
         let interval_array = interval_scalar.to_array();
 
         // timestamp + interval
-        if let ColumnarValue::Array(res1) =
-            resolve_temporal_op_scalar(&timestamp_array, 1, &interval_scalar, false)?
-        {
-            let res2 = timestamp_scalar.add(&interval_scalar)?.to_array();
-            assert_eq!(
-                &res1, &res2,
-                "Timestamp Scalar={timestamp_scalar} + Interval Scalar={interval_scalar}"
-            );
-        }
+        let res1 =
+            resolve_temporal_op_scalar(&timestamp_array, 1, &interval_scalar, false)?;
+        let res2 = timestamp_scalar.add(&interval_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Timestamp Scalar={timestamp_scalar} + Interval Scalar={interval_scalar}"
+        );
 
         // timestamp - interval
-        if let ColumnarValue::Array(res1) =
-            resolve_temporal_op_scalar(&timestamp_array, -1, &interval_scalar, false)?
-        {
-            let res2 = timestamp_scalar.sub(&interval_scalar)?.to_array();
-            assert_eq!(
-                &res1, &res2,
-                "Timestamp Scalar={timestamp_scalar} - Interval Scalar={interval_scalar}"
-            );
-        }
+        let res1 =
+            resolve_temporal_op_scalar(&timestamp_array, -1, &interval_scalar, false)?;
+        let res2 = timestamp_scalar.sub(&interval_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Timestamp Scalar={timestamp_scalar} - Interval Scalar={interval_scalar}"
+        );
 
         // timestamp - timestamp
-        if let ColumnarValue::Array(res1) =
-            resolve_temporal_op_scalar(&timestamp_array, -1, &timestamp_scalar, false)?
-        {
-            let res2 = timestamp_scalar.sub(&timestamp_scalar)?.to_array();
-            assert_eq!(
-                &res1, &res2,
-                "Timestamp Scalar={timestamp_scalar} - Timestamp Scalar={timestamp_scalar}"
-            );
-        }
+        let res1 =
+            resolve_temporal_op_scalar(&timestamp_array, -1, &timestamp_scalar, false)?;
+        let res2 = timestamp_scalar.sub(&timestamp_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Timestamp Scalar={timestamp_scalar} - Timestamp Scalar={timestamp_scalar}"
+        );
 
         // interval - interval
-        if let ColumnarValue::Array(res1) =
-            resolve_temporal_op_scalar(&interval_array, -1, &interval_scalar, false)?
-        {
-            let res2 = interval_scalar.sub(&interval_scalar)?.to_array();
-            assert_eq!(
-                &res1, &res2,
-                "Interval Scalar={interval_scalar} - Interval Scalar={interval_scalar}"
-            );
-        }
+        let res1 =
+            resolve_temporal_op_scalar(&interval_array, -1, &interval_scalar, false)?;
+        let res2 = interval_scalar.sub(&interval_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Interval Scalar={interval_scalar} - Interval Scalar={interval_scalar}"
+        );
 
         // interval + interval
-        if let ColumnarValue::Array(res1) =
-            resolve_temporal_op_scalar(&interval_array, 1, &interval_scalar, false)?
-        {
-            let res2 = interval_scalar.add(&interval_scalar)?.to_array();
-            assert_eq!(
-                &res1, &res2,
-                "Interval Scalar={interval_scalar} + Interval Scalar={interval_scalar}"
-            );
-        }
+        let res1 =
+            resolve_temporal_op_scalar(&interval_array, 1, &interval_scalar, false)?;
+        let res2 = interval_scalar.add(&interval_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Interval Scalar={interval_scalar} + Interval Scalar={interval_scalar}"
+        );
 
         Ok(())
     }

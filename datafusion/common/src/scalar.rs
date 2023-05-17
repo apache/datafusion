@@ -907,11 +907,11 @@ macro_rules! impl_op_arithmetic {
             )))),
             // Binary operations on arguments with different types:
             (ScalarValue::Date32(Some(days)), _) => {
-                let value = date32_add(*days, $RHS, get_sign!($OPERATION))?;
+                let value = date32_op(*days, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::Date32(Some(value)))
             }
             (ScalarValue::Date64(Some(ms)), _) => {
-                let value = date64_add(*ms, $RHS, get_sign!($OPERATION))?;
+                let value = date64_op(*ms, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::Date64(Some(value)))
             }
             (ScalarValue::TimestampSecond(Some(ts_s), zone), _) => {
@@ -1247,14 +1247,14 @@ pub fn calculate_naives<const TIME_MODE: bool>(
 }
 
 #[inline]
-pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
+pub fn date32_op(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::days(days as i64));
     do_date_math(prior, scalar, sign).map(|d| d.sub(epoch).num_days() as i32)
 }
 
 #[inline]
-pub fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+pub fn date64_op(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::milliseconds(ms));
     do_date_math(prior, scalar, sign).map(|d| d.sub(epoch).num_milliseconds())

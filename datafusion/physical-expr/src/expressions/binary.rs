@@ -21,7 +21,7 @@ mod kernels_arrow;
 
 use std::{any::Any, sync::Arc};
 
-use chrono::NaiveDateTime;
+use chrono::{Days, Months, NaiveDate, NaiveDateTime};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
@@ -55,6 +55,7 @@ use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+use arrow_array::temporal_conversions::{MILLISECONDS_IN_DAY, NANOSECONDS_IN_DAY};
 use datafusion_common::delta::shift_months;
 use datafusion_common::scalar::{
     calculate_naives, microseconds_add, microseconds_sub, milliseconds_add,
@@ -1363,22 +1364,22 @@ pub fn resolve_temporal_op_scalar(
     sign: i32,
     rhs: &ScalarValue,
     commute: bool,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     match (sign, commute) {
         (1, false) => add_dyn_temporal_right_scalar(lhs, rhs),
         (1, true) => add_dyn_temporal_left_scalar(rhs, lhs),
         (-1, false) => subtract_dyn_temporal_right_scalar(lhs, rhs),
         (-1, true) => subtract_dyn_temporal_left_scalar(rhs, lhs),
-        _ => Err(DataFusionError::Internal(format!(
-            "Undefined operation for temporal types"
-        ))),
+        _ => Err(DataFusionError::Internal(
+            "Undefined operation for temporal types".to_string(),
+        )),
     }
 }
 
 /// This function handles the Timestamp - Timestamp operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
-pub fn ts_sub_scalar_ts(array: &ArrayRef, scalar: &ScalarValue) -> Result<ColumnarValue> {
+pub fn ts_sub_scalar_ts(array: &ArrayRef, scalar: &ScalarValue) -> Result<ArrayRef> {
     let ret = match (array.data_type(), scalar) {
         (
             DataType::Timestamp(TimeUnit::Second, opt_tz_lhs),
@@ -1456,13 +1457,13 @@ pub fn ts_sub_scalar_ts(array: &ArrayRef, scalar: &ScalarValue) -> Result<Column
             )));
         }
     };
-    Ok(ColumnarValue::Array(ret))
+    Ok(ret)
 }
 
 /// This function handles the Timestamp - Timestamp operations,
 /// where the first one is a scalar, and the second one is an array,
 /// hence the result is also an array.
-pub fn scalar_ts_sub_ts(scalar: &ScalarValue, array: &ArrayRef) -> Result<ColumnarValue> {
+pub fn scalar_ts_sub_ts(scalar: &ScalarValue, array: &ArrayRef) -> Result<ArrayRef> {
     let ret = match (scalar, array.data_type()) {
         (
             ScalarValue::TimestampSecond(Some(lhs), opt_tz_lhs),
@@ -1540,7 +1541,7 @@ pub fn scalar_ts_sub_ts(scalar: &ScalarValue, array: &ArrayRef) -> Result<Column
             )));
         }
     };
-    Ok(ColumnarValue::Array(ret))
+    Ok(ret)
 }
 
 macro_rules! sub_timestamp_interval_macro {
@@ -1556,11 +1557,11 @@ macro_rules! sub_timestamp_interval_macro {
 /// This function handles the Timestamp - Interval operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
-pub fn ts_sub_scalar_interval(
+pub fn ts_op_scalar_interval(
     array: &ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     let ret = match array.data_type() {
         DataType::Timestamp(TimeUnit::Second, tz) => {
             sub_timestamp_interval_macro!(
@@ -1611,241 +1612,83 @@ pub fn ts_sub_scalar_interval(
             array.data_type()
         )))?,
     };
-    Ok(ColumnarValue::Array(ret))
+    Ok(ret)
 }
 /// This function handles the Timestamp - Interval operations,
 /// where the first one is a scalar, and the second one is an array,
 /// hence the result is also an array.
-pub fn scalar_ts_sub_interval(
+pub fn scalar_ts_op_interval(
     scalar: &ScalarValue,
+    sign: i32,
     array: &ArrayRef,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     let ret = match (scalar, array.data_type()) {
-        // Second - Interval
+        // Second op YearMonth
         (
             ScalarValue::TimestampSecond(Some(ts_sec), tz),
             DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
-            let array = as_interval_ym_array(&array)?;
-            let ret: PrimitiveArray<TimestampSecondType> = try_unary::<
-                IntervalYearMonthType,
-                _,
-                TimestampSecondType,
-            >(array, |ym| {
-                let prior = NaiveDateTime::from_timestamp_opt(*ts_sec, 0)
-                    .ok_or_else(|| DataFusionError::Internal("ASDASD".to_string()))?;
-                Ok(shift_months(prior, -ym).timestamp())
-            })?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
+        ) => ts_second_interval_ym_op(*ts_sec, tz, array, sign)?,
+        // Millisecond op YearMonth
+        (
+            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => ts_ms_interval_ym_op(*ts_ms, tz, array, sign)?,
+        // Microsecond op YearMonth
+        (
+            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => ts_us_interval_ym_op(*ts_us, tz, array, sign)?,
+        // Nanosecond op YearMonth
+        (
+            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => ts_ns_interval_ym_op(*ts_ns, tz, array, sign)?,
+        // Second op DayTime
         (
             ScalarValue::TimestampSecond(Some(ts_sec), tz),
             DataType::Interval(IntervalUnit::DayTime),
-        ) => {
-            let array = as_interval_dt_array(&array)?;
-            let ret: PrimitiveArray<TimestampSecondType> =
-                try_unary::<IntervalDayTimeType, _, TimestampSecondType>(array, |ym| {
-                    let prior = NaiveDateTime::from_timestamp_opt(*ts_sec, 0)
-                        .ok_or_else(|| DataFusionError::Internal("ASDASD".to_string()))?;
-                    Ok(add_day_time(prior, ym, -1).timestamp())
-                })?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
+        ) => ts_second_interval_dt_op(*ts_sec, tz, array, sign)?,
+        // Millisecond op DayTime
+        (
+            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => ts_ms_interval_dt_op(*ts_ms, tz, array, sign)?,
+        // Microsecond op DayTime
+        (
+            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => ts_us_interval_dt_op(*ts_us, tz, array, sign)?,
+        // Nanosecond op DayTime
+        (
+            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => ts_ns_interval_dt_op(*ts_ns, tz, array, sign)?,
+        // Second op MonthDayNano
         (
             ScalarValue::TimestampSecond(Some(ts_sec), tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
-            let array = as_interval_mdn_array(&array)?;
-            let ret: PrimitiveArray<TimestampSecondType> = try_unary::<
-                IntervalMonthDayNanoType,
-                _,
-                TimestampSecondType,
-            >(array, |ym| {
-                let prior = NaiveDateTime::from_timestamp_opt(*ts_sec, 0)
-                    .ok_or_else(|| DataFusionError::Internal("ASDASD".to_string()))?;
-                Ok(add_m_d_nano(prior, ym, -1).timestamp())
-            })?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
-        // Millisecond - Interval
-        (
-            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
-            let array = as_interval_ym_array(&array)?;
-            let ret: PrimitiveArray<TimestampMillisecondType> =
-                try_unary::<IntervalYearMonthType, _, TimestampMillisecondType>(
-                    array,
-                    |ym| {
-                        let prior = NaiveDateTime::from_timestamp_millis(*ts_ms)
-                            .ok_or_else(|| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?;
-                        Ok(shift_months(prior, -ym).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
-        (
-            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => {
-            let array = as_interval_dt_array(&array)?;
-            let ret: PrimitiveArray<TimestampMillisecondType> =
-                try_unary::<IntervalDayTimeType, _, TimestampMillisecondType>(
-                    array,
-                    |ym| {
-                        let prior = NaiveDateTime::from_timestamp_millis(*ts_ms)
-                            .ok_or_else(|| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?;
-                        Ok(add_day_time(prior, ym, -1).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
+        ) => ts_second_interval_mdn_op(*ts_sec, tz, array, sign)?,
+        // Millisecond op MonthDayNano
         (
             ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
-            let array = as_interval_mdn_array(&array)?;
-            let ret: PrimitiveArray<TimestampMillisecondType> =
-                try_unary::<IntervalMonthDayNanoType, _, TimestampMillisecondType>(
-                    array,
-                    |ym| {
-                        let prior = NaiveDateTime::from_timestamp_millis(*ts_ms)
-                            .ok_or_else(|| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?;
-                        Ok(add_m_d_nano(prior, ym, -1).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
-        // Microsecond - Interval
-        (
-            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
-            let array = as_interval_ym_array(&array)?;
-            let ret: PrimitiveArray<TimestampMicrosecondType> =
-                try_unary::<IntervalYearMonthType, _, TimestampMicrosecondType>(
-                    array,
-                    |ym| {
-                        let prior = NaiveDateTime::from_timestamp_micros(*ts_us)
-                            .ok_or_else(|| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?;
-                        Ok(shift_months(prior, -ym).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
-        (
-            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => {
-            let array = as_interval_dt_array(&array)?;
-            let ret: PrimitiveArray<TimestampMicrosecondType> =
-                try_unary::<IntervalDayTimeType, _, TimestampMicrosecondType>(
-                    array,
-                    |dt| {
-                        let prior = NaiveDateTime::from_timestamp_micros(*ts_us)
-                            .ok_or_else(|| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?;
-                        Ok(add_day_time(prior, dt, -1).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
+        ) => ts_ms_interval_mdn_op(*ts_ms, tz, array, sign)?,
+        // Microsecond op MonthDayNano
         (
             ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
-            let array = as_interval_mdn_array(&array)?;
-            let ret: PrimitiveArray<TimestampMicrosecondType> =
-                try_unary::<IntervalMonthDayNanoType, _, TimestampMicrosecondType>(
-                    array,
-                    |mdn| {
-                        let prior = NaiveDateTime::from_timestamp_micros(*ts_us)
-                            .ok_or_else(|| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?;
-                        Ok(add_m_d_nano(prior, mdn, -1).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
-        // Nanosecond - Interval
-        (
-            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
-            let array = as_interval_ym_array(&array)?;
-            let ret: PrimitiveArray<TimestampNanosecondType> =
-                try_unary::<IntervalYearMonthType, _, TimestampNanosecondType>(
-                    array,
-                    |ym| {
-                        let prior = NaiveDateTime::from_timestamp_opt(
-                            ts_ns.div_euclid(1_000_000_000),
-                            ts_ns.rem_euclid(1_000_000_000).try_into().map_err(|_| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?,
-                        )
-                        .ok_or_else(|| DataFusionError::Internal("ASDASD".to_string()))?;
-                        Ok(shift_months(prior, -ym).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
-        (
-            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => {
-            let array = as_interval_dt_array(&array)?;
-            let ret: PrimitiveArray<TimestampNanosecondType> =
-                try_unary::<IntervalDayTimeType, _, TimestampNanosecondType>(
-                    array,
-                    |dt| {
-                        let prior = NaiveDateTime::from_timestamp_opt(
-                            ts_ns.div_euclid(1_000_000_000),
-                            ts_ns.rem_euclid(1_000_000_000).try_into().map_err(|_| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?,
-                        )
-                        .ok_or_else(|| DataFusionError::Internal("ASDASD".to_string()))?;
-                        Ok(add_day_time(prior, dt, -1).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
+        ) => ts_us_interval_mdn_op(*ts_us, tz, array, sign)?,
+
+        // Nanosecond op MonthDayNano
         (
             ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
             DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
-            let array = as_interval_mdn_array(&array)?;
-            let ret: PrimitiveArray<TimestampNanosecondType> =
-                try_unary::<IntervalMonthDayNanoType, _, TimestampNanosecondType>(
-                    array,
-                    |mdn| {
-                        let prior = NaiveDateTime::from_timestamp_opt(
-                            ts_ns.div_euclid(1_000_000_000),
-                            ts_ns.rem_euclid(1_000_000_000).try_into().map_err(|_| {
-                                DataFusionError::Internal("ASDASD".to_string())
-                            })?,
-                        )
-                        .ok_or_else(|| DataFusionError::Internal("ASDASD".to_string()))?;
-                        Ok(add_m_d_nano(prior, mdn, -1).timestamp())
-                    },
-                )?;
-            Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef
-        }
+        ) => ts_ns_interval_mdn_op(*ts_ns, tz, array, sign)?,
         _ => Err(DataFusionError::Internal(
             "Invalid types for Timestamp vs Interval operations".to_string(),
         ))?,
     };
-    Ok(ColumnarValue::Array(ret))
+    Ok(ret)
 }
 
 macro_rules! sub_interval_macro {
@@ -1874,11 +1717,11 @@ macro_rules! sub_interval_cross_macro {
 /// This function handles the Interval - Interval operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an interval array.
-pub fn interval_sub_scalar_interval(
+pub fn interval_op_scalar_interval(
     array: &ArrayRef,
     sign: i32,
     scalar: &ScalarValue,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     let ret = match (array.data_type(), scalar) {
         (
             DataType::Interval(IntervalUnit::YearMonth),
@@ -2015,95 +1858,105 @@ pub fn interval_sub_scalar_interval(
             scalar.get_datatype(),
         )))?,
     };
-    Ok(ColumnarValue::Array(ret))
+    Ok(ret)
 }
 /// This function handles the Interval - Interval operations,
 /// where the first one is a scalar, and the second one is an array,
 /// hence the result is also an interval array.
-pub fn scalar_interval_sub_interval(
+pub fn scalar_interval_op_interval(
     scalar: &ScalarValue,
+    sign: i32,
     array: &ArrayRef,
-) -> Result<ColumnarValue> {
+) -> Result<ArrayRef> {
     let ret = match (scalar, array.data_type()) {
+        // YearMonth op YearMonth
         (
             ScalarValue::IntervalYearMonth(Some(lhs)),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => {
             let array = as_interval_ym_array(&array)?;
             let ret: PrimitiveArray<IntervalYearMonthType> =
-                unary(array, |rhs| op_ym(*lhs, rhs, -1));
+                unary(array, |rhs| op_ym(*lhs, rhs, sign));
             Arc::new(ret) as ArrayRef
         }
+        // DayTime op YearMonth
         (
             ScalarValue::IntervalDayTime(Some(lhs)),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => {
             let array = as_interval_ym_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_ym_dt(rhs, *lhs, -1, true));
+                unary(array, |rhs| op_ym_dt(rhs, *lhs, sign, true));
             Arc::new(ret) as ArrayRef
         }
+        // MonthDayNano op YearMonth
         (
             ScalarValue::IntervalMonthDayNano(Some(lhs)),
             DataType::Interval(IntervalUnit::YearMonth),
         ) => {
             let array = as_interval_ym_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_ym_mdn(rhs, *lhs, -1, true));
+                unary(array, |rhs| op_ym_mdn(rhs, *lhs, sign, true));
             Arc::new(ret) as ArrayRef
         }
+        // YearMonth op DayTime
         (
             ScalarValue::IntervalYearMonth(Some(lhs)),
             DataType::Interval(IntervalUnit::DayTime),
         ) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_ym_dt(*lhs, rhs, -1, false));
+                unary(array, |rhs| op_ym_dt(*lhs, rhs, sign, false));
             Arc::new(ret) as ArrayRef
         }
+        // DayTime op DayTime
         (
             ScalarValue::IntervalDayTime(Some(lhs)),
             DataType::Interval(IntervalUnit::DayTime),
         ) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalDayTimeType> =
-                unary(array, |rhs| op_dt(*lhs, rhs, -1));
+                unary(array, |rhs| op_dt(*lhs, rhs, sign));
             Arc::new(ret) as ArrayRef
         }
+        // MonthDayNano op DayTime
         (
             ScalarValue::IntervalMonthDayNano(Some(lhs)),
             DataType::Interval(IntervalUnit::DayTime),
         ) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_dt_mdn(rhs, *lhs, -1, true));
+                unary(array, |rhs| op_dt_mdn(rhs, *lhs, sign, true));
             Arc::new(ret) as ArrayRef
         }
+        // YearMonth op MonthDayNano
         (
             ScalarValue::IntervalYearMonth(Some(lhs)),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_ym_mdn(*lhs, rhs, -1, false));
+                unary(array, |rhs| op_ym_mdn(*lhs, rhs, sign, false));
             Arc::new(ret) as ArrayRef
         }
+        // DayTime op MonthDayNano
         (
             ScalarValue::IntervalDayTime(Some(lhs)),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_dt_mdn(*lhs, rhs, -1, false));
+                unary(array, |rhs| op_dt_mdn(*lhs, rhs, sign, false));
             Arc::new(ret) as ArrayRef
         }
+        // MonthDayNano op MonthDayNano
         (
             ScalarValue::IntervalMonthDayNano(Some(lhs)),
             DataType::Interval(IntervalUnit::MonthDayNano),
         ) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
-                unary(array, |rhs| op_mdn(*lhs, rhs, -1));
+                unary(array, |rhs| op_mdn(*lhs, rhs, sign));
             Arc::new(ret) as ArrayRef
         }
         _ => Err(DataFusionError::Internal(format!(
@@ -2112,7 +1965,425 @@ pub fn scalar_interval_sub_interval(
             array.data_type(),
         )))?,
     };
-    Ok(ColumnarValue::Array(ret))
+    Ok(ret)
+}
+
+#[inline]
+pub fn date32_interval_ym_op(
+    right: &Arc<dyn Array>,
+    epoch: &NaiveDate,
+    prior: &NaiveDate,
+    month_op: fn(NaiveDate, Months) -> Option<NaiveDate>,
+) -> Result<ArrayRef> {
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+    let right: &PrimitiveArray<IntervalYearMonthType> = right.as_primitive();
+    let ret = Arc::new(try_unary::<IntervalYearMonthType, _, Date32Type>(
+        right,
+        |ym| {
+            let months = Months::new(ym.try_into().map_err(cast_err)?);
+            Ok(
+                (month_op(*prior, months).ok_or_else(out_of_range)? - *epoch).num_days()
+                    as i32,
+            )
+        },
+    )?) as ArrayRef;
+    Ok(ret)
+}
+
+#[inline]
+pub fn date32_interval_dt_op(
+    right: &Arc<dyn Array>,
+    epoch: &NaiveDate,
+    prior: &NaiveDate,
+    day_op: fn(NaiveDate, Days) -> Option<NaiveDate>,
+) -> Result<ArrayRef> {
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+    let right: &PrimitiveArray<IntervalDayTimeType> = right.as_primitive();
+    let ret = Arc::new(try_unary::<IntervalDayTimeType, _, Date32Type>(
+        right,
+        |dt| {
+            let (days, millis) = IntervalDayTimeType::to_parts(dt);
+            let days = Days::new(days.try_into().map_err(cast_err)?);
+            Ok(
+                ((day_op(*prior, days).ok_or_else(out_of_range)? - *epoch).num_days()
+                    - millis as i64 / MILLISECONDS_IN_DAY) as i32,
+            )
+        },
+    )?) as ArrayRef;
+    Ok(ret)
+}
+
+#[inline]
+pub fn date32_interval_mdn_op(
+    right: &Arc<dyn Array>,
+    epoch: &NaiveDate,
+    prior: &NaiveDate,
+    day_op: fn(NaiveDate, Days) -> Option<NaiveDate>,
+    month_op: fn(NaiveDate, Months) -> Option<NaiveDate>,
+) -> Result<ArrayRef> {
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+    let right: &PrimitiveArray<IntervalMonthDayNanoType> = right.as_primitive();
+    let ret = Arc::new(try_unary::<IntervalMonthDayNanoType, _, Date32Type>(
+        right,
+        |mdn| {
+            let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(mdn);
+            let month_diff =
+                month_op(*prior, Months::new(months.try_into().map_err(cast_err)?))
+                    .ok_or_else(out_of_range)?;
+            Ok(
+                ((day_op(month_diff, Days::new(days.try_into().map_err(cast_err)?))
+                    .ok_or_else(out_of_range)?
+                    - *epoch)
+                    .num_days()
+                    - nanos / NANOSECONDS_IN_DAY) as i32,
+            )
+        },
+    )?) as ArrayRef;
+    Ok(ret)
+}
+
+#[inline]
+pub fn date64_interval_ym_op(
+    right: &Arc<dyn Array>,
+    epoch: &NaiveDate,
+    prior: &NaiveDate,
+    month_op: fn(NaiveDate, Months) -> Option<NaiveDate>,
+) -> Result<ArrayRef> {
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+    let right: &PrimitiveArray<IntervalYearMonthType> = right.as_primitive();
+    let ret = Arc::new(try_unary::<IntervalYearMonthType, _, Date64Type>(
+        right,
+        |ym| {
+            Ok(
+                (month_op(*prior, Months::new(ym.try_into().map_err(cast_err)?))
+                    .ok_or_else(out_of_range)?
+                    - *epoch)
+                    .num_milliseconds(),
+            )
+        },
+    )?) as ArrayRef;
+    Ok(ret)
+}
+
+#[inline]
+pub fn date64_interval_dt_op(
+    right: &Arc<dyn Array>,
+    epoch: &NaiveDate,
+    prior: &NaiveDate,
+    day_op: fn(NaiveDate, Days) -> Option<NaiveDate>,
+) -> Result<ArrayRef> {
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+    let right: &PrimitiveArray<IntervalDayTimeType> = right.as_primitive();
+    let ret = Arc::new(try_unary::<IntervalDayTimeType, _, Date64Type>(
+        right,
+        |dt| {
+            let (days, millis) = IntervalDayTimeType::to_parts(dt);
+            Ok(
+                (day_op(*prior, Days::new(days.try_into().map_err(cast_err)?))
+                    .ok_or_else(out_of_range)?
+                    - *epoch)
+                    .num_milliseconds()
+                    - millis as i64,
+            )
+        },
+    )?) as ArrayRef;
+    Ok(ret)
+}
+
+#[inline]
+pub fn date64_interval_mdn_op(
+    right: &Arc<dyn Array>,
+    epoch: &NaiveDate,
+    prior: &NaiveDate,
+    day_op: fn(NaiveDate, Days) -> Option<NaiveDate>,
+    month_op: fn(NaiveDate, Months) -> Option<NaiveDate>,
+) -> Result<ArrayRef> {
+    let cast_err = |_| {
+        DataFusionError::Internal(
+            "Interval values cannot be casted as unsigned integers".to_string(),
+        )
+    };
+    let out_of_range =
+        || DataFusionError::Internal("Resulting date is out of range".to_string());
+    let right: &PrimitiveArray<IntervalMonthDayNanoType> = right.as_primitive();
+    let ret = Arc::new(try_unary::<IntervalMonthDayNanoType, _, Date64Type>(
+        right,
+        |mdn| {
+            let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(mdn);
+            let month_diff =
+                month_op(*prior, Months::new(months.try_into().map_err(cast_err)?))
+                    .ok_or_else(out_of_range)?;
+            Ok(
+                (day_op(month_diff, Days::new(days.try_into().map_err(cast_err)?))
+                    .ok_or_else(out_of_range)?
+                    - *epoch)
+                    .num_milliseconds()
+                    - nanos / 1_000_000,
+            )
+        },
+    )?) as ArrayRef;
+    Ok(ret)
+}
+
+#[inline]
+pub fn ts_second_interval_ym_op(
+    ts_sec: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_ym_array(&array)?;
+    let ret: PrimitiveArray<TimestampSecondType> =
+        try_unary::<IntervalYearMonthType, _, TimestampSecondType>(array, |ym| {
+            let prior = NaiveDateTime::from_timestamp_opt(ts_sec, 0).ok_or_else(err)?;
+            Ok(shift_months(prior, sign * ym).timestamp())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_ms_interval_ym_op(
+    ts_ms: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_ym_array(&array)?;
+    let ret: PrimitiveArray<TimestampMillisecondType> =
+        try_unary::<IntervalYearMonthType, _, TimestampMillisecondType>(array, |ym| {
+            let prior = NaiveDateTime::from_timestamp_millis(ts_ms).ok_or_else(err)?;
+            Ok(shift_months(prior, sign * ym).timestamp_millis())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_us_interval_ym_op(
+    ts_us: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_ym_array(&array)?;
+    let ret: PrimitiveArray<TimestampMicrosecondType> =
+        try_unary::<IntervalYearMonthType, _, TimestampMicrosecondType>(array, |ym| {
+            let prior = NaiveDateTime::from_timestamp_micros(ts_us).ok_or_else(err)?;
+            Ok(shift_months(prior, sign * ym).timestamp_micros())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_ns_interval_ym_op(
+    ts_ns: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_ym_array(&array)?;
+    let ret: PrimitiveArray<TimestampNanosecondType> =
+        try_unary::<IntervalYearMonthType, _, TimestampNanosecondType>(array, |ym| {
+            let prior = NaiveDateTime::from_timestamp_opt(
+                ts_ns.div_euclid(1_000_000_000),
+                ts_ns.rem_euclid(1_000_000_000).try_into().map_err(|_| {
+                    DataFusionError::Internal("Overflow of divison".to_string())
+                })?,
+            )
+            .ok_or_else(err)?;
+            Ok(shift_months(prior, sign * ym).timestamp_nanos())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_second_interval_dt_op(
+    ts_sec: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_dt_array(&array)?;
+    let ret: PrimitiveArray<TimestampSecondType> =
+        try_unary::<IntervalDayTimeType, _, TimestampSecondType>(array, |dt| {
+            let prior = NaiveDateTime::from_timestamp_opt(ts_sec, 0).ok_or_else(err)?;
+            Ok(add_day_time(prior, dt, sign).timestamp())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_ms_interval_dt_op(
+    ts_ms: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_dt_array(&array)?;
+    let ret: PrimitiveArray<TimestampMillisecondType> =
+        try_unary::<IntervalDayTimeType, _, TimestampMillisecondType>(array, |dt| {
+            let prior = NaiveDateTime::from_timestamp_millis(ts_ms).ok_or_else(err)?;
+            Ok(add_day_time(prior, dt, sign).timestamp_millis())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_us_interval_dt_op(
+    ts_us: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_dt_array(&array)?;
+    let ret: PrimitiveArray<TimestampMicrosecondType> =
+        try_unary::<IntervalDayTimeType, _, TimestampMicrosecondType>(array, |dt| {
+            let prior = NaiveDateTime::from_timestamp_micros(ts_us).ok_or_else(err)?;
+            Ok(add_day_time(prior, dt, sign).timestamp_micros())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_ns_interval_dt_op(
+    ts_ns: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_dt_array(&array)?;
+    let ret: PrimitiveArray<TimestampNanosecondType> =
+        try_unary::<IntervalDayTimeType, _, TimestampNanosecondType>(array, |dt| {
+            let prior = NaiveDateTime::from_timestamp_opt(
+                ts_ns.div_euclid(1_000_000_000),
+                ts_ns.rem_euclid(1_000_000_000).try_into().map_err(|_| {
+                    DataFusionError::Internal("Timestamp is overflowed".to_string())
+                })?,
+            )
+            .ok_or_else(err)?;
+            Ok(add_day_time(prior, dt, sign).timestamp_nanos())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_second_interval_mdn_op(
+    ts_sec: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_mdn_array(&array)?;
+    let ret: PrimitiveArray<TimestampSecondType> =
+        try_unary::<IntervalMonthDayNanoType, _, TimestampSecondType>(array, |mdn| {
+            let prior = NaiveDateTime::from_timestamp_opt(ts_sec, 0).ok_or_else(err)?;
+            Ok(add_m_d_nano(prior, mdn, sign).timestamp())
+        })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_ms_interval_mdn_op(
+    ts_ms: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_mdn_array(&array)?;
+    let ret: PrimitiveArray<TimestampMillisecondType> = try_unary::<
+        IntervalMonthDayNanoType,
+        _,
+        TimestampMillisecondType,
+    >(array, |mdn| {
+        let prior = NaiveDateTime::from_timestamp_millis(ts_ms).ok_or_else(err)?;
+        Ok(add_m_d_nano(prior, mdn, sign).timestamp_millis())
+    })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_us_interval_mdn_op(
+    ts_us: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_mdn_array(&array)?;
+    let ret: PrimitiveArray<TimestampMicrosecondType> = try_unary::<
+        IntervalMonthDayNanoType,
+        _,
+        TimestampMicrosecondType,
+    >(array, |mdn| {
+        let prior = NaiveDateTime::from_timestamp_micros(ts_us).ok_or_else(err)?;
+        Ok(add_m_d_nano(prior, mdn, sign).timestamp_micros())
+    })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
+}
+
+#[inline]
+pub fn ts_ns_interval_mdn_op(
+    ts_ns: i64,
+    tz: &Option<Arc<str>>,
+    array: &Arc<dyn Array>,
+    sign: i32,
+) -> Result<ArrayRef> {
+    let err = || DataFusionError::Internal("Timestamp is out-of-range".to_string());
+    let array = as_interval_mdn_array(&array)?;
+    let ret: PrimitiveArray<TimestampNanosecondType> = try_unary::<
+        IntervalMonthDayNanoType,
+        _,
+        TimestampNanosecondType,
+    >(array, |mdn| {
+        let prior = NaiveDateTime::from_timestamp_opt(
+            ts_ns.div_euclid(1_000_000_000),
+            ts_ns.rem_euclid(1_000_000_000).try_into().map_err(|_| {
+                DataFusionError::Internal("Timestamp is overflowed".to_string())
+            })?,
+        )
+        .ok_or_else(err)?;
+        Ok(add_m_d_nano(prior, mdn, sign).timestamp_nanos())
+    })?;
+    Ok(Arc::new(ret.with_timezone_opt(tz.clone())) as ArrayRef)
 }
 
 // Macros related with timestamp & interval operations
