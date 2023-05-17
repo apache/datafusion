@@ -55,7 +55,6 @@ mod row_hash;
 mod utils;
 
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties2;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 
 /// Hash aggregate modes
@@ -347,7 +346,7 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
 /// aggregations in a single [`AggregateExec`]), the function returns an error.
 fn get_finest_requirement<
     F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties2,
+    F2: Fn() -> OrderingEquivalenceProperties,
 >(
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
     eq_properties: F,
@@ -1075,7 +1074,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties2;
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Column, Count, Median,
     };
@@ -1736,7 +1734,7 @@ mod tests {
         let col_c = Column::new("c", 2);
         let col_d = Column::new("d", 3);
         eq_properties.add_equal_conditions((&col_a, &col_b));
-        let mut ordering_eq_properties = OrderingEquivalenceProperties2::new(test_schema);
+        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
             &vec![OrderedColumn::new(col_a.clone(), options1)],
             &vec![OrderedColumn::new(col_c.clone(), options2)],

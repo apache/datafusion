@@ -60,7 +60,6 @@ use datafusion_common::utils::{
 };
 use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties2;
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
@@ -262,7 +261,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties2 {
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
     }
 

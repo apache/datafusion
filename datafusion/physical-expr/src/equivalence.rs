@@ -119,8 +119,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-pub type OrderingEquivalenceProperties = EquivalenceProperties<OrderedColumn>;
-pub type OrderingEquivalenceProperties2 = EquivalenceProperties<Vec<OrderedColumn>>;
+pub type OrderingEquivalenceProperties = EquivalenceProperties<Vec<OrderedColumn>>;
 
 /// EquivalentClass is a set of [`Column`]s or [`OrderedColumn`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -138,67 +137,6 @@ pub struct EquivalentClass<T = Column> {
 impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     pub fn new(head: T, others: Vec<T>) -> EquivalentClass<T> {
         EquivalentClass {
-            head,
-            others: HashSet::from_iter(others),
-        }
-    }
-
-    pub fn head(&self) -> &T {
-        &self.head
-    }
-
-    pub fn others(&self) -> &HashSet<T> {
-        &self.others
-    }
-
-    pub fn contains(&self, col: &T) -> bool {
-        self.head == *col || self.others.contains(col)
-    }
-
-    pub fn insert(&mut self, col: T) -> bool {
-        self.head != col && self.others.insert(col)
-    }
-
-    pub fn remove(&mut self, col: &T) -> bool {
-        let removed = self.others.remove(col);
-        if !removed && *col == self.head {
-            let one_col = self.others.iter().next().cloned();
-            if let Some(col) = one_col {
-                let removed = self.others.remove(&col);
-                self.head = col;
-                removed
-            } else {
-                false
-            }
-        } else {
-            removed
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &'_ T> {
-        std::iter::once(&self.head).chain(self.others.iter())
-    }
-
-    pub fn len(&self) -> usize {
-        self.others.len() + 1
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EquivalentClass2<T = Vec<Column>> {
-    /// First element in the EquivalentClass
-    head: T,
-    /// Other equal columns
-    others: HashSet<T>,
-}
-
-impl<T: Eq + Hash + Clone> EquivalentClass2<T> {
-    pub fn new(head: T, others: Vec<T>) -> EquivalentClass2<T> {
-        EquivalentClass2 {
             head,
             others: HashSet::from_iter(others),
         }
@@ -296,50 +234,9 @@ impl ColumnAccessor for OrderedColumn {
     }
 }
 
-pub type OrderingEquivalentClass = EquivalentClass<OrderedColumn>;
-pub type OrderingEquivalentClass2 = EquivalentClass<Vec<OrderedColumn>>;
+pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
 
 impl OrderingEquivalentClass {
-    /// Finds the matching column inside the `OrderingEquivalentClass`.
-    fn get_matching_column(&self, column: &Column) -> Option<OrderedColumn> {
-        if self.head.col.eq(column) {
-            Some(self.head.clone())
-        } else {
-            for item in &self.others {
-                if item.col.eq(column) {
-                    return Some(item.clone());
-                }
-            }
-            None
-        }
-    }
-
-    fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
-        for (column, columns) in columns_map {
-            if self.head.col.eq(column) {
-                for col in columns {
-                    self.insert(OrderedColumn {
-                        col: col.clone(),
-                        options: self.head.options,
-                    });
-                }
-            } else {
-                for item in self.others.clone() {
-                    if item.col.eq(column) {
-                        for col in columns {
-                            self.insert(OrderedColumn {
-                                col: col.clone(),
-                                options: item.options,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl OrderingEquivalentClass2 {
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         for (column, columns) in columns_map {
             for ordering in vec![self.head.clone()]
@@ -394,6 +291,27 @@ pub fn project_equivalence_properties(
     output_eq.extend(ec_classes);
 }
 
+// /// This function applies the given projection to the given ordering
+// /// equivalence properties to compute the resulting (projected) ordering
+// /// equivalence properties; e.g.
+// /// 1) Adding an alias, which can introduce additional ordering equivalence
+// ///    properties, as in Projection(a, a as a1, a as a2) extends global ordering
+// ///    of a to a1 and a2.
+// /// 2) Truncate the [`OrderingEquivalentClass`]es that are not in the output schema.
+// pub fn project_ordering_equivalence_properties(
+//     input_eq: OrderingEquivalenceProperties,
+//     columns_map: &HashMap<Column, Vec<Column>>,
+//     output_eq: &mut OrderingEquivalenceProperties,
+// ) {
+//     let mut ec_classes = input_eq.classes().to_vec();
+//     for class in ec_classes.iter_mut() {
+//         class.update_with_aliases(columns_map);
+//     }
+//
+//     prune_columns_to_remove(output_eq, &mut ec_classes);
+//     output_eq.extend(ec_classes);
+// }
+
 /// This function applies the given projection to the given ordering
 /// equivalence properties to compute the resulting (projected) ordering
 /// equivalence properties; e.g.
@@ -405,27 +323,6 @@ pub fn project_ordering_equivalence_properties(
     input_eq: OrderingEquivalenceProperties,
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
-) {
-    let mut ec_classes = input_eq.classes().to_vec();
-    for class in ec_classes.iter_mut() {
-        class.update_with_aliases(columns_map);
-    }
-
-    prune_columns_to_remove(output_eq, &mut ec_classes);
-    output_eq.extend(ec_classes);
-}
-
-/// This function applies the given projection to the given ordering
-/// equivalence properties to compute the resulting (projected) ordering
-/// equivalence properties; e.g.
-/// 1) Adding an alias, which can introduce additional ordering equivalence
-///    properties, as in Projection(a, a as a1, a as a2) extends global ordering
-///    of a to a1 and a2.
-/// 2) Truncate the [`OrderingEquivalentClass`]es that are not in the output schema.
-pub fn project_ordering_equivalence_properties2(
-    input_eq: OrderingEquivalenceProperties2,
-    columns_map: &HashMap<Column, Vec<Column>>,
-    output_eq: &mut OrderingEquivalenceProperties2,
 ) {
     let mut ec_classes = input_eq.classes().to_vec();
     for class in ec_classes.iter_mut() {

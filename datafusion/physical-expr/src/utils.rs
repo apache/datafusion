@@ -17,7 +17,7 @@
 
 use crate::equivalence::{
     EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
-    OrderingEquivalenceProperties2, OrderingEquivalentClass, OrderingEquivalentClass2,
+    OrderingEquivalentClass,
 };
 use crate::expressions::{BinaryExpr, Column, UnKnownColumn};
 use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
@@ -165,47 +165,47 @@ pub fn normalize_expr_with_equivalence_properties(
         .unwrap_or(expr)
 }
 
-fn normalize_expr_with_ordering_equivalence_properties(
-    expr: Arc<dyn PhysicalExpr>,
-    sort_options: SortOptions,
-    eq_properties: &[OrderingEquivalentClass],
-) -> (Arc<dyn PhysicalExpr>, SortOptions) {
-    let normalized_expr = expr
-        .clone()
-        .transform(&|expr| {
-            let normalized_form =
-                expr.as_any().downcast_ref::<Column>().and_then(|column| {
-                    for class in eq_properties {
-                        let ordered_column = OrderedColumn {
-                            col: column.clone(),
-                            options: sort_options,
-                        };
-                        if class.contains(&ordered_column) {
-                            return Some(class.head().clone());
-                        }
-                    }
-                    None
-                });
-            Ok(if let Some(normalized_form) = normalized_form {
-                Transformed::Yes(Arc::new(normalized_form.col) as _)
-            } else {
-                Transformed::No(expr)
-            })
-        })
-        .unwrap_or_else(|_| expr.clone());
-    if expr.ne(&normalized_expr) {
-        if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
-            for eq_class in eq_properties.iter() {
-                let head = eq_class.head();
-                if head.col.eq(col) {
-                    // Use options of the normalized version:
-                    return (normalized_expr, head.options);
-                }
-            }
-        }
-    }
-    (expr, sort_options)
-}
+// fn normalize_expr_with_ordering_equivalence_properties(
+//     expr: Arc<dyn PhysicalExpr>,
+//     sort_options: SortOptions,
+//     eq_properties: &[OrderingEquivalentClass],
+// ) -> (Arc<dyn PhysicalExpr>, SortOptions) {
+//     let normalized_expr = expr
+//         .clone()
+//         .transform(&|expr| {
+//             let normalized_form =
+//                 expr.as_any().downcast_ref::<Column>().and_then(|column| {
+//                     for class in eq_properties {
+//                         let ordered_column = OrderedColumn {
+//                             col: column.clone(),
+//                             options: sort_options,
+//                         };
+//                         if class.contains(&ordered_column) {
+//                             return Some(class.head().clone());
+//                         }
+//                     }
+//                     None
+//                 });
+//             Ok(if let Some(normalized_form) = normalized_form {
+//                 Transformed::Yes(Arc::new(normalized_form.col) as _)
+//             } else {
+//                 Transformed::No(expr)
+//             })
+//         })
+//         .unwrap_or_else(|_| expr.clone());
+//     if expr.ne(&normalized_expr) {
+//         if let Some(col) = normalized_expr.as_any().downcast_ref::<Column>() {
+//             for eq_class in eq_properties.iter() {
+//                 let head = eq_class.head();
+//                 if head.col.eq(col) {
+//                     // Use options of the normalized version:
+//                     return (normalized_expr, head.options);
+//                 }
+//             }
+//         }
+//     }
+//     (expr, sort_options)
+// }
 
 fn normalize_sort_expr_with_equivalence_properties(
     mut sort_expr: PhysicalSortExpr,
@@ -216,18 +216,18 @@ fn normalize_sort_expr_with_equivalence_properties(
     sort_expr
 }
 
-fn normalize_sort_expr_with_ordering_equivalence_properties(
-    mut sort_expr: PhysicalSortExpr,
-    eq_properties: &[OrderingEquivalentClass],
-) -> PhysicalSortExpr {
-    (sort_expr.expr, sort_expr.options) =
-        normalize_expr_with_ordering_equivalence_properties(
-            sort_expr.expr.clone(),
-            sort_expr.options,
-            eq_properties,
-        );
-    sort_expr
-}
+// fn normalize_sort_expr_with_ordering_equivalence_properties(
+//     mut sort_expr: PhysicalSortExpr,
+//     eq_properties: &[OrderingEquivalentClass],
+// ) -> PhysicalSortExpr {
+//     (sort_expr.expr, sort_expr.options) =
+//         normalize_expr_with_ordering_equivalence_properties(
+//             sort_expr.expr.clone(),
+//             sort_expr.options,
+//             eq_properties,
+//         );
+//     sort_expr
+// }
 
 fn normalize_sort_requirement_with_equivalence_properties(
     mut sort_requirement: PhysicalSortRequirement,
@@ -238,33 +238,33 @@ fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement
 }
 
-fn normalize_sort_requirement_with_ordering_equivalence_properties(
-    mut sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[OrderingEquivalentClass],
-) -> PhysicalSortRequirement {
-    if let Some(options) = &mut sort_requirement.options {
-        (sort_requirement.expr, *options) =
-            normalize_expr_with_ordering_equivalence_properties(
-                sort_requirement.expr,
-                *options,
-                eq_properties,
-            );
-    }
-    sort_requirement
-}
+// fn normalize_sort_requirement_with_ordering_equivalence_properties(
+//     mut sort_requirement: PhysicalSortRequirement,
+//     eq_properties: &[OrderingEquivalentClass],
+// ) -> PhysicalSortRequirement {
+//     if let Some(options) = &mut sort_requirement.options {
+//         (sort_requirement.expr, *options) =
+//             normalize_expr_with_ordering_equivalence_properties(
+//                 sort_requirement.expr,
+//                 *options,
+//                 eq_properties,
+//             );
+//     }
+//     sort_requirement
+// }
 
-pub fn normalize_sort_expr(
-    sort_expr: PhysicalSortExpr,
-    eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass],
-) -> PhysicalSortExpr {
-    let normalized =
-        normalize_sort_expr_with_equivalence_properties(sort_expr, eq_properties);
-    normalize_sort_expr_with_ordering_equivalence_properties(
-        normalized,
-        ordering_eq_properties,
-    )
-}
+// pub fn normalize_sort_expr(
+//     sort_expr: PhysicalSortExpr,
+//     eq_properties: &[EquivalentClass],
+//     ordering_eq_properties: &[OrderingEquivalentClass],
+// ) -> PhysicalSortExpr {
+//     let normalized =
+//         normalize_sort_expr_with_equivalence_properties(sort_expr, eq_properties);
+//     normalize_sort_expr_with_ordering_equivalence_properties(
+//         normalized,
+//         ordering_eq_properties,
+//     )
+// }
 
 fn get_ranges_inside<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range<usize>> {
     let n_section = section.len();
@@ -296,7 +296,7 @@ fn collapse_vec<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
 pub fn normalize_sort_expr2(
     sort_exprs: &[PhysicalSortExpr],
     eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass2],
+    ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Vec<PhysicalSortExpr> {
     let mut normalized_exprs = sort_exprs
         .iter()
@@ -348,7 +348,7 @@ pub fn normalize_sort_expr2(
 pub fn normalize_sort_requirements2(
     sort_exprs: &[PhysicalSortRequirement],
     eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass2],
+    ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Vec<PhysicalSortRequirement> {
     let mut normalized_exprs = sort_exprs
         .iter()
@@ -397,25 +397,25 @@ pub fn normalize_sort_requirements2(
     collapse_vec(normalized_exprs)
 }
 
-pub fn normalize_sort_requirement(
-    sort_requirement: PhysicalSortRequirement,
-    eq_properties: &[EquivalentClass],
-    ordering_eq_properties: &[OrderingEquivalentClass],
-) -> PhysicalSortRequirement {
-    let normalized = normalize_sort_requirement_with_equivalence_properties(
-        sort_requirement,
-        eq_properties,
-    );
-    normalize_sort_requirement_with_ordering_equivalence_properties(
-        normalized,
-        ordering_eq_properties,
-    )
-}
+// pub fn normalize_sort_requirement(
+//     sort_requirement: PhysicalSortRequirement,
+//     eq_properties: &[EquivalentClass],
+//     ordering_eq_properties: &[OrderingEquivalentClass],
+// ) -> PhysicalSortRequirement {
+//     let normalized = normalize_sort_requirement_with_equivalence_properties(
+//         sort_requirement,
+//         eq_properties,
+//     );
+//     normalize_sort_requirement_with_ordering_equivalence_properties(
+//         normalized,
+//         ordering_eq_properties,
+//     )
+// }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<
     F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties2,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
@@ -438,7 +438,7 @@ pub fn ordering_satisfy<
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_concrete<
     F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties2,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
@@ -470,7 +470,7 @@ pub fn ordering_satisfy_concrete<
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement<
     F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties2,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortRequirement]>,
@@ -493,7 +493,7 @@ pub fn ordering_satisfy_requirement<
 /// provided [`PhysicalSortExpr`]s.
 pub fn ordering_satisfy_requirement_concrete<
     F: FnOnce() -> EquivalenceProperties,
-    F2: FnOnce() -> OrderingEquivalenceProperties2,
+    F2: FnOnce() -> OrderingEquivalenceProperties,
 >(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortRequirement],
@@ -520,7 +520,7 @@ pub fn ordering_satisfy_requirement_concrete<
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
 pub fn requirements_compatible<
-    F: FnOnce() -> OrderingEquivalenceProperties2,
+    F: FnOnce() -> OrderingEquivalenceProperties,
     F2: FnOnce() -> EquivalenceProperties,
 >(
     provided: Option<&[PhysicalSortRequirement]>,
@@ -543,7 +543,7 @@ pub fn requirements_compatible<
 /// Checks whether the given [`PhysicalSortRequirement`]s are equal or more
 /// specific than the provided [`PhysicalSortRequirement`]s.
 fn requirements_compatible_concrete<
-    F: FnOnce() -> OrderingEquivalenceProperties2,
+    F: FnOnce() -> OrderingEquivalenceProperties,
     F2: FnOnce() -> EquivalenceProperties,
 >(
     provided: &[PhysicalSortRequirement],
@@ -827,7 +827,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use std::fmt::{Display, Formatter};
 
-    use crate::equivalence::OrderingEquivalenceProperties2;
+    use crate::equivalence::OrderingEquivalenceProperties;
     use arrow_schema::{DataType, Field, Schema};
     use petgraph::visit::Bfs;
     use std::sync::Arc;
@@ -910,12 +910,12 @@ mod tests {
         let mut ordering_eq_properties =
             OrderingEquivalenceProperties::new(test_schema.clone());
         ordering_eq_properties.add_equal_conditions((
-            &OrderedColumn::new(col_a.clone(), option1),
-            &OrderedColumn::new(col_d.clone(), option1),
+            &vec![OrderedColumn::new(col_a.clone(), option1)],
+            &vec![OrderedColumn::new(col_d.clone(), option1)],
         ));
         ordering_eq_properties.add_equal_conditions((
-            &OrderedColumn::new(col_a.clone(), option1),
-            &OrderedColumn::new(col_e.clone(), option2),
+            &vec![OrderedColumn::new(col_a.clone(), option1)],
+            &vec![OrderedColumn::new(col_e.clone(), option2)],
         ));
         Ok((test_schema, eq_properties, ordering_eq_properties))
     }
@@ -923,7 +923,7 @@ mod tests {
     fn create_test_params2() -> Result<(
         SchemaRef,
         EquivalenceProperties,
-        OrderingEquivalenceProperties2,
+        OrderingEquivalenceProperties,
     )> {
         // Assume schema satisfies ordering a ASC NULLS LAST
         // and d ASC NULLS LAST, b ASC NULLS LAST and e DESC NULLS FIRST, b ASC NULLS LAST
@@ -945,7 +945,7 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
         eq_properties.add_equal_conditions((col_a, col_c));
         let mut ordering_eq_properties =
-            OrderingEquivalenceProperties2::new(test_schema.clone());
+            OrderingEquivalenceProperties::new(test_schema.clone());
         ordering_eq_properties.add_equal_conditions((
             &vec![OrderedColumn::new(col_a.clone(), option1)],
             &vec![
@@ -1235,13 +1235,13 @@ mod tests {
             finer,
             crude,
             || { EquivalenceProperties::new(empty_schema.clone()) },
-            || { OrderingEquivalenceProperties2::new(empty_schema.clone()) },
+            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
         ));
         assert!(!ordering_satisfy(
             crude,
             finer,
             || { EquivalenceProperties::new(empty_schema.clone()) },
-            || { OrderingEquivalenceProperties2::new(empty_schema.clone()) },
+            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
         ));
         Ok(())
     }
@@ -1429,26 +1429,26 @@ mod tests {
             );
         }
 
-        // Test cases for ordering equivalence normalization
-        // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
-        let expressions = vec![
-            (&col_d_expr, option1, option1, &col_a_expr),
-            (&col_e_expr, option2, option1, &col_a_expr),
-            // Cannot normalize, hence should return itself.
-            (&col_e_expr, option1, option1, &col_e_expr),
-        ];
-        for (expr, sort_options, expected_options, expected_ordering_eq) in expressions {
-            let (normalized_expr, options) =
-                normalize_expr_with_ordering_equivalence_properties(
-                    expr.clone(),
-                    sort_options,
-                    ordering_eq_properties.classes(),
-                );
-            assert!(
-                normalized_expr.eq(expected_ordering_eq) && (expected_options == options),
-                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
-            );
-        }
+        // // Test cases for ordering equivalence normalization
+        // // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
+        // let expressions = vec![
+        //     (&col_d_expr, option1, option1, &col_a_expr),
+        //     (&col_e_expr, option2, option1, &col_a_expr),
+        //     // Cannot normalize, hence should return itself.
+        //     (&col_e_expr, option1, option1, &col_e_expr),
+        // ];
+        // for (expr, sort_options, expected_options, expected_ordering_eq) in expressions {
+        //     let (normalized_expr, options) =
+        //         normalize_expr_with_ordering_equivalence_properties(
+        //             expr.clone(),
+        //             sort_options,
+        //             ordering_eq_properties.classes(),
+        //         );
+        //     assert!(
+        //         normalized_expr.eq(expected_ordering_eq) && (expected_options == options),
+        //         "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
+        //     );
+        // }
         Ok(())
     }
 
@@ -1500,31 +1500,31 @@ mod tests {
             );
         }
 
-        // Test cases for ordering equivalence normalization
-        // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
-        let expressions = vec![
-            (&col_d, option1, &col_a, option1),
-            (&col_e, option2, &col_a, option1),
-        ];
-        for (expr, sort_options, expected_col, expected_options) in
-            expressions.into_iter()
-        {
-            let expected = PhysicalSortExpr {
-                expr: Arc::new((*expected_col).clone()) as _,
-                options: expected_options,
-            };
-            let arg = PhysicalSortExpr {
-                expr: Arc::new((*expr).clone()) as _,
-                options: sort_options,
-            };
-            assert!(
-                expected.eq(&normalize_sort_expr_with_ordering_equivalence_properties(
-                    arg.clone(),
-                    ordering_eq_properties.classes()
-                )),
-                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
-            );
-        }
+        // // Test cases for ordering equivalence normalization
+        // // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
+        // let expressions = vec![
+        //     (&col_d, option1, &col_a, option1),
+        //     (&col_e, option2, &col_a, option1),
+        // ];
+        // for (expr, sort_options, expected_col, expected_options) in
+        //     expressions.into_iter()
+        // {
+        //     let expected = PhysicalSortExpr {
+        //         expr: Arc::new((*expected_col).clone()) as _,
+        //         options: expected_options,
+        //     };
+        //     let arg = PhysicalSortExpr {
+        //         expr: Arc::new((*expr).clone()) as _,
+        //         options: sort_options,
+        //     };
+        //     assert!(
+        //         expected.eq(&normalize_sort_expr_with_ordering_equivalence_properties(
+        //             arg.clone(),
+        //             ordering_eq_properties.classes()
+        //         )),
+        //         "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
+        //     );
+        // }
         Ok(())
     }
 
@@ -1577,33 +1577,33 @@ mod tests {
             );
         }
 
-        // Test cases for ordering equivalence normalization
-        // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
-        let expressions = vec![
-            (&col_d, Some(option1), &col_a, Some(option1)),
-            (&col_e, Some(option2), &col_a, Some(option1)),
-        ];
-        for (expr, sort_options, expected_col, expected_options) in
-            expressions.into_iter()
-        {
-            let expected = PhysicalSortRequirement::new(
-                Arc::new((*expected_col).clone()) as _,
-                expected_options,
-            );
-            let arg = PhysicalSortRequirement::new(
-                Arc::new((*expr).clone()) as _,
-                sort_options,
-            );
-            assert!(
-                expected.eq(
-                    &normalize_sort_requirement_with_ordering_equivalence_properties(
-                        arg.clone(),
-                        ordering_eq_properties.classes()
-                    )
-                ),
-                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
-            );
-        }
+        // // Test cases for ordering equivalence normalization
+        // // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
+        // let expressions = vec![
+        //     (&col_d, Some(option1), &col_a, Some(option1)),
+        //     (&col_e, Some(option2), &col_a, Some(option1)),
+        // ];
+        // for (expr, sort_options, expected_col, expected_options) in
+        //     expressions.into_iter()
+        // {
+        //     let expected = PhysicalSortRequirement::new(
+        //         Arc::new((*expected_col).clone()) as _,
+        //         expected_options,
+        //     );
+        //     let arg = PhysicalSortRequirement::new(
+        //         Arc::new((*expr).clone()) as _,
+        //         sort_options,
+        //     );
+        //     assert!(
+        //         expected.eq(
+        //             &normalize_sort_requirement_with_ordering_equivalence_properties(
+        //                 arg.clone(),
+        //                 ordering_eq_properties.classes()
+        //             )
+        //         ),
+        //         "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
+        //     );
+        // }
         Ok(())
     }
 
@@ -1624,7 +1624,7 @@ mod tests {
         eq_properties.add_equal_conditions((col_a, col_c));
 
         // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
-        let mut ordering_eq_properties = OrderingEquivalenceProperties2::new(test_schema);
+        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
             &vec![OrderedColumn::new(col_a.clone(), option1)],
             &vec![OrderedColumn::new(col_e.clone(), option1)],

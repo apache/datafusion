@@ -47,7 +47,6 @@ mod window_agg_exec;
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties2;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
@@ -252,10 +251,10 @@ pub(crate) fn window_ordering_equivalence(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
-) -> OrderingEquivalenceProperties2 {
+) -> OrderingEquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
-    let mut result = OrderingEquivalenceProperties2::new(schema.clone());
+    let mut result = OrderingEquivalenceProperties::new(schema.clone());
     result.extend(
         input
             .ordering_equivalence_properties()

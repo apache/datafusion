@@ -41,9 +41,6 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 
-use datafusion_physical_expr::equivalence::{
-    project_ordering_equivalence_properties2, OrderingEquivalenceProperties2,
-};
 use datafusion_physical_expr::{
     normalize_out_expr_with_columns_map, project_equivalence_properties,
     project_ordering_equivalence_properties, OrderingEquivalenceProperties,
@@ -219,9 +216,9 @@ impl ExecutionPlan for ProjectionExec {
         new_properties
     }
 
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties2 {
-        let mut new_properties = OrderingEquivalenceProperties2::new(self.schema());
-        project_ordering_equivalence_properties2(
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        project_ordering_equivalence_properties(
             self.input.ordering_equivalence_properties(),
             &self.columns_map,
             &mut new_properties,
