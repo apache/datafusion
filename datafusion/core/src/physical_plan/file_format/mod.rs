@@ -17,6 +17,7 @@
 
 //! Execution plans that read file formats
 
+mod arrow_file;
 mod avro;
 #[cfg(test)]
 mod chunked_store;
@@ -35,6 +36,7 @@ use arrow::{
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
     record_batch::RecordBatch,
 };
+pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
