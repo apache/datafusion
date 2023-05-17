@@ -1133,6 +1133,7 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
+            alias @ Expr::Alias { .. } if &alias.display_name().unwrap() != schema.field(i).name() => alias.unalias().alias(schema.field(i).name()),
             ignore_alias @ Expr::Alias { .. } => ignore_alias,
             ignore_col @ Expr::Column { .. } => ignore_col,
             x => x.alias(schema.field(i).name()),
@@ -1207,6 +1208,8 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     if inputs.is_empty() {
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
     }
+
+    dbg!(&inputs);
 
     Ok(LogicalPlan::Union(Union {
         inputs,
