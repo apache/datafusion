@@ -1438,13 +1438,13 @@ mod tests {
             finer,
             crude,
             || { EquivalenceProperties::new(empty_schema.clone()) },
-            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
+            || { OrderingEquivalenceProperties2::new(empty_schema.clone()) },
         ));
         assert!(!ordering_satisfy(
             crude,
             finer,
             || { EquivalenceProperties::new(empty_schema.clone()) },
-            || { OrderingEquivalenceProperties::new(empty_schema.clone()) },
+            || { OrderingEquivalenceProperties2::new(empty_schema.clone()) },
         ));
         Ok(())
     }
@@ -1476,7 +1476,8 @@ mod tests {
             },
         ];
         let provided = Some(&provided[..]);
-        let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
+        let (_test_schema, eq_properties, ordering_eq_properties) =
+            create_test_params2()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
             // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
@@ -1486,79 +1487,11 @@ mod tests {
             (vec![(col_c, option1)], true),
             (vec![(col_c, option2)], false),
             // Test whether ordering equivalence works as expected
-            (vec![(col_d, option1)], true),
-            (vec![(col_d, option2)], false),
-            (vec![(col_e, option2)], true),
-            (vec![(col_e, option1)], false),
-        ];
-        for (cols, expected) in requirements {
-            let err_msg = format!("Error in test case:{cols:?}");
-            let required = cols
-                .into_iter()
-                .map(|(col, options)| PhysicalSortExpr {
-                    expr: Arc::new(col.clone()),
-                    options,
-                })
-                .collect::<Vec<_>>();
-
-            let required = Some(&required[..]);
-            assert_eq!(
-                ordering_satisfy(
-                    provided,
-                    required,
-                    || eq_properties.clone(),
-                    || ordering_eq_properties.clone(),
-                ),
-                expected,
-                "{err_msg}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_ordering_satisfy_with_equivalence2() -> Result<()> {
-        let col_a = &Column::new("a", 0);
-        let col_b = &Column::new("b", 1);
-        let col_c = &Column::new("c", 2);
-        let col_d = &Column::new("d", 3);
-        let col_e = &Column::new("e", 4);
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let option2 = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        // The schema is ordered by a ASC NULLS LAST, b ASC NULLS LAST
-        let provided = vec![
-            PhysicalSortExpr {
-                expr: Arc::new(col_a.clone()),
-                options: option1,
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(col_b.clone()),
-                options: option1,
-            },
-        ];
-        let provided = Some(&provided[..]);
-        let (_test_schema, eq_properties, ordering_eq_properties) =
-            create_test_params2()?;
-        // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
-        let requirements = vec![
-            // // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
-            // (vec![(col_a, option1)], true),
-            // (vec![(col_a, option2)], false),
-            // // Test whether equivalence works as expected
-            // (vec![(col_c, option1)], true),
-            // (vec![(col_c, option2)], false),
-            // // Test whether ordering equivalence works as expected
-            // (vec![(col_d, option1)], false),
-            // (vec![(col_d, option1), (col_b, option1)], true),
-            // (vec![(col_d, option2), (col_b, option1)], false),
-            // (vec![(col_e, option2), (col_b, option1)], true),
-            // (vec![(col_e, option1), (col_b, option1)], false),
+            (vec![(col_d, option1)], false),
+            (vec![(col_d, option1), (col_b, option1)], true),
+            (vec![(col_d, option2), (col_b, option1)], false),
+            (vec![(col_e, option2), (col_b, option1)], true),
+            (vec![(col_e, option1), (col_b, option1)], false),
             (
                 vec![
                     (col_d, option1),
@@ -1612,7 +1545,7 @@ mod tests {
 
             let required = Some(&required[..]);
             assert_eq!(
-                ordering_satisfy2(
+                ordering_satisfy(
                     provided,
                     required,
                     || eq_properties.clone(),
@@ -1894,10 +1827,10 @@ mod tests {
         eq_properties.add_equal_conditions((col_a, col_c));
 
         // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
-        let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
+        let mut ordering_eq_properties = OrderingEquivalenceProperties2::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &OrderedColumn::new(col_a.clone(), option1),
-            &OrderedColumn::new(col_e.clone(), option1),
+            &vec![OrderedColumn::new(col_a.clone(), option1)],
+            &vec![OrderedColumn::new(col_e.clone(), option1)],
         ));
         let sort_req_a = PhysicalSortExpr {
             expr: Arc::new((col_a).clone()) as _,
