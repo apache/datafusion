@@ -30,7 +30,7 @@ use arrow_array::Array;
 use arrow_schema::Fields;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use log::{debug, info, trace};
+use log::{debug, trace};
 
 use crate::{error::Result, scalar::ScalarValue};
 
@@ -152,12 +152,18 @@ pub fn split_files(
 }
 
 struct Partition {
+    /// The path to the partition, including the table prefix
     path: Path,
+    /// How many path segments below the table prefix `path` contains
+    /// or equivalently the number of partition values in `path`
     depth: usize,
+    /// The files contained as direct children of this `Partition` if known
     files: Option<Vec<ObjectMeta>>,
 }
 
 impl Partition {
+    /// List the direct children of this partition updating `self.files` with
+    /// any child files, and returning a list of child "directories"
     async fn list(mut self, store: &dyn ObjectStore) -> Result<(Self, Vec<Path>)> {
         trace!("Listing partition {}", self.path);
         let prefix = Some(&self.path).filter(|p| !p.as_ref().is_empty());
@@ -186,6 +192,9 @@ async fn list_partitions(
     futures.push(partition.list(store));
 
     while let Some((partition, paths)) = futures.next().await.transpose()? {
+        // If pending contains a future it implies prior to this iteration
+        // `futures.len == CONCURRENCY_LIMIT`. We can therefore add a single
+        // future from `pending` to the working set
         if let Some(next) = pending.pop() {
             futures.push(next)
         }
@@ -321,12 +330,12 @@ pub async fn pruned_partition_list<'a>(
     }
 
     let partitions = list_partitions(store, table_path, partition_cols.len()).await?;
-    info!("Listed {} partitions", partitions.len());
+    debug!("Listed {} partitions", partitions.len());
 
     let pruned =
         prune_partitions(table_path, partitions, filters, partition_cols).await?;
 
-    info!("Pruning yielded {} partitions", pruned.len());
+    debug!("Pruning yielded {} partitions", pruned.len());
 
     let stream = futures::stream::iter(pruned)
         .map(move |partition: Partition| async move {
