@@ -2448,6 +2448,12 @@ mod tests {
             regex_not_match(col("c1"), lit("^foo$")),
             col("c1").not_eq(lit("foo")),
         );
+        assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
+        assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
+        assert_no_change(regex_match(col("c1"), lit("^")));
+        assert_no_change(regex_match(col("c1"), lit("$")));
+        assert_no_change(regex_match(col("c1"), lit("$^")));
+        assert_no_change(regex_match(col("c1"), lit("$foo^")));
 
         // OR-chain
         assert_change(
@@ -2466,6 +2472,19 @@ mod tests {
             regex_not_match(col("c1"), lit("foo|bar|baz")),
             not_like(col("c1"), "%foo%")
                 .and(not_like(col("c1"), "%bar%"))
+                .and(not_like(col("c1"), "%baz%")),
+        );
+        // both anchored expressions (translated to equality) and unanchored
+        assert_change(
+            regex_match(col("c1"), lit("foo|^x$|baz")),
+            like(col("c1"), "%foo%")
+                .or(col("c1").eq(lit("x")))
+                .or(like(col("c1"), "%baz%")),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("foo|^bar$|baz")),
+            not_like(col("c1"), "%foo%")
+                .and(col("c1").not_eq(lit("bar")))
                 .and(not_like(col("c1"), "%baz%")),
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)

@@ -166,7 +166,7 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
         .all(|h| matches!(h.kind(), HirKind::Literal(_)))
 }
 
-/// extracts a string literal expression assuming that `is_anchored_literal()`
+/// extracts a string literal expression assuming that [`is_anchored_literal`]
 /// returned true.
 fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
     match v.len() {
