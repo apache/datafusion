@@ -164,15 +164,6 @@ pub fn normalize_expr_with_equivalence_properties(
         .unwrap_or(expr)
 }
 
-fn normalize_sort_expr_with_equivalence_properties(
-    mut sort_expr: PhysicalSortExpr,
-    eq_properties: &[EquivalentClass],
-) -> PhysicalSortExpr {
-    sort_expr.expr =
-        normalize_expr_with_equivalence_properties(sort_expr.expr, eq_properties);
-    sort_expr
-}
-
 fn normalize_sort_requirement_with_equivalence_properties(
     mut sort_requirement: PhysicalSortRequirement,
     eq_properties: &[EquivalentClass],
@@ -182,6 +173,7 @@ fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement
 }
 
+// Searches `section` inside the `to_search`. Returns each range `section` found inside the `to_search`.
 fn get_ranges_inside<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range<usize>> {
     let n_section = section.len();
     let n_end = if to_search.len() >= n_section {
@@ -199,6 +191,7 @@ fn get_ranges_inside<T: PartialEq>(to_search: &[T], section: &[T]) -> Vec<Range<
     res
 }
 
+// Removes duplicate entries inside the `in_data`, vector returned preserves insertion order.
 fn collapse_vec<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
     let mut out_data = vec![];
     for elem in in_data {
@@ -1230,52 +1223,6 @@ mod tests {
                     eq_properties.classes()
                 )),
                 "error in test: expr: {expr:?}"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_normalize_sort_expr_with_equivalence() -> Result<()> {
-        let col_a = &Column::new("a", 0);
-        let _col_b = &Column::new("b", 1);
-        let col_c = &Column::new("c", 2);
-        let col_d = &Column::new("d", 3);
-        let _col_e = &Column::new("e", 4);
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        // Assume that column a and c are aliases.
-        let (_test_schema, eq_properties, _ordering_eq_properties) =
-            create_test_params()?;
-
-        // Test cases for equivalence normalization
-        // First entry in the tuple is PhysicalExpr, second entry is its ordering, third entry is result after normalization.
-        let expressions = vec![
-            (&col_a, option1, &col_a, option1),
-            (&col_c, option1, &col_a, option1),
-            // Cannot normalize column d, since it is not in equivalence properties.
-            (&col_d, option1, &col_d, option1),
-        ];
-        for (expr, sort_options, expected_col, expected_options) in
-            expressions.into_iter()
-        {
-            let expected = PhysicalSortExpr {
-                expr: Arc::new((*expected_col).clone()) as _,
-                options: expected_options,
-            };
-            let arg = PhysicalSortExpr {
-                expr: Arc::new((*expr).clone()) as _,
-                options: sort_options,
-            };
-            assert!(
-                expected.eq(&normalize_sort_expr_with_equivalence_properties(
-                    arg.clone(),
-                    eq_properties.classes()
-                )),
-                "error in test: expr: {expr:?}, sort_options: {sort_options:?}"
             );
         }
 
