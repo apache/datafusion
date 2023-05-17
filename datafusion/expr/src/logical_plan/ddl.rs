@@ -192,6 +192,8 @@ pub struct CreateExternalTable {
     pub order_exprs: Vec<Expr>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
+    /// Whether the table is an infinite streams
+    pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -211,6 +213,7 @@ impl Hash for CreateExternalTable {
         self.definition.hash(state);
         self.file_compression_type.hash(state);
         self.order_exprs.hash(state);
+        self.unbounded.hash(state);
         self.options.len().hash(state); // HashMap is not hashable
     }
 }

@@ -27,6 +27,7 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
 
 use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
@@ -81,6 +82,7 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
+            FileType::ARROW => Arc::new(ArrowFormat::default()),
         };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
@@ -133,15 +135,7 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         // look for 'infinite' as an option
-        let infinite_source = match cmd.options.get("infinite_source").map(|s| s.as_str())
-        {
-            None => false,
-            Some("true") => true,
-            Some("false") => false,
-            Some(value) => {
-                return Err(DataFusionError::Plan(format!("Unknown value for infinite_source: {value}. Expected 'true' or 'false'")));
-            }
-        };
+        let infinite_source = cmd.unbounded;
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config().collect_statistics())
@@ -208,6 +202,7 @@ mod tests {
             file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
             definition: None,
             order_exprs: vec![],
+            unbounded: false,
             options: HashMap::new(),
         };
         let table_provider = factory.create(&state, &cmd).await.unwrap();
