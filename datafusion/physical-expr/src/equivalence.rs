@@ -291,27 +291,6 @@ pub fn project_equivalence_properties(
     output_eq.extend(ec_classes);
 }
 
-// /// This function applies the given projection to the given ordering
-// /// equivalence properties to compute the resulting (projected) ordering
-// /// equivalence properties; e.g.
-// /// 1) Adding an alias, which can introduce additional ordering equivalence
-// ///    properties, as in Projection(a, a as a1, a as a2) extends global ordering
-// ///    of a to a1 and a2.
-// /// 2) Truncate the [`OrderingEquivalentClass`]es that are not in the output schema.
-// pub fn project_ordering_equivalence_properties(
-//     input_eq: OrderingEquivalenceProperties,
-//     columns_map: &HashMap<Column, Vec<Column>>,
-//     output_eq: &mut OrderingEquivalenceProperties,
-// ) {
-//     let mut ec_classes = input_eq.classes().to_vec();
-//     for class in ec_classes.iter_mut() {
-//         class.update_with_aliases(columns_map);
-//     }
-//
-//     prune_columns_to_remove(output_eq, &mut ec_classes);
-//     output_eq.extend(ec_classes);
-// }
-
 /// This function applies the given projection to the given ordering
 /// equivalence properties to compute the resulting (projected) ordering
 /// equivalence properties; e.g.
@@ -324,7 +303,6 @@ pub fn project_ordering_equivalence_properties(
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
-    println!("project_ordering_equivalence_properties is called");
     let mut ec_classes = input_eq.classes().to_vec();
     for class in ec_classes.iter_mut() {
         class.update_with_aliases(columns_map);

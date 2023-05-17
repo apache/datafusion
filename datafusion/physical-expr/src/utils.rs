@@ -209,59 +209,22 @@ fn collapse_vec<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
     out_data
 }
 
-pub fn normalize_sort_expr2(
+pub fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
     eq_properties: &[EquivalentClass],
     ordering_eq_properties: &[OrderingEquivalentClass],
 ) -> Vec<PhysicalSortExpr> {
-    let mut normalized_exprs = sort_exprs
-        .iter()
-        .map(|sort_expr| {
-            normalize_sort_expr_with_equivalence_properties(
-                sort_expr.clone(),
-                eq_properties,
-            )
-        })
-        .collect::<Vec<_>>();
-    for ordering_eq_class in ordering_eq_properties {
-        for elem in ordering_eq_class.others() {
-            let elem: Vec<PhysicalSortExpr> = elem
-                .clone()
-                .into_iter()
-                .map(|elem| elem.into())
-                .collect::<Vec<_>>();
-            println!("normalized_exprs: {:?}", normalized_exprs);
-            println!("elem: {:?}", elem);
-            let ranges = get_ranges_inside(&normalized_exprs, &elem);
-            let mut offset: i64 = 0;
-            for Range { start, end } in ranges {
-                println!("start:{:?}, end:{:?}", start, end);
-                let head: Vec<PhysicalSortExpr> = ordering_eq_class
-                    .head()
-                    .clone()
-                    .into_iter()
-                    .map(|elem| elem.into())
-                    .collect::<Vec<_>>();
-                println!("head:{:?}", head);
-                let updated_start: i64 = start as i64 + offset;
-                let updated_end: i64 = end as i64 + offset;
-                println!(
-                    "updated_start: {:?}, updated_end:{:?}",
-                    updated_start, updated_end
-                );
-                let range = end - start;
-                offset += head.len() as i64 - range as i64;
-                normalized_exprs
-                    .splice(updated_start as usize..updated_end as usize, head);
-                println!("normalized_exprs bef return:{:?}", normalized_exprs);
-                // break;
-            }
-        }
-    }
+    let sort_requirements = PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter());
+    let normalized_exprs = normalize_sort_requirements(
+        &sort_requirements,
+        eq_properties,
+        ordering_eq_properties,
+    );
+    let normalized_exprs = PhysicalSortRequirement::to_sort_exprs(normalized_exprs);
     collapse_vec(normalized_exprs)
 }
 
-pub fn normalize_sort_requirements2(
+pub fn normalize_sort_requirements(
     sort_exprs: &[PhysicalSortRequirement],
     eq_properties: &[EquivalentClass],
     ordering_eq_properties: &[OrderingEquivalentClass],
@@ -282,51 +245,26 @@ pub fn normalize_sort_requirements2(
                 .into_iter()
                 .map(|elem| elem.into())
                 .collect::<Vec<_>>();
-            println!("normalized_exprs: {:?}", normalized_exprs);
-            println!("elem: {:?}", elem);
             let ranges = get_ranges_inside(&normalized_exprs, &elem);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
-                println!("start:{:?}, end:{:?}", start, end);
                 let head: Vec<PhysicalSortRequirement> = ordering_eq_class
                     .head()
                     .clone()
                     .into_iter()
                     .map(|elem| elem.into())
                     .collect::<Vec<_>>();
-                println!("head:{:?}", head);
                 let updated_start: i64 = start as i64 + offset;
                 let updated_end: i64 = end as i64 + offset;
-                println!(
-                    "updated_start: {:?}, updated_end:{:?}",
-                    updated_start, updated_end
-                );
                 let range = end - start;
                 offset += head.len() as i64 - range as i64;
                 normalized_exprs
                     .splice(updated_start as usize..updated_end as usize, head);
-                println!("normalized_exprs bef return:{:?}", normalized_exprs);
-                // break;
             }
         }
     }
     collapse_vec(normalized_exprs)
 }
-
-// pub fn normalize_sort_requirement(
-//     sort_requirement: PhysicalSortRequirement,
-//     eq_properties: &[EquivalentClass],
-//     ordering_eq_properties: &[OrderingEquivalentClass],
-// ) -> PhysicalSortRequirement {
-//     let normalized = normalize_sort_requirement_with_equivalence_properties(
-//         sort_requirement,
-//         eq_properties,
-//     );
-//     normalize_sort_requirement_with_ordering_equivalence_properties(
-//         normalized,
-//         ordering_eq_properties,
-//     )
-// }
 
 /// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<
@@ -366,9 +304,9 @@ pub fn ordering_satisfy_concrete<
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
     let required_normalized =
-        normalize_sort_expr2(required, eq_classes, ordering_eq_classes);
+        normalize_sort_exprs(required, eq_classes, ordering_eq_classes);
     let provided_normalized =
-        normalize_sort_expr2(provided, eq_classes, ordering_eq_classes);
+        normalize_sort_exprs(provided, eq_classes, ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -417,9 +355,9 @@ pub fn ordering_satisfy_requirement_concrete<
     let eq_properties = equal_properties();
     let eq_classes = eq_properties.classes();
     let required_normalized =
-        normalize_sort_requirements2(required, eq_classes, ordering_eq_classes);
+        normalize_sort_requirements(required, eq_classes, ordering_eq_classes);
     let provided_normalized =
-        normalize_sort_expr2(provided, eq_classes, ordering_eq_classes);
+        normalize_sort_exprs(provided, eq_classes, ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -469,9 +407,9 @@ fn requirements_compatible_concrete<
     let eq_classes = eq_properties.classes();
 
     let required_normalized =
-        normalize_sort_requirements2(required, eq_classes, ordering_eq_classes);
+        normalize_sort_requirements(required, eq_classes, ordering_eq_classes);
     let provided_normalized =
-        normalize_sort_requirements2(provided, eq_classes, ordering_eq_classes);
+        normalize_sort_requirements(provided, eq_classes, ordering_eq_classes);
     if required_normalized.len() > provided_normalized.len() {
         return false;
     }
@@ -796,43 +734,6 @@ mod tests {
     }
 
     fn create_test_params() -> Result<(
-        SchemaRef,
-        EquivalenceProperties,
-        OrderingEquivalenceProperties,
-    )> {
-        // Assume schema satisfies ordering a ASC NULLS LAST
-        // and d ASC NULLS LAST and e DESC NULLS FIRST
-        // Assume that column a and c are aliases.
-        let col_a = &Column::new("a", 0);
-        let _col_b = &Column::new("b", 1);
-        let col_c = &Column::new("c", 2);
-        let col_d = &Column::new("d", 3);
-        let col_e = &Column::new("e", 4);
-        let option1 = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        let option2 = SortOptions {
-            descending: true,
-            nulls_first: true,
-        };
-        let test_schema = create_test_schema()?;
-        let mut eq_properties = EquivalenceProperties::new(test_schema.clone());
-        eq_properties.add_equal_conditions((col_a, col_c));
-        let mut ordering_eq_properties =
-            OrderingEquivalenceProperties::new(test_schema.clone());
-        ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), option1)],
-            &vec![OrderedColumn::new(col_d.clone(), option1)],
-        ));
-        ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), option1)],
-            &vec![OrderedColumn::new(col_e.clone(), option2)],
-        ));
-        Ok((test_schema, eq_properties, ordering_eq_properties))
-    }
-
-    fn create_test_params2() -> Result<(
         SchemaRef,
         EquivalenceProperties,
         OrderingEquivalenceProperties,
@@ -1185,8 +1086,7 @@ mod tests {
             },
         ];
         let provided = Some(&provided[..]);
-        let (_test_schema, eq_properties, ordering_eq_properties) =
-            create_test_params2()?;
+        let (_test_schema, eq_properties, ordering_eq_properties) = create_test_params()?;
         // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
         let requirements = vec![
             // `a ASC NULLS LAST`, expects `ordering_satisfy` to be `true`, since existing ordering `a ASC NULLS LAST, b ASC NULLS LAST` satisfies it
@@ -1237,10 +1137,6 @@ mod tests {
                 ],
                 false,
             ),
-            // (vec![(col_d, option1)], true),
-            // (vec![(col_d, option2)], false),
-            // (vec![(col_e, option2)], true),
-            // (vec![(col_e, option1)], false),
         ];
         for (cols, expected) in requirements {
             let err_msg = format!("Error in test case:{cols:?}");
@@ -1397,8 +1293,6 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
-        // Assume schema satisfies ordering a ASC NULLS LAST
-        // and d ASC NULLS LAST and e DESC NULLS FIRST
         // Assume that column a and c are aliases.
         let (_test_schema, eq_properties, _ordering_eq_properties) =
             create_test_params()?;
