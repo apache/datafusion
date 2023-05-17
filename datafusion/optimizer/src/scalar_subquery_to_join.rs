@@ -25,7 +25,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{context, Column, Result};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::sync::Arc;
 
@@ -264,21 +264,32 @@ fn optimize_scalar(
         .build()?;
 
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let new_plan = if join_filter.is_none() {
-        // if not correlated, group down to 1 row and cross join on that (preserving row count)
-        new_plan.cross_join(subqry_plan)?
+        match filter_input {
+            LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: _,
+            }) => subqry_plan,
+            _ => {
+                // if not correlated, group down to 1 row and cross join on that (preserving row count)
+                LogicalPlanBuilder::from(filter_input.clone())
+                    .cross_join(subqry_plan)?
+                    .build()?
+            }
+        }
     } else {
         // left join if correlated, grouping by the join keys so we don't change row count
-        new_plan.join(
-            subqry_plan,
-            JoinType::Left,
-            (Vec::<Column>::new(), Vec::<Column>::new()),
-            join_filter,
-        )?
+        LogicalPlanBuilder::from(filter_input.clone())
+            .join(
+                subqry_plan,
+                JoinType::Left,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                join_filter,
+            )?
+            .build()?
     };
 
-    Ok(Some(new_plan.build()?))
+    Ok(Some(new_plan))
 }
 
 #[cfg(test)]
