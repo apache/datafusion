@@ -252,7 +252,6 @@ pub(crate) fn window_ordering_equivalence(
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> OrderingEquivalenceProperties {
-    println!("window_ordering_equivalence:");
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
     let mut result = OrderingEquivalenceProperties::new(schema.clone());
@@ -308,7 +307,6 @@ pub(crate) fn window_ordering_equivalence(
             }
         }
     }
-    println!("window result:{:?}", result);
     result
 }
 #[cfg(test)]
