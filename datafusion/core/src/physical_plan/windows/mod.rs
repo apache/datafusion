@@ -47,6 +47,7 @@ mod window_agg_exec;
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties2;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
@@ -251,10 +252,10 @@ pub(crate) fn window_ordering_equivalence(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
     window_expr: &[Arc<dyn WindowExpr>],
-) -> OrderingEquivalenceProperties {
+) -> OrderingEquivalenceProperties2 {
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
-    let mut result = OrderingEquivalenceProperties::new(schema.clone());
+    let mut result = OrderingEquivalenceProperties2::new(schema.clone());
     result.extend(
         input
             .ordering_equivalence_properties()
@@ -263,6 +264,21 @@ pub(crate) fn window_ordering_equivalence(
             .cloned(),
     );
     let out_ordering = input.output_ordering().unwrap_or(&[]);
+    let mut out_ordering_normalized = vec![];
+    for elem in out_ordering {
+        // Normalize expression, as we search for ordering equivalences
+        // on normalized versions:
+        let normalized = normalize_expr_with_equivalence_properties(
+            elem.expr.clone(),
+            input.equivalence_properties().classes(),
+        );
+        if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
+            out_ordering_normalized
+                .push(OrderedColumn::new(column.clone(), elem.options));
+        } else {
+            break;
+        }
+    }
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
@@ -275,28 +291,18 @@ pub(crate) fn window_ordering_equivalence(
                 .is::<RowNumber>()
             {
                 // If there is an existing ordering, add new ordering as an equivalence:
-                if let Some(first) = out_ordering.first() {
-                    // Normalize expression, as we search for ordering equivalences
-                    // on normalized versions:
-                    let normalized = normalize_expr_with_equivalence_properties(
-                        first.expr.clone(),
-                        input.equivalence_properties().classes(),
-                    );
-                    if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
-                        let column_info =
-                            schema.column_with_name(expr.field().unwrap().name());
-                        if let Some((idx, field)) = column_info {
-                            let lhs = OrderedColumn::new(column.clone(), first.options);
-                            let options = SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            }; // ASC, NULLS LAST
-                            let rhs = OrderedColumn::new(
-                                Column::new(field.name(), idx),
-                                options,
-                            );
-                            result.add_equal_conditions((&lhs, &rhs));
-                        }
+                if !out_ordering_normalized.is_empty() {
+                    let options = SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    }; // ASC, NULLS LAST
+                    let column_info =
+                        schema.column_with_name(expr.field().unwrap().name());
+                    if let Some((idx, field)) = column_info {
+                        let rhs =
+                            OrderedColumn::new(Column::new(field.name(), idx), options);
+                        result
+                            .add_equal_conditions((&out_ordering_normalized, &vec![rhs]));
                     }
                 }
             }

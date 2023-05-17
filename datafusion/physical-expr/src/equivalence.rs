@@ -20,10 +20,10 @@ use crate::expressions::Column;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 
+use crate::{PhysicalSortExpr, PhysicalSortRequirement};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
-use crate::PhysicalSortExpr;
 
 /// Equivalence Properties is a vec of EquivalentClass.
 #[derive(Debug, Clone)]
@@ -262,15 +262,23 @@ impl OrderedColumn {
     }
 }
 
-impl Into<PhysicalSortExpr> for OrderedColumn{
+impl Into<PhysicalSortExpr> for OrderedColumn {
     fn into(self) -> PhysicalSortExpr {
-        PhysicalSortExpr{
+        PhysicalSortExpr {
             expr: Arc::new(self.col) as _,
-            options: self.options
+            options: self.options,
         }
     }
 }
 
+impl Into<PhysicalSortRequirement> for OrderedColumn {
+    fn into(self) -> PhysicalSortRequirement {
+        PhysicalSortRequirement {
+            expr: Arc::new(self.col) as _,
+            options: Some(self.options),
+        }
+    }
+}
 
 trait ColumnAccessor {
     fn column(&self) -> &Column;
@@ -331,6 +339,30 @@ impl OrderingEquivalentClass {
     }
 }
 
+impl OrderingEquivalentClass2 {
+    fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
+        for (column, columns) in columns_map {
+            for ordering in vec![self.head.clone()]
+                .iter()
+                .chain(self.others.clone().iter())
+            {
+                for (idx, elem) in ordering.iter().enumerate() {
+                    if elem.col.eq(column) {
+                        let mut normalized = self.head.clone();
+                        for col in columns {
+                            normalized[idx] = OrderedColumn {
+                                col: col.clone(),
+                                options: self.head[idx].options,
+                            };
+                            self.insert(normalized.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// This function applies the given projection to the given equivalence
 /// properties to compute the resulting (projected) equivalence properties; e.g.
 /// 1) Adding an alias, which can introduce additional equivalence properties,
@@ -380,6 +412,28 @@ pub fn project_ordering_equivalence_properties(
     }
 
     prune_columns_to_remove(output_eq, &mut ec_classes);
+    output_eq.extend(ec_classes);
+}
+
+/// This function applies the given projection to the given ordering
+/// equivalence properties to compute the resulting (projected) ordering
+/// equivalence properties; e.g.
+/// 1) Adding an alias, which can introduce additional ordering equivalence
+///    properties, as in Projection(a, a as a1, a as a2) extends global ordering
+///    of a to a1 and a2.
+/// 2) Truncate the [`OrderingEquivalentClass`]es that are not in the output schema.
+pub fn project_ordering_equivalence_properties2(
+    input_eq: OrderingEquivalenceProperties2,
+    columns_map: &HashMap<Column, Vec<Column>>,
+    output_eq: &mut OrderingEquivalenceProperties2,
+) {
+    let mut ec_classes = input_eq.classes().to_vec();
+    for class in ec_classes.iter_mut() {
+        class.update_with_aliases(columns_map);
+    }
+
+    // prune_columns_to_remove(output_eq, &mut ec_classes);
+    // TODO: Add pruning
     output_eq.extend(ec_classes);
 }
 

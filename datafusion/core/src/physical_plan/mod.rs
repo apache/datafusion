@@ -32,7 +32,9 @@ use arrow::record_batch::RecordBatch;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
-use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
+use datafusion_physical_expr::equivalence::{
+    OrderingEquivalenceProperties, OrderingEquivalenceProperties2,
+};
 pub use display::DisplayFormatType;
 use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
@@ -189,8 +191,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     }
 
     /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        OrderingEquivalenceProperties::new(self.schema())
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties2 {
+        OrderingEquivalenceProperties2::new(self.schema())
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list

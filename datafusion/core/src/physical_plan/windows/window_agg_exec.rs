@@ -42,6 +42,7 @@ use arrow::{
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::DataFusionError;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties2;
 use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
@@ -192,7 +193,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     /// Get the OrderingEquivalenceProperties within the plan
-    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties2 {
         window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
     }
 
