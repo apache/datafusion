@@ -1133,9 +1133,14 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
+            alias @ Expr::Alias { .. }
+                if &alias.display_name().unwrap() != schema.field(i).name() =>
+            {
+                alias.unalias().alias(schema.field(i).name())
+            }
             ignore_alias @ Expr::Alias { .. } => ignore_alias,
             ignore_col @ Expr::Column { .. } => ignore_col,
-            x => x.alias(schema.field(i).name()),
+            expr => expr.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
@@ -1187,7 +1192,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            x => vec![Arc::new(x)],
+            other_plan => vec![Arc::new(other_plan)],
         })
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
@@ -1199,7 +1204,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                         Arc::new(union_schema.clone()),
                     )?))
                 }
-                x => Ok(Arc::new(x)),
+                other_plan => Ok(Arc::new(other_plan)),
             }
         })
         .collect::<Result<Vec<_>>>()?;
