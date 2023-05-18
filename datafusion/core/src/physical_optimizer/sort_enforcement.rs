@@ -2901,7 +2901,6 @@ mod tmp_tests {
     use crate::prelude::SessionContext;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_first_value() -> Result<()> {
@@ -2931,8 +2930,8 @@ mod tmp_tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "ProjectionExec: expr=[LASTVALUE(annotated_data_infinite.inc_col) ORDER BY [annotated_data_infinite.ts ASC NULLS LAST]@0 as last]",
-                "  AggregateExec: mode=Single, gby=[], aggr=[LASTVALUE(annotated_data_infinite.inc_col)]",
+                "ProjectionExec: expr=[LAST_VALUE(annotated_data_infinite.inc_col) ORDER BY [annotated_data_infinite.ts ASC NULLS LAST]@0 as last]",
+                "  AggregateExec: mode=Single, gby=[], aggr=[LAST_VALUE(annotated_data_infinite.inc_col)]",
             ]
         };
 

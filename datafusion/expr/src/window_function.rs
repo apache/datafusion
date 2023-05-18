@@ -23,6 +23,7 @@
 
 use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
+use crate::utils::convert_camel_uppercase_snake;
 use crate::{aggregate_function, AggregateUDF, Signature, TypeSignature, Volatility};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
@@ -53,19 +54,20 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunction> {
 
 impl fmt::Display for BuiltInWindowFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            BuiltInWindowFunction::RowNumber => write!(f, "ROW_NUMBER"),
-            BuiltInWindowFunction::Rank => write!(f, "RANK"),
-            BuiltInWindowFunction::DenseRank => write!(f, "DENSE_RANK"),
-            BuiltInWindowFunction::PercentRank => write!(f, "PERCENT_RANK"),
-            BuiltInWindowFunction::CumeDist => write!(f, "CUME_DIST"),
-            BuiltInWindowFunction::Ntile => write!(f, "NTILE"),
-            BuiltInWindowFunction::Lag => write!(f, "LAG"),
-            BuiltInWindowFunction::Lead => write!(f, "LEAD"),
-            BuiltInWindowFunction::FirstValue => write!(f, "FIRST_VALUE"),
-            BuiltInWindowFunction::LastValue => write!(f, "LAST_VALUE"),
-            BuiltInWindowFunction::NthValue => write!(f, "NTH_VALUE"),
-        }
+        // match self {
+        //     BuiltInWindowFunction::RowNumber => write!(f, "ROW_NUMBER"),
+        //     BuiltInWindowFunction::Rank => write!(f, "RANK"),
+        //     BuiltInWindowFunction::DenseRank => write!(f, "DENSE_RANK"),
+        //     BuiltInWindowFunction::PercentRank => write!(f, "PERCENT_RANK"),
+        //     BuiltInWindowFunction::CumeDist => write!(f, "CUME_DIST"),
+        //     BuiltInWindowFunction::Ntile => write!(f, "NTILE"),
+        //     BuiltInWindowFunction::Lag => write!(f, "LAG"),
+        //     BuiltInWindowFunction::Lead => write!(f, "LEAD"),
+        //     BuiltInWindowFunction::FirstValue => write!(f, "FIRST_VALUE"),
+        //     BuiltInWindowFunction::LastValue => write!(f, "LAST_VALUE"),
+        //     BuiltInWindowFunction::NthValue => write!(f, "NTH_VALUE"),
+        // }
+        write!(f, "{}", convert_camel_uppercase_snake(format!("{self:?}")))
     }
 }
 

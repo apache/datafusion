@@ -54,6 +54,20 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
     Ok(())
 }
 
+/// Convert Camel form to uppercase snake
+/// such as FirstValue => FIRST_VALUE
+pub fn convert_camel_uppercase_snake(in_str: String) -> String {
+    let mut res = String::new();
+    for ch in in_str.chars() {
+        if ch.is_uppercase() && !res.is_empty() {
+            res = format!("{}_{}", res, ch.to_uppercase());
+        } else {
+            res = format!("{}{}", res, ch.to_uppercase());
+        }
+    }
+    res
+}
+
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
