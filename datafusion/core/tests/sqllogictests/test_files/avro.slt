@@ -42,7 +42,7 @@ STORED AS AVRO
 WITH HEADER ROW
 LOCATION '../../testing/data/avro/single_nan.avro'
 
-# test avro_query
+# test avro query
 query IT
 SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 ----
@@ -55,13 +55,34 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain
 0 0
 1 1
 
-# test avro_single_nan_schema
+# test avro single nan schema
 query R
 SELECT mycol FROM single_nan
 ----
 NULL
 
-# test avro_explain
+# test avro query multi files
+query IT
+SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_multi_files
+----
+4  0
+5  1
+6  0
+7  1
+2  0
+3  1
+0  0
+1  1
+4  0
+5  1
+6  0
+7  1
+2  0
+3  1
+0  0
+1  1
+
+# test avro explain
 query TT
 EXPLAIN SELECT count(*) from alltypes_plain
 ----

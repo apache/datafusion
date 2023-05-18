@@ -22,6 +22,7 @@ use std::thread;
 
 use log::info;
 use sqllogictest::strict_column_validator;
+use tempfile::TempDir;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 
@@ -83,7 +84,8 @@ async fn run_test_file(
     relative_path: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     info!("Running with DataFusion runner: {}", path.display());
-    let ctx = context_for_test_file(&relative_path).await;
+    let test_ctx = context_for_test_file(&relative_path).await;
+    let ctx = test_ctx.session_ctx().clone();
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     runner.with_column_validator(strict_column_validator);
     runner.run_file_async(path).await?;
@@ -110,7 +112,8 @@ async fn run_complete_file(
 
     info!("Using complete mode to complete: {}", path.display());
 
-    let ctx = context_for_test_file(&relative_path).await;
+    let test_ctx = context_for_test_file(&relative_path).await;
+    let ctx = test_ctx.session_ctx().clone();
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     let col_separator = " ";
     runner
@@ -160,28 +163,69 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
 }
 
 /// Create a SessionContext, configured for the specific test
-async fn context_for_test_file(relative_path: &Path) -> SessionContext {
+async fn context_for_test_file(relative_path: &Path) -> TestContext {
     let config = SessionConfig::new()
         // hardcode target partitions so plans are deterministic
         .with_target_partitions(4);
 
-    let ctx = SessionContext::with_config(config);
+    let mut test_ctx = TestContext::new(SessionContext::with_config(config));
 
     match relative_path.file_name().unwrap().to_str().unwrap() {
         "aggregate.slt" => {
             info!("Registering aggregate tables");
-            setup::register_aggregate_tables(&ctx).await;
+            setup::register_aggregate_tables(&test_ctx.session_ctx()).await;
         }
         "scalar.slt" => {
             info!("Registering scalar tables");
-            setup::register_scalar_tables(&ctx).await;
+            setup::register_scalar_tables(&test_ctx.session_ctx()).await;
+        }
+        "avro.slt" => {
+            info!("Registering avro tables");
+            setup::register_avro_tables(&mut test_ctx).await;
         }
         _ => {
             info!("Using default SessionContext");
         }
     };
-    ctx
+    test_ctx
 }
+
+/// Context for running tests
+pub struct TestContext {
+    /// Context for running queries
+    ctx: SessionContext,
+    /// Temporary directory created and cleared at the end of the test
+    test_dir: Option<TempDir>,
+}
+
+impl TestContext {
+    fn new(ctx: SessionContext) -> Self {
+        Self { ctx, test_dir: None }
+    }
+
+    /// Enables the test directory feature. If not enabled,
+    /// calling `testdir_path` will result in a panic.
+    fn enable_testdir(&mut self) {
+        if self.test_dir.is_none() {
+            self.test_dir = Some(TempDir::new().expect("failed to create testdir"));
+        }
+    }
+
+    /// Returns the path to the test directory. Panics if the test
+    /// directory feature is not enabled via `enable_testdir`.
+    fn testdir_path(&self) -> &Path {
+        self.test_dir
+            .as_ref()
+            .expect("testdir not enabled")
+            .path()
+    }
+
+    /// Returns a reference to the internal SessionContext
+    fn session_ctx(&self) -> &SessionContext {
+        &self.ctx
+    }
+}
+
 
 /// Parsed command line options
 struct Options {
