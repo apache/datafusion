@@ -308,12 +308,12 @@ pub fn create_aggregate_expr(
                 "MEDIAN(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::First, _) => Arc::new(expressions::FirstAgg::new(
+        (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstAgg::new(
             input_phy_exprs[0].clone(),
             name,
             input_phy_types[0].clone(),
         )),
-        (AggregateFunction::Last, _) => Arc::new(expressions::LastAgg::new(
+        (AggregateFunction::LastValue, _) => Arc::new(expressions::LastAgg::new(
             input_phy_exprs[0].clone(),
             name,
             input_phy_types[0].clone(),

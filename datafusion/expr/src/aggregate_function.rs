@@ -43,9 +43,9 @@ pub enum AggregateFunction {
     /// array_agg
     ArrayAgg,
     /// first
-    First,
+    FirstValue,
     /// last
-    Last,
+    LastValue,
     /// Variance (Sample)
     Variance,
     /// Variance (Population)
@@ -105,6 +105,8 @@ impl FromStr for AggregateFunction {
             "min" => AggregateFunction::Min,
             "sum" => AggregateFunction::Sum,
             "array_agg" => AggregateFunction::ArrayAgg,
+            "first_value" => AggregateFunction::FirstValue,
+            "last_value" => AggregateFunction::LastValue,
             // statistical
             "corr" => AggregateFunction::Correlation,
             "covar" => AggregateFunction::Covariance,
@@ -186,7 +188,7 @@ pub fn return_type(
             Ok(coerced_data_types[0].clone())
         }
         AggregateFunction::Grouping => Ok(DataType::Int32),
-        AggregateFunction::First | AggregateFunction::Last => {
+        AggregateFunction::FirstValue | AggregateFunction::LastValue => {
             Ok(coerced_data_types[0].clone())
         }
     }
@@ -240,8 +242,8 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::StddevPop
         | AggregateFunction::Median
         | AggregateFunction::ApproxMedian
-        | AggregateFunction::First
-        | AggregateFunction::Last => {
+        | AggregateFunction::FirstValue
+        | AggregateFunction::LastValue => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
         AggregateFunction::Covariance | AggregateFunction::CovariancePop => {

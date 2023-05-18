@@ -2894,3 +2894,67 @@ mod tests {
         )
     }
 }
+
+mod tmp_tests{
+    use tempfile::TempDir;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use crate::assert_batches_eq;
+    use crate::physical_plan::{collect, displayable};
+    use crate::prelude::SessionContext;
+
+    #[tokio::test]
+    async fn test_first_value() -> Result<()> {
+        let config = SessionConfig::new()
+            .with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        ctx.sql("CREATE EXTERNAL TABLE annotated_data_infinite (
+              ts INTEGER,
+              inc_col INTEGER,
+              desc_col INTEGER,
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (ts ASC)
+            LOCATION 'tests/data/window_1.csv'").await?;
+
+        let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts DESC), ts, inc_col
+       FROM annotated_data_infinite
+       ORDER BY ts ASC";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "GlobalLimitExec: skip=0, fetch=5",
+                "  ProjectionExec: expr=[ts@0 as ts, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
+                "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]",
+            ]
+        };
+
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        let actual_len = actual.len();
+        let actual_trim_last = &actual[..actual_len - 1];
+        assert_eq!(
+            expected, actual_trim_last,
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        );
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        let expected = vec![
+            "+----+-----+",
+            "| ts | rn1 |",
+            "+----+-----+",
+            "| 1  | 1   |",
+            "| 1  | 2   |",
+            "| 5  | 3   |",
+            "| 9  | 4   |",
+            "| 10 | 5   |",
+            "+----+-----+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+}
