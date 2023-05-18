@@ -2398,8 +2398,10 @@ pub enum AggregateFunction {
     BitXor = 21,
     BoolAnd = 22,
     BoolOr = 23,
-    First = 24,
-    Last = 25,
+    /// since function with same names exists in builtin window functions
+    /// because of name scope rules, we append their name with _AGG identifiers
+    FirstValueAgg = 24,
+    LastValueAgg = 25,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2434,8 +2436,8 @@ impl AggregateFunction {
             AggregateFunction::BitXor => "BIT_XOR",
             AggregateFunction::BoolAnd => "BOOL_AND",
             AggregateFunction::BoolOr => "BOOL_OR",
-            AggregateFunction::First => "FIRST",
-            AggregateFunction::Last => "LAST",
+            AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
+            AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2467,8 +2469,8 @@ impl AggregateFunction {
             "BIT_XOR" => Some(Self::BitXor),
             "BOOL_AND" => Some(Self::BoolAnd),
             "BOOL_OR" => Some(Self::BoolOr),
-            "FIRST" => Some(Self::First),
-            "LAST" => Some(Self::Last),
+            "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
+            "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
             _ => None,
         }
     }

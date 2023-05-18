@@ -116,7 +116,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let order_by = (!order_by.is_empty()).then_some(order_by);
-            println!("order by:{:?}", order_by);
             let (fun, args) =
                 self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
             return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(

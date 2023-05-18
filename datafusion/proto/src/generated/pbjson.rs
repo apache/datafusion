@@ -463,8 +463,8 @@ impl serde::Serialize for AggregateFunction {
             Self::BitXor => "BIT_XOR",
             Self::BoolAnd => "BOOL_AND",
             Self::BoolOr => "BOOL_OR",
-            Self::First => "FIRST",
-            Self::Last => "LAST",
+            Self::FirstValueAgg => "FIRST_VALUE_AGG",
+            Self::LastValueAgg => "LAST_VALUE_AGG",
         };
         serializer.serialize_str(variant)
     }
@@ -500,8 +500,8 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "BIT_XOR",
             "BOOL_AND",
             "BOOL_OR",
-            "FIRST",
-            "LAST",
+            "FIRST_VALUE_AGG",
+            "LAST_VALUE_AGG",
         ];
 
         struct GeneratedVisitor;
@@ -568,8 +568,8 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "BIT_XOR" => Ok(AggregateFunction::BitXor),
                     "BOOL_AND" => Ok(AggregateFunction::BoolAnd),
                     "BOOL_OR" => Ok(AggregateFunction::BoolOr),
-                    "FIRST" => Ok(AggregateFunction::First),
-                    "LAST" => Ok(AggregateFunction::Last),
+                    "FIRST_VALUE_AGG" => Ok(AggregateFunction::FirstValueAgg),
+                    "LAST_VALUE_AGG" => Ok(AggregateFunction::LastValueAgg),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

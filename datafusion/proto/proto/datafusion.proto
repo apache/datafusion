@@ -569,8 +569,10 @@ enum AggregateFunction {
   BIT_XOR = 21;
   BOOL_AND = 22;
   BOOL_OR = 23;
-  FIRST = 24;
-  LAST = 25;
+  // since function with same names exists in builtin window functions
+  // because of name scope rules, we append their name with _AGG identifiers
+  FIRST_VALUE_AGG = 24;
+  LAST_VALUE_AGG = 25;
 }
 
 message AggregateExprNode {
