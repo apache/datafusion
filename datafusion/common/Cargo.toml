@@ -50,6 +50,7 @@ pyo3 = { version = "0.18.0", optional = true }
 # sqlparser = "0.33"
 # sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", branch="feature/first_last_support"}
 # sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "870b3de" }
-sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "1c4c3b8", features = ["visitor"] }
+# sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "1c4c3b8", features = ["visitor"] }
+sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "b759a95", features = ["visitor"] }
 [dev-dependencies]
 rand = "0.8.4"
