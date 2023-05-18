@@ -20,11 +20,114 @@ use datafusion_substrait::logical_plan::{consumer, producer};
 #[cfg(test)]
 mod tests {
 
+    use std::hash::Hash;
+    use std::sync::Arc;
+
     use crate::{consumer::from_substrait_plan, producer::to_substrait_plan};
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::common::{DFSchema, DFSchemaRef};
     use datafusion::error::Result;
+    use datafusion::execution::context::{ExtensionDeserializer, SessionState};
+    use datafusion::execution::runtime_env::RuntimeEnv;
+    use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
     use datafusion::prelude::*;
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
+
+    struct MockExtensionDeserializer;
+
+    impl ExtensionDeserializer for MockExtensionDeserializer {
+        fn deserialize_logical_plan(
+            &self,
+            name: &str,
+            bytes: &[u8],
+        ) -> Result<std::sync::Arc<dyn datafusion::logical_expr::UserDefinedLogicalNode>>
+        {
+            if name == "MockUserDefinedLogicalPlan" {
+                MockUserDefinedLogicalPlan::deserialize(bytes)
+            } else {
+                unreachable!()
+            }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct MockUserDefinedLogicalPlan {
+        /// Replacement for serialize/deserialize data
+        validation_bytes: Vec<u8>,
+        inputs: Vec<LogicalPlan>,
+        empty_schema: DFSchemaRef,
+    }
+
+    impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "MockUserDefinedLogicalPlan"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            self.inputs.iter().collect()
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.empty_schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![]
+        }
+
+        fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                f,
+                "MockUserDefinedLogicalPlan [validation_bytes={:?}]",
+                self.validation_bytes
+            )
+        }
+
+        fn from_template(
+            &self,
+            _: &[Expr],
+            inputs: &[LogicalPlan],
+        ) -> Arc<dyn UserDefinedLogicalNode> {
+            Arc::new(Self {
+                validation_bytes: self.validation_bytes.clone(),
+                inputs: inputs.to_vec(),
+                empty_schema: Arc::new(DFSchema::empty()),
+            })
+        }
+
+        fn dyn_hash(&self, _: &mut dyn std::hash::Hasher) {
+            unimplemented!()
+        }
+
+        fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
+            unimplemented!()
+        }
+
+        fn serialize(&self) -> Result<Vec<u8>> {
+            Ok(self.validation_bytes.clone())
+        }
+
+        fn deserialize(bytes: &[u8]) -> Result<Arc<dyn UserDefinedLogicalNode>>
+        where
+            Self: Sized,
+        {
+            Ok(Arc::new(MockUserDefinedLogicalPlan::new(bytes.to_vec())))
+        }
+    }
+
+    impl MockUserDefinedLogicalPlan {
+        pub fn new(validation_bytes: Vec<u8>) -> Self {
+            Self {
+                validation_bytes,
+                inputs: vec![],
+                empty_schema: Arc::new(DFSchema::empty()),
+            }
+        }
+    }
 
     #[tokio::test]
     async fn simple_select() -> Result<()> {
@@ -336,6 +439,28 @@ mod tests {
         .await
     }
 
+    #[tokio::test]
+    async fn extension_logical_plan() -> Result<()> {
+        let mut ctx = create_context().await?;
+        let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
+        let ext_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(MockUserDefinedLogicalPlan {
+                validation_bytes,
+                inputs: vec![],
+                empty_schema: Arc::new(DFSchema::empty()),
+            }),
+        });
+
+        let proto = to_substrait_plan(&ext_plan)?;
+        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+
+        let plan1str = format!("{ext_plan:?}");
+        let plan2str = format!("{plan2:?}");
+        assert_eq!(plan1str, plan2str);
+
+        Ok(())
+    }
+
     async fn assert_expected_plan(sql: &str, expected_plan_str: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
@@ -445,7 +570,12 @@ mod tests {
     }
 
     async fn create_context() -> Result<SessionContext> {
-        let ctx = SessionContext::new();
+        let state = SessionState::with_config_rt(
+            SessionConfig::default(),
+            Arc::new(RuntimeEnv::default()),
+        )
+        .with_extension_deserializer(Arc::new(MockExtensionDeserializer));
+        let ctx = SessionContext::with_state(state);
         let mut explicit_options = CsvReadOptions::new();
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int64, true),

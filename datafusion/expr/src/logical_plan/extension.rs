@@ -17,7 +17,7 @@
 
 //! This module defines the interface for logical nodes
 use crate::{Expr, LogicalPlan};
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use std::hash::{Hash, Hasher};
 use std::{any::Any, cmp::Eq, collections::HashSet, fmt, sync::Arc};
 
@@ -164,6 +164,26 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Note: [`UserDefinedLogicalNode`] is not constrained by [`Eq`]
     /// directly because it must remain object safe.
     fn dyn_eq(&self, other: &dyn UserDefinedLogicalNode) -> bool;
+
+    /// Serialize this node to a byte array. This serialization needs not to include
+    /// input plans.
+    fn serialize(&self) -> Result<Vec<u8>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Serialize is not implemented for user defined logical node {}",
+            self.name()
+        )))
+    }
+
+    /// Deserialize the node from a byte array. The inputs plan is not included in the
+    /// byte array, it will be passed later via [from_template](UserDefinedLogicalNode::from_template).
+    fn deserialize(_: &[u8]) -> Result<Arc<dyn UserDefinedLogicalNode>>
+    where
+        Self: Sized,
+    {
+        Err(DataFusionError::NotImplemented(
+            "Deserialize is not implemented for user defined logical node".to_string(),
+        ))
+    }
 }
 
 impl Hash for dyn UserDefinedLogicalNode {

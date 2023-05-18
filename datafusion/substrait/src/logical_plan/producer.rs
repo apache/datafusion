@@ -31,6 +31,7 @@ use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort, WindowFunction};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
+use prost_types::Any as ProtoAny;
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -56,9 +57,10 @@ use substrait::{
         read_rel::{NamedTable, ReadType},
         rel::RelType,
         sort_field::{SortDirection, SortKind},
-        AggregateFunction, AggregateRel, AggregationPhase, Expression, FetchRel,
-        FilterRel, FunctionArgument, JoinRel, NamedStruct, Plan, PlanRel, ProjectRel,
-        ReadRel, Rel, RelRoot, SortField, SortRel,
+        AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
+        ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
+        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot,
+        SortField, SortRel,
     },
     version,
 };
@@ -355,6 +357,38 @@ pub fn to_substrait_rel(
             project_rel.expressions.extend(window_exprs);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
+            }))
+        }
+        LogicalPlan::Extension(extension_plan) => {
+            let extension_bytes = extension_plan.node.serialize()?;
+            let detail = ProtoAny {
+                type_url: extension_plan.node.name().to_string(),
+                value: extension_bytes,
+            };
+            let mut inputs_rel = extension_plan
+                .node
+                .inputs()
+                .into_iter()
+                .map(|plan| to_substrait_rel(plan, extension_info))
+                .collect::<Result<Vec<_>>>()?;
+            let rel_type = match inputs_rel.len() {
+                0 => RelType::ExtensionLeaf(ExtensionLeafRel {
+                    common: None,
+                    detail: Some(detail),
+                }),
+                1 => RelType::ExtensionSingle(Box::new(ExtensionSingleRel {
+                    common: None,
+                    detail: Some(detail),
+                    input: Some(inputs_rel.pop().unwrap()),
+                })),
+                _ => RelType::ExtensionMulti(ExtensionMultiRel {
+                    common: None,
+                    detail: Some(detail),
+                    inputs: inputs_rel.into_iter().map(|r| *r).collect(),
+                }),
+            };
+            Ok(Box::new(Rel {
+                rel_type: Some(rel_type),
             }))
         }
         _ => Err(DataFusionError::NotImplemented(format!(
