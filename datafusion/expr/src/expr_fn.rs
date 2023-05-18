@@ -508,6 +508,19 @@ scalar_expr!(
 scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
+// array functions
+nary_scalar_expr!(
+    MakeArray,
+    array,
+    "returns an array of fixed size with each argument on it."
+);
+scalar_expr!(
+    ArrayNdims,
+    array_ndims,
+    array,
+    "returns the number of dimensions of the array."
+);
+
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
 scalar_expr!(
@@ -597,11 +610,6 @@ nary_scalar_expr!(
     Btrim,
     btrim,
     "removes all characters, spaces by default, from both sides of a string"
-);
-nary_scalar_expr!(
-    MakeArray,
-    array,
-    "returns an array of fixed size with each argument on it."
 );
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
@@ -872,6 +880,9 @@ mod test {
         test_scalar_expr!(DateTrunc, date_trunc, part, date);
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
+
+        test_nary_scalar_expr!(MakeArray, array, input);
+        test_unary_scalar_expr!(ArrayNdims, array_ndims);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
     }

@@ -384,8 +384,11 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
 
-        // string functions
+        // array functions
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
+
+        // string functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {

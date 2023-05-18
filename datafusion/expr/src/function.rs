@@ -21,8 +21,8 @@ use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::type_coercion::functions::data_types;
 use crate::ColumnarValue;
 use crate::{
-    array_expressions, conditional_expressions, struct_expressions, Accumulator,
-    BuiltinScalarFunction, Signature, TypeSignature,
+    conditional_expressions, struct_expressions, Accumulator, BuiltinScalarFunction,
+    Signature, TypeSignature,
 };
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
@@ -115,6 +115,7 @@ pub fn return_type(
             Arc::new(Field::new("item", input_expr_types[0].clone(), true)),
             input_expr_types.len() as i32,
         )),
+        BuiltinScalarFunction::ArrayNdims => Ok(DataType::Int64),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
         BuiltinScalarFunction::BitLength => {
             utf8_to_int_type(&input_expr_types[0], "bit_length")
@@ -318,10 +319,8 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
 
     // for now, the list is small, as we do not have many built-in functions.
     match fun {
-        BuiltinScalarFunction::MakeArray => Signature::variadic(
-            array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
-            fun.volatility(),
-        ),
+        BuiltinScalarFunction::MakeArray => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayNdims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::Struct => Signature::variadic(
             struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
             fun.volatility(),

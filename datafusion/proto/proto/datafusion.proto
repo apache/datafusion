@@ -537,6 +537,7 @@ enum ScalarFunction {
   Factorial = 83;
   Lcm = 84;
   Gcd = 85;
+  ArrayNdims = 86;
 }
 
 message ScalarFunctionNode {

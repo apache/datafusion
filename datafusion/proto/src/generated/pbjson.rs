@@ -17343,6 +17343,7 @@ impl serde::Serialize for ScalarFunction {
             Self::Factorial => "Factorial",
             Self::Lcm => "Lcm",
             Self::Gcd => "Gcd",
+            Self::ArrayNdims => "ArrayNdims",
         };
         serializer.serialize_str(variant)
     }
@@ -17440,6 +17441,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Factorial",
             "Lcm",
             "Gcd",
+            "ArrayNdims",
         ];
 
         struct GeneratedVisitor;
@@ -17568,6 +17570,7 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Factorial" => Ok(ScalarFunction::Factorial),
                     "Lcm" => Ok(ScalarFunction::Lcm),
                     "Gcd" => Ok(ScalarFunction::Gcd),
+                    "ArrayNdims" => Ok(ScalarFunction::ArrayNdims),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

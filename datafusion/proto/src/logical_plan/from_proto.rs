@@ -36,9 +36,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
-    abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
-    cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
-    date_bin, date_part, date_trunc, degrees, digest, exp,
+    abs, acos, acosh, array, array_ndims, ascii, asin, asinh, atan, atan2, atanh,
+    bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
+    concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -445,6 +445,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::Array => Self::MakeArray,
+            ScalarFunction::ArrayNdims => Self::ArrayNdims,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -1152,6 +1153,9 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::ArrayNdims => {
+                    Ok(array_ndims(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),

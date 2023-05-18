@@ -97,9 +97,13 @@ pub enum BuiltinScalarFunction {
     /// trunc
     Trunc,
 
-    // string functions
+    // array functions
     /// construct an array from columns
     MakeArray,
+    /// array_ndims
+    ArrayNdims,
+
+    // string functions
     /// ascii
     Ascii,
     /// bit_length
@@ -254,6 +258,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -428,6 +433,7 @@ impl FromStr for BuiltinScalarFunction {
 
             // array functions
             "make_array" => BuiltinScalarFunction::MakeArray,
+            "array_ndims" => BuiltinScalarFunction::ArrayNdims,
 
             _ => {
                 return Err(DataFusionError::Plan(format!(
