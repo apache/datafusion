@@ -110,7 +110,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         if let Ok(fun) = AggregateFunction::from_str(&name) {
             let distinct = function.distinct;
-            let order_by = function.order_by.into_iter().map(|e| self.order_by_to_sort_expr(e, schema, planner_context)).collect::<Result<Vec<_>>>()?;
+            let order_by = function
+                .order_by
+                .into_iter()
+                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
+                .collect::<Result<Vec<_>>>()?;
             let order_by = (!order_by.is_empty()).then_some(order_by);
             println!("order by:{:?}", order_by);
             let (fun, args) =

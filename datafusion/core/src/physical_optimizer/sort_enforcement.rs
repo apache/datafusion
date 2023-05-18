@@ -2895,20 +2895,20 @@ mod tests {
     }
 }
 
-mod tmp_tests{
-    use tempfile::TempDir;
-    use datafusion_common::Result;
-    use datafusion_execution::config::SessionConfig;
+mod tmp_tests {
     use crate::assert_batches_eq;
     use crate::physical_plan::{collect, displayable};
     use crate::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_first_value() -> Result<()> {
-        let config = SessionConfig::new()
-            .with_target_partitions(1);
+        let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
-        ctx.sql("CREATE EXTERNAL TABLE annotated_data_infinite (
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data_infinite (
               ts INTEGER,
               inc_col INTEGER,
               desc_col INTEGER,
@@ -2916,11 +2916,14 @@ mod tmp_tests{
             STORED AS CSV
             WITH HEADER ROW
             WITH ORDER (ts ASC)
-            LOCATION 'tests/data/window_1.csv'").await?;
+            LOCATION 'tests/data/window_1.csv'",
+        )
+        .await?;
 
-        let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts DESC), ts, inc_col
-       FROM annotated_data_infinite
-       ORDER BY ts ASC";
+        //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
+        // FROM annotated_data_infinite";
+        let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+       FROM annotated_data_infinite";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
@@ -2928,9 +2931,8 @@ mod tmp_tests{
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "GlobalLimitExec: skip=0, fetch=5",
-                "  ProjectionExec: expr=[ts@0 as ts, ROW_NUMBER() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as rn1]",
-                "    BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: \"ROW_NUMBER()\", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]",
+                "ProjectionExec: expr=[LASTVALUE(annotated_data_infinite.inc_col) ORDER BY [annotated_data_infinite.ts ASC NULLS LAST]@0 as last]",
+                "  AggregateExec: mode=Single, gby=[], aggr=[LASTVALUE(annotated_data_infinite.inc_col)]",
             ]
         };
 
@@ -2942,19 +2944,8 @@ mod tmp_tests{
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let actual = collect(physical_plan, ctx.task_ctx()).await?;
-        let expected = vec![
-            "+----+-----+",
-            "| ts | rn1 |",
-            "+----+-----+",
-            "| 1  | 1   |",
-            "| 1  | 2   |",
-            "| 5  | 3   |",
-            "| 9  | 4   |",
-            "| 10 | 5   |",
-            "+----+-----+",
-        ];
+        let expected = vec!["+------+", "| last |", "+------+", "| 305  |", "+------+"];
         assert_batches_eq!(expected, &actual);
         Ok(())
     }
-
 }

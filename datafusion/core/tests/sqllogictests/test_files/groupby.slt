@@ -2011,7 +2011,7 @@ SELECT a, d,
 # test_source_sorted_groupby3
 
 query TT
-EXPLAIN SELECT a, b, FIRST(c ORDER BY a DESC) as first_c
+EXPLAIN SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
@@ -2037,7 +2037,7 @@ SELECT a, b, FIRST(c ORDER BY a DESC) as first_c
 # test_source_sorted_groupby4
 
 query TT
-EXPLAIN SELECT a, b, LAST(c ORDER BY a DESC) as last_c
+EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
@@ -2051,7 +2051,7 @@ ProjectionExec: expr=[a@0 as a, b@1 as b, LAST(annotated_data_infinite2.c) ORDER
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], has_header=true
 
 query III
-SELECT a, b, LAST(c ORDER BY a DESC) as last_c
+SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
   FROM annotated_data_infinite2
   GROUP BY a, b
 ----
