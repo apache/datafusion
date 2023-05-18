@@ -78,7 +78,11 @@ impl MemoryPool for GreedyMemoryPool {
                 (new_used <= self.pool_size).then_some(new_used)
             })
             .map_err(|used| {
-                insufficient_capacity_err(reservation, additional, self.pool_size - used)
+                insufficient_capacity_err(
+                    reservation,
+                    additional,
+                    self.pool_size.saturating_sub(used),
+                )
             })?;
         Ok(())
     }
@@ -145,13 +149,13 @@ impl MemoryPool for FairSpillPool {
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         if consumer.can_spill {
-            self.state.lock().num_spill -= 1;
+            self.state.lock().num_spill.checked_sub(1).unwrap();
         }
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         let mut state = self.state.lock();
-        match reservation.consumer.can_spill {
+        match reservation.registration.consumer.can_spill {
             true => state.spillable += additional,
             false => state.unspillable += additional,
         }
@@ -159,7 +163,7 @@ impl MemoryPool for FairSpillPool {
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         let mut state = self.state.lock();
-        match reservation.consumer.can_spill {
+        match reservation.registration.consumer.can_spill {
             true => state.spillable -= shrink,
             false => state.unspillable -= shrink,
         }
@@ -168,7 +172,7 @@ impl MemoryPool for FairSpillPool {
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         let mut state = self.state.lock();
 
-        match reservation.consumer.can_spill {
+        match reservation.registration.consumer.can_spill {
             true => {
                 // The total amount of memory available to spilling consumers
                 let spill_available = self.pool_size.saturating_sub(state.unspillable);
@@ -216,7 +220,7 @@ fn insufficient_capacity_err(
     additional: usize,
     available: usize,
 ) -> DataFusionError {
-    DataFusionError::ResourcesExhausted(format!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.consumer.name, reservation.size, available))
+    DataFusionError::ResourcesExhausted(format!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", additional, reservation.registration.consumer.name, reservation.size, available))
 }
 
 #[cfg(test)]

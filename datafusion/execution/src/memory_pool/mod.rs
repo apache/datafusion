@@ -90,10 +90,27 @@ impl MemoryConsumer {
     pub fn register(self, pool: &Arc<dyn MemoryPool>) -> MemoryReservation {
         pool.register(&self);
         MemoryReservation {
-            consumer: self,
+            registration: Arc::new(MemoryConsumerRegistration {
+                pool: Arc::clone(pool),
+                consumer: self,
+            }),
             size: 0,
-            policy: Arc::clone(pool),
         }
+    }
+}
+
+/// A registration of a [`MemoryConsumer`] with a [`MemoryPool`]
+///
+/// Calls [`MemoryPool::unregister`] on drop
+#[derive(Debug)]
+struct MemoryConsumerRegistration {
+    pool: Arc<dyn MemoryPool>,
+    consumer: MemoryConsumer,
+}
+
+impl Drop for MemoryConsumerRegistration {
+    fn drop(&mut self) {
+        self.pool.unregister(&self.consumer);
     }
 }
 
@@ -101,9 +118,8 @@ impl MemoryConsumer {
 /// that is freed back to the pool on drop
 #[derive(Debug)]
 pub struct MemoryReservation {
-    consumer: MemoryConsumer,
+    registration: Arc<MemoryConsumerRegistration>,
     size: usize,
-    policy: Arc<dyn MemoryPool>,
 }
 
 impl MemoryReservation {
@@ -128,7 +144,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&mut self, capacity: usize) {
         let new_size = self.size.checked_sub(capacity).unwrap();
-        self.policy.shrink(self, capacity);
+        self.registration.pool.shrink(self, capacity);
         self.size = new_size
     }
 
@@ -155,22 +171,52 @@ impl MemoryReservation {
 
     /// Increase the size of this reservation by `capacity` bytes
     pub fn grow(&mut self, capacity: usize) {
-        self.policy.grow(self, capacity);
+        self.registration.pool.grow(self, capacity);
         self.size += capacity;
     }
 
     /// Try to increase the size of this reservation by `capacity` bytes
     pub fn try_grow(&mut self, capacity: usize) -> Result<()> {
-        self.policy.try_grow(self, capacity)?;
+        self.registration.pool.try_grow(self, capacity)?;
         self.size += capacity;
         Ok(())
+    }
+
+    /// Splits off `capacity` bytes from this [`MemoryReservation`] into
+    /// a new [`MemoryReservation`] with the same [`MemoryConsumer`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` exceeds [`Self::size`]
+    pub fn split(&mut self, capacity: usize) -> Result<MemoryReservation> {
+        self.size = self.size.checked_sub(capacity).unwrap();
+        Ok(Self {
+            size: capacity,
+            registration: self.registration.clone(),
+        })
+    }
+
+    /// Returns a new empty [`MemoryReservation`] with the same [`MemoryConsumer`]
+    pub fn split_empty(&self) -> Self {
+        Self {
+            size: 0,
+            registration: self.registration.clone(),
+        }
+    }
+
+    /// Splits off all the bytes from this [`MemoryReservation`] into
+    /// a new [`MemoryReservation`] with the same [`MemoryConsumer`]
+    pub fn take(&mut self) -> MemoryReservation {
+        Self {
+            size: std::mem::take(&mut self.size),
+            registration: self.registration.clone(),
+        }
     }
 }
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
         self.free();
-        self.policy.unregister(&self.consumer);
     }
 }
 

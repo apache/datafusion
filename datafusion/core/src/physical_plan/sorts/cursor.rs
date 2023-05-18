@@ -21,6 +21,7 @@ use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::{Row, Rows};
 use arrow_array::types::ByteArrayType;
 use arrow_array::{Array, ArrowPrimitiveType, GenericByteArray, PrimitiveArray};
+use datafusion_execution::memory_pool::MemoryReservation;
 use std::cmp::Ordering;
 
 /// A [`Cursor`] for [`Rows`]
@@ -29,6 +30,9 @@ pub struct RowCursor {
     num_rows: usize,
 
     rows: Rows,
+
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
 }
 
 impl std::fmt::Debug for RowCursor {
@@ -41,12 +45,13 @@ impl std::fmt::Debug for RowCursor {
 }
 
 impl RowCursor {
-    /// Create a new SortKeyCursor
-    pub fn new(rows: Rows) -> Self {
+    /// Create a new SortKeyCursor from `rows` and the associated `reservation`
+    pub fn new(rows: Rows, reservation: MemoryReservation) -> Self {
         Self {
             cur_row: 0,
             num_rows: rows.num_rows(),
             rows,
+            reservation,
         }
     }
 

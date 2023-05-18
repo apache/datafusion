@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use log::{debug, trace};
 
 use crate::error::{DataFusionError, Result};
@@ -165,6 +166,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         let schema = self.schema();
 
+        let reservation =
+            MemoryConsumer::new(format!("SortPreservingMergeExec[{partition}]"))
+                .register(&context.runtime_env().memory_pool);
+
         match input_partitions {
             0 => Err(DataFusionError::Internal(
                 "SortPreservingMergeExec requires at least one input partition"
@@ -192,6 +197,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     &self.expr,
                     BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
+                    reservation,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -810,6 +816,8 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
+        let reservation =
+            MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
 
         let merge_stream = streaming_merge(
             streams,
@@ -817,6 +825,7 @@ mod tests {
             sort.as_slice(),
             BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
+            reservation,
         )
         .unwrap();
 

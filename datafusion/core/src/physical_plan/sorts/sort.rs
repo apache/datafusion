@@ -55,6 +55,9 @@ use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
 
+/// How much memory to reserve for performing in-memory sorts
+const EXTERNAL_SORTER_MERGE_RESERVATION: usize = 10 * 1024 * 1024;
+
 struct ExternalSorterMetrics {
     /// metrics
     baseline: BaselineMetrics,
@@ -94,8 +97,10 @@ struct ExternalSorter {
     expr: Arc<[PhysicalSortExpr]>,
     metrics: ExternalSorterMetrics,
     fetch: Option<usize>,
+    /// Reservation for in_mem_batches
     reservation: MemoryReservation,
-    partition_id: usize,
+    /// Reservation for in memory sorting of batches
+    merge_reservation: MemoryReservation,
     runtime: Arc<RuntimeEnv>,
     batch_size: usize,
 }
@@ -115,6 +120,12 @@ impl ExternalSorter {
             .with_can_spill(true)
             .register(&runtime.memory_pool);
 
+        let mut merge_reservation =
+            MemoryConsumer::new(format!("ExternalSorterMerge[{partition_id}]"))
+                .register(&runtime.memory_pool);
+
+        merge_reservation.resize(EXTERNAL_SORTER_MERGE_RESERVATION);
+
         Self {
             schema,
             in_mem_batches: vec![],
@@ -124,7 +135,7 @@ impl ExternalSorter {
             metrics,
             fetch,
             reservation,
-            partition_id,
+            merge_reservation,
             runtime,
             batch_size,
         }
@@ -189,12 +200,10 @@ impl ExternalSorter {
                 &self.expr,
                 self.metrics.baseline.clone(),
                 self.batch_size,
+                self.reservation.split_empty(),
             )
         } else if !self.in_mem_batches.is_empty() {
-            let result = self.in_mem_sort_stream(self.metrics.baseline.clone());
-            // Report to the memory manager we are no longer using memory
-            self.reservation.free();
-            result
+            self.in_mem_sort_stream(self.metrics.baseline.clone())
         } else {
             Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
         }
@@ -238,6 +247,9 @@ impl ExternalSorter {
             return Ok(());
         }
 
+        // Release the memory reserved for merge
+        self.merge_reservation.free();
+
         self.in_mem_batches = self
             .in_mem_sort_stream(self.metrics.baseline.intermediate())?
             .try_collect()
@@ -249,7 +261,11 @@ impl ExternalSorter {
             .map(|x| x.get_array_memory_size())
             .sum();
 
-        self.reservation.resize(size);
+        // Reserve headroom for next sort
+        self.merge_reservation
+            .resize(EXTERNAL_SORTER_MERGE_RESERVATION);
+
+        self.reservation.try_resize(size)?;
         self.in_mem_batches_sorted = true;
         Ok(())
     }
@@ -262,9 +278,8 @@ impl ExternalSorter {
         assert_ne!(self.in_mem_batches.len(), 0);
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.remove(0);
-            let stream = self.sort_batch_stream(batch, metrics)?;
-            self.in_mem_batches.clear();
-            return Ok(stream);
+            let reservation = self.reservation.take();
+            return self.sort_batch_stream(batch, metrics, reservation);
         }
 
         // If less than 1MB of in-memory data, concatenate and sort in place
@@ -274,14 +289,19 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
-            return self.sort_batch_stream(batch, metrics);
+            self.reservation.try_resize(batch.get_array_memory_size())?;
+            let reservation = self.reservation.take();
+            return self.sort_batch_stream(batch, metrics, reservation);
         }
 
         let streams = std::mem::take(&mut self.in_mem_batches)
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
-                Ok(spawn_buffered(self.sort_batch_stream(batch, metrics)?, 1))
+                let reservation =
+                    self.reservation.split(batch.get_array_memory_size())?;
+                let input = self.sort_batch_stream(batch, metrics, reservation)?;
+                Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
 
@@ -293,6 +313,7 @@ impl ExternalSorter {
             &self.expr,
             metrics,
             self.batch_size,
+            self.merge_reservation.split_empty(),
         )
     }
 
@@ -300,15 +321,9 @@ impl ExternalSorter {
         &self,
         batch: RecordBatch,
         metrics: BaselineMetrics,
+        reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let schema = batch.schema();
-
-        let mut reservation =
-            MemoryConsumer::new(format!("sort_batch_stream{}", self.partition_id))
-                .register(&self.runtime.memory_pool);
-
-        // TODO: This should probably be try_grow (#5885)
-        reservation.resize(batch.get_array_memory_size());
 
         let fetch = self.fetch;
         let expressions = self.expr.clone();
@@ -316,7 +331,7 @@ impl ExternalSorter {
             let sorted = sort_batch(&batch, &expressions, fetch)?;
             metrics.record_output(sorted.num_rows());
             drop(batch);
-            reservation.free();
+            drop(reservation);
             Ok(sorted)
         }));
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
@@ -805,8 +820,10 @@ mod tests {
         ];
 
         for (fetch, expect_spillage) in test_options {
-            let config = RuntimeConfig::new()
-                .with_memory_limit(avg_batch_size * (partitions - 1), 1.0);
+            let config = RuntimeConfig::new().with_memory_limit(
+                EXTERNAL_SORTER_MERGE_RESERVATION + avg_batch_size * (partitions - 1),
+                1.0,
+            );
             let runtime = Arc::new(RuntimeEnv::new(config)?);
             let session_ctx =
                 SessionContext::with_config_rt(SessionConfig::new(), runtime);
