@@ -2921,8 +2921,8 @@ mod tmp_tests {
 
         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
         // FROM annotated_data_infinite";
-       //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
-       // FROM annotated_data_infinite";
+        //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+        // FROM annotated_data_infinite";
 
         let sql = "SELECT LAST_VALUE(inc_col) OVER() as last
        FROM annotated_data_infinite";
