@@ -43,6 +43,7 @@ impl FirstAgg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
+        println!("first agg init");
         Self {
             name: name.into(),
             data_type,
@@ -182,6 +183,7 @@ impl LastAgg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
+        println!("last agg init");
         Self {
             name: name.into(),
             data_type,
@@ -259,6 +261,7 @@ struct LastAccumulator {
 impl LastAccumulator {
     /// new Last accumulator
     pub fn try_new(data_type: &DataType) -> Result<Self> {
+        println!("last accumulator init");
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
             count: 0,

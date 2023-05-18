@@ -2921,7 +2921,10 @@ mod tmp_tests {
 
         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
         // FROM annotated_data_infinite";
-        let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+       //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+       // FROM annotated_data_infinite";
+
+        let sql = "SELECT LAST_VALUE(inc_col) OVER() as last
        FROM annotated_data_infinite";
 
         let msg = format!("Creating logical plan for '{sql}'");
@@ -2930,8 +2933,8 @@ mod tmp_tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             vec![
-                "ProjectionExec: expr=[LAST_VALUE(annotated_data_infinite.inc_col) ORDER BY [annotated_data_infinite.ts ASC NULLS LAST]@0 as last]",
-                "  AggregateExec: mode=Single, gby=[], aggr=[LAST_VALUE(annotated_data_infinite.inc_col)]",
+                "ProjectionExec: expr=[LAST_VALUE(annotated_data_infinite.inc_col) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as last]",
+                "  WindowAggExec: wdw=[LAST_VALUE(annotated_data_infinite.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data_infinite.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
             ]
         };
 
