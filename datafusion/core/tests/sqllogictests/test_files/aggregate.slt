@@ -1838,3 +1838,33 @@ select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 ----
 4
 5
+
+# bool aggregtion
+statement ok
+CREATE TABLE value_bool(x boolean, g int) AS VALUES (NULL, 0), (false, 0), (true, 0), (false, 1), (true, 2), (NULL, 3);
+
+query B
+select min(x) from value_bool;
+----
+false
+
+query B
+select max(x) from value_bool;
+----
+true
+
+query B
+select min(x) from value_bool group by g order by g;
+----
+false
+false
+true
+NULL
+
+query B
+select max(x) from value_bool group by g order by g;
+----
+true
+false
+true
+NULL

@@ -124,6 +124,25 @@ impl ListingTableUrl {
         self.url.scheme()
     }
 
+    /// Return the prefix from which to list files
+    pub fn prefix(&self) -> &Path {
+        &self.prefix
+    }
+
+    /// Returns `true` if `path` matches this [`ListingTableUrl`]
+    pub fn contains(&self, path: &Path) -> bool {
+        match self.strip_prefix(path) {
+            Some(mut segments) => match &self.glob {
+                Some(glob) => {
+                    let stripped = segments.join("/");
+                    glob.matches(&stripped)
+                }
+                None => true,
+            },
+            None => false,
+        }
+    }
+
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
     pub(crate) fn strip_prefix<'a, 'b: 'a>(
@@ -131,12 +150,11 @@ impl ListingTableUrl {
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
         use object_store::path::DELIMITER;
-        let path: &str = path.as_ref();
-        let stripped = match self.prefix.as_ref() {
-            "" => path,
-            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
-        };
-        Some(stripped.split(DELIMITER))
+        let mut stripped = path.as_ref().strip_prefix(self.prefix.as_ref())?;
+        if !stripped.is_empty() && !self.prefix.as_ref().is_empty() {
+            stripped = stripped.strip_prefix(DELIMITER)?;
+        }
+        Some(stripped.split_terminator(DELIMITER))
     }
 
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
@@ -158,17 +176,7 @@ impl ListingTableUrl {
             .try_filter(move |meta| {
                 let path = &meta.location;
                 let extension_match = path.as_ref().ends_with(file_extension);
-                let glob_match = match &self.glob {
-                    Some(glob) => match self.strip_prefix(path) {
-                        Some(mut segments) => {
-                            let stripped = segments.join("/");
-                            glob.matches(&stripped)
-                        }
-                        None => false,
-                    },
-                    None => true,
-                };
-
+                let glob_match = self.contains(path);
                 futures::future::ready(extension_match && glob_match)
             })
             .boxed()
@@ -253,6 +261,10 @@ mod tests {
         let url = ListingTableUrl::parse("file:///foo").unwrap();
         let child = Path::parse("/foob/bar").unwrap();
         assert!(url.strip_prefix(&child).is_none());
+
+        let url = ListingTableUrl::parse("file:///foo/file").unwrap();
+        let child = Path::parse("/foo/file").unwrap();
+        assert_eq!(url.strip_prefix(&child).unwrap().count(), 0);
 
         let url = ListingTableUrl::parse("file:///foo/ bar").unwrap();
         assert_eq!(url.prefix.as_ref(), "foo/ bar");
