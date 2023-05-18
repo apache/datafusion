@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::prelude::AvroReadOptions;
 use datafusion::{
     arrow::{
         array::{
@@ -29,9 +30,8 @@ use datafusion::{
     test_util,
 };
 use std::sync::Arc;
-use datafusion::prelude::AvroReadOptions;
 
-use crate::{TestContext, utils};
+use crate::{utils, TestContext};
 
 pub async fn register_avro_tables(ctx: &mut TestContext) {
     register_avro_test_data(ctx).await;
@@ -49,18 +49,19 @@ async fn register_avro_test_data(ctx: &mut TestContext) {
         &alltypes_plain_file,
         format!("{}/alltypes_plain1.avro", table_path.display()),
     )
-        .unwrap();
+    .unwrap();
     std::fs::copy(
         &alltypes_plain_file,
         format!("{}/alltypes_plain2.avro", table_path.display()),
     )
-        .unwrap();
+    .unwrap();
 
-    ctx.session_ctx().register_avro(
-        "alltypes_plain_multi_files",
-        table_path.display().to_string().as_str(),
-        AvroReadOptions::default(),
-    )
+    ctx.session_ctx()
+        .register_avro(
+            "alltypes_plain_multi_files",
+            table_path.display().to_string().as_str(),
+            AvroReadOptions::default(),
+        )
         .await
         .unwrap();
 }

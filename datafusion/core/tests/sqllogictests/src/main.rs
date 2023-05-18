@@ -200,7 +200,10 @@ pub struct TestContext {
 
 impl TestContext {
     fn new(ctx: SessionContext) -> Self {
-        Self { ctx, test_dir: None }
+        Self {
+            ctx,
+            test_dir: None,
+        }
     }
 
     /// Enables the test directory feature. If not enabled,
@@ -214,10 +217,7 @@ impl TestContext {
     /// Returns the path to the test directory. Panics if the test
     /// directory feature is not enabled via `enable_testdir`.
     fn testdir_path(&self) -> &Path {
-        self.test_dir
-            .as_ref()
-            .expect("testdir not enabled")
-            .path()
+        self.test_dir.as_ref().expect("testdir not enabled").path()
     }
 
     /// Returns a reference to the internal SessionContext
@@ -225,7 +225,6 @@ impl TestContext {
         &self.ctx
     }
 }
-
 
 /// Parsed command line options
 struct Options {
