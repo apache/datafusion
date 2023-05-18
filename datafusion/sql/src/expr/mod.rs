@@ -299,8 +299,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(*subquery, schema, planner_context),
 
             SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, planner_context),
-            // SQLExpr::FIRST(first_agg) => self.parse_first_last_agg(FirstLastAgg::First( first_agg), schema, planner_context),
-            // SQLExpr::LAST(last_agg) => self.parse_first_last_agg(FirstLastAgg::Last(last_agg), schema, planner_context),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {sql:?}"

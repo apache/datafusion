@@ -43,9 +43,9 @@ pub enum AggregateFunction {
     ApproxDistinct,
     /// array_agg
     ArrayAgg,
-    /// first
+    /// first_value
     FirstValue,
-    /// last
+    /// last_value
     LastValue,
     /// Variance (Sample)
     Variance,

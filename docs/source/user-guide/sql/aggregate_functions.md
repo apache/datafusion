@@ -36,8 +36,8 @@ Aggregate functions operate on a set of values to compute a single result.
 - [min](#min)
 - [sum](#sum)
 - [array_agg](#array_agg)
-- [first](#first)
-- [last](#last)
+- [first_value](#first_value)
+- [last_value](#last_value)
 
 ### `avg`
 
@@ -207,12 +207,12 @@ array_agg(expression [ORDER BY expression])
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
-### `first`
+### `first_value`
 
 Returns the first entry in aggregation group. If ordering requirement is given, returns the first element of the ordered group.
 
 ```
-first(expression [ORDER BY expression])
+first_value(expression [ORDER BY expression])
 ```
 
 #### Arguments
@@ -220,12 +220,12 @@ first(expression [ORDER BY expression])
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
-### `last`
+### `last_value`
 
 Returns the last entry in aggregation group. If ordering requirement is given, returns the last element of the ordered group.
 
 ```
-last(expression [ORDER BY expression])
+last_value(expression [ORDER BY expression])
 ```
 
 #### Arguments
