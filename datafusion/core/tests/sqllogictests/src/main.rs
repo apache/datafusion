@@ -173,11 +173,11 @@ async fn context_for_test_file(relative_path: &Path) -> TestContext {
     match relative_path.file_name().unwrap().to_str().unwrap() {
         "aggregate.slt" => {
             info!("Registering aggregate tables");
-            setup::register_aggregate_tables(&test_ctx.session_ctx()).await;
+            setup::register_aggregate_tables(test_ctx.session_ctx()).await;
         }
         "scalar.slt" => {
             info!("Registering scalar tables");
-            setup::register_scalar_tables(&test_ctx.session_ctx()).await;
+            setup::register_scalar_tables(test_ctx.session_ctx()).await;
         }
         "avro.slt" => {
             info!("Registering avro tables");
