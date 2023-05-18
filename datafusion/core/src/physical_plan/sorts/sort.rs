@@ -738,7 +738,8 @@ mod tests {
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
         // trigger spill there will be 4 batches with 5.5KB for each
-        let config = RuntimeConfig::new().with_memory_limit(12288, 1.0);
+        let config = RuntimeConfig::new()
+            .with_memory_limit(EXTERNAL_SORTER_MERGE_RESERVATION + 12288, 1.0);
         let runtime = Arc::new(RuntimeEnv::new(config)?);
         let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
 
