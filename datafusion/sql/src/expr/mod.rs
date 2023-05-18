@@ -54,6 +54,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Virtual stack machine to convert SQLExpr to Expr
         // This allows visiting the expr tree in a depth-first manner which
         // produces expressions in postfix notations, i.e. `a + b` => `a b +`.
+        // See https://github.com/apache/arrow-datafusion/issues/1444
         let mut stack: Box<Vec<StackEntry>> =
             Box::new(vec![StackEntry::SQLExpr(Box::new(sql))]);
         let mut eval_stack = Box::<Vec<Expr>>::default();
