@@ -43,10 +43,10 @@ use datafusion_common::cast::as_primitive_array;
 /// Basic query for with a udaf returning a structure
 async fn test_udf_returning_struct() {
     let ctx = udaf_struct_context();
-    let sql = "SELECT first_value(value, time) from t";
+    let sql = "SELECT first(value, time) from t";
     let expected = vec![
         "+------------------------------------------------+",
-        "| first_value(t.value,t.time)                    |",
+        "| first(t.value,t.time)                          |",
         "+------------------------------------------------+",
         "| {value: 2.0, time: 1970-01-01T00:00:00.000002} |",
         "+------------------------------------------------+",
@@ -58,7 +58,7 @@ async fn test_udf_returning_struct() {
 /// Demonstrate extracting the fields from the a structure using a subquery
 async fn test_udf_returning_struct_sq() {
     let ctx = udaf_struct_context();
-    let sql = "select sq.first['value'], sq.first['time'] from (SELECT first_value(value, time) as first from t) as sq";
+    let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
     let expected = vec![
         "+-----------------+----------------------------+",
         "| sq.first[value] | sq.first[time]             |",
@@ -117,7 +117,7 @@ fn register_aggregate(ctx: &mut SessionContext) {
 
     let volatility = Volatility::Immutable;
 
-    let name = "first_value";
+    let name = "first";
 
     let first = AggregateUDF::new(
         name,
