@@ -430,9 +430,7 @@ pub async fn from_substrait_rel(
             )),
         },
         Some(RelType::ExtensionLeaf(extension)) => {
-            let ext_detail = if let Some(detail) = &extension.detail {
-                detail
-            } else {
+            let Some(ext_detail) = &extension.detail else {
                 return Err(DataFusionError::Substrait(
                     "Unexpected empty detail in ExtensionLeafRel".to_string(),
                 ));
@@ -444,9 +442,7 @@ pub async fn from_substrait_rel(
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionSingle(extension)) => {
-            let ext_detail = if let Some(detail) = &extension.detail {
-                detail
-            } else {
+            let Some(ext_detail) = &extension.detail else {
                 return Err(DataFusionError::Substrait(
                     "Unexpected empty detail in ExtensionSingleRel".to_string(),
                 ));
@@ -455,19 +451,17 @@ pub async fn from_substrait_rel(
                 .state()
                 .extension_deserializer()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-            let input_rel = if let Some(input) = &extension.input {
-                input
-            } else {
-                return Err(DataFusionError::Substrait("ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead".to_string()));
+            let Some(input_rel) = &extension.input else {
+                return Err(DataFusionError::Substrait(
+                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead".to_string()
+                ));
             };
             let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
             let plan = plan.from_template(&plan.expressions(), &[input_plan]);
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
         Some(RelType::ExtensionMulti(extension)) => {
-            let ext_detail = if let Some(detail) = &extension.detail {
-                detail
-            } else {
+            let Some(ext_detail) = &extension.detail else {
                 return Err(DataFusionError::Substrait(
                     "Unexpected empty detail in ExtensionSingleRel".to_string(),
                 ));
