@@ -114,6 +114,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
+use crate::execution::options::ArrowReadOptions;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
@@ -844,6 +845,20 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
+    /// Creates a [`DataFrame`] for reading an Arrow data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_arrow<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        options: ArrowReadOptions<'_>,
+    ) -> Result<DataFrame> {
+        self._read_type(table_paths, options).await
+    }
+
     /// Creates an empty DataFrame.
     pub fn read_empty(&self) -> Result<DataFrame> {
         Ok(DataFrame::new(
@@ -1020,6 +1035,27 @@ impl SessionContext {
         name: &str,
         table_path: &str,
         options: AvroReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options = options.to_listing_options(&self.copied_config());
+
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Registers an Arrow file as a table that can be referenced from
+    /// SQL statements executed against this context.
+    pub async fn register_arrow(
+        &self,
+        name: &str,
+        table_path: &str,
+        options: ArrowReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.copied_config());
 
@@ -1360,6 +1396,7 @@ impl SessionState {
         table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("ARROW".into(), Arc::new(ListingTableFactory::new()));
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
@@ -2573,6 +2610,43 @@ mod tests {
         let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
         // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
         assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_sql_returns_error() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_table("test", test::table_with_sequence(1, 1).unwrap())
+            .unwrap();
+        let state = ctx.state();
+
+        // create view
+        let sql = "create view test_view as select * from test";
+        let plan = state.create_logical_plan(sql).await;
+        let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
+        assert!(physical_plan.is_err());
+        assert_eq!(
+            format!("{}", physical_plan.unwrap_err()),
+            "This feature is not implemented: Unsupported logical plan: CreateView"
+        );
+        // // drop view
+        let sql = "drop view test_view";
+        let plan = state.create_logical_plan(sql).await;
+        let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
+        assert!(physical_plan.is_err());
+        assert_eq!(
+            format!("{}", physical_plan.unwrap_err()),
+            "This feature is not implemented: Unsupported logical plan: DropView"
+        );
+        // // drop table
+        let sql = "drop table test";
+        let plan = state.create_logical_plan(sql).await;
+        let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
+        assert!(physical_plan.is_err());
+        assert_eq!(
+            format!("{}", physical_plan.unwrap_err()),
+            "This feature is not implemented: Unsupported logical plan: DropTable"
+        );
         Ok(())
     }
 

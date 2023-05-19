@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 
+use crate::datasource::file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION};
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::file_type::FileCompressionType;
@@ -210,6 +211,52 @@ impl<'a> ParquetReadOptions<'a> {
         table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
+        self
+    }
+}
+
+/// Options that control the reading of ARROW files.
+///
+/// Note this structure is supplied when a datasource is created and
+/// can not not vary from statement to statement. For settings that
+/// can vary statement to statement see
+/// [`ConfigOptions`](crate::config::ConfigOptions).
+#[derive(Clone)]
+pub struct ArrowReadOptions<'a> {
+    /// The data source schema.
+    pub schema: Option<&'a Schema>,
+
+    /// File extension; only files with this extension are selected for data input.
+    /// Defaults to `FileType::ARROW.get_ext().as_str()`.
+    pub file_extension: &'a str,
+
+    /// Partition Columns
+    pub table_partition_cols: Vec<(String, DataType)>,
+}
+
+impl<'a> Default for ArrowReadOptions<'a> {
+    fn default() -> Self {
+        Self {
+            schema: None,
+            file_extension: DEFAULT_ARROW_EXTENSION,
+            table_partition_cols: vec![],
+        }
+    }
+}
+
+impl<'a> ArrowReadOptions<'a> {
+    /// Specify table_partition_cols for partition pruning
+    pub fn table_partition_cols(
+        mut self,
+        table_partition_cols: Vec<(String, DataType)>,
+    ) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Specify schema to use for AVRO read
+    pub fn schema(mut self, schema: &'a Schema) -> Self {
+        self.schema = Some(schema);
         self
     }
 }
@@ -481,6 +528,28 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
         table_path: ListingTableUrl,
     ) -> Result<SchemaRef> {
         self._get_resolved_schema(config, state, table_path, self.schema, self.infinite)
+            .await
+    }
+}
+
+#[async_trait]
+impl ReadOptions<'_> for ArrowReadOptions<'_> {
+    fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+        let file_format = ArrowFormat::default();
+
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(config.target_partitions())
+            .with_table_partition_cols(self.table_partition_cols.clone())
+    }
+
+    async fn get_resolved_schema(
+        &self,
+        config: &SessionConfig,
+        state: SessionState,
+        table_path: ListingTableUrl,
+    ) -> Result<SchemaRef> {
+        self._get_resolved_schema(config, state, table_path, self.schema, false)
             .await
     }
 }

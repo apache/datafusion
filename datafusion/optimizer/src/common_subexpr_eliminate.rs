@@ -880,6 +880,7 @@ mod test {
                 )),
                 vec![inner],
                 None,
+                None,
             ))
         };
 
