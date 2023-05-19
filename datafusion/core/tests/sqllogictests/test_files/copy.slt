@@ -21,15 +21,15 @@ statement ok
 create table source_table(col1 integer, col2 varchar) as values (1, 'Foo'), (2, 'Bar');
 
 # Copy from table
-statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is yet supported
+statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
 COPY source_table  to '/tmp/table.parquet';
 
 # Copy from table with options
-statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is yet supported
+statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55);
 
 # Copy from table with options (and trailing comma)
-statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is yet supported
+statement error DataFusion error: This feature is not implemented: `COPY \.\. TO \.\.` statement is not yet supported
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55, row_group_limit_bytes 9,);
 
 
