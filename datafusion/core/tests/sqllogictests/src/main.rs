@@ -85,7 +85,7 @@ async fn run_tests() -> Result<()> {
             })
         })
         // run up to num_cpus streams in parallel
-        .buffered(num_cpus::get())
+        .buffer_unordered(num_cpus::get())
         .collect()
         .await;
 
