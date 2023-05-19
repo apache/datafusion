@@ -43,6 +43,11 @@ cargo test -p datafusion --test sqllogictests -- information_schema
 cargo test -p datafusion --test sqllogictests -- ddl --complete
 ```
 
+```shell
+# Run ddl.slt, printing debug logging to stdout
+RUST_LOG=debug cargo test -p datafusion --test sqllogictests -- ddl
+```
+
 #### Running tests: Validation Mode
 
 In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the file to the output produced by that run.
