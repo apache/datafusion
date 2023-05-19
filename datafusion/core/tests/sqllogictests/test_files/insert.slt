@@ -199,3 +199,37 @@ ORDER BY c1
 
 statement ok
 drop table table_without_values;
+
+# test_insert_into_with_sort
+
+statement ok
+create table table_without_values(c1 varchar not null);
+
+# verify that the sort order of the insert query is maintained into the
+# insert (there should be a SortExec in the following plan)
+# See https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178 for more background
+query TT
+explain insert into table_without_values select c1 from aggregate_test_100 order by c1;
+----
+logical_plan
+Dml: op=[Insert] table=[table_without_values]
+--Projection: aggregate_test_100.c1 AS c1
+----Sort: aggregate_test_100.c1 ASC NULLS LAST
+------TableScan: aggregate_test_100 projection=[c1]
+physical_plan
+InsertExec: sink=MemoryTable (partitions=1)
+--ProjectionExec: expr=[c1@0 as c1]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+
+query T
+insert into table_without_values select c1 from aggregate_test_100 order by c1;
+----
+100
+
+query I
+select count(*) from table_without_values;
+----
+100
+
+statement ok
+drop table table_without_values;
