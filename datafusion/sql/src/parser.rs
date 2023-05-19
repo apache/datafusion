@@ -163,6 +163,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
     pub file_compression_type: CompressionTypeVariant,
+    /// Infinite streams?
+    pub unbounded: bool,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -406,7 +408,10 @@ impl<'a> DFParser<'a> {
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external_table()
+            self.parse_create_external_table(false)
+        } else if self.parser.parse_keyword(Keyword::UNBOUNDED) {
+            self.parser.expect_keyword(Keyword::EXTERNAL)?;
+            self.parse_create_external_table(true)
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
@@ -557,7 +562,10 @@ impl<'a> DFParser<'a> {
         })
     }
 
-    fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
+    fn parse_create_external_table(
+        &mut self,
+        unbounded: bool,
+    ) -> Result<Statement, ParserError> {
         self.parser.expect_keyword(Keyword::TABLE)?;
         let if_not_exists =
             self.parser
@@ -588,39 +596,72 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if self.parser.parse_keyword(Keyword::STORED) {
-                self.parser.expect_keyword(Keyword::AS)?;
-                ensure_not_set(&builder.file_type, "STORED AS")?;
-                builder.file_type = Some(self.parse_file_format()?);
-            } else if self.parser.parse_keyword(Keyword::LOCATION) {
-                ensure_not_set(&builder.location, "LOCATION")?;
-                builder.location = Some(self.parser.parse_literal_string()?);
-            } else if self.parser.parse_keyword(Keyword::WITH) {
-                if self.parser.parse_keyword(Keyword::ORDER) {
-                    ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
-                    builder.order_exprs = Some(self.parse_order_by_exprs()?);
-                } else {
-                    self.parser.expect_keyword(Keyword::HEADER)?;
-                    self.parser.expect_keyword(Keyword::ROW)?;
-                    ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
-                    builder.has_header = Some(true);
+            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
+                Keyword::STORED,
+                Keyword::LOCATION,
+                Keyword::WITH,
+                Keyword::DELIMITER,
+                Keyword::COMPRESSION,
+                Keyword::PARTITIONED,
+                Keyword::OPTIONS,
+            ]) {
+                match keyword {
+                    Keyword::STORED => {
+                        self.parser.expect_keyword(Keyword::AS)?;
+                        ensure_not_set(&builder.file_type, "STORED AS")?;
+                        builder.file_type = Some(self.parse_file_format()?);
+                    }
+                    Keyword::LOCATION => {
+                        ensure_not_set(&builder.location, "LOCATION")?;
+                        builder.location = Some(self.parser.parse_literal_string()?);
+                    }
+                    Keyword::WITH => {
+                        if self.parser.parse_keyword(Keyword::ORDER) {
+                            ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
+                            builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                        } else {
+                            self.parser.expect_keyword(Keyword::HEADER)?;
+                            self.parser.expect_keyword(Keyword::ROW)?;
+                            ensure_not_set(&builder.has_header, "WITH HEADER ROW")?;
+                            builder.has_header = Some(true);
+                        }
+                    }
+                    Keyword::DELIMITER => {
+                        ensure_not_set(&builder.delimiter, "DELIMITER")?;
+                        builder.delimiter = Some(self.parse_delimiter()?);
+                    }
+                    Keyword::COMPRESSION => {
+                        self.parser.expect_keyword(Keyword::TYPE)?;
+                        ensure_not_set(
+                            &builder.file_compression_type,
+                            "COMPRESSION TYPE",
+                        )?;
+                        builder.file_compression_type =
+                            Some(self.parse_file_compression_type()?);
+                    }
+                    Keyword::PARTITIONED => {
+                        self.parser.expect_keyword(Keyword::BY)?;
+                        ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
+                        builder.table_partition_cols = Some(self.parse_partitions()?);
+                    }
+                    Keyword::OPTIONS => {
+                        ensure_not_set(&builder.options, "OPTIONS")?;
+                        builder.options = Some(self.parse_string_options()?);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
                 }
-            } else if self.parser.parse_keyword(Keyword::DELIMITER) {
-                ensure_not_set(&builder.delimiter, "DELIMITER")?;
-                builder.delimiter = Some(self.parse_delimiter()?);
-            } else if self.parser.parse_keyword(Keyword::COMPRESSION) {
-                self.parser.expect_keyword(Keyword::TYPE)?;
-                ensure_not_set(&builder.file_compression_type, "COMPRESSION TYPE")?;
-                builder.file_compression_type = Some(self.parse_file_compression_type()?);
-            } else if self.parser.parse_keyword(Keyword::PARTITIONED) {
-                self.parser.expect_keyword(Keyword::BY)?;
-                ensure_not_set(&builder.table_partition_cols, "PARTITIONED BY")?;
-                builder.table_partition_cols = Some(self.parse_partitions()?)
-            } else if self.parser.parse_keyword(Keyword::OPTIONS) {
-                ensure_not_set(&builder.options, "OPTIONS")?;
-                builder.options = Some(self.parse_string_options()?);
             } else {
-                break;
+                let token = self.parser.next_token();
+                if token == Token::EOF || token == Token::SemiColon {
+                    break;
+                } else {
+                    return Err(ParserError::ParserError(format!(
+                        "Unexpected token {}",
+                        token
+                    )));
+                }
             }
         }
 
@@ -649,6 +690,7 @@ impl<'a> DFParser<'a> {
             file_compression_type: builder
                 .file_compression_type
                 .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
+            unbounded,
             options: builder.options.unwrap_or(HashMap::new()),
         };
         Ok(Statement::CreateExternalTable(create))
@@ -799,6 +841,44 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: leading space
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'     ";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(None))],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            unbounded: false,
+            options: HashMap::new(),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: leading space + semicolon
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'      ;";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(None))],
+            file_type: "CSV".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -817,6 +897,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -835,6 +916,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -856,6 +938,7 @@ mod tests {
                 order_exprs: vec![],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
+                unbounded: false,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -882,6 +965,7 @@ mod tests {
                 file_compression_type: CompressionTypeVariant::from_str(
                     file_compression_type,
                 )?,
+                unbounded: false,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -900,6 +984,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -917,6 +1002,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -934,6 +1020,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -952,6 +1039,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: true,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -975,6 +1063,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::from([("k1".into(), "v1".into())]),
         });
         expect_parse_ok(sql, expected)?;
@@ -993,6 +1082,7 @@ mod tests {
             order_exprs: vec![],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::from([
                 ("k1".into(), "v1".into()),
                 ("k2".into(), "v2".into()),
@@ -1040,6 +1130,7 @@ mod tests {
                 }],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
+                unbounded: false,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -1079,6 +1170,7 @@ mod tests {
             ],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -1114,13 +1206,14 @@ mod tests {
             }],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
+            unbounded: false,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
         // Most complete CREATE EXTERNAL TABLE statement possible
         let sql = "
-            CREATE EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
+            CREATE UNBOUNDED EXTERNAL TABLE IF NOT EXISTS t (c1 int, c2 float)
             STORED AS PARQUET
             DELIMITER '*'
             WITH HEADER ROW
@@ -1158,6 +1251,7 @@ mod tests {
             }],
             if_not_exists: true,
             file_compression_type: CompressionTypeVariant::ZSTD,
+            unbounded: true,
             options: HashMap::from([
                 ("ROW_GROUP_SIZE".into(), "1024".into()),
                 ("TRUNCATE".into(), "NO".into()),
