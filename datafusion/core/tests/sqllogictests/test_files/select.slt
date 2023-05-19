@@ -300,29 +300,29 @@ false
 
 # Binary Expression for Binary
 statement ok
-CREATE TABLE t as select arrow_cast('Bar', 'Binary') as column1, 'B%' as column2;
+CREATE TABLE binary_t as select arrow_cast('Bar', 'Binary') as column1, 'B%' as column2;
 
 query B
-select column1 is distinct from column2 from t;
+select column1 is distinct from column2 from binary_t;
 ----
 true
 
 query B
-select column1 is not distinct from column2 from t;
+select column1 is not distinct from column2 from binary_t;
 ----
 false
 
 # Binary Expression for LargeBinary
 statement ok
-CREATE TABLE t as select arrow_cast('Bar', 'LargeBinary') as column1, 'B%' as column2;
+CREATE TABLE large_binary_t as select arrow_cast('Bar', 'LargeBinary') as column1, 'B%' as column2;
 
 query B
-select column1 is distinct from column2 from t;
+select column1 is distinct from column2 from large_binary_t;
 ----
 true
 
 query B
-select column1 is not distinct from column2 from t;
+select column1 is not distinct from column2 from large_binary_t;
 ----
 false
 
