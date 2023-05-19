@@ -399,7 +399,11 @@ impl<'a> DFParser<'a> {
             Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
             Token::Number(ref n, l) => match n.parse() {
                 Ok(n) => Ok(Value::Number(n, l)),
-                Err(e) => parser_err!(format!("Could not parse '{n}' as number: {e}")),
+                // The tokenizer should have ensured `n` is an integer
+                // so this should not be possible
+                Err(e) => parser_err!(format!(
+                    "Unexpected error: could not parse '{n}' as number: {e}"
+                )),
             },
             _ => self.parser.expected("string or numeric value", next_token),
         }
