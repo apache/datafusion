@@ -28,6 +28,7 @@ use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use core::fmt;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::StreamExt;
 use std::any::Any;
 use std::fmt::{Debug, Display};
@@ -106,6 +107,19 @@ impl ExecutionPlan for InsertExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        // Require that the InsertExec gets the data in the order the
+        // input produced it (otherwise the optimizer may chose to reorder
+        // the input which could result in unintended / poor UX)
+        //
+        // More rationale:
+        // https://github.com/apache/arrow-datafusion/pull/6354#discussion_r1195284178
+        vec![self
+            .input
+            .output_ordering()
+            .map(PhysicalSortRequirement::from_sort_exprs)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
