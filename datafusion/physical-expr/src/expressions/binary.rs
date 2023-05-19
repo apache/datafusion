@@ -1360,16 +1360,16 @@ pub fn resolve_temporal_op(
 }
 
 pub fn resolve_temporal_op_scalar(
-    lhs: &ArrayRef,
+    arr: &ArrayRef,
     sign: i32,
-    rhs: &ScalarValue,
-    commute: bool,
+    scalar: &ScalarValue,
+    swap: bool,
 ) -> Result<ArrayRef> {
-    match (sign, commute) {
-        (1, false) => add_dyn_temporal_right_scalar(lhs, rhs),
-        (1, true) => add_dyn_temporal_left_scalar(rhs, lhs),
-        (-1, false) => subtract_dyn_temporal_right_scalar(lhs, rhs),
-        (-1, true) => subtract_dyn_temporal_left_scalar(rhs, lhs),
+    match (sign, swap) {
+        (1, false) => add_dyn_temporal_right_scalar(arr, scalar),
+        (1, true) => add_dyn_temporal_left_scalar(scalar, arr),
+        (-1, false) => subtract_dyn_temporal_right_scalar(arr, scalar),
+        (-1, true) => subtract_dyn_temporal_left_scalar(scalar, arr),
         _ => Err(DataFusionError::Internal(
             "Undefined operation for temporal types".to_string(),
         )),
@@ -1544,7 +1544,7 @@ pub fn scalar_ts_sub_ts(scalar: &ScalarValue, array: &ArrayRef) -> Result<ArrayR
     Ok(ret)
 }
 
-macro_rules! sub_timestamp_interval_macro {
+macro_rules! op_timestamp_interval_macro {
     ($array:expr, $as_timestamp:expr, $ts_type:ty, $fn_op:expr, $scalar:expr, $sign:expr, $tz:expr) => {{
         let array = $as_timestamp(&$array)?;
         let ret: PrimitiveArray<$ts_type> =
@@ -1554,7 +1554,7 @@ macro_rules! sub_timestamp_interval_macro {
         Arc::new(ret.with_timezone_opt($tz.clone())) as ArrayRef
     }};
 }
-/// This function handles the Timestamp - Interval operations,
+/// This function handles the Timestamp -/+ Interval operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an array.
 pub fn ts_op_scalar_interval(
@@ -1564,7 +1564,7 @@ pub fn ts_op_scalar_interval(
 ) -> Result<ArrayRef> {
     let ret = match array.data_type() {
         DataType::Timestamp(TimeUnit::Second, tz) => {
-            sub_timestamp_interval_macro!(
+            op_timestamp_interval_macro!(
                 array,
                 as_timestamp_second_array,
                 TimestampSecondType,
@@ -1575,7 +1575,7 @@ pub fn ts_op_scalar_interval(
             )
         }
         DataType::Timestamp(TimeUnit::Millisecond, tz) => {
-            sub_timestamp_interval_macro!(
+            op_timestamp_interval_macro!(
                 array,
                 as_timestamp_millisecond_array,
                 TimestampMillisecondType,
@@ -1586,7 +1586,7 @@ pub fn ts_op_scalar_interval(
             )
         }
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-            sub_timestamp_interval_macro!(
+            op_timestamp_interval_macro!(
                 array,
                 as_timestamp_microsecond_array,
                 TimestampMicrosecondType,
@@ -1597,7 +1597,7 @@ pub fn ts_op_scalar_interval(
             )
         }
         DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            sub_timestamp_interval_macro!(
+            op_timestamp_interval_macro!(
                 array,
                 as_timestamp_nanosecond_array,
                 TimestampNanosecondType,
@@ -1614,7 +1614,7 @@ pub fn ts_op_scalar_interval(
     };
     Ok(ret)
 }
-/// This function handles the Timestamp - Interval operations,
+/// This function handles the Timestamp -/+ Interval operations,
 /// where the first one is a scalar, and the second one is an array,
 /// hence the result is also an array.
 pub fn scalar_ts_op_interval(
@@ -1691,7 +1691,7 @@ pub fn scalar_ts_op_interval(
     Ok(ret)
 }
 
-macro_rules! sub_interval_macro {
+macro_rules! op_interval_macro {
     ($array:expr, $as_interval:expr, $interval_type:ty, $fn_op:expr, $scalar:expr, $sign:expr) => {{
         let array = $as_interval(&$array)?;
         let ret: PrimitiveArray<$interval_type> =
@@ -1699,7 +1699,7 @@ macro_rules! sub_interval_macro {
         Arc::new(ret) as ArrayRef
     }};
 }
-macro_rules! sub_interval_cross_macro {
+macro_rules! op_interval_cross_macro {
     ($array:expr, $as_interval:expr, $commute:expr, $fn_op:expr, $scalar:expr, $sign:expr, $t1:ty, $t2:ty) => {{
         let array = $as_interval(&$array)?;
         let ret: PrimitiveArray<IntervalMonthDayNanoType> = if $commute {
@@ -1714,7 +1714,7 @@ macro_rules! sub_interval_cross_macro {
         Arc::new(ret) as ArrayRef
     }};
 }
-/// This function handles the Interval - Interval operations,
+/// This function handles the Interval -/+ Interval operations,
 /// where the first one is an array, and the second one is a scalar,
 /// hence the result is also an interval array.
 pub fn interval_op_scalar_interval(
@@ -1727,7 +1727,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::YearMonth),
             ScalarValue::IntervalYearMonth(Some(rhs)),
         ) => {
-            sub_interval_macro!(
+            op_interval_macro!(
                 array,
                 as_interval_ym_array,
                 IntervalYearMonthType,
@@ -1740,7 +1740,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::YearMonth),
             ScalarValue::IntervalDayTime(Some(rhs)),
         ) => {
-            sub_interval_cross_macro!(
+            op_interval_cross_macro!(
                 array,
                 as_interval_ym_array,
                 false,
@@ -1755,7 +1755,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::YearMonth),
             ScalarValue::IntervalMonthDayNano(Some(rhs)),
         ) => {
-            sub_interval_cross_macro!(
+            op_interval_cross_macro!(
                 array,
                 as_interval_ym_array,
                 false,
@@ -1770,7 +1770,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::DayTime),
             ScalarValue::IntervalYearMonth(Some(rhs)),
         ) => {
-            sub_interval_cross_macro!(
+            op_interval_cross_macro!(
                 array,
                 as_interval_dt_array,
                 true,
@@ -1785,7 +1785,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::DayTime),
             ScalarValue::IntervalDayTime(Some(rhs)),
         ) => {
-            sub_interval_macro!(
+            op_interval_macro!(
                 array,
                 as_interval_dt_array,
                 IntervalDayTimeType,
@@ -1798,7 +1798,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::DayTime),
             ScalarValue::IntervalMonthDayNano(Some(rhs)),
         ) => {
-            sub_interval_cross_macro!(
+            op_interval_cross_macro!(
                 array,
                 as_interval_dt_array,
                 false,
@@ -1813,7 +1813,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::MonthDayNano),
             ScalarValue::IntervalYearMonth(Some(rhs)),
         ) => {
-            sub_interval_cross_macro!(
+            op_interval_cross_macro!(
                 array,
                 as_interval_mdn_array,
                 true,
@@ -1828,7 +1828,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::MonthDayNano),
             ScalarValue::IntervalDayTime(Some(rhs)),
         ) => {
-            sub_interval_cross_macro!(
+            op_interval_cross_macro!(
                 array,
                 as_interval_mdn_array,
                 true,
@@ -1843,7 +1843,7 @@ pub fn interval_op_scalar_interval(
             DataType::Interval(IntervalUnit::MonthDayNano),
             ScalarValue::IntervalMonthDayNano(Some(rhs)),
         ) => {
-            sub_interval_macro!(
+            op_interval_macro!(
                 array,
                 as_interval_mdn_array,
                 IntervalMonthDayNanoType,
@@ -1860,7 +1860,7 @@ pub fn interval_op_scalar_interval(
     };
     Ok(ret)
 }
-/// This function handles the Interval - Interval operations,
+/// This function handles the Interval -/+ Interval operations,
 /// where the first one is a scalar, and the second one is an array,
 /// hence the result is also an interval array.
 pub fn scalar_interval_op_interval(

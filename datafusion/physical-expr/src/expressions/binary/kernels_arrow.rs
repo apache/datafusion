@@ -530,7 +530,8 @@ fn scalar_date32_array_interval_op(
     day_op: fn(NaiveDate, Days) -> Option<NaiveDate>,
     month_op: fn(NaiveDate, Months) -> Option<NaiveDate>,
 ) -> Result<ArrayRef> {
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .ok_or_else(|| DataFusionError::Execution("Invalid Date entered".to_string()))?;
     let prior = epoch.add(Duration::days(left as i64));
     match right.data_type() {
         DataType::Interval(IntervalUnit::YearMonth) => {
@@ -555,7 +556,8 @@ fn scalar_date64_array_interval_op(
     day_op: fn(NaiveDate, Days) -> Option<NaiveDate>,
     month_op: fn(NaiveDate, Months) -> Option<NaiveDate>,
 ) -> Result<ArrayRef> {
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .ok_or_else(|| DataFusionError::Execution("Invalid Date entered".to_string()))?;
     let prior = epoch.add(Duration::milliseconds(left));
     match right.data_type() {
         DataType::Interval(IntervalUnit::YearMonth) => {
