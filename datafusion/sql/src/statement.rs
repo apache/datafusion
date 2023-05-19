@@ -542,7 +542,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
         // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
         Err(DataFusionError::NotImplemented(
-            "`COPY .. TO ..` statement is yet supported".to_string(),
+            "`COPY .. TO ..` statement is not yet supported".to_string(),
         ))
     }
 

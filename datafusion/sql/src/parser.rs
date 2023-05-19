@@ -368,7 +368,7 @@ impl<'a> DFParser<'a> {
     /// Parse the next token as a key name for an option list
     ///
     /// Note this is different than [`parse_literal_string`]
-    /// because it it allows keywords as well as other non words
+    /// because it allows keywords as well as other non words
     ///
     /// [`parse_literal_string`]: sqlparser::parser::Parser::parse_literal_string
     pub fn parse_option_key(&mut self) -> Result<String, ParserError> {
@@ -697,9 +697,9 @@ impl<'a> DFParser<'a> {
         Ok(options)
     }
 
-    /// parses (key value) style options into a map of String --> [`Value`].
+    /// Parses (key value) style options into a map of String --> [`Value`].
     ///
-    /// unlike [`Self::parse_string_options`], this method supports
+    /// Unlike [`Self::parse_string_options`], this method supports
     /// keywords as key names as well as multiple value types such as
     /// Numbers as well as Strings.
     fn parse_value_options(&mut self) -> Result<HashMap<String, Value>, ParserError> {
