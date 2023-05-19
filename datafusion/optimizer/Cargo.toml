@@ -43,9 +43,9 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 arrow = { workspace = true }
 async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "24.0.0" }
-datafusion-expr = { path = "../expr", version = "24.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "24.0.0", default-features = false }
+datafusion-common = { path = "../common", version = "25.0.0" }
+datafusion-expr = { path = "../expr", version = "25.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "25.0.0", default-features = false }
 hashbrown = { version = "0.13", features = ["raw"] }
 itertools = "0.10"
 log = "^0.4"
@@ -53,5 +53,5 @@ regex-syntax = "0.7.1"
 
 [dev-dependencies]
 ctor = "0.2.0"
-datafusion-sql = { path = "../sql", version = "24.0.0" }
+datafusion-sql = { path = "../sql", version = "25.0.0" }
 env_logger = "0.10.0"
