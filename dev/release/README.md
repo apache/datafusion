@@ -76,14 +76,35 @@ PyPI.
 
 ### Change Log
 
-We maintain a `CHANGELOG.md` so our users know what has been
-changed between releases.
+We maintain a `CHANGELOG.md` so our users know what has been changed between releases.
 
-The CHANGELOG is managed automatically using
-[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/main/dev/release/update_change_log.sh)
+The changelog is generated using a Python script:
 
-This script creates a changelog using GitHub PRs and issues based on the labels
-associated with them.
+```bash
+$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/arrow-datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+```
+
+This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
+titles starting with `feat:`, `fix:`, or `docs:` . The script will produce output similar to:
+
+```
+Fetching list of commits between 24.0.0 and HEAD
+Fetching pull requests
+Categorizing pull requests
+Generating changelog content
+```
+
+This process is not fully automated, so there are some additional manual steps:
+
+- Add the ASF header to the generated file
+- Add a link to this changelog from the top-level `/datafusion/CHANGELOG.md`
+- Add the following content (copy from the previous version's changelog and update as appropriate:
+
+```
+## [24.0.0](https://github.com/apache/arrow-datafusion/tree/24.0.0) (2023-05-06)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/23.0.0...24.0.0)
+```
 
 ## Prepare release commits and PR
 
