@@ -17,6 +17,7 @@
 
 //! Function module contains typing and signature for built-in and user defined functions.
 
+use crate::function_err::generate_signature_error_msg;
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::type_coercion::functions::data_types;
 use crate::ColumnarValue;
@@ -100,13 +101,16 @@ pub fn return_type(
     // or the execution panics.
 
     if input_expr_types.is_empty() && !fun.supports_zero_argument() {
-        return Err(DataFusionError::Internal(format!(
-            "Builtin scalar function {fun} does not support empty arguments"
+        return Err(DataFusionError::Plan(generate_signature_error_msg(
+            fun,
+            input_expr_types,
         )));
     }
 
     // verify that this is a valid set of data types for this function
-    data_types(input_expr_types, &signature(fun))?;
+    data_types(input_expr_types, &signature(fun)).map_err(|_| {
+        DataFusionError::Plan(generate_signature_error_msg(fun, input_expr_types))
+    })?;
 
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
