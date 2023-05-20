@@ -56,6 +56,7 @@ async fn register_avro_test_data(ctx: &mut TestContext) {
     )
     .unwrap();
 
+    #[cfg(feature = "avro")]
     ctx.session_ctx()
         .register_avro(
             "alltypes_plain_multi_files",
