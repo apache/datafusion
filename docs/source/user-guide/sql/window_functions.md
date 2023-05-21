@@ -26,6 +26,7 @@ Window functions calculate a value for a set of rows within a result set.
 All [aggregate functions](aggregate_functions.md) can be used as window functions.
 
 Examples:
+
 ```sql
     select min(x) over(partition by col1 order by col2) from table
     select avg(x) over(partition by col1 order by col2) from table
@@ -41,6 +42,7 @@ Examples:
 ### `row_number`
 
 Number of the current row within its partition, counting from 1.
+
 ```sql
 row_number() over([partition by expression1] [order by expression2])
 ```
@@ -53,6 +55,7 @@ row_number() over([partition by expression1] [order by expression2])
 ### `rank`
 
 Rank of the current row with gaps; same as row_number of its first peer.
+
 ```sql
 rank() over([partition by expression1] [order by expression2])
 ```
@@ -75,7 +78,6 @@ dense_rank() over([partition by expression1] [order by expression2])
 - **expression1**: The expression by which to split the result set into partitions
 - **expression2**: The expression by which the rows are sorted within partitions
 
-
 ### `ntile`
 
 Integer ranging from 1 to the argument value, dividing the partition as equally as possible.
@@ -90,8 +92,6 @@ ntile(expression1) over([partition by expression2] [order by expression3])
 - **expression2**: The expression by which to split the result set into partitions
 - **expression3**: The expression by which the rows are sorted within partitions
 
-
-
 ## Analytical functions
 
 - [cume_dist](#cume_dist)
@@ -102,11 +102,9 @@ ntile(expression1) over([partition by expression2] [order by expression3])
 - [last_value](#last_value)
 - [nth_value](#nth_value)
 
-
 ### `cume_dist`
 
 Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
-
 
 ```sql
 cume_dist() over([partition by expression1] [order by expression2])
@@ -117,11 +115,9 @@ cume_dist() over([partition by expression1] [order by expression2])
 - **expression1**: The expression by which to split the result set into partitions
 - **expression2**: The expression by which the rows are sorted within partitions
 
-
 ### `percent_rank`
 
 Relative rank of the current row: (rank - 1) / (total rows - 1).
-
 
 ```sql
 percent_rank() over([partition by expression1] [order by expression2])
@@ -131,7 +127,6 @@ percent_rank() over([partition by expression1] [order by expression2])
 
 - **expression1**: The expression by which to split the result set into partitions
 - **expression2**: The expression by which the rows are sorted within partitions
-
 
 ### `lag`
 
@@ -144,11 +139,10 @@ lag(expression1, offset, default) over([partition by expression3] [order by expr
 #### Arguments
 
 - **expression1**: Expression to operate on
-- **offset**: Integer. Specifies how many rows back the value of *expression1* should be retrieved. Defaults to 1.
-- **default**: The default value if the offset is not within the partition. Must be of the same type as *expression1*.
+- **offset**: Integer. Specifies how many rows back the value of _expression1_ should be retrieved. Defaults to 1.
+- **default**: The default value if the offset is not within the partition. Must be of the same type as _expression1_.
 - **expression3**: The expression by which to split the result set into partitions
 - **expression4**: The expression by which the rows are sorted within partitions
-
 
 ### `lead`
 
@@ -161,8 +155,8 @@ lead(expression1, offset default) over([partition by expression2] [order by expr
 #### Arguments
 
 - **expression1**: Expression to operate on
-- **offset**: Integer. Specifies how many rows forward the value of *expression1* should be retrieved. Defaults to 1.
-- **default**: The default value if the offset is not within the partition. Must be of the same type as *expression1*.
+- **offset**: Integer. Specifies how many rows forward the value of _expression1_ should be retrieved. Defaults to 1.
+- **default**: The default value if the offset is not within the partition. Must be of the same type as _expression1_.
 - **expression3**: The expression by which to split the result set into partitions
 - **expression4**: The expression by which the rows are sorted within partitions
 
@@ -180,11 +174,9 @@ first_value(expression1) over([partition by expression2] [order by expression3])
 - **expression2**: The expression by which to split the result set into partitions
 - **expression3**: The expression by which the rows are sorted within partitions
 
-
 ### `last_value`
 
 Returns value evaluated at the row that is the last row of the window frame.
-
 
 ```sql
 last_value(expression1) over([partition by expression2] [order by expression3])
@@ -196,11 +188,9 @@ last_value(expression1) over([partition by expression2] [order by expression3])
 - **expression2**: The expression by which to split the result set into partitions
 - **expression3**: The expression by which the rows are sorted within partitions
 
-
 ### `nth_value`
 
 Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.
-
 
 ```sql
 nth_value(expression1, n) over([partition by expression2] [order by expression3])
@@ -209,9 +199,6 @@ nth_value(expression1, n) over([partition by expression2] [order by expression3]
 #### Arguments
 
 - **expression1**: The name the column of which nth value to retrieve
-- **n**: Integer. Specifies the *n* in nth
+- **n**: Integer. Specifies the _n_ in nth
 - **expression2**: The expression by which to split the result set into partitions
 - **expression3**: The expression by which the rows are sorted within partitions
-
-
-
