@@ -53,6 +53,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
+        if !function.order_by.is_empty() && function.over.is_some() {
+            return Err(DataFusionError::Plan(
+                "Aggregate ORDER BY is not implemented for window functions".to_string(),
+            ));
+        }
+
         // then, window function
         if let Some(window) = function.over.take() {
             let partition_by = window

@@ -426,7 +426,7 @@ impl AggregateExec {
                 .iter()
                 .zip(order_by_expr.into_iter())
                 .map(|(aggr_expr, fn_reqs)| {
-                    // If aggregation function is ordering sensitive, keep ordering requirement as is otherwise ignore requirement
+                    // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
                     if is_ordering_sensitive(aggr_expr) {
                         fn_reqs
                     } else {

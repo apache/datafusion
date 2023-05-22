@@ -3017,6 +3017,12 @@ SELECT a, b, c,
 0 0 3 11 96 11 2 10 36 10 36 11 5 11 9
 0 0 4 9 72 9 NULL 14 45 14 45 9 4 9 9
 
+#fn aggregate order by with window frame
+# in window expressions, aggregate function should not have itself ordering requirement, (requirements should be defined in window clause)
+# hence query below, should return error (Similar to what PostgreSQL does).
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+SELECT SUM(inc_col ORDER BY a DESC) OVER() as last
+       FROM annotated_data_infinite2
 
 statement ok
 drop table annotated_data_finite2
