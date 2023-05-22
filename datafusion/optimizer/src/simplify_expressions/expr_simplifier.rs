@@ -31,7 +31,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarVa
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Volatility,
+    Operator, Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -114,6 +114,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+        let mut or_in_list_simplifier = OrInListSimplifier::new();
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
@@ -121,6 +122,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
+            .rewrite(&mut or_in_list_simplifier)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
@@ -322,6 +324,94 @@ impl<'a> ConstEvaluator<'a> {
             }
             ColumnarValue::Scalar(s) => Ok(s),
         }
+    }
+}
+
+/// Combine multiple OR expressions into a single IN list expression if possible
+///
+/// i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
+struct OrInListSimplifier {}
+
+impl OrInListSimplifier {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl TreeNodeRewriter for OrInListSimplifier {
+    type N = Expr;
+
+    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        match &expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                if *op == Operator::Or {
+                    // TODO: Possible to make this more efficient?
+                    let left = as_inlist(left);
+                    let right = as_inlist(right);
+                    if let (Some(mut left), Some(mut right)) = (left, right) {
+                        if mergeable_inlist(&left, &right) {
+                            let merged_inlist = merge_inlist(&mut left, &mut right);
+                            return Ok(Expr::InList(merged_inlist));
+                        }
+                    }
+                }
+            }
+            _ => {},
+        }
+
+        Ok(expr)
+    }
+}
+
+/// Try to convert an expression to an in-list expression
+fn as_inlist(expr: &Expr) -> Option<InList> {
+    match expr {
+        Expr::InList(inlist) => Some(inlist.clone()),
+        Expr::BinaryExpr(BinaryExpr { left, op, right}) if *op == Operator::Eq => {
+            let unboxed_left = *left.clone();
+            let unboxed_right = *right.clone();
+            match (&unboxed_left, &unboxed_right) {
+                (Expr::Column(_), Expr::Literal(_)) => {
+                    Some(InList {
+                        expr: left.clone(),
+                        list: vec![unboxed_right],
+                        negated: false,
+                    })
+                }
+                (Expr::Literal(_), Expr::Column(_)) => {
+                    Some(InList {
+                        expr: right.clone(),
+                        list: vec![unboxed_left],
+                        negated: false,
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Are two in-list expressions compatible for merging?
+///
+/// Only in-list expressions with the same column and negation status
+fn mergeable_inlist(a: &InList, b: &InList) -> bool {
+    a.expr.try_into_col().is_ok() && b.expr.try_into_col().is_ok()
+        && a.expr == b.expr && a.negated == b.negated
+}
+
+/// Merge two in-list expressions into a single in-list expression
+fn merge_inlist(a: &mut InList, b: &mut InList) -> InList {
+    assert_eq!(a.expr, b.expr);
+
+    let mut list = vec![];
+    list.append(&mut a.list);
+    list.append(&mut b.list);
+
+    InList {
+        expr: a.expr.clone(),
+        list,
+        negated: false,
     }
 }
 
