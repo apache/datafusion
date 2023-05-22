@@ -446,3 +446,30 @@ drop table t1
 
 statement ok
 drop table t2
+
+# test UNION ALL aliases correctly with all aliased
+query TT
+explain select 1 a group by a union all select 2 b union all select 3 c
+----
+logical_plan
+Union
+--Projection: Int64(1) AS a
+----Aggregate: groupBy=[[Int64(1)]], aggr=[[]]
+------EmptyRelation
+--Projection: Int64(2) AS a
+----EmptyRelation
+--Projection: Int64(3) AS a
+----EmptyRelation
+physical_plan
+UnionExec
+--ProjectionExec: expr=[Int64(1)@0 as a]
+----AggregateExec: mode=FinalPartitioned, gby=[Int64(1)@0 as Int64(1)], aggr=[]
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([Column { name: "Int64(1)", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[1 as Int64(1)], aggr=[]
+--------------EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[2 as a]
+----EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[3 as a]
+----EmptyExec: produce_one_row=true
