@@ -33,6 +33,7 @@ use crate::physical_plan::ExecutionPlan;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::utils::ordering_satisfy;
 use datafusion_physical_expr::PhysicalSortExpr;
+use crate::physical_plan::aggregates::AggregateExec;
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
@@ -151,6 +152,11 @@ pub fn is_union(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.as_any().is::<RepartitionExec>()
+}
+
+/// Checks whether the given operator is a [`RepartitionExec`].
+pub fn is_aggregate(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.as_any().is::<AggregateExec>()
 }
 
 #[cfg(test)]

@@ -57,6 +57,7 @@ mod utils;
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{ArrayAgg, FirstAgg, LastAgg};
+use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_requirement};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -474,7 +475,7 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
-        let mut aggregator_requirement = None;
+        let mut aggregator_requirements = [None, None];
         // Ordering requirement makes sense only in Partial and Single modes.
         // In other modes, all groups are collapsed, therefore their input schema
         // can not contain expressions in the requirement.
@@ -497,8 +498,15 @@ impl AggregateExec {
                 || input.equivalence_properties(),
                 || input.ordering_equivalence_properties(),
             )?;
-            aggregator_requirement = requirement
+            let aggregator_requirement = requirement.as_ref()
                 .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
+            let reverse_agg_requirement = if aggr_expr.iter().all(|expr| expr.reverse_expr().is_some()){
+                requirement.map(|reqs| PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&reqs).iter()))
+            } else{
+                None
+            };
+            aggregator_requirements[0] = aggregator_requirement;
+            aggregator_requirements[1] = reverse_agg_requirement;
         }
 
         // construct a map from the input columns to the output columns of the Aggregation
@@ -514,36 +522,48 @@ impl AggregateExec {
         let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
 
         let mut required_input_ordering = None;
-        if let Some(AggregationOrdering {
-            ordering,
-            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
-            // running with bounded memory, without breaking pipeline), then
-            // we append aggregator ordering requirement to the existing
-            // ordering. This way, we can still run with bounded memory.
-            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-            ..
-        }) = &aggregation_ordering
-        {
-            if let Some(aggregator_requirement) = aggregator_requirement {
-                // Get the section of the input ordering that enables us to run in the
-                // FullyOrdered or PartiallyOrdered mode:
-                let requirement_prefix =
-                    if let Some(existing_ordering) = input.output_ordering() {
-                        existing_ordering[0..ordering.len()].to_vec()
-                    } else {
-                        vec![]
-                    };
-                let mut requirement =
-                    PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
-                for req in aggregator_requirement {
-                    if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
-                        requirement.push(req);
+
+        for (idx, aggregator_requirement) in aggregator_requirements.into_iter().enumerate() {
+            if let Some(AggregationOrdering {
+                            ordering,
+                            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
+                            // running with bounded memory, without breaking pipeline), then
+                            // we append aggregator ordering requirement to the existing
+                            // ordering. This way, we can still run with bounded memory.
+                            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
+                            ..
+                        }) = &aggregation_ordering
+            {
+                if let Some(aggregator_requirement) = aggregator_requirement {
+                    // Get the section of the input ordering that enables us to run in the
+                    // FullyOrdered or PartiallyOrdered mode:
+                    let requirement_prefix =
+                        if let Some(existing_ordering) = input.output_ordering() {
+                            existing_ordering[0..ordering.len()].to_vec()
+                        } else {
+                            vec![]
+                        };
+                    let mut requirement =
+                        PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
+                    for req in aggregator_requirement {
+                        if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
+                            requirement.push(req);
+                        }
                     }
+                    required_input_ordering = Some(requirement);
                 }
-                required_input_ordering = Some(requirement);
+            } else {
+                required_input_ordering = aggregator_requirement;
             }
-        } else {
-            required_input_ordering = aggregator_requirement;
+            if ordering_satisfy_requirement(input.output_ordering(), required_input_ordering.as_deref(), || input.equivalence_properties(), || input.ordering_equivalence_properties()) {
+                if idx == 1 {
+                    let res = aggr_expr.iter_mut().map(|elem| {
+                        elem.reverse_expr()
+                    }).collect::<Option<Vec<_>>>();
+                    aggr_expr = res.ok_or_else(|| DataFusionError::Execution("Should have a reverse expression".to_string()))?;
+                }
+                break;
+            }
         }
 
         Ok(AggregateExec {

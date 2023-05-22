@@ -37,11 +37,7 @@
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::sort_pushdown::{pushdown_sorts, SortPushDown};
-use crate::physical_optimizer::utils::{
-    add_sort_above, find_indices, is_coalesce_partitions, is_limit, is_repartition,
-    is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window,
-    merge_and_order_indices, set_difference,
-};
+use crate::physical_optimizer::utils::{add_sort_above, find_indices, is_aggregate, is_coalesce_partitions, is_limit, is_repartition, is_sort, is_sort_preserving_merge, is_sorted, is_union, is_window, merge_and_order_indices, set_difference};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -61,6 +57,7 @@ use datafusion_physical_expr::utils::{
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 use itertools::{concat, izip, Itertools};
 use std::sync::Arc;
+use crate::physical_plan::aggregates::AggregateExec;
 
 /// This rule inspects [`SortExec`]'s in the given physical plan and removes the
 /// ones it can prove unnecessary.
@@ -511,6 +508,12 @@ fn ensure_sorting(
                 return Ok(Transformed::Yes(result));
             }
         }
+    } else if is_aggregate(&plan) {
+        if let Some(tree) = &mut sort_onwards[0] {
+            if let Some(result) = analyze_window_sort_removal(tree, &plan)? {
+                return Ok(Transformed::Yes(result));
+            }
+        }
     } else if is_sort_preserving_merge(&plan)
         && children[0].output_partitioning().partition_count() <= 1
     {
@@ -684,6 +687,113 @@ fn analyze_window_sort_removal(
     }
     Ok(None)
 }
+
+// /// Analyzes a [`AggregateExec`] to determine
+// /// whether it may allow removing a sort.
+// fn analyze_aggregate_sort_removal(
+//     sort_tree: &mut ExecTree,
+//     window_exec: &Arc<dyn ExecutionPlan>,
+// ) -> Result<Option<PlanWithCorrespondingSort>> {
+//     let (aggr_expr, order_by_exprs) = if let Some(exec) =
+//         window_exec.as_any().downcast_ref::<AggregateExec>()
+//     {
+//         (exec.aggr_expr(), &exec.order_by_expr)
+//     }  else {
+//         return Err(DataFusionError::Plan(
+//             "Expects to receive either AggregateExec".to_string(),
+//         ));
+//     };
+//     let partitionby_exprs = window_expr[0].partition_by();
+//     let orderby_sort_keys = window_expr[0].order_by();
+//
+//     // search_flags stores return value of the can_skip_sort.
+//     // `None` case represents `SortExec` cannot be removed.
+//     // `PartitionSearch` mode stores at which mode executor should work to remove
+//     // `SortExec` before it,
+//     // `bool` stores whether or not we need to reverse window expressions to remove `SortExec`.
+//     let mut search_flags = None;
+//     for sort_any in sort_tree.get_leaves() {
+//         // Variable `sort_any` will either be a `SortExec` or a
+//         // `SortPreservingMergeExec`, and both have a single child.
+//         // Therefore, we can use the 0th index without loss of generality.
+//         let sort_input = &sort_any.children()[0];
+//         let flags = can_skip_sort(partitionby_exprs, orderby_sort_keys, sort_input)?;
+//         if flags.is_some() && (search_flags.is_none() || search_flags == flags) {
+//             search_flags = flags;
+//             continue;
+//         }
+//         // We can not skip the sort, or window reversal requirements are not
+//         // uniform; then sort removal is not possible -- we immediately return.
+//         return Ok(None);
+//     }
+//     let (should_reverse, partition_search_mode) = if let Some(search_flags) = search_flags
+//     {
+//         search_flags
+//     } else {
+//         // We can not skip the sort return:
+//         return Ok(None);
+//     };
+//     let is_unbounded = unbounded_output(window_exec);
+//     if !is_unbounded && partition_search_mode != PartitionSearchMode::Sorted {
+//         // Executor has bounded input and `partition_search_mode` is not `PartitionSearchMode::Sorted`
+//         // in this case removing the sort is not helpful, return:
+//         return Ok(None);
+//     };
+//
+//     let new_window_expr = if should_reverse {
+//         window_expr
+//             .iter()
+//             .map(|e| e.get_reverse_expr())
+//             .collect::<Option<Vec<_>>>()
+//     } else {
+//         Some(window_expr.to_vec())
+//     };
+//     if let Some(window_expr) = new_window_expr {
+//         let requires_single_partition = matches!(
+//             window_exec.required_input_distribution()[sort_tree.idx],
+//             Distribution::SinglePartition
+//         );
+//         let mut new_child = remove_corresponding_sort_from_sub_plan(
+//             sort_tree,
+//             requires_single_partition,
+//         )?;
+//         let new_schema = new_child.schema();
+//
+//         let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
+//         // If all window expressions can run with bounded memory, choose the
+//         // bounded window variant:
+//         let new_plan = if uses_bounded_memory {
+//             Arc::new(BoundedWindowAggExec::try_new(
+//                 window_expr,
+//                 new_child,
+//                 new_schema,
+//                 partition_keys.to_vec(),
+//                 partition_search_mode,
+//             )?) as _
+//         } else {
+//             if partition_search_mode != PartitionSearchMode::Sorted {
+//                 // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
+//                 // Hence, if `partition_search_mode` is not `PartitionSearchMode::Sorted` we should convert
+//                 // input ordering such that it can work with PartitionSearchMode::Sorted (add `SortExec`).
+//                 // Effectively `WindowAggExec` works only in PartitionSearchMode::Sorted mode.
+//                 let reqs = window_exec
+//                     .required_input_ordering()
+//                     .swap_remove(0)
+//                     .unwrap_or(vec![]);
+//                 let sort_expr = PhysicalSortRequirement::to_sort_exprs(reqs);
+//                 add_sort_above(&mut new_child, sort_expr)?;
+//             };
+//             Arc::new(WindowAggExec::try_new(
+//                 window_expr,
+//                 new_child,
+//                 new_schema,
+//                 partition_keys.to_vec(),
+//             )?) as _
+//         };
+//         return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
+//     }
+//     Ok(None)
+// }
 
 /// Updates child to remove the unnecessary [`CoalescePartitionsExec`] below it.
 fn update_child_to_remove_coalesce(
@@ -2895,90 +3005,102 @@ mod tests {
     }
 }
 
-// mod tmp_tests {
-//     use crate::assert_batches_eq;
-//     use crate::physical_plan::{collect, displayable, ExecutionPlan};
-//     use crate::prelude::SessionContext;
-//     use datafusion_common::Result;
-//     use datafusion_execution::config::SessionConfig;
-//     use std::sync::Arc;
-//
-//     fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-//         let formatted = displayable(plan.as_ref()).indent().to_string();
-//         let actual: Vec<&str> = formatted.trim().lines().collect();
-//         println!("{:#?}", actual);
-//         Ok(())
-//     }
-//
-//     #[tokio::test]
-//     async fn test_first_value() -> Result<()> {
-//         let config = SessionConfig::new().with_target_partitions(1);
-//         let ctx = SessionContext::with_config(config);
-//         ctx.sql(
-//             "CREATE EXTERNAL TABLE annotated_data_infinite (
-//               ts INTEGER,
-//               inc_col INTEGER,
-//               desc_col INTEGER,
-//             )
-//             STORED AS CSV
-//             WITH HEADER ROW
-//             WITH ORDER (ts ASC)
-//             LOCATION 'tests/data/window_1.csv'",
-//         )
-//         .await?;
-//
-//         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
-//         // FROM annotated_data_infinite";
-//         //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
-//         // FROM annotated_data_infinite";
-//
-//         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first, LAST_VALUE(inc_col ORDER BY ts DESC) as first2
-//         // FROM annotated_data_infinite";
-//
-//         //  let sql = "SELECT ARRAY_AGG(inc_col ORDER BY ts ASC)[1] as first
-//         // FROM annotated_data_infinite";
-//
-//         //  let sql = "SELECT ARRAY_AGG(inc_col ORDER BY ts ASC) as arr, FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
-//         //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2
-//         // FROM annotated_data_infinite";
-//
-//         //  let sql = "SELECT ARRAY_AGG(inc_col ORDER BY ts DESC) as arr, FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
-//         //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2
-//         // FROM annotated_data_infinite";
-//
-//         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
-//         //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2,
-//         //          ARRAY_AGG(inc_col ORDER BY ts ASC) as arr
-//         // FROM annotated_data_infinite";
-//
-//         let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
-//                 LAST_VALUE(inc_col ORDER BY ts DESC) as first2,
-//                 ARRAY_AGG(inc_col ORDER BY ts DESC) as arr
-//        FROM annotated_data_infinite";
-//
-//         let msg = format!("Creating logical plan for '{sql}'");
-//         let dataframe = ctx.sql(sql).await.expect(&msg);
-//         let physical_plan = dataframe.create_physical_plan().await?;
-//
-//         print_plan(&physical_plan)?;
-//         // let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-//         // let expected = {
-//         //     vec![
-//         //         "ProjectionExec: expr=[LAST_VALUE(annotated_data_infinite.inc_col) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as last]",
-//         //         "  WindowAggExec: wdw=[LAST_VALUE(annotated_data_infinite.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data_infinite.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
-//         //     ]
-//         // };
-//         //
-//         // let actual: Vec<&str> = formatted.trim().lines().collect();
-//         // let actual_len = actual.len();
-//         // let actual_trim_last = &actual[..actual_len - 1];
-//         // assert_eq!(
-//         //     expected, actual_trim_last,
-//         //     "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-//         // );
-//         let actual = collect(physical_plan, ctx.task_ctx()).await?;
-//         let expected = vec!["+------+", "| last |", "+------+", "| 305  |", "+------+"];
-//         assert_batches_eq!(expected, &actual);
-//         Ok(())
-//     }
-// }
+mod tmp_tests {
+    use crate::assert_batches_eq;
+    use crate::physical_plan::{collect, displayable, ExecutionPlan};
+    use crate::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
+
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        let formatted = displayable(plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        println!("{:#?}", actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_first_value() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        ctx.sql(
+            "CREATE EXTERNAL TABLE annotated_data_infinite (
+              ts INTEGER,
+              inc_col INTEGER,
+              desc_col INTEGER,
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            WITH ORDER (ts ASC)
+            LOCATION 'tests/data/window_1.csv'",
+        )
+        .await?;
+
+        //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
+        // FROM annotated_data_infinite";
+        //  let sql = "SELECT LAST_VALUE(inc_col ORDER BY ts ASC) as last
+        // FROM annotated_data_infinite";
+
+        //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first, LAST_VALUE(inc_col ORDER BY ts DESC) as first2
+        // FROM annotated_data_infinite";
+
+        //  let sql = "SELECT ARRAY_AGG(inc_col ORDER BY ts ASC)[1] as first
+        // FROM annotated_data_infinite";
+
+        //  let sql = "SELECT ARRAY_AGG(inc_col ORDER BY ts ASC) as arr, FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
+        //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2
+        // FROM annotated_data_infinite";
+
+        //  let sql = "SELECT ARRAY_AGG(inc_col ORDER BY ts DESC) as arr, FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
+        //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2
+        // FROM annotated_data_infinite";
+
+        //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
+        //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2,
+        //          ARRAY_AGG(inc_col ORDER BY ts ASC) as arr
+        // FROM annotated_data_infinite";
+
+       //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
+       //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2,
+       //          ARRAY_AGG(inc_col ORDER BY ts DESC) as arr
+       // FROM annotated_data_infinite";
+
+       //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first,
+       //          LAST_VALUE(inc_col ORDER BY ts DESC) as first2
+       // FROM annotated_data_infinite";
+
+       //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts DESC) as first,
+       //          LAST_VALUE(inc_col ORDER BY ts ASC) as first2
+       // FROM annotated_data_infinite";
+
+        let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts DESC) as first,
+                LAST_VALUE(inc_col ORDER BY ts DESC) as first2
+       FROM annotated_data_infinite";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+
+        print_plan(&physical_plan)?;
+        // let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        // let expected = {
+        //     vec![
+        //         "ProjectionExec: expr=[LAST_VALUE(annotated_data_infinite.inc_col) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as last]",
+        //         "  WindowAggExec: wdw=[LAST_VALUE(annotated_data_infinite.inc_col): Ok(Field { name: \"LAST_VALUE(annotated_data_infinite.inc_col)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
+        //     ]
+        // };
+        //
+        // let actual: Vec<&str> = formatted.trim().lines().collect();
+        // let actual_len = actual.len();
+        // let actual_trim_last = &actual[..actual_len - 1];
+        // assert_eq!(
+        //     expected, actual_trim_last,
+        //     "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+        // );
+        let actual = collect(physical_plan, ctx.task_ctx()).await?;
+        let expected = vec!["+------+", "| last |", "+------+", "| 305  |", "+------+"];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+}
