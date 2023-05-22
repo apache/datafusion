@@ -404,11 +404,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             Statement::Delete {
-                table_name,
+                mut tables,
                 using,
                 selection,
                 returning,
+                from,
             } => {
+                let table_name = match tables.len() {
+                    0 => {
+                        return Err(DataFusionError::NotImplemented(
+                            "DELETE without target table not supported".to_string(),
+                        ))
+                    }
+                    1 => tables.pop().unwrap(),
+                    n => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "DELETE only supports single table, got {n}: {tables:?}"
+                        )))
+                    }
+                };
                 if using.is_some() {
                     Err(DataFusionError::Plan(
                         "Using clause not supported".to_owned(),
@@ -417,6 +431,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if returning.is_some() {
                     Err(DataFusionError::Plan(
                         "Delete-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                if !from.is_empty() {
+                    Err(DataFusionError::Plan(
+                        "DELETE FROM query not yet supported".to_owned(),
                     ))?;
                 }
                 self.delete_to_plan(table_name, selection)
@@ -789,16 +808,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn delete_to_plan(
         &self,
-        table_factor: TableFactor,
+        table_name: ObjectName,
         predicate_expr: Option<Expr>,
     ) -> Result<LogicalPlan> {
-        let table_name = match &table_factor {
-            TableFactor::Table { name, .. } => name.clone(),
-            _ => Err(DataFusionError::Plan(
-                "Cannot delete from non-table relations!".to_string(),
-            ))?,
-        };
-
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self.schema_provider.get_table_provider(table_ref.clone())?;
