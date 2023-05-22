@@ -113,7 +113,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let (fun, args) =
                 self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
             return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun, args, distinct, None,
+                fun, args, distinct, None, None,
             )));
         };
 
@@ -128,7 +128,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(fm, args, None)));
+            return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                fm, args, None, None,
+            )));
         }
 
         // Special case arrow_cast (as its type is dependent on its argument value)

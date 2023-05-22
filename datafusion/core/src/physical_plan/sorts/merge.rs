@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::common::Result;
-use crate::physical_plan::metrics::MemTrackingMetrics;
+use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
 use crate::physical_plan::sorts::stream::{
@@ -55,7 +55,7 @@ pub(crate) fn streaming_merge(
     streams: Vec<SendableRecordBatchStream>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
-    tracking_metrics: MemTrackingMetrics,
+    metrics: BaselineMetrics,
     batch_size: usize,
 ) -> Result<SendableRecordBatchStream> {
     // Special case single column comparisons with optimized cursor implementations
@@ -63,11 +63,11 @@ pub(crate) fn streaming_merge(
         let sort = expressions[0].clone();
         let data_type = sort.expr.data_type(schema.as_ref())?;
         downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, tracking_metrics, batch_size),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, tracking_metrics, batch_size)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, tracking_metrics, batch_size)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, tracking_metrics, batch_size)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, tracking_metrics, batch_size)
+            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size),
+            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size)
+            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size)
+            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size)
+            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size)
             _ => {}
         }
     }
@@ -76,7 +76,7 @@ pub(crate) fn streaming_merge(
     Ok(Box::pin(SortPreservingMergeStream::new(
         Box::new(streams),
         schema,
-        tracking_metrics,
+        metrics,
         batch_size,
     )))
 }
@@ -92,7 +92,7 @@ struct SortPreservingMergeStream<C> {
     streams: CursorStream<C>,
 
     /// used to record execution metrics
-    tracking_metrics: MemTrackingMetrics,
+    metrics: BaselineMetrics,
 
     /// If the stream has encountered an error
     aborted: bool,
@@ -146,7 +146,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
     fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
-        tracking_metrics: MemTrackingMetrics,
+        metrics: BaselineMetrics,
         batch_size: usize,
     ) -> Self {
         let stream_count = streams.partitions();
@@ -154,7 +154,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
         Self {
             in_progress: BatchBuilder::new(schema, stream_count, batch_size),
             streams,
-            tracking_metrics,
+            metrics,
             aborted: false,
             cursors: (0..stream_count).map(|_| None).collect(),
             loser_tree: vec![],
@@ -209,7 +209,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
 
         // NB timer records time taken on drop, so there are no
         // calls to `timer.done()` below.
-        let elapsed_compute = self.tracking_metrics.elapsed_compute().clone();
+        let elapsed_compute = self.metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
 
         loop {
@@ -347,7 +347,7 @@ impl<C: Cursor + Unpin> Stream for SortPreservingMergeStream<C> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.poll_next_inner(cx);
-        self.tracking_metrics.record_poll(poll)
+        self.metrics.record_poll(poll)
     }
 }
 

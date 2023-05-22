@@ -167,6 +167,7 @@ mod tests {
             Field::new("b", DataType::Boolean, false),
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
+            Field::new("e", DataType::UInt32, true),
         ]);
         table_scan(Some("test"), &schema, None)
             .expect("creating scan")
@@ -623,9 +624,9 @@ mod tests {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_null().not())?
+            .filter(col("e").is_null().not())?
             .build()?;
-        let expected = "Filter: test.d IS NOT NULL\
+        let expected = "Filter: test.e IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -636,9 +637,9 @@ mod tests {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_not_null().not())?
+            .filter(col("e").is_not_null().not())?
             .build()?;
-        let expected = "Filter: test.d IS NULL\
+        let expected = "Filter: test.e IS NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -846,6 +847,32 @@ mod tests {
         // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
         let expected =
             "TableScan: test, unsupported_filters=[g = f AS g = power(f,Float64(1))]";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_is_not_null() -> Result<()> {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_not_null())?
+            .build()?;
+        let expected = "Filter: Boolean(true)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_is_null() -> Result<()> {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_null())?
+            .build()?;
+        let expected = "Filter: Boolean(false)\
+        \n  TableScan: test";
+
         assert_optimized_plan_eq(&plan, expected)
     }
 }

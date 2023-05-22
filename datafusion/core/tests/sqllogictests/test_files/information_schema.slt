@@ -146,7 +146,7 @@ datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
-datafusion.execution.parquet.enable_page_index false
+datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
@@ -169,7 +169,7 @@ datafusion.optimizer.repartition_file_scans true
 datafusion.optimizer.repartition_joins true
 datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
-datafusion.optimizer.skip_failed_rules true
+datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true

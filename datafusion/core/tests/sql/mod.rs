@@ -79,16 +79,14 @@ macro_rules! test_expression {
 }
 
 pub mod aggregates;
+pub mod arrow_files;
 #[cfg(feature = "avro")]
-pub mod avro;
 pub mod create_drop;
-pub mod errors;
 pub mod explain_analyze;
 pub mod expr;
 pub mod functions;
 pub mod group_by;
 pub mod joins;
-pub mod json;
 pub mod limit;
 pub mod order;
 pub mod parquet;
@@ -98,9 +96,7 @@ pub mod references;
 pub mod select;
 pub mod timestamp;
 pub mod udf;
-pub mod window;
 
-pub mod explain;
 pub mod information_schema;
 pub mod parquet_schema;
 pub mod partitioned_csv;
@@ -515,100 +511,6 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
                     .unwrap(),
             ),
             Arc::new(dict2),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
-/// the table column_left has more rows than the table column_right
-fn create_join_context_unbalanced(
-    column_left: &str,
-    column_right: &str,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new(column_left, DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 33, 44, 77])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-                Some("e"),
-            ])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new(column_right, DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                Some("y"),
-                Some("x"),
-                Some("w"),
-            ])),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
-// Create memory tables with nulls
-fn create_join_context_with_nulls() -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("t1_id", DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77, 88, 99])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-                Some("e"),
-                None,
-                None,
-            ])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("t2_id", DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55, 99])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                None,
-                Some("x"),
-                Some("w"),
-                Some("u"),
-            ])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;

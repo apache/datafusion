@@ -160,12 +160,12 @@ explain SELECT c1, c2 FROM aggregate_test_100 ORDER BY c2, c3, c2
 ----
 logical_plan
 Projection: aggregate_test_100.c1, aggregate_test_100.c2
-  Sort: aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST
-    TableScan: aggregate_test_100 projection=[c1, c2, c3]
+--Sort: aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c3 ASC NULLS LAST
+----TableScan: aggregate_test_100 projection=[c1, c2, c3]
 physical_plan
 ProjectionExec: expr=[c1@0 as c1, c2@1 as c2]
-  SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
-    CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+--SortExec: expr=[c2@1 ASC NULLS LAST,c3@2 ASC NULLS LAST]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 ORDER BY c2, c3, c2

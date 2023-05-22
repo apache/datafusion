@@ -83,7 +83,8 @@ pub trait RowAccumulator: Send + Sync + Debug {
 pub fn is_row_accumulator_support_dtype(data_type: &DataType) -> bool {
     matches!(
         data_type,
-        DataType::UInt8
+        DataType::Boolean
+            | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64

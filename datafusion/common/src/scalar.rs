@@ -31,6 +31,7 @@ use crate::cast::{
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
+use arrow::buffer::NullBuffer;
 use arrow::compute::nullif;
 use arrow::datatypes::{FieldRef, Fields, SchemaBuilder};
 use arrow::{
@@ -649,6 +650,21 @@ macro_rules! primitive_right {
             "Can not divide an uninitialized value to a non-floating point value",
         )))
     };
+    ($TERM:expr, &, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, |, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, ^, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, &&, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, ||, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
 }
 
 macro_rules! unsigned_subtraction_error {
@@ -753,6 +769,74 @@ macro_rules! impl_op {
                 tz_rhs.as_deref(),
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
+        }
+    };
+    ($LHS:expr, $RHS:expr, &) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, &)
+    };
+    ($LHS:expr, $RHS:expr, |) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, |)
+    };
+    ($LHS:expr, $RHS:expr, ^) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, ^)
+    };
+    ($LHS:expr, $RHS:expr, &&) => {
+        impl_bool_op_arithmetic!($LHS, $RHS, &&)
+    };
+    ($LHS:expr, $RHS:expr, ||) => {
+        impl_bool_op_arithmetic!($LHS, $RHS, ||)
+    };
+}
+
+macro_rules! impl_bit_op_arithmetic {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
+        match ($LHS, $RHS) {
+            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
+                primitive_op!(lhs, rhs, UInt64, $OPERATION)
+            }
+            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
+                primitive_op!(lhs, rhs, Int64, $OPERATION)
+            }
+            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
+                primitive_op!(lhs, rhs, UInt32, $OPERATION)
+            }
+            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
+                primitive_op!(lhs, rhs, Int32, $OPERATION)
+            }
+            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
+                primitive_op!(lhs, rhs, UInt16, $OPERATION)
+            }
+            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
+                primitive_op!(lhs, rhs, Int16, $OPERATION)
+            }
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                primitive_op!(lhs, rhs, UInt8, $OPERATION)
+            }
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                primitive_op!(lhs, rhs, Int8, $OPERATION)
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
+        }
+    };
+}
+
+macro_rules! impl_bool_op_arithmetic {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
+        match ($LHS, $RHS) {
+            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
+                primitive_op!(lhs, rhs, Boolean, $OPERATION)
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
         }
     };
 }
@@ -1922,6 +2006,19 @@ impl ScalarValue {
             ScalarValue::Int16(Some(v)) => Ok(ScalarValue::Int16(Some(-v))),
             ScalarValue::Int32(Some(v)) => Ok(ScalarValue::Int32(Some(-v))),
             ScalarValue::Int64(Some(v)) => Ok(ScalarValue::Int64(Some(-v))),
+            ScalarValue::IntervalYearMonth(Some(v)) => {
+                Ok(ScalarValue::IntervalYearMonth(Some(-v)))
+            }
+            ScalarValue::IntervalDayTime(Some(v)) => {
+                let (days, ms) = IntervalDayTimeType::to_parts(*v);
+                let val = IntervalDayTimeType::make_value(-days, -ms);
+                Ok(ScalarValue::IntervalDayTime(Some(val)))
+            }
+            ScalarValue::IntervalMonthDayNano(Some(v)) => {
+                let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(*v);
+                let val = IntervalMonthDayNanoType::make_value(-months, -days, -nanos);
+                Ok(ScalarValue::IntervalMonthDayNano(Some(val)))
+            }
             ScalarValue::Decimal128(Some(v), precision, scale) => {
                 Ok(ScalarValue::Decimal128(Some(-v), *precision, *scale))
             }
@@ -1949,6 +2046,31 @@ impl ScalarValue {
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_checked_op!(self, rhs, checked_sub, -)
+    }
+
+    pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, &&)
+    }
+
+    pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, ||)
+    }
+
+    pub fn bitand<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, &)
+    }
+
+    pub fn bitor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, |)
+    }
+
+    pub fn bitxor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, ^)
     }
 
     pub fn is_unsigned(&self) -> bool {
@@ -2375,8 +2497,8 @@ impl ScalarValue {
                 let field_values = fields
                     .iter()
                     .zip(columns)
-                    .map(|(field, column)| -> Result<(Field, ArrayRef)> {
-                        Ok((field.as_ref().clone(), Self::iter_to_array(column)?))
+                    .map(|(field, column)| {
+                        Ok((field.clone(), Self::iter_to_array(column)?))
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -2546,7 +2668,7 @@ impl ScalarValue {
         let offsets_array = offsets.finish();
         let array_data = ArrayDataBuilder::new(data_type.clone())
             .len(offsets_array.len() - 1)
-            .null_bit_buffer(Some(valid.finish()))
+            .nulls(Some(NullBuffer::new(valid.finish())))
             .add_buffer(offsets_array.values().inner().clone())
             .add_child_data(flat_array.to_data());
 
@@ -2777,7 +2899,7 @@ impl ScalarValue {
                         .iter()
                         .zip(values.iter())
                         .map(|(field, value)| {
-                            (field.as_ref().clone(), value.to_array_of_size(size))
+                            (field.clone(), value.to_array_of_size(size))
                         })
                         .collect();
 
@@ -4647,17 +4769,17 @@ mod tests {
 
     #[test]
     fn test_scalar_struct() {
-        let field_a = Field::new("A", DataType::Int32, false);
-        let field_b = Field::new("B", DataType::Boolean, false);
-        let field_c = Field::new("C", DataType::Utf8, false);
+        let field_a = Arc::new(Field::new("A", DataType::Int32, false));
+        let field_b = Arc::new(Field::new("B", DataType::Boolean, false));
+        let field_c = Arc::new(Field::new("C", DataType::Utf8, false));
 
-        let field_e = Field::new("e", DataType::Int16, false);
-        let field_f = Field::new("f", DataType::Int64, false);
-        let field_d = Field::new(
+        let field_e = Arc::new(Field::new("e", DataType::Int16, false));
+        let field_f = Arc::new(Field::new("f", DataType::Int64, false));
+        let field_d = Arc::new(Field::new(
             "D",
             DataType::Struct(vec![field_e.clone(), field_f.clone()].into()),
             false,
-        );
+        ));
 
         let scalar = ScalarValue::Struct(
             Some(vec![
@@ -4824,12 +4946,12 @@ mod tests {
 
     #[test]
     fn test_lists_in_struct() {
-        let field_a = Field::new("A", DataType::Utf8, false);
-        let field_primitive_list = Field::new(
+        let field_a = Arc::new(Field::new("A", DataType::Utf8, false));
+        let field_primitive_list = Arc::new(Field::new(
             "primitive_list",
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
             false,
-        );
+        ));
 
         // Define primitive list scalars
         let l0 = ScalarValue::List(
@@ -5426,6 +5548,28 @@ mod tests {
         for (lhs, rhs) in cases {
             let distance = lhs.distance(&rhs);
             assert!(distance.is_none());
+        }
+    }
+
+    #[test]
+    fn test_scalar_interval_negate() {
+        let cases = [
+            (
+                ScalarValue::new_interval_ym(1, 12),
+                ScalarValue::new_interval_ym(-1, -12),
+            ),
+            (
+                ScalarValue::new_interval_dt(1, 999),
+                ScalarValue::new_interval_dt(-1, -999),
+            ),
+            (
+                ScalarValue::new_interval_mdn(12, 15, 123_456),
+                ScalarValue::new_interval_mdn(-12, -15, -123_456),
+            ),
+        ];
+        for (expr, expected) in cases.iter() {
+            let result = expr.arithmetic_negate().unwrap();
+            assert_eq!(*expected, result, "-expr:{expr:?}");
         }
     }
 

@@ -325,36 +325,42 @@ AS tbl(int_col, float_col, negative_col, summation);
 10 20 -30 4
 
 
-query IIRIII
+query IIRIIIIII
 SELECT
   count(*) AS count_all,
   count(c3) AS count_c3,
   avg(c3) AS avg,
   sum(c3) AS sum,
   max(c3) AS max,
-  min(c3) AS min
+  min(c3) AS min,
+  bit_and(c3) as bit_and,
+  bit_or(c3) as bit_or,
+  bit_xor(c3) as bit_xor
 FROM aggregate_test_100_by_sql;
 ----
-100 100 7.81 781 125 -117
+100 100 7.81 781 125 -117 0 -1 -61
 
 
-query IIRIII
+query IIRIIIIII
 select
   c2,
   sum(c3) sum_c3,
   avg(c3) avg_c3,
   max(c3) max_c3,
   min(c3) min_c3,
-  count(c3) count_c3
+  count(c3) count_c3,
+  bit_and(c3) bit_and_c3,
+  bit_or(c3) bit_or_c3,
+  bit_xor(c3) bit_xor_c3
 from aggregate_test_100_by_sql
 group by c2
 order by c2;
 ----
-1 367 16.681818181818 125 -99 22
-2 184 8.363636363636 122 -117 22
-3 395 20.789473684211 123 -101 19
-4 29 1.260869565217 123 -117 23
-5 -194 -13.857142857143 118 -101 14
+1 367 16.681818181818 125 -99 22 0 -1 -47
+2 184 8.363636363636 122 -117 22 0 -1 -2
+3 395 20.789473684211 123 -101 19 0 -1 101
+4 29 1.260869565217 123 -117 23 0 -1 15
+5 -194 -13.857142857143 118 -101 14 0 -1 -122
 
 
 query I

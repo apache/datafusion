@@ -366,6 +366,11 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Max => Self::Max,
             AggregateFunction::Sum => Self::Sum,
             AggregateFunction::Avg => Self::Avg,
+            AggregateFunction::BitAnd => Self::BitAnd,
+            AggregateFunction::BitOr => Self::BitOr,
+            AggregateFunction::BitXor => Self::BitXor,
+            AggregateFunction::BoolAnd => Self::BoolAnd,
+            AggregateFunction::BoolOr => Self::BoolOr,
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
@@ -617,6 +622,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref args,
                 ref distinct,
                 ref filter,
+                ref order_by,
             }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -632,6 +638,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
                     AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
+                    AggregateFunction::BitAnd => protobuf::AggregateFunction::BitAnd,
+                    AggregateFunction::BitOr => protobuf::AggregateFunction::BitOr,
+                    AggregateFunction::BitXor => protobuf::AggregateFunction::BitXor,
+                    AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
+                    AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
                     AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
@@ -669,6 +680,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
+                    order_by: match order_by {
+                        Some(e) => e
+                            .iter()
+                            .map(|expr| expr.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => vec![],
+                    },
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
@@ -704,7 +722,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF(expr::AggregateUDF { fun, args, filter }) => Self {
+            Expr::AggregateUDF(expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name.clone(),
@@ -716,6 +739,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         filter: match filter {
                             Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                             None => None,
+                        },
+                        order_by: match order_by {
+                            Some(e) => e
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            None => vec![],
                         },
                     },
                 ))),
