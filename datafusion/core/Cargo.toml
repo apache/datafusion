@@ -78,7 +78,7 @@ lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = "0.5.4"
+object_store = "0.6.0"
 parking_lot = "0.12"
 parquet = { workspace = true }
 percent-encoding = "2.2.0"
