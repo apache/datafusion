@@ -679,6 +679,8 @@ pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
+pub mod stats;
+
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;

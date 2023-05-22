@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::common::Result;
+use crate::physical_plan::stats::StatisticsStream;
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -47,6 +48,9 @@ pub struct BatchBuilder {
     /// The accumulated stream indexes from which to pull rows
     /// Consists of a tuple of `(batch_idx, row_idx)`
     indices: Vec<(usize, usize)>,
+
+    /// TEMP observe statistics of the output
+    stats: StatisticsStream,
 }
 
 impl BatchBuilder {
@@ -63,6 +67,7 @@ impl BatchBuilder {
             cursors: vec![BatchCursor::default(); stream_count],
             indices: Vec::with_capacity(batch_size),
             reservation,
+            stats: StatisticsStream::new(),
         }
     }
 
@@ -146,6 +151,8 @@ impl BatchBuilder {
             retain
         });
 
-        Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?))
+        let batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+        self.stats.observe_batch(&batch);
+        Ok(Some(batch))
     }
 }
