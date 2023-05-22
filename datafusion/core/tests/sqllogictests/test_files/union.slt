@@ -447,7 +447,7 @@ drop table t1
 statement ok
 drop table t2
 
-# test UNION ALL aliases correctly with all aliased
+# test UNION ALL aliases correctly with aliased columns
 query TT
 explain select 1 a group by a union all select 2 b union all select 3 c
 ----
@@ -473,3 +473,36 @@ UnionExec
 ----EmptyExec: produce_one_row=true
 --ProjectionExec: expr=[3 as a]
 ----EmptyExec: produce_one_row=true
+
+# test UNION ALL aliases correctly with aliased subquery
+query TT
+explain select count(*) count, n from (select 5 as n) a group by n
+union all
+select x, y from (select 1 as x , max(10) as y) b
+----
+logical_plan
+Union
+--Projection: COUNT(UInt8(1)) AS count, a.n
+----Aggregate: groupBy=[[a.n]], aggr=[[COUNT(UInt8(1))]]
+------SubqueryAlias: a
+--------Projection: Int64(5) AS n
+----------EmptyRelation
+--Projection: b.x AS count, b.y AS n
+----SubqueryAlias: b
+------Projection: Int64(1) AS x, MAX(Int64(10)) AS y
+--------Aggregate: groupBy=[[]], aggr=[[MAX(Int64(10))]]
+----------EmptyRelation
+physical_plan
+UnionExec
+--ProjectionExec: expr=[COUNT(UInt8(1))@1 as count, n@0 as n]
+----AggregateExec: mode=FinalPartitioned, gby=[n@0 as n], aggr=[COUNT(UInt8(1))]
+------CoalesceBatchesExec: target_batch_size=8192
+--------RepartitionExec: partitioning=Hash([Column { name: "n", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------AggregateExec: mode=Partial, gby=[n@0 as n], aggr=[COUNT(UInt8(1))]
+--------------ProjectionExec: expr=[5 as n]
+----------------EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[x@0 as count, y@1 as n]
+----ProjectionExec: expr=[1 as x, MAX(Int64(10))@0 as y]
+------AggregateExec: mode=Single, gby=[], aggr=[MAX(Int64(10))]
+--------EmptyExec: produce_one_row=true
