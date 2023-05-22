@@ -57,7 +57,7 @@ impl ArrayStatistics {
                 let overall = combine_stats(keys, values);
                 // TODO add overall stats (and then breakdown)
                 format!(
-                    "{:<16}{}\n{:<16}{}{:<16}\n{}",
+                    "{:<16}{}\n{:<16}{}\n{:<16}{}",
                     "DictionaryArray:",
                     stat_summary(&overall),
                     "  Keys:",
@@ -205,9 +205,9 @@ mod test {
         let stats = ArrayStatistics::from(&d1 as &dyn Array);
 
         let expected = vec![
-            "DictionaryArray:",
-            "  Keys:      3 rows                  224 bytes (Exact)",
-            "  Values:      2 rows                 2232 bytes (Exact)",
+            "DictionaryArray:     5 rows                 2456 bytes (Exact)",
+            "  Keys:              3 rows                  224 bytes (Exact)",
+            "  Values:            2 rows                 2232 bytes (Exact)",
         ];
 
         let actual: Vec<_> = stats.summary().split("\n").map(|s| s.to_string()).collect();
