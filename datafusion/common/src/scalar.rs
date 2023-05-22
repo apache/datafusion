@@ -3128,7 +3128,10 @@ impl ScalarValue {
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
         let value = ScalarValue::Utf8(Some(value));
-        let cast_options = CastOptions { safe: false };
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
         let cast_arr = cast_with_options(&value.to_array(), target_type, &cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }

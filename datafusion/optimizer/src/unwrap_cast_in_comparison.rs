@@ -1098,7 +1098,7 @@ mod tests {
                 let cast_array = cast_with_options(
                     &literal_array,
                     &target_type,
-                    &CastOptions { safe: true },
+                    &CastOptions::default(),
                 )
                 .expect("Expected to be cast array with arrow cast kernel");
 
