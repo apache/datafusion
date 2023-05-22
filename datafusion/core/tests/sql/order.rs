@@ -56,10 +56,7 @@ async fn create_external_table_with_order() -> Result<()> {
     let table_dyn = listing_table_factory.create(&ctx.state(), &cmd).await?;
     let table = table_dyn.as_any().downcast_ref::<ListingTable>().unwrap();
     assert_eq!(cmd.order_exprs.len(), 1);
-    assert_eq!(
-        &cmd.order_exprs,
-        table.options().file_sort_order.as_ref().unwrap()
-    );
+    assert_eq!(cmd.order_exprs, table.options().file_sort_order);
     Ok(())
 }
 

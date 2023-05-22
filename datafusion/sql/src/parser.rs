@@ -158,7 +158,7 @@ pub struct CreateExternalTable {
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Ordered expressions
-    pub order_exprs: Vec<OrderByExpr>,
+    pub order_exprs: Vec<Vec<OrderByExpr>>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
@@ -585,7 +585,7 @@ impl<'a> DFParser<'a> {
             delimiter: Option<char>,
             file_compression_type: Option<CompressionTypeVariant>,
             table_partition_cols: Option<Vec<String>>,
-            order_exprs: Option<Vec<OrderByExpr>>,
+            order_exprs: Vec<Vec<OrderByExpr>>,
             options: Option<HashMap<String, String>>,
         }
         let mut builder = Builder::default();
@@ -621,8 +621,7 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::WITH => {
                         if self.parser.parse_keyword(Keyword::ORDER) {
-                            ensure_not_set(&builder.order_exprs, "WITH ORDER")?;
-                            builder.order_exprs = Some(self.parse_order_by_exprs()?);
+                            builder.order_exprs.push(self.parse_order_by_exprs()?);
                         } else {
                             self.parser.expect_keyword(Keyword::HEADER)?;
                             self.parser.expect_keyword(Keyword::ROW)?;
@@ -689,7 +688,7 @@ impl<'a> DFParser<'a> {
             delimiter: builder.delimiter.unwrap_or(','),
             location: builder.location.unwrap(),
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
-            order_exprs: builder.order_exprs.unwrap_or(vec![]),
+            order_exprs: builder.order_exprs,
             if_not_exists,
             file_compression_type: builder
                 .file_compression_type
@@ -1124,14 +1123,14 @@ mod tests {
                 delimiter: ',',
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
-                order_exprs: vec![OrderByExpr {
+                order_exprs: vec![vec![OrderByExpr {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
                         quote_style: None,
                     }),
                     asc,
                     nulls_first,
-                }],
+                }]],
                 if_not_exists: false,
                 file_compression_type: UNCOMPRESSED,
                 unbounded: false,
@@ -1154,7 +1153,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            order_exprs: vec![
+            order_exprs: vec![vec![
                 OrderByExpr {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
@@ -1171,7 +1170,7 @@ mod tests {
                     asc: Some(false),
                     nulls_first: Some(true),
                 },
-            ],
+            ]],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
@@ -1193,7 +1192,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
-            order_exprs: vec![OrderByExpr {
+            order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
@@ -1207,7 +1206,7 @@ mod tests {
                 },
                 asc: Some(true),
                 nulls_first: None,
-            }],
+            }]],
             if_not_exists: false,
             file_compression_type: UNCOMPRESSED,
             unbounded: false,
@@ -1238,7 +1237,7 @@ mod tests {
             delimiter: '*',
             location: "foo.parquet".into(),
             table_partition_cols: vec!["c1".into()],
-            order_exprs: vec![OrderByExpr {
+            order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
                     left: Box::new(Identifier(Ident {
                         value: "c1".to_owned(),
@@ -1252,7 +1251,7 @@ mod tests {
                 },
                 asc: Some(true),
                 nulls_first: None,
-            }],
+            }]],
             if_not_exists: true,
             file_compression_type: CompressionTypeVariant::ZSTD,
             unbounded: true,

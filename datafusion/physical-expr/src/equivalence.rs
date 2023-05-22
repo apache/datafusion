@@ -19,6 +19,7 @@ use crate::expressions::Column;
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
+use datafusion_common::DataFusionError;
 
 use crate::{PhysicalSortExpr, PhysicalSortRequirement};
 use std::collections::{HashMap, HashSet};
@@ -205,6 +206,24 @@ impl From<OrderedColumn> for PhysicalSortExpr {
         PhysicalSortExpr {
             expr: Arc::new(value.col) as _,
             options: value.options,
+        }
+    }
+}
+
+impl TryFrom<PhysicalSortExpr> for OrderedColumn {
+    type Error = DataFusionError;
+
+    fn try_from(value: PhysicalSortExpr) -> Result<Self, Self::Error> {
+        if let Some(col) = value.expr.as_any().downcast_ref::<Column>() {
+            Ok(OrderedColumn {
+                col: col.clone(),
+                options: value.options,
+            })
+        } else {
+            Err(DataFusionError::NotImplemented(
+                "Only Column PhysicalSortExpr's can be downcasted to OrderedColumn yet"
+                    .to_string(),
+            ))
         }
     }
 }

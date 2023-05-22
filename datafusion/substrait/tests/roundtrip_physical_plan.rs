@@ -48,7 +48,7 @@ mod tests {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         };
         let parquet_exec: Arc<dyn ExecutionPlan> =

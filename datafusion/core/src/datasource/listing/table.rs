@@ -231,7 +231,7 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
-    pub file_sort_order: Option<Vec<Expr>>,
+    pub file_sort_order: Vec<Vec<Expr>>,
     /// Infinite source means that the input is not guaranteed to end.
     /// Currently, CSV, JSON, and AVRO formats are supported.
     /// In order to support infinite inputs, DataFusion may adjust query
@@ -253,7 +253,7 @@ impl ListingOptions {
             table_partition_cols: vec![],
             collect_stat: true,
             target_partitions: 1,
-            file_sort_order: None,
+            file_sort_order: vec![],
             infinite_source: false,
         }
     }
@@ -418,7 +418,7 @@ impl ListingOptions {
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -612,16 +612,13 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Option<Vec<PhysicalSortExpr>>> {
-        let file_sort_order =
-            if let Some(file_sort_order) = self.options.file_sort_order.as_ref() {
-                file_sort_order
-            } else {
-                return Ok(None);
-            };
+    fn try_create_output_ordering(&self) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+        let mut all_sort_exprs = vec![];
+        let file_sort_orders = &self.options.file_sort_order;
 
-        // convert each expr to a physical sort expr
-        let sort_exprs = file_sort_order
+        for file_sort_order in file_sort_orders {
+            // convert each expr to a physical sort expr
+            let sort_exprs = file_sort_order
             .iter()
             .map(|expr| {
                 if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
@@ -647,8 +644,9 @@ impl ListingTable {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-
-        Ok(Some(sort_exprs))
+            all_sort_exprs.push(sort_exprs);
+        }
+        Ok(all_sort_exprs)
     }
 }
 
@@ -956,40 +954,38 @@ mod tests {
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (None, Ok(None)),
-            // empty list
-            (Some(vec![]), Ok(Some(vec![]))),
+            (vec![], Ok(vec![])),
             // not a sort expr
             (
-                Some(vec![col("string_col")]),
+                vec![vec![col("string_col")]],
                 Err("Expected Expr::Sort in output_ordering, but got string_col"),
             ),
             // sort expr, but non column
             (
-                Some(vec![
+                vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
-                ]),
+                ]],
                 Err("Only support single column references in output_ordering, got int_col + Int32(1)"),
             ),
             // ok with one column
             (
-                Some(vec![col("string_col").sort(true, false)]),
-                Ok(Some(vec![PhysicalSortExpr {
+                vec![vec![col("string_col").sort(true, false)]],
+                Ok(vec![vec![PhysicalSortExpr {
                     expr: physical_col("string_col", &schema).unwrap(),
                     options: SortOptions {
                         descending: false,
                         nulls_first: false,
                     },
-                }]))
+                }]])
 
             ),
             // ok with two columns, different options
             (
-                Some(vec![
+                vec![vec![
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
-                ]),
-                Ok(Some(vec![
+                ]],
+                Ok(vec![vec![
                     PhysicalSortExpr {
                         expr: physical_col("string_col", &schema).unwrap(),
                         options: SortOptions {
@@ -1004,7 +1000,7 @@ mod tests {
                             nulls_first: true,
                         },
                     },
-                ]))
+                ]])
 
             ),
 

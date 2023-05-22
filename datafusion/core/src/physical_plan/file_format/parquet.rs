@@ -18,6 +18,8 @@
 //! Execution plan for reading Parquet files
 
 use arrow::datatypes::{DataType, SchemaRef};
+use datafusion_physical_expr::OrderedColumn;
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 use datafusion_physical_expr::PhysicalExpr;
 use fmt::Debug;
 use std::any::Any;
@@ -90,7 +92,7 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
@@ -342,7 +344,44 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        if let Some(first) = self.projected_output_ordering.get(0) {
+            Some(first.as_slice())
+        } else {
+            None
+        }
+    }
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut oep = OrderingEquivalenceProperties::new(self.schema());
+        let first_ordering = &self.projected_output_ordering[0];
+        let first_column = first_ordering
+            .iter()
+            .map(|e| TryFrom::try_from(e.clone()))
+            .collect::<Vec<_>>();
+        let checked_column_first = if first_column.iter().all(Result::is_ok) {
+            first_column
+                .into_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<OrderedColumn>>()
+        } else {
+            Vec::new()
+        };
+        for i in 1..self.projected_output_ordering.len() {
+            let ordering = &self.projected_output_ordering[i];
+            let column = ordering
+                .iter()
+                .map(|e| TryFrom::try_from(e.clone()))
+                .collect::<Vec<_>>();
+            let checked_column = if column.iter().all(Result::is_ok) {
+                column
+                    .into_iter()
+                    .map(Result::unwrap)
+                    .collect::<Vec<OrderedColumn>>()
+            } else {
+                Vec::new()
+            };
+            oep.add_equal_conditions((&checked_column_first, &checked_column))
+        }
+        oep
     }
 
     fn with_new_children(
@@ -900,7 +939,7 @@ mod tests {
                     projection,
                     limit: None,
                     table_partition_cols: vec![],
-                    output_ordering: None,
+                    output_ordering: vec![],
                     infinite_source: false,
                 },
                 predicate,
@@ -1549,7 +1588,7 @@ mod tests {
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
-                    output_ordering: None,
+                    output_ordering: vec![],
                     infinite_source: false,
                 },
                 None,
@@ -1663,7 +1702,7 @@ mod tests {
                         ),
                     ),
                 ],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1725,7 +1764,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1917,7 +1956,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1954,7 +1993,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1996,7 +2035,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -2034,7 +2073,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -2073,7 +2112,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -2102,7 +2141,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,

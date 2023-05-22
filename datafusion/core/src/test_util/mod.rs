@@ -528,7 +528,7 @@ pub async fn register_unbounded_file_with_ordering(
     // Get listing options:
     let options_sort = fifo_options
         .to_listing_options(&ctx.copied_config())
-        .with_file_sort_order(file_sort_order);
+        .with_file_sort_order(vec![file_sort_order.unwrap_or(vec![])]);
     // Register table:
     ctx.register_listing_table(
         table_name,

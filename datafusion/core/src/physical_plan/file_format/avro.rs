@@ -22,6 +22,7 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
+use datafusion_physical_expr::{OrderedColumn, OrderingEquivalenceProperties};
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -37,7 +38,7 @@ pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -80,7 +81,44 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        if let Some(first) = self.projected_output_ordering.get(0) {
+            Some(first.as_slice())
+        } else {
+            None
+        }
+    }
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut oep = OrderingEquivalenceProperties::new(self.schema());
+        let first_ordering = &self.projected_output_ordering[0];
+        let first_column = first_ordering
+            .iter()
+            .map(|e| TryFrom::try_from(e.clone()))
+            .collect::<Vec<_>>();
+        let checked_column_first = if first_column.iter().all(Result::is_ok) {
+            first_column
+                .into_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<OrderedColumn>>()
+        } else {
+            Vec::new()
+        };
+        for i in 1..self.projected_output_ordering.len() {
+            let ordering = &self.projected_output_ordering[i];
+            let column = ordering
+                .iter()
+                .map(|e| TryFrom::try_from(e.clone()))
+                .collect::<Vec<_>>();
+            let checked_column = if column.iter().all(Result::is_ok) {
+                column
+                    .into_iter()
+                    .map(Result::unwrap)
+                    .collect::<Vec<OrderedColumn>>()
+            } else {
+                Vec::new()
+            };
+            oep.add_equal_conditions((&checked_column_first, &checked_column))
+        }
+        oep
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -265,7 +303,7 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -337,7 +375,7 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -409,7 +447,7 @@ mod tests {
             statistics: Statistics::default(),
             limit: None,
             table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);

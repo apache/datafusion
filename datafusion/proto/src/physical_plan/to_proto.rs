@@ -42,7 +42,7 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
-use crate::protobuf;
+use crate::protobuf::{self, PhysicalSortExprNodeVector};
 use crate::protobuf::{physical_aggregate_expr_node, PhysicalSortExprNode, ScalarValue};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
@@ -481,8 +481,9 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             .map(|p| p.as_slice().try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let output_ordering = if let Some(output_ordering) = &conf.output_ordering {
-            output_ordering
+        let mut output_ordering = vec![];
+        for o in &conf.output_ordering {
+            let ordering = o
                 .iter()
                 .map(|o| {
                     let expr = o.expr.clone().try_into()?;
@@ -492,10 +493,9 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                         nulls_first: o.options.nulls_first,
                     })
                 })
-                .collect::<Result<Vec<PhysicalSortExprNode>>>()?
-        } else {
-            vec![]
-        };
+                .collect::<Result<Vec<PhysicalSortExprNode>>>()?;
+            output_ordering.push(ordering)
+        }
 
         Ok(protobuf::FileScanExecConf {
             file_groups,
@@ -515,7 +515,12 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .map(|x| x.0.clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
-            output_ordering,
+            output_ordering: output_ordering
+                .into_iter()
+                .map(|e| PhysicalSortExprNodeVector {
+                    physical_sort_expr_node_vector: e,
+                })
+                .collect::<Vec<_>>(),
         })
     }
 }

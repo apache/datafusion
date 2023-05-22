@@ -72,10 +72,6 @@ CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
 statement error DataFusion error: SQL error: ParserError\("WITH HEADER ROW specified more than once"\)
 CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER ROW WITH HEADER ROW LOCATION 'foo.csv'
 
-# Duplicate `WITH ORDER` clause
-statement error DataFusion error: SQL error: ParserError\("WITH ORDER specified more than once"\)
-CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1) WITH ORDER (c1) LOCATION 'foo.csv'
-
 # Duplicate `DELIMITER` clause
 statement error DataFusion error: SQL error: ParserError\("DELIMITER specified more than once"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '-' DELIMITER '+' LOCATION 'foo.csv'

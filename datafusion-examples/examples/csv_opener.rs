@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         projection: Some(vec![12, 0]),
         limit: Some(5),
         table_partition_cols: vec![],
-        output_ordering: None,
+        output_ordering: vec![],
         infinite_source: false,
     };
 

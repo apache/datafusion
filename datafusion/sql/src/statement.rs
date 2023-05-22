@@ -548,10 +548,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_order_by(
         &self,
-        order_exprs: Vec<OrderByExpr>,
+        order_exprs: Vec<Vec<OrderByExpr>>,
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<datafusion_expr::Expr>> {
+    ) -> Result<Vec<Vec<datafusion_expr::Expr>>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             return Err(DataFusionError::Plan(
@@ -559,25 +559,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_owned(),
             ));
         }
-        // Convert each OrderByExpr to a SortExpr:
-        let result = order_exprs
-            .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-            .collect::<Result<Vec<_>>>()?;
-        // Verify that columns of all SortExprs exist in the schema:
-        for expr in result.iter() {
-            for column in expr.to_columns()?.iter() {
-                if !schema.has_column(column) {
-                    // Return an error if any column is not in the schema:
-                    return Err(DataFusionError::Plan(format!(
-                        "Column {column} is not in schema"
-                    )));
+
+        let mut all_results = vec![];
+        for expr in order_exprs {
+            // Convert each OrderByExpr to a SortExpr:
+            let result = expr
+                .into_iter()
+                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
+                .collect::<Result<Vec<_>>>()?;
+            // Verify that columns of all SortExprs exist in the schema:
+            for expr in result.iter() {
+                for column in expr.to_columns()?.iter() {
+                    if !schema.has_column(column) {
+                        // Return an error if any column is not in the schema:
+                        return Err(DataFusionError::Plan(format!(
+                            "Column {column} is not in schema"
+                        )));
+                    }
                 }
             }
+            // If all SortExprs are valid, return them as an expression vector
+            all_results.push(result)
         }
-
-        // If all SortExprs are valid, return them as an expression vector
-        Ok(result)
+        Ok(all_results)
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement

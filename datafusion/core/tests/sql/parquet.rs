@@ -60,7 +60,7 @@ async fn parquet_with_sort_order_specified() {
     // The sort order is not specified
     let options_no_sort = parquet_read_options
         .to_listing_options(&session_config)
-        .with_file_sort_order(None);
+        .with_file_sort_order(vec![]);
 
     // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("string_col"), col("int_col")]
@@ -74,7 +74,7 @@ async fn parquet_with_sort_order_specified() {
 
     let options_sort = parquet_read_options
         .to_listing_options(&session_config)
-        .with_file_sort_order(Some(file_sort_order));
+        .with_file_sort_order(vec![file_sort_order]);
 
     // This string appears in ParquetExec if the output ordering is
     // specified

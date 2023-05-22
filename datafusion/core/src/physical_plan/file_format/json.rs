@@ -31,6 +31,7 @@ use crate::physical_plan::{
 use arrow::{datatypes::SchemaRef, json};
 
 use bytes::{Buf, Bytes};
+use datafusion_physical_expr::{OrderedColumn, OrderingEquivalenceProperties};
 
 use crate::physical_plan::common::AbortOnDropSingle;
 use arrow::json::ReaderBuilder;
@@ -52,7 +53,7 @@ pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
@@ -101,7 +102,44 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        if let Some(first) = self.projected_output_ordering.get(0) {
+            Some(first.as_slice())
+        } else {
+            None
+        }
+    }
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut oep = OrderingEquivalenceProperties::new(self.schema());
+        let first_ordering = &self.projected_output_ordering[0];
+        let first_column = first_ordering
+            .iter()
+            .map(|e| TryFrom::try_from(e.clone()))
+            .collect::<Vec<_>>();
+        let checked_column_first = if first_column.iter().all(Result::is_ok) {
+            first_column
+                .into_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<OrderedColumn>>()
+        } else {
+            Vec::new()
+        };
+        for i in 1..self.projected_output_ordering.len() {
+            let ordering = &self.projected_output_ordering[i];
+            let column = ordering
+                .iter()
+                .map(|e| TryFrom::try_from(e.clone()))
+                .collect::<Vec<_>>();
+            let checked_column = if column.iter().all(Result::is_ok) {
+                column
+                    .into_iter()
+                    .map(Result::unwrap)
+                    .collect::<Vec<OrderedColumn>>()
+            } else {
+                Vec::new()
+            };
+            oep.add_equal_conditions((&checked_column_first, &checked_column))
+        }
+        oep
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -427,7 +465,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -503,7 +541,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -549,7 +587,7 @@ mod tests {
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -600,7 +638,7 @@ mod tests {
                 projection: Some(vec![3, 0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),

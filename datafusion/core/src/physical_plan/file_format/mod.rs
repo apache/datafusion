@@ -155,14 +155,14 @@ pub struct FileScanConfig {
     /// The partitioning columns
     pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
-    pub output_ordering: Option<Vec<PhysicalSortExpr>>,
+    pub output_ordering: Vec<Vec<PhysicalSortExpr>>,
     /// Indicates whether this plan may produce an infinite stream of records.
     pub infinite_source: bool,
 }
 
 impl FileScanConfig {
     /// Project the schema and the statistics on the given column indices
-    fn project(&self) -> (SchemaRef, Statistics, Option<Vec<PhysicalSortExpr>>) {
+    fn project(&self) -> (SchemaRef, Statistics, Vec<Vec<PhysicalSortExpr>>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
             return (
                 Arc::clone(&self.file_schema),
@@ -265,11 +265,10 @@ impl Display for FileScanConfig {
             write!(f, ", infinite_source=true")?;
         }
 
-        if let Some(orders) = ordering {
-            if !orders.is_empty() {
-                write!(f, ", output_ordering={}", OutputOrderingDisplay(&orders))?;
-            }
+        for order in ordering {
+            write!(f, ", output_ordering={}", OutputOrderingDisplay(&order))?;
         }
+
         Ok(())
     }
 }
@@ -775,15 +774,16 @@ impl From<ObjectMeta> for FileMeta {
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
     projected_schema: &SchemaRef,
-) -> Option<Vec<PhysicalSortExpr>> {
-    let mut new_ordering = vec![];
-    if let Some(output_ordering) = &base_config.output_ordering {
+) -> Vec<Vec<PhysicalSortExpr>> {
+    let mut all_orderings = vec![];
+    for e in &base_config.output_ordering {
         if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
-                   output_ordering, base_config.file_groups);
-            return None;
+            base_config.output_ordering[0], base_config.file_groups);
+            return vec![];
         }
-        for PhysicalSortExpr { expr, options } in output_ordering {
+        let mut new_ordering = vec![];
+        for PhysicalSortExpr { expr, options } in e {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {
@@ -799,8 +799,9 @@ fn get_projected_output_ordering(
             // since rest of the orderings are violated
             break;
         }
+        all_orderings.push(new_ordering);
     }
-    (!new_ordering.is_empty()).then_some(new_ordering)
+    all_orderings
 }
 
 #[cfg(test)]
@@ -1139,7 +1140,7 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         }
     }

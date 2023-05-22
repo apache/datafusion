@@ -33,6 +33,7 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 
 use bytes::Buf;
+use datafusion_physical_expr::{OrderedColumn, OrderingEquivalenceProperties};
 
 use crate::physical_plan::common::AbortOnDropSingle;
 use bytes::Bytes;
@@ -54,7 +55,7 @@ pub struct CsvExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
     has_header: bool,
     delimiter: u8,
     /// Execution metrics
@@ -121,7 +122,47 @@ impl ExecutionPlan for CsvExec {
 
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        if let Some(first) = self.projected_output_ordering.get(0) {
+            Some(first.as_slice())
+        } else {
+            None
+        }
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut oep = OrderingEquivalenceProperties::new(self.schema());
+        let first_ordering = &self.projected_output_ordering[0];
+
+        let first_column = first_ordering
+            .iter()
+            .map(|e| TryFrom::try_from(e.clone()))
+            .collect::<Vec<_>>();
+        let checked_column_first = if first_column.iter().all(Result::is_ok) {
+            first_column
+                .into_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<OrderedColumn>>()
+        } else {
+            Vec::new()
+        };
+
+        for i in 1..self.projected_output_ordering.len() {
+            let ordering = &self.projected_output_ordering[i];
+            let column = ordering
+                .iter()
+                .map(|e| TryFrom::try_from(e.clone()))
+                .collect::<Vec<_>>();
+            let checked_column = if column.iter().all(Result::is_ok) {
+                column
+                    .into_iter()
+                    .map(Result::unwrap)
+                    .collect::<Vec<OrderedColumn>>()
+            } else {
+                Vec::new()
+            };
+            oep.add_equal_conditions((&checked_column_first, &checked_column))
+        }
+        oep
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
