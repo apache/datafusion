@@ -18,7 +18,8 @@
 //! DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
-use sqlparser::ast::OrderByExpr;
+use sqlparser::ast::{OrderByExpr, Query, Value};
+use sqlparser::tokenizer::Word;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
@@ -28,8 +29,9 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, TokenWithLocation, Tokenizer},
 };
+use std::collections::VecDeque;
+use std::fmt;
 use std::{collections::HashMap, str::FromStr};
-use std::{collections::VecDeque, fmt};
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -40,6 +42,78 @@ macro_rules! parser_err {
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
+}
+
+/// DataFusion extension DDL for `COPY`
+///
+/// # Syntax:
+///
+/// ```text
+/// COPY <table_name | (<query>)>
+/// TO
+/// <destination_url>
+/// (key_value_list)
+/// ```
+///
+/// # Examples
+///
+/// ```sql
+/// COPY lineitem  TO 'lineitem'
+///  (format parquet,
+///   partitions 16,
+///   row_group_limit_rows 100000,
+//    row_group_limit_bytes 200000
+///  )
+///
+/// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyToStatement {
+    /// From where the data comes from
+    pub source: CopyToSource,
+    /// The URL to where the data is heading
+    pub target: String,
+    /// Target specific options
+    pub options: HashMap<String, Value>,
+}
+
+impl fmt::Display for CopyToStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            source,
+            target,
+            options,
+        } = self;
+
+        write!(f, "COPY {source} TO {target}")?;
+
+        if !options.is_empty() {
+            let mut opts: Vec<_> =
+                options.iter().map(|(k, v)| format!("{k} {v}")).collect();
+            // print them in sorted order
+            opts.sort_unstable();
+            write!(f, " ({})", opts.join(", "))?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyToSource {
+    /// `COPY <table> TO ...`
+    Relation(ObjectName),
+    /// COPY (...query...) TO ...
+    Query(Query),
+}
+
+impl fmt::Display for CopyToSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CopyToSource::Relation(r) => write!(f, "{r}"),
+            CopyToSource::Query(q) => write!(f, "({q})"),
+        }
+    }
 }
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
@@ -119,12 +193,25 @@ pub struct DescribeTableStmt {
 /// Tokens parsed by [`DFParser`] are converted into these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
-    /// ANSI SQL AST node
+    /// ANSI SQL AST node (from sqlparser-rs)
     Statement(Box<SQLStatement>),
     /// Extension: `CREATE EXTERNAL TABLE`
     CreateExternalTable(CreateExternalTable),
     /// Extension: `DESCRIBE TABLE`
     DescribeTableStmt(DescribeTableStmt),
+    /// Extension: `COPY TO`
+    CopyTo(CopyToStatement),
+}
+
+impl fmt::Display for Statement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Statement::Statement(stmt) => write!(f, "{stmt}"),
+            Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
+            Statement::DescribeTableStmt(_) => write!(f, "DESCRIBE TABLE ..."),
+            Statement::CopyTo(stmt) => write!(f, "{stmt}"),
+        }
+    }
 }
 
 /// DataFusion SQL Parser based on [`sqlparser`]
@@ -213,6 +300,11 @@ impl<'a> DFParser<'a> {
                         // use custom parsing
                         self.parse_create()
                     }
+                    Keyword::COPY => {
+                        // move one token forward
+                        self.parser.next_token();
+                        self.parse_copy()
+                    }
                     Keyword::DESCRIBE => {
                         // move one token forward
                         self.parser.next_token();
@@ -242,6 +334,79 @@ impl<'a> DFParser<'a> {
         Ok(Statement::DescribeTableStmt(DescribeTableStmt {
             table_name,
         }))
+    }
+
+    /// Parse a SQL `COPY TO` statement
+    pub fn parse_copy(&mut self) -> Result<Statement, ParserError> {
+        // parse as a query
+        let source = if self.parser.consume_token(&Token::LParen) {
+            let query = self.parser.parse_query()?;
+            self.parser.expect_token(&Token::RParen)?;
+            CopyToSource::Query(query)
+        } else {
+            // parse as table reference
+            let table_name = self.parser.parse_object_name()?;
+            CopyToSource::Relation(table_name)
+        };
+
+        self.parser.expect_keyword(Keyword::TO)?;
+
+        let target = self.parser.parse_literal_string()?;
+
+        // check for options in parens
+        let options = if self.parser.peek_token().token == Token::LParen {
+            self.parse_value_options()?
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Statement::CopyTo(CopyToStatement {
+            source,
+            target,
+            options,
+        }))
+    }
+
+    /// Parse the next token as a key name for an option list
+    ///
+    /// Note this is different than [`parse_literal_string`]
+    /// because it allows keywords as well as other non words
+    ///
+    /// [`parse_literal_string`]: sqlparser::parser::Parser::parse_literal_string
+    pub fn parse_option_key(&mut self) -> Result<String, ParserError> {
+        let next_token = self.parser.next_token();
+        match next_token.token {
+            Token::Word(Word { value, .. }) => Ok(value),
+            Token::SingleQuotedString(s) => Ok(s),
+            Token::DoubleQuotedString(s) => Ok(s),
+            Token::EscapedStringLiteral(s) => Ok(s),
+            _ => self.parser.expected("key name", next_token),
+        }
+    }
+
+    /// Parse the next token as a value for an option list
+    ///
+    /// Note this is different than [`parse_value`] as it allows any
+    /// word or keyword in this location.
+    ///
+    /// [`parse_value`]: sqlparser::parser::Parser::parse_value
+    pub fn parse_option_value(&mut self) -> Result<Value, ParserError> {
+        let next_token = self.parser.next_token();
+        match next_token.token {
+            Token::Word(Word { value, .. }) => Ok(Value::UnQuotedString(value)),
+            Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
+            Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
+            Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
+            Token::Number(ref n, l) => match n.parse() {
+                Ok(n) => Ok(Value::Number(n, l)),
+                // The tokenizer should have ensured `n` is an integer
+                // so this should not be possible
+                Err(e) => parser_err!(format!(
+                    "Unexpected error: could not parse '{n}' as number: {e}"
+                )),
+            },
+            _ => self.parser.expected("string or numeric value", next_token),
+        }
     }
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
@@ -485,7 +650,7 @@ impl<'a> DFParser<'a> {
                     }
                     Keyword::OPTIONS => {
                         ensure_not_set(&builder.options, "OPTIONS")?;
-                        builder.options = Some(self.parse_options()?);
+                        builder.options = Some(self.parse_string_options()?);
                     }
                     _ => {
                         unreachable!()
@@ -555,14 +720,42 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    fn parse_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
-        let mut options: HashMap<String, String> = HashMap::new();
+    /// Parses (key value) style options where the values are literal strings.
+    fn parse_string_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
+        let mut options = HashMap::new();
         self.parser.expect_token(&Token::LParen)?;
 
         loop {
             let key = self.parser.parse_literal_string()?;
             let value = self.parser.parse_literal_string()?;
-            options.insert(key.to_string(), value.to_string());
+            options.insert(key, value);
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after option definition",
+                    self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(options)
+    }
+
+    /// Parses (key value) style options into a map of String --> [`Value`].
+    ///
+    /// Unlike [`Self::parse_string_options`], this method supports
+    /// keywords as key names as well as multiple value types such as
+    /// Numbers as well as Strings.
+    fn parse_value_options(&mut self) -> Result<HashMap<String, Value>, ParserError> {
+        let mut options = HashMap::new();
+        self.parser.expect_token(&Token::LParen)?;
+
+        loop {
+            let key = self.parse_option_key()?;
+            let value = self.parse_option_value()?;
+            options.insert(key, value);
             let comma = self.parser.consume_token(&Token::Comma);
             if self.parser.consume_token(&Token::RParen) {
                 // allow a trailing comma, even though it's not in standard
@@ -602,7 +795,7 @@ mod tests {
             1,
             "Expected to parse exactly one statement"
         );
-        assert_eq!(statements[0], expected);
+        assert_eq!(statements[0], expected, "actual:\n{:#?}", statements[0]);
         Ok(())
     }
 
@@ -1073,5 +1266,135 @@ mod tests {
         // For error cases, see: `create_external_table.slt`
 
         Ok(())
+    }
+
+    #[test]
+    fn copy_to_table_to_table() -> Result<(), ParserError> {
+        // positive case
+        let sql = "COPY foo TO bar";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: object_name("foo"),
+            target: "bar".to_string(),
+            options: HashMap::new(),
+        });
+
+        assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_to_query_to_table() -> Result<(), ParserError> {
+        let statement = verified_stmt("SELECT 1");
+
+        // unwrap the various layers
+        let statement = if let Statement::Statement(statement) = statement {
+            *statement
+        } else {
+            panic!("Expected statement, got {statement:?}");
+        };
+
+        let query = if let SQLStatement::Query(query) = statement {
+            *query
+        } else {
+            panic!("Expected query, got {statement:?}");
+        };
+
+        let sql = "COPY (SELECT 1) TO bar";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: CopyToSource::Query(query),
+            target: "bar".to_string(),
+            options: HashMap::new(),
+        });
+        assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_to_options() -> Result<(), ParserError> {
+        let sql = "COPY foo TO bar (row_group_size 55)";
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: object_name("foo"),
+            target: "bar".to_string(),
+            options: HashMap::from([(
+                "row_group_size".to_string(),
+                Value::Number("55".to_string(), false),
+            )]),
+        });
+        assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn copy_to_multi_options() -> Result<(), ParserError> {
+        let sql =
+            "COPY foo TO bar (format parquet, row_group_size 55, compression snappy)";
+        // canonical order is alphabetical
+        let canonical =
+            "COPY foo TO bar (compression snappy, format parquet, row_group_size 55)";
+
+        let expected_options = HashMap::from([
+            (
+                "compression".to_string(),
+                Value::UnQuotedString("snappy".to_string()),
+            ),
+            (
+                "format".to_string(),
+                Value::UnQuotedString("parquet".to_string()),
+            ),
+            (
+                "row_group_size".to_string(),
+                Value::Number("55".to_string(), false),
+            ),
+        ]);
+
+        let options =
+            if let Statement::CopyTo(copy_to) = one_statement_parses_to(sql, canonical) {
+                copy_to.options
+            } else {
+                panic!("Expected copy");
+            };
+
+        assert_eq!(options, expected_options);
+
+        Ok(())
+    }
+
+    // For error cases, see: `copy.slt`
+
+    fn object_name(name: &str) -> CopyToSource {
+        CopyToSource::Relation(ObjectName(vec![Ident::new(name)]))
+    }
+
+    // Based on  sqlparser-rs
+    // https://github.com/sqlparser-rs/sqlparser-rs/blob/ae3b5844c839072c235965fe0d1bddc473dced87/src/test_utils.rs#L104-L116
+
+    /// Ensures that `sql` parses as a single [Statement]
+    ///
+    /// If `canonical` is non empty,this function additionally asserts
+    /// that:
+    ///
+    /// 1. parsing `sql` results in the same [`Statement`] as parsing
+    /// `canonical`.
+    ///
+    /// 2. re-serializing the result of parsing `sql` produces the same
+    /// `canonical` sql string
+    fn one_statement_parses_to(sql: &str, canonical: &str) -> Statement {
+        let mut statements = DFParser::parse_sql(sql).unwrap();
+        assert_eq!(statements.len(), 1);
+
+        if sql != canonical {
+            assert_eq!(DFParser::parse_sql(canonical).unwrap(), statements);
+        }
+
+        let only_statement = statements.pop_front().unwrap();
+        assert_eq!(canonical, only_statement.to_string());
+        only_statement
+    }
+
+    /// Ensures that `sql` parses as a single [Statement], and that
+    /// re-serializing the parse result produces the same `sql`
+    /// string (is not modified after a serialization round-trip).
+    fn verified_stmt(sql: &str) -> Statement {
+        one_statement_parses_to(sql, sql)
     }
 }

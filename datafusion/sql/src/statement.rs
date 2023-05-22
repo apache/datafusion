@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
+    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
+    Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -85,6 +86,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
+            DFStatement::CopyTo(s) => self.copy_to_plan(s),
         }
     }
 
@@ -535,6 +537,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             schema,
             dummy_schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
+        // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
+        Err(DataFusionError::NotImplemented(
+            "`COPY .. TO ..` statement is not yet supported".to_string(),
+        ))
     }
 
     fn build_order_by(
