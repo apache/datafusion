@@ -28,8 +28,9 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 Examples:
 
 ```sql
-    select min(x) over(partition by col1 order by col2) from table
-    select avg(x) over(partition by col1 order by col2) from table
+    select min(x) over(partition by col1 order by col2) from table;
+    select avg(x) over(partition by col1 order by col2 range between 2 preceding and 2 following) from table;
+    select max(x) over(order by col1 rows between unbounded preceding and current row) from table;
 ```
 
 ## Ranking functions
