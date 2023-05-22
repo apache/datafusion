@@ -404,7 +404,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             Statement::Delete {
-                table_name,
+                tables: _tables,
+                from,
                 using,
                 selection,
                 returning,
@@ -419,7 +420,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Delete-returning clause not yet supported".to_owned(),
                     ))?;
                 }
-                self.delete_to_plan(table_name, selection)
+                self.delete_to_plan(from[0].relation.clone(), selection)
             }
 
             Statement::StartTransaction { modes } => {
@@ -560,10 +561,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ));
         }
         // Convert each OrderByExpr to a SortExpr:
-        let result = order_exprs
-            .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-            .collect::<Result<Vec<_>>>()?;
+        let result = self.order_by_to_sort_expr(&order_exprs, schema, planner_context)?;
         // Verify that columns of all SortExprs exist in the schema:
         for expr in result.iter() {
             for column in expr.to_columns()?.iter() {

@@ -42,8 +42,7 @@ arrow-schema = { workspace = true }
 datafusion-common = { path = "../common", version = "25.0.0" }
 datafusion-expr = { path = "../expr", version = "25.0.0" }
 log = "^0.4"
-# sqlparser = "0.33"
-sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "7ed96ce" }
+sqlparser = "0.34"
 
 [dev-dependencies]
 ctor = "0.2.0"

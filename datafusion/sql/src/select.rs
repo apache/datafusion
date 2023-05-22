@@ -35,7 +35,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Partitioning,
 };
 use sqlparser::ast::{self, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
-use sqlparser::ast::{IdentWindow, Select, SelectItem, TableWithJoins};
+use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -72,18 +72,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // handle named windows before processing the projection expression
         let mut modified_projection = select.projection.clone();
+        // If the projection is done over a named window, that window
+        // name must be defined. Otherwise, it gives an error.
         for proj in modified_projection.iter_mut() {
             if let SelectItem::ExprWithAlias {
                 expr: ast::Expr::Function(f),
                 alias: _,
             } = proj
             {
-                for IdentWindow(window_ident, window_spec) in select.named_window.iter() {
+                for NamedWindowDefinition(window_ident, window_spec) in
+                    select.named_window.iter()
+                {
                     if let Some(WindowType::NamedWindow(ident)) = &f.over {
                         if ident.eq(window_ident) {
                             f.over = Some(WindowType::WindowSpec(window_spec.clone()))
                         }
                     }
+                }
+                // All named windows must be defined with a WindowSpec.
+                if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                    return Err(DataFusionError::Plan(format!(
+                        "The window {ident} is not defined!"
+                    )));
                 }
             }
         }
@@ -215,7 +225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let plan = if select.distinct {
+        let plan = if select.distinct.is_some() {
             LogicalPlanBuilder::from(plan).distinct()?.build()
         } else {
             Ok(plan)

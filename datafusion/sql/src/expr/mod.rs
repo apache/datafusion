@@ -36,7 +36,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, Interval, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -161,13 +161,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-            SQLExpr::Interval {
+            SQLExpr::Interval(Interval {
                 value,
                 leading_field,
                 leading_precision,
                 last_field,
                 fractional_seconds_precision,
-            } => self.sql_interval_to_expr(
+            } )=> self.sql_interval_to_expr(
                 *value,
                 schema,
                 planner_context,
@@ -353,11 +353,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let order_by = if let Some(order_by) = order_by {
             // TODO: Once sqlparser supports multiple order by clause, handle it
             //       see issue: https://github.com/sqlparser-rs/sqlparser-rs/issues/875
-            Some(vec![self.order_by_to_sort_expr(
-                *order_by,
-                input_schema,
-                planner_context,
-            )?])
+            Some(self.order_by_to_sort_expr(&order_by, input_schema, planner_context)?)
         } else {
             None
         };

@@ -24,7 +24,7 @@
 //! - An EXCLUDE clause.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use sqlparser::ast;
+use sqlparser::ast::{self, Interval};
 use sqlparser::parser::ParserError::ParserError;
 use std::convert::{From, TryFrom};
 use std::fmt;
@@ -238,11 +238,11 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
     Ok(ScalarValue::Utf8(Some(match v {
         ast::Expr::Value(ast::Value::Number(value, false))
         | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => value,
-        ast::Expr::Interval {
+        ast::Expr::Interval(Interval {
             value,
             leading_field,
             ..
-        } => {
+        }) => {
             let result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
