@@ -56,7 +56,7 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
 
 /// Convert Camel form to uppercase snake
 /// such as FirstValue => FIRST_VALUE
-pub fn convert_camel_uppercase_snake(in_str: String) -> String {
+pub fn convert_camel_to_upper_snake(in_str: String) -> String {
     let mut res = String::new();
     for ch in in_str.chars() {
         if ch.is_uppercase() && !res.is_empty() {

@@ -23,7 +23,7 @@
 
 use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
-use crate::utils::convert_camel_uppercase_snake;
+use crate::utils::convert_camel_to_upper_snake;
 use crate::{aggregate_function, AggregateUDF, Signature, TypeSignature, Volatility};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
@@ -57,7 +57,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunction> {
 
 impl fmt::Display for BuiltInWindowFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", convert_camel_uppercase_snake(format!("{self:?}")))
+        write!(f, "{}", convert_camel_to_upper_snake(format!("{self:?}")))
     }
 }
 

@@ -17,7 +17,7 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use crate::utils::convert_camel_uppercase_snake;
+use crate::utils::convert_camel_to_upper_snake;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
@@ -86,7 +86,7 @@ impl fmt::Display for AggregateFunction {
         // uppercase of the debug.
         // Convert Camel form to uppercase snake
         // such as FirstValue => FIRST_VALUE
-        write!(f, "{}", convert_camel_uppercase_snake(format!("{self:?}")))
+        write!(f, "{}", convert_camel_to_upper_snake(format!("{self:?}")))
     }
 }
 
