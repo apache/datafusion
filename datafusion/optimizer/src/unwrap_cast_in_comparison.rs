@@ -957,7 +957,7 @@ mod tests {
             TimeUnit::Microsecond,
             TimeUnit::Nanosecond,
         ] {
-            let utc = Some("+0:00".into());
+            let utc = Some("+00:00".into());
             // No timezone, utc timezone
             let (lit_tz_none, lit_tz_utc) = match time_unit {
                 TimeUnit::Second => (
