@@ -360,7 +360,8 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Extension(extension_plan) => {
-            let extension_bytes = extension_plan.node.serialize()?;
+            // let extension_bytes = extension_plan.node.serialize()?;
+            let extension_bytes = todo!();
             let detail = ProtoAny {
                 type_url: extension_plan.node.name().to_string(),
                 value: extension_bytes,

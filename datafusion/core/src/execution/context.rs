@@ -31,6 +31,7 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
+use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     DescribeTable, StringifiedPlan, UserDefinedLogicalNode,
@@ -1339,7 +1340,7 @@ pub struct SessionState {
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Deserializer registry for extensions.
-    extension_deserializer: Arc<dyn ExtensionDeserializer>,
+    serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
     /// Execution properties
@@ -1482,7 +1483,7 @@ impl SessionState {
             catalog_list,
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
-            extension_deserializer: Arc::new(EmptyExtensionDeserializer),
+            serializer_registry: Arc::new(EmptySerializerRegistry),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
@@ -1644,11 +1645,11 @@ impl SessionState {
     }
 
     /// Replace the extension deserializer
-    pub fn with_extension_deserializer(
+    pub fn with_serializer_registry(
         mut self,
-        deserializer: Arc<dyn ExtensionDeserializer>,
+        registry: Arc<dyn SerializerRegistry>,
     ) -> Self {
-        self.extension_deserializer = deserializer;
+        self.serializer_registry = registry;
         self
     }
 
@@ -1939,9 +1940,9 @@ impl SessionState {
         &self.aggregate_functions
     }
 
-    /// Return extension deserializer
-    pub fn extension_deserializer(&self) -> Arc<dyn ExtensionDeserializer> {
-        self.extension_deserializer.clone()
+    /// Return [SerializerRegistry] for extensions
+    pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
+        self.serializer_registry.clone()
     }
 
     /// Return version of the cargo package that produced this query
@@ -2075,22 +2076,21 @@ fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
     }
 }
 
-/// Deserializer registry for extensions like [UserDefinedLogicalNode].
-pub trait ExtensionDeserializer: Send + Sync {
-    /// Deserialize user defined logical plan node ([UserDefinedLogicalNode]) from
-    /// bytes.
-    fn deserialize_logical_plan(
-        &self,
-        name: &str,
-        bytes: &[u8],
-    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
-}
-
-/// Default implementation of [ExtensionDeserializer] that throws unimplemented error
+/// Default implementation of [SerializerRegistry] that throws unimplemented error
 /// for all requests.
-pub struct EmptyExtensionDeserializer;
+pub struct EmptySerializerRegistry;
 
-impl ExtensionDeserializer for EmptyExtensionDeserializer {
+impl SerializerRegistry for EmptySerializerRegistry {
+    fn serialize_logical_plan(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+    ) -> Result<Vec<u8>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Serializing user defined logical plan node `{}` is not supported",
+            node.name()
+        )))
+    }
+
     fn deserialize_logical_plan(
         &self,
         name: &str,

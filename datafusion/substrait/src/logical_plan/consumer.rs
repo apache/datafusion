@@ -437,7 +437,7 @@ pub async fn from_substrait_rel(
             };
             let plan = ctx
                 .state()
-                .extension_deserializer()
+                .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             Ok(LogicalPlan::Extension(Extension { node: plan }))
         }
@@ -449,7 +449,7 @@ pub async fn from_substrait_rel(
             };
             let plan = ctx
                 .state()
-                .extension_deserializer()
+                .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let Some(input_rel) = &extension.input else {
                 return Err(DataFusionError::Substrait(
@@ -468,7 +468,7 @@ pub async fn from_substrait_rel(
             };
             let plan = ctx
                 .state()
-                .extension_deserializer()
+                .serializer_registry()
                 .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
             let mut inputs = Vec::with_capacity(extension.inputs.len());
             for input in &extension.inputs {

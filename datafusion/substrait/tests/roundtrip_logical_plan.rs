@@ -27,15 +27,31 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::{DFSchema, DFSchemaRef};
     use datafusion::error::Result;
-    use datafusion::execution::context::{ExtensionDeserializer, SessionState};
+    use datafusion::execution::context::SessionState;
+    use datafusion::execution::registry::SerializerRegistry;
     use datafusion::execution::runtime_env::RuntimeEnv;
     use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
     use datafusion::prelude::*;
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
 
-    struct MockExtensionDeserializer;
+    struct MockSerializerRegistry;
 
-    impl ExtensionDeserializer for MockExtensionDeserializer {
+    impl SerializerRegistry for MockSerializerRegistry {
+        fn serialize_logical_plan(
+            &self,
+            node: &dyn UserDefinedLogicalNode,
+        ) -> Result<Vec<u8>> {
+            if node.name() == "MockUserDefinedLogicalPlan" {
+                let node = node
+                    .as_any()
+                    .downcast_ref::<MockUserDefinedLogicalPlan>()
+                    .unwrap();
+                node.serialize()
+            } else {
+                unreachable!()
+            }
+        }
+
         fn deserialize_logical_plan(
             &self,
             name: &str,
@@ -106,6 +122,16 @@ mod tests {
         fn dyn_eq(&self, _: &dyn UserDefinedLogicalNode) -> bool {
             unimplemented!()
         }
+    }
+
+    impl MockUserDefinedLogicalPlan {
+        pub fn new(validation_bytes: Vec<u8>) -> Self {
+            Self {
+                validation_bytes,
+                inputs: vec![],
+                empty_schema: Arc::new(DFSchema::empty()),
+            }
+        }
 
         fn serialize(&self) -> Result<Vec<u8>> {
             Ok(self.validation_bytes.clone())
@@ -116,16 +142,6 @@ mod tests {
             Self: Sized,
         {
             Ok(Arc::new(MockUserDefinedLogicalPlan::new(bytes.to_vec())))
-        }
-    }
-
-    impl MockUserDefinedLogicalPlan {
-        pub fn new(validation_bytes: Vec<u8>) -> Self {
-            Self {
-                validation_bytes,
-                inputs: vec![],
-                empty_schema: Arc::new(DFSchema::empty()),
-            }
         }
     }
 
@@ -574,7 +590,7 @@ mod tests {
             SessionConfig::default(),
             Arc::new(RuntimeEnv::default()),
         )
-        .with_extension_deserializer(Arc::new(MockExtensionDeserializer));
+        .with_serializer_registry(Arc::new(MockSerializerRegistry));
         let ctx = SessionContext::with_state(state);
         let mut explicit_options = CsvReadOptions::new();
         let schema = Schema::new(vec![
