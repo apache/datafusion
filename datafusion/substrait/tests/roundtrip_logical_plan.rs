@@ -467,7 +467,7 @@ mod tests {
             }),
         });
 
-        let proto = to_substrait_plan(&ext_plan)?;
+        let proto = to_substrait_plan(&ext_plan, &ctx)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
 
         let plan1str = format!("{ext_plan:?}");
@@ -481,7 +481,7 @@ mod tests {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
-        let proto = to_substrait_plan(&plan)?;
+        let proto = to_substrait_plan(&plan, &ctx)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = ctx.state().optimize(&plan2)?;
         let plan2str = format!("{plan2:?}");
@@ -493,7 +493,7 @@ mod tests {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan1 = df.into_optimized_plan()?;
-        let proto = to_substrait_plan(&plan1)?;
+        let proto = to_substrait_plan(&plan1, &ctx)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = ctx.state().optimize(&plan2)?;
 
@@ -512,11 +512,11 @@ mod tests {
         let mut ctx = create_context().await?;
 
         let df_a = ctx.sql(sql_with_alias).await?;
-        let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?)?;
+        let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?, &ctx)?;
         let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a).await?;
 
         let df = ctx.sql(sql_no_alias).await?;
-        let proto = to_substrait_plan(&df.into_optimized_plan()?)?;
+        let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx)?;
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
 
         println!("{plan_with_alias:#?}");
@@ -532,7 +532,7 @@ mod tests {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
-        let proto = to_substrait_plan(&plan)?;
+        let proto = to_substrait_plan(&plan, &ctx)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = ctx.state().optimize(&plan2)?;
 
@@ -549,7 +549,7 @@ mod tests {
         let mut ctx = create_all_type_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
-        let proto = to_substrait_plan(&plan)?;
+        let proto = to_substrait_plan(&plan, &ctx)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2 = ctx.state().optimize(&plan2)?;
 
@@ -566,7 +566,7 @@ mod tests {
         let ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
-        let proto = to_substrait_plan(&plan)?;
+        let proto = to_substrait_plan(&plan, &ctx)?;
 
         let mut function_names: Vec<String> = vec![];
         let mut function_anchors: Vec<u32> = vec![];
