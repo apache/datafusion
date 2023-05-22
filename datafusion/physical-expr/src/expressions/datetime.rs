@@ -604,6 +604,13 @@ mod tests {
             &res1, &res2,
             "Timestamp Scalar={timestamp_scalar} + Interval Scalar={interval_scalar}"
         );
+        let res1 =
+            resolve_temporal_op_scalar(&timestamp_array, 1, &interval_scalar, true)?;
+        let res2 = interval_scalar.add(&timestamp_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Timestamp Scalar={timestamp_scalar} + Interval Scalar={interval_scalar}"
+        );
 
         // timestamp - interval
         let res1 =
@@ -622,6 +629,13 @@ mod tests {
             &res1, &res2,
             "Timestamp Scalar={timestamp_scalar} - Timestamp Scalar={timestamp_scalar}"
         );
+        let res1 =
+            resolve_temporal_op_scalar(&timestamp_array, -1, &timestamp_scalar, true)?;
+        let res2 = timestamp_scalar.sub(&timestamp_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Timestamp Scalar={timestamp_scalar} - Timestamp Scalar={timestamp_scalar}"
+        );
 
         // interval - interval
         let res1 =
@@ -631,10 +645,24 @@ mod tests {
             &res1, &res2,
             "Interval Scalar={interval_scalar} - Interval Scalar={interval_scalar}"
         );
+        let res1 =
+            resolve_temporal_op_scalar(&interval_array, -1, &interval_scalar, true)?;
+        let res2 = interval_scalar.sub(&interval_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Interval Scalar={interval_scalar} - Interval Scalar={interval_scalar}"
+        );
 
         // interval + interval
         let res1 =
             resolve_temporal_op_scalar(&interval_array, 1, &interval_scalar, false)?;
+        let res2 = interval_scalar.add(&interval_scalar)?.to_array();
+        assert_eq!(
+            &res1, &res2,
+            "Interval Scalar={interval_scalar} + Interval Scalar={interval_scalar}"
+        );
+        let res1 =
+            resolve_temporal_op_scalar(&interval_array, 1, &interval_scalar, true)?;
         let res2 = interval_scalar.add(&interval_scalar)?.to_array();
         assert_eq!(
             &res1, &res2,
