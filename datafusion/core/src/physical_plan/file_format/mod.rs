@@ -452,6 +452,12 @@ impl SchemaAdapter {
         )?)
     }
 
+    /// Creates a `SchemaMapping` that can be used to cast or map the columns from the file schema to the table schema.
+    ///
+    /// If the provided `file_schema` contains columns of a different type to the expected
+    /// `table_schema`, the method will attempt to cast the array data from the file schema
+    /// to the table schema where possible.
+    #[allow(dead_code)]
     pub fn map_schema(&self, file_schema: &Schema) -> Result<SchemaMapping> {
         let mut field_mappings = Vec::new();
 
@@ -484,12 +490,18 @@ impl SchemaAdapter {
     }
 }
 
+/// The SchemaMapping struct holds a mapping from the file schema to the table schema
+/// and any necessary type conversions that need to be applied.
 pub struct SchemaMapping {
+    #[allow(dead_code)]
     table_schema: SchemaRef,
+    #[allow(dead_code)]
     field_mappings: Vec<(usize, DataType)>,
 }
 
 impl SchemaMapping {
+    /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
+    #[allow(dead_code)]
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let mut mapped_cols = Vec::with_capacity(self.field_mappings.len());
 
@@ -499,8 +511,7 @@ impl SchemaMapping {
             mapped_cols.push(casted_array);
         }
 
-        let schema = self.table_schema.clone();
-        let record_batch = RecordBatch::try_new(schema.clone(), mapped_cols)?;
+        let record_batch = RecordBatch::try_new(self.table_schema.clone(), mapped_cols)?;
         Ok(record_batch)
     }
 }
