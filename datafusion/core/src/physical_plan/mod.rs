@@ -671,6 +671,7 @@ pub mod planner;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
+pub mod stats;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;
@@ -679,8 +680,6 @@ pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
-pub mod stats;
-
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;
