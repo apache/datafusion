@@ -35,7 +35,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{or, Accumulator};
+use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
@@ -360,7 +360,7 @@ fn get_finest_requirement<
     F: Fn() -> EquivalenceProperties,
     F2: Fn() -> OrderingEquivalenceProperties,
 >(
-    aggr_expr: &mut Vec<Arc<dyn AggregateExpr>>,
+    aggr_expr: &mut [Arc<dyn AggregateExpr>],
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
     eq_properties: F,
     ordering_eq_properties: F2,
@@ -454,25 +454,6 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .collect()
 }
 
-fn rewrite_aggregate(
-    aggr_expr: &mut Vec<Arc<dyn AggregateExpr>>,
-    order_by_expr: &mut Vec<Option<Vec<PhysicalSortExpr>>>,
-) {
-    for (aggr_expr, order_by_expr) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
-        if let Some(first_agg) = aggr_expr.as_any().downcast_ref::<FirstAgg>() {
-            if let Some(order_by_expr) = order_by_expr {
-                *aggr_expr = Arc::new(LastAgg::new(
-                    first_agg.expressions()[0].clone(),
-                    first_agg.name(),
-                    first_agg.data_type.clone(),
-                )) as _;
-                *order_by_expr = reverse_order_bys(&order_by_expr);
-                continue;
-            }
-        }
-    }
-}
-
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -484,11 +465,6 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
-        // println!("aggr_expr:{:?}", aggr_expr);
-        // println!("order_by_expr:{:?}", order_by_expr);
-        // rewrite_aggregate(&mut aggr_expr, &mut order_by_expr);
-        // println!("aggr_expr:{:?}", aggr_expr);
-        // println!("order_by_expr:{:?}", order_by_expr);
         let schema = create_schema(
             &input.schema(),
             &group_by.expr,
