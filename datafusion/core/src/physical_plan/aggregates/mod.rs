@@ -35,7 +35,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::Accumulator;
+use datafusion_expr::{or, Accumulator};
 use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
@@ -341,7 +341,18 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _)
         .collect()
 }
-
+fn get_init_req(
+    aggr_expr: &[Arc<dyn AggregateExpr>],
+    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
+) -> Option<Vec<PhysicalSortExpr>> {
+    for (aggr_expr, fn_reqs) in aggr_expr.iter().zip(order_by_expr.iter()) {
+        // Cannot reverse and there is a requirement
+        if aggr_expr.reverse_expr().is_none() && fn_reqs.is_some() {
+            return fn_reqs.clone();
+        }
+    }
+    None
+}
 /// This function gets the finest ordering requirement among all the aggregation
 /// functions. If requirements are conflicting, (i.e. we can not compute the
 /// aggregations in a single [`AggregateExec`]), the function returns an error.
@@ -349,12 +360,19 @@ fn get_finest_requirement<
     F: Fn() -> EquivalenceProperties,
     F2: Fn() -> OrderingEquivalenceProperties,
 >(
+    aggr_expr: &mut Vec<Arc<dyn AggregateExpr>>,
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
     eq_properties: F,
     ordering_eq_properties: F2,
 ) -> Result<Option<Vec<PhysicalSortExpr>>> {
-    let mut result: Option<Vec<PhysicalSortExpr>> = None;
-    for fn_reqs in order_by_expr.iter().flatten() {
+    let mut result: Option<Vec<PhysicalSortExpr>> =
+        get_init_req(aggr_expr, order_by_expr);
+    for (aggr_expr, fn_reqs) in aggr_expr.iter_mut().zip(order_by_expr.iter()) {
+        let fn_reqs = if let Some(fn_reqs) = fn_reqs {
+            fn_reqs
+        } else {
+            continue;
+        };
         if let Some(result) = &mut result {
             if ordering_satisfy_concrete(
                 result,
@@ -377,6 +395,32 @@ fn get_finest_requirement<
                 *result = fn_reqs.clone();
                 continue;
             }
+            if let Some(reverse) = aggr_expr.reverse_expr() {
+                let fn_reqs_reverse = reverse_order_bys(fn_reqs);
+                if ordering_satisfy_concrete(
+                    result,
+                    &fn_reqs_reverse,
+                    &eq_properties,
+                    &ordering_eq_properties,
+                ) {
+                    // Do not update the result as it already satisfies current
+                    // function's requirement:
+                    *aggr_expr = reverse;
+                    continue;
+                }
+                if ordering_satisfy_concrete(
+                    &fn_reqs_reverse,
+                    result,
+                    &eq_properties,
+                    &ordering_eq_properties,
+                ) {
+                    // Update result with current function's requirements, as it is
+                    // a finer requirement than what we currently have.
+                    *result = fn_reqs_reverse;
+                    *aggr_expr = reverse;
+                    continue;
+                }
+            }
             // If neither of the requirements satisfy the other, this means
             // requirements are conflicting. Currently, we do not support
             // conflicting requirements.
@@ -397,17 +441,54 @@ fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
         || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
+/// Reverses the ORDER BY expression, which is useful during equivalent window
+/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
+/// 'ORDER BY a DESC, NULLS FIRST'.
+pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
+    order_bys
+        .iter()
+        .map(|e| PhysicalSortExpr {
+            expr: e.expr.clone(),
+            options: !e.options,
+        })
+        .collect()
+}
+
+fn rewrite_aggregate(
+    aggr_expr: &mut Vec<Arc<dyn AggregateExpr>>,
+    order_by_expr: &mut Vec<Option<Vec<PhysicalSortExpr>>>,
+) {
+    for (aggr_expr, order_by_expr) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
+        if let Some(first_agg) = aggr_expr.as_any().downcast_ref::<FirstAgg>() {
+            if let Some(order_by_expr) = order_by_expr {
+                *aggr_expr = Arc::new(LastAgg::new(
+                    first_agg.expressions()[0].clone(),
+                    first_agg.name(),
+                    first_agg.data_type.clone(),
+                )) as _;
+                *order_by_expr = reverse_order_bys(&order_by_expr);
+                continue;
+            }
+        }
+    }
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
         mode: AggregateMode,
         group_by: PhysicalGroupBy,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
         mut order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
+        // println!("aggr_expr:{:?}", aggr_expr);
+        // println!("order_by_expr:{:?}", order_by_expr);
+        // rewrite_aggregate(&mut aggr_expr, &mut order_by_expr);
+        // println!("aggr_expr:{:?}", aggr_expr);
+        // println!("order_by_expr:{:?}", order_by_expr);
         let schema = create_schema(
             &input.schema(),
             &group_by.expr,
@@ -435,6 +516,7 @@ impl AggregateExec {
                 })
                 .collect::<Vec<_>>();
             let requirement = get_finest_requirement(
+                &mut aggr_expr,
                 &order_by_expr,
                 || input.equivalence_properties(),
                 || input.ordering_equivalence_properties(),
@@ -1095,7 +1177,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Column, Count, Median,
+        lit, ApproxDistinct, Column, Count, FirstAgg, Median,
     };
     use datafusion_physical_expr::{
         AggregateExpr, EquivalenceProperties, OrderedColumn,
@@ -1759,7 +1841,28 @@ mod tests {
             &OrderedColumn::new(col_a.clone(), options1),
             &OrderedColumn::new(col_c.clone(), options2),
         ));
-
+        let mut aggr_exprs = vec![
+            Arc::new(FirstAgg::new(
+                Arc::new(col_a.clone()),
+                "first1",
+                DataType::Int32,
+            )) as Arc<dyn AggregateExpr>,
+            Arc::new(FirstAgg::new(
+                Arc::new(col_a.clone()),
+                "first1",
+                DataType::Int32,
+            )) as Arc<dyn AggregateExpr>,
+            Arc::new(FirstAgg::new(
+                Arc::new(col_a.clone()),
+                "first1",
+                DataType::Int32,
+            )) as Arc<dyn AggregateExpr>,
+            Arc::new(FirstAgg::new(
+                Arc::new(col_a.clone()),
+                "first1",
+                DataType::Int32,
+            )) as Arc<dyn AggregateExpr>,
+        ];
         let order_by_exprs = vec![
             None,
             Some(vec![PhysicalSortExpr {
@@ -1786,6 +1889,7 @@ mod tests {
             ]),
         ];
         let res = get_finest_requirement(
+            &mut aggr_exprs,
             &order_by_exprs,
             || eq_properties.clone(),
             || ordering_eq_properties.clone(),
