@@ -1644,7 +1644,7 @@ impl SessionState {
         self
     }
 
-    /// Replace the extension deserializer
+    /// Replace the extension [`SerializerRegistry`]
     pub fn with_serializer_registry(
         mut self,
         registry: Arc<dyn SerializerRegistry>,
