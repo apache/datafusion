@@ -18,7 +18,7 @@
 //! FunctionRegistry trait
 
 use datafusion_common::Result;
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode};
 use std::{collections::HashSet, sync::Arc};
 
 /// A registry knows how to build logical expressions out of user-defined function' names
@@ -31,4 +31,22 @@ pub trait FunctionRegistry {
 
     /// Returns a reference to the udaf named `name`.
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>>;
+}
+
+/// Serializer and deserializer registry for extensions like [UserDefinedLogicalNode].
+pub trait SerializerRegistry: Send + Sync {
+    /// Serialize this node to a byte array. This serialization should not include
+    /// input plans.
+    fn serialize_logical_plan(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+    ) -> Result<Vec<u8>>;
+
+    /// Deserialize user defined logical plan node ([UserDefinedLogicalNode]) from
+    /// bytes.
+    fn deserialize_logical_plan(
+        &self,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>>;
 }

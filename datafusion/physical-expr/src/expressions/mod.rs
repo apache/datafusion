@@ -77,9 +77,7 @@ pub use crate::window::row_number::RowNumber;
 
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{
-    cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
-};
+pub use cast::{cast, cast_column, cast_with_options, CastExpr};
 pub use column::{col, Column, UnKnownColumn};
 pub use datetime::{date_time_interval_expr, DateTimeIntervalExpr};
 pub use get_indexed_field::GetIndexedFieldExpr;
