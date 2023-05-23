@@ -22,7 +22,7 @@ use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    /// convert sql OrderByExpr to Expr::Sort
+    /// convert sql [OrderByExpr] to Vec<Expr>
     pub(crate) fn order_by_to_sort_expr(
         &self,
         exprs: &[OrderByExpr],

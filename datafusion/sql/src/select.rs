@@ -34,7 +34,9 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, Filter, GroupingSet, LogicalPlan,
     LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{self, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
+use sqlparser::ast::{
+    self, Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType,
+};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -225,7 +227,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let plan = if select.distinct.is_some() {
+        let distinct = select
+            .distinct
+            .map(|distinct| match distinct {
+                Distinct::Distinct => Ok(true),
+                Distinct::On(_) => Err(DataFusionError::NotImplemented(
+                    "DISTINCT ON Exprs not supported".to_string(),
+                )),
+            })
+            .transpose()?
+            .unwrap_or(false);
+
+        let plan = if distinct {
             LogicalPlanBuilder::from(plan).distinct()?.build()
         } else {
             Ok(plan)

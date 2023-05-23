@@ -2376,9 +2376,9 @@ statement error DataFusion error: Error during planning: Invalid window frame: f
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. negative as following
-statement error DataFusion error: SQL error: TokenizerError\("Unterminated string literal at Line: 6, Column 37"\)
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets must be non negative integers
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
-  
+
 # This test shows that ordering satisfy considers ordering equivalences,
 # and can simplify (reduce expression size) multi expression requirements during normalization
 # For the example below, requirement rn1 ASC, c9 DESC should be simplified to the rn1 ASC.
@@ -3024,7 +3024,8 @@ drop table annotated_data_finite2
 statement ok
 drop table annotated_data_infinite2
 
-# unused windows are ignored
+# window3 spec is not used in window functions.
+# The query should still work.
 query RR
 SELECT
   MAX(c12) OVER window1 as min1,
@@ -3074,7 +3075,7 @@ ProjectionExec: expr=[min1@0 as min1, max1@1 as max1]
 ----------------SortExec: expr=[c11@1 ASC NULLS LAST]
 ------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c11, c12], has_header=true
 
-# window under projection is not defined 
+# window2 spec is not defined
 statement error DataFusion error: Error during planning: The window window2 is not defined!
 SELECT
   MAX(c12) OVER window1 as min1,
