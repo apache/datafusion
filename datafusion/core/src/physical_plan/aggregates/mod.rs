@@ -57,7 +57,7 @@ mod utils;
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{ArrayAgg, FirstAgg, LastAgg};
-use datafusion_physical_expr::utils::{ordering_satisfy, ordering_satisfy_requirement};
+use datafusion_physical_expr::utils::ordering_satisfy_requirement;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -498,13 +498,19 @@ impl AggregateExec {
                 || input.equivalence_properties(),
                 || input.ordering_equivalence_properties(),
             )?;
-            let aggregator_requirement = requirement.as_ref()
+            let aggregator_requirement = requirement
+                .as_ref()
                 .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
-            let reverse_agg_requirement = if aggr_expr.iter().all(|expr| expr.reverse_expr().is_some()){
-                requirement.map(|reqs| PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&reqs).iter()))
-            } else{
-                None
-            };
+            let reverse_agg_requirement =
+                if aggr_expr.iter().all(|expr| expr.reverse_expr().is_some()) {
+                    requirement.map(|reqs| {
+                        PhysicalSortRequirement::from_sort_exprs(
+                            reverse_order_bys(&reqs).iter(),
+                        )
+                    })
+                } else {
+                    None
+                };
             aggregator_requirements[0] = aggregator_requirement;
             aggregator_requirements[1] = reverse_agg_requirement;
         }
@@ -523,16 +529,18 @@ impl AggregateExec {
 
         let mut required_input_ordering = None;
 
-        for (idx, aggregator_requirement) in aggregator_requirements.into_iter().enumerate() {
+        for (idx, aggregator_requirement) in
+            aggregator_requirements.into_iter().enumerate()
+        {
             if let Some(AggregationOrdering {
-                            ordering,
-                            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
-                            // running with bounded memory, without breaking pipeline), then
-                            // we append aggregator ordering requirement to the existing
-                            // ordering. This way, we can still run with bounded memory.
-                            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-                            ..
-                        }) = &aggregation_ordering
+                ordering,
+                // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
+                // running with bounded memory, without breaking pipeline), then
+                // we append aggregator ordering requirement to the existing
+                // ordering. This way, we can still run with bounded memory.
+                mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
+                ..
+            }) = &aggregation_ordering
             {
                 if let Some(aggregator_requirement) = aggregator_requirement {
                     // Get the section of the input ordering that enables us to run in the
@@ -543,8 +551,9 @@ impl AggregateExec {
                         } else {
                             vec![]
                         };
-                    let mut requirement =
-                        PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
+                    let mut requirement = PhysicalSortRequirement::from_sort_exprs(
+                        requirement_prefix.iter(),
+                    );
                     for req in aggregator_requirement {
                         if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                             requirement.push(req);
@@ -555,12 +564,22 @@ impl AggregateExec {
             } else {
                 required_input_ordering = aggregator_requirement;
             }
-            if ordering_satisfy_requirement(input.output_ordering(), required_input_ordering.as_deref(), || input.equivalence_properties(), || input.ordering_equivalence_properties()) {
+            if ordering_satisfy_requirement(
+                input.output_ordering(),
+                required_input_ordering.as_deref(),
+                || input.equivalence_properties(),
+                || input.ordering_equivalence_properties(),
+            ) {
                 if idx == 1 {
-                    let res = aggr_expr.iter_mut().map(|elem| {
-                        elem.reverse_expr()
-                    }).collect::<Option<Vec<_>>>();
-                    aggr_expr = res.ok_or_else(|| DataFusionError::Execution("Should have a reverse expression".to_string()))?;
+                    let res = aggr_expr
+                        .iter_mut()
+                        .map(|elem| elem.reverse_expr())
+                        .collect::<Option<Vec<_>>>();
+                    aggr_expr = res.ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "Should have a reverse expression".to_string(),
+                        )
+                    })?;
                 }
                 break;
             }
@@ -1838,6 +1857,11 @@ mod tests {
             &OrderedColumn::new(col_c.clone(), options2),
         ));
         let mut aggr_exprs = vec![
+            Arc::new(FirstAgg::new(
+                Arc::new(col_a.clone()),
+                "first1",
+                DataType::Int32,
+            )) as Arc<dyn AggregateExpr>,
             Arc::new(FirstAgg::new(
                 Arc::new(col_a.clone()),
                 "first1",
