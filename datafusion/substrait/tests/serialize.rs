@@ -57,7 +57,7 @@ mod tests {
         let ctx = create_context().await?;
         let table = provider_as_source(ctx.table_provider("data").await?);
         let table_scan = LogicalPlanBuilder::scan("data", table, None)?.build()?;
-        let convert_result = producer::to_substrait_plan(&table_scan);
+        let convert_result = producer::to_substrait_plan(&table_scan, &ctx);
         assert!(convert_result.is_ok());
 
         Ok(())
