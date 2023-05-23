@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::expressions::Column;
+use crate::{PhysicalSortExpr, PhysicalSortRequirement};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 
-use crate::{PhysicalSortExpr, PhysicalSortRequirement};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -224,23 +224,21 @@ impl OrderingEquivalentClass {
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         for (column, columns) in columns_map {
             let mut to_insert = vec![];
-            for ordering in vec![&self.head].into_iter().chain(self.others.iter()) {
-                for (idx, elem) in ordering.iter().enumerate() {
-                    if elem.col.eq(column) {
+            for ordering in std::iter::once(&self.head).chain(self.others.iter()) {
+                for (idx, item) in ordering.iter().enumerate() {
+                    if item.col.eq(column) {
                         for col in columns {
                             let mut normalized = self.head.clone();
-                            // Change the corresponding entry in the head, with the alias column
-                            normalized[idx] = OrderedColumn {
-                                col: col.clone(),
-                                options: elem.options,
-                            };
+                            // Change the corresponding entry in the head with the alias column:
+                            let entry = &mut normalized[idx];
+                            (entry.col, entry.options) = (col.clone(), item.options);
                             to_insert.push(normalized);
                         }
                     }
                 }
             }
-            for elems in to_insert {
-                self.insert(elems);
+            for items in to_insert {
+                self.insert(items);
             }
         }
     }
@@ -273,7 +271,7 @@ pub fn project_equivalence_properties(
         }
     }
 
-    // Prune columns that no longer is in the schema from from the EquivalenceProperties.
+    // Prune columns that are no longer in the schema from equivalences.
     let schema = output_eq.schema();
     let fields = schema.fields();
     for class in eq_classes.iter_mut() {

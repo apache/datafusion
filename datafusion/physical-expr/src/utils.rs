@@ -173,40 +173,41 @@ fn normalize_sort_requirement_with_equivalence_properties(
     sort_requirement
 }
 
-// Searches `section` inside the `searched`. Returns each range where `section` is compatible with the corresponding slice in the `searched`.
+/// This function searches for the slice `section` inside the slice `given`.
+/// It returns each range where `section` is compatible with the corresponding
+/// slice in `given`.
 fn get_compatible_ranges(
-    searched: &[PhysicalSortRequirement],
+    given: &[PhysicalSortRequirement],
     section: &[PhysicalSortRequirement],
 ) -> Vec<Range<usize>> {
     let n_section = section.len();
-    let n_end = if searched.len() >= n_section {
-        searched.len() - n_section + 1
+    let n_end = if given.len() >= n_section {
+        given.len() - n_section + 1
     } else {
         0
     };
-    let mut res = vec![];
-    for idx in 0..n_end {
-        let end = idx + n_section;
-        let matches = searched[idx..end]
-            .iter()
-            .zip(section)
-            .all(|(req, given)| given.compatible(req));
-        if matches {
-            res.push(Range { start: idx, end });
-        }
-    }
-    res
+    (0..n_end)
+        .filter_map(|idx| {
+            let end = idx + n_section;
+            given[idx..end]
+                .iter()
+                .zip(section)
+                .all(|(req, given)| given.compatible(req))
+                .then_some(Range { start: idx, end })
+        })
+        .collect()
 }
 
-// Removes duplicate entries inside the `in_data`, vector returned preserves insertion order.
-fn collapse_vec<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
-    let mut out_data = vec![];
-    for elem in in_data {
-        if !out_data.contains(&elem) {
-            out_data.push(elem);
+/// This function constructs a duplicate-free vector by filtering out duplicate
+/// entries inside the given vector `input`.
+fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
+    let mut output = vec![];
+    for item in input {
+        if !output.contains(&item) {
+            output.push(item);
         }
     }
-    out_data
+    output
 }
 
 pub fn normalize_sort_exprs(
@@ -239,35 +240,33 @@ pub fn normalize_sort_requirements(
         })
         .collect::<Vec<_>>();
     for ordering_eq_class in ordering_eq_properties {
-        for elem in ordering_eq_class.others() {
-            let elem: Vec<PhysicalSortRequirement> = elem
+        for item in ordering_eq_class.others() {
+            let item = item
                 .clone()
                 .into_iter()
                 .map(|elem| elem.into())
                 .collect::<Vec<_>>();
-            let ranges = get_compatible_ranges(&normalized_exprs, &elem);
+            let ranges = get_compatible_ranges(&normalized_exprs, &item);
             let mut offset: i64 = 0;
             for Range { start, end } in ranges {
-                let head: Vec<PhysicalSortRequirement> = ordering_eq_class
+                let mut head = ordering_eq_class
                     .head()
                     .clone()
                     .into_iter()
                     .map(|elem| elem.into())
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<PhysicalSortRequirement>>();
                 let updated_start = (start as i64 + offset) as usize;
                 let updated_end = (end as i64 + offset) as usize;
                 let range = end - start;
                 offset += head.len() as i64 - range as i64;
                 let all_none = normalized_exprs[updated_start..updated_end]
                     .iter()
-                    .all(|elem| elem.options.is_none());
-                let head = if all_none {
-                    head.into_iter()
-                        .map(|elem| PhysicalSortRequirement::new(elem.expr, None))
-                        .collect::<Vec<_>>()
-                } else {
-                    head
-                };
+                    .all(|req| req.options.is_none());
+                if all_none {
+                    for req in head.iter_mut() {
+                        req.options = None;
+                    }
+                }
                 normalized_exprs.splice(updated_start..updated_end, head);
             }
         }
