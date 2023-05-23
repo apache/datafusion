@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::prelude::AvroReadOptions;
 use datafusion::{
     arrow::{
         array::{
@@ -31,13 +30,12 @@ use datafusion::{
 };
 use std::sync::Arc;
 
-use crate::{utils, TestContext};
+use crate::utils;
 
-pub async fn register_avro_tables(ctx: &mut TestContext) {
-    register_avro_test_data(ctx).await;
-}
+#[cfg(feature = "avro")]
+pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
+    use datafusion::prelude::AvroReadOptions;
 
-async fn register_avro_test_data(ctx: &mut TestContext) {
     ctx.enable_testdir();
 
     let table_path = ctx.testdir_path().join("avro");
