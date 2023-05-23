@@ -221,6 +221,10 @@ impl From<OrderedColumn> for PhysicalSortRequirement {
 pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
 
 impl OrderingEquivalentClass {
+    /// This function extends ordering equivalences with alias information.
+    // For instance, assume column a and b are aliases,
+    // and column (a ASC), (c DESC) are ordering equivalent. We append (b ASC) to ordering equivalence,
+    // since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         for (column, columns) in columns_map {
             let mut to_insert = vec![];
