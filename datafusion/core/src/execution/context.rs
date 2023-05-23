@@ -1760,7 +1760,7 @@ impl SessionState {
         // Always include information_schema if available
         if self.config.information_schema() {
             for s in INFORMATION_SCHEMA_TABLES {
-                relations.insert(sqlparser::ast::ObjectName(vec![
+                relations.insert(ObjectName(vec![
                     Ident::new(INFORMATION_SCHEMA),
                     Ident::new(*s),
                 ]));

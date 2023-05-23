@@ -24,7 +24,7 @@
 //! - An EXCLUDE clause.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use sqlparser::ast::{self};
+use sqlparser::ast;
 use sqlparser::parser::ParserError::ParserError;
 use std::convert::{From, TryFrom};
 use std::fmt;
