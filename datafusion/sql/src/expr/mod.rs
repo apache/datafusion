@@ -362,7 +362,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 1 => order_by.pop().unwrap(),
                 n => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "ARRAY_AGG only supports a single ORDER BY expressio. Got {n}"
+                        "ARRAY_AGG only supports a single ORDER BY expression. Got {n}"
                     )))
                 }
             };
