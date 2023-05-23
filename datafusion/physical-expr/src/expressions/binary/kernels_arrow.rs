@@ -347,7 +347,7 @@ pub(crate) fn add_dyn_temporal_right_scalar(
             let left = as_date32_array(&left)?;
             let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
                 Ok(date32_op(days, right, 1)?)
-            })?) as ArrayRef;
+            })?) as _;
             Ok(ret)
         }
         // Date64 + Interval
@@ -355,7 +355,7 @@ pub(crate) fn add_dyn_temporal_right_scalar(
             let left = as_date64_array(&left)?;
             let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
                 Ok(date64_op(ms, right, 1)?)
-            })?) as ArrayRef;
+            })?) as _;
             Ok(ret)
         }
         // Interval + Interval
@@ -381,30 +381,32 @@ pub(crate) fn add_dyn_temporal_left_scalar(
         // Date32 + Interval
         (DataType::Date32, DataType::Interval(..)) => {
             if let ScalarValue::Date32(Some(left)) = left {
-                return scalar_date32_array_interval_op(
+                scalar_date32_array_interval_op(
                     *left,
                     right,
                     NaiveDate::checked_add_days,
                     NaiveDate::checked_add_months,
-                );
+                )
+            } else {
+                Err(DataFusionError::Internal(
+                    "Date32 value is None".to_string(),
+                ))
             }
-            Err(DataFusionError::Internal(
-                "Date32 value is None".to_string(),
-            ))
         }
         // Date64 + Interval
         (DataType::Date64, DataType::Interval(..)) => {
             if let ScalarValue::Date64(Some(left)) = left {
-                return scalar_date64_array_interval_op(
+                scalar_date64_array_interval_op(
                     *left,
                     right,
                     NaiveDate::checked_add_days,
                     NaiveDate::checked_add_months,
-                );
+                )
+            } else {
+                Err(DataFusionError::Internal(
+                    "Date64 value is None".to_string(),
+                ))
             }
-            Err(DataFusionError::Internal(
-                "Date64 value is None".to_string(),
-            ))
         }
         // Interval + Interval
         (DataType::Interval(..), DataType::Interval(..)) => {
@@ -464,7 +466,7 @@ pub(crate) fn subtract_dyn_temporal_right_scalar(
             let left = as_date32_array(&left)?;
             let ret = Arc::new(try_unary::<Date32Type, _, Date32Type>(left, |days| {
                 Ok(date32_op(days, right, -1)?)
-            })?) as ArrayRef;
+            })?) as _;
             Ok(ret)
         }
         // Date64 - Interval
@@ -472,7 +474,7 @@ pub(crate) fn subtract_dyn_temporal_right_scalar(
             let left = as_date64_array(&left)?;
             let ret = Arc::new(try_unary::<Date64Type, _, Date64Type>(left, |ms| {
                 Ok(date64_op(ms, right, -1)?)
-            })?) as ArrayRef;
+            })?) as _;
             Ok(ret)
         }
         // Timestamp - Timestamp
@@ -502,30 +504,32 @@ pub(crate) fn subtract_dyn_temporal_left_scalar(
         // Date32 - Interval
         (DataType::Date32, DataType::Interval(..)) => {
             if let ScalarValue::Date32(Some(left)) = left {
-                return scalar_date32_array_interval_op(
+                scalar_date32_array_interval_op(
                     *left,
                     right,
                     NaiveDate::checked_sub_days,
                     NaiveDate::checked_sub_months,
-                );
+                )
+            } else {
+                Err(DataFusionError::Internal(
+                    "Date32 value is None".to_string(),
+                ))
             }
-            Err(DataFusionError::Internal(
-                "Date32 value is None".to_string(),
-            ))
         }
         // Date64 - Interval
         (DataType::Date64, DataType::Interval(..)) => {
             if let ScalarValue::Date64(Some(left)) = left {
-                return scalar_date64_array_interval_op(
+                scalar_date64_array_interval_op(
                     *left,
                     right,
                     NaiveDate::checked_sub_days,
                     NaiveDate::checked_sub_months,
-                );
+                )
+            } else {
+                Err(DataFusionError::Internal(
+                    "Date64 value is None".to_string(),
+                ))
             }
-            Err(DataFusionError::Internal(
-                "Date64 value is None".to_string(),
-            ))
         }
         // Timestamp - Timestamp
         (DataType::Timestamp(..), DataType::Timestamp(..)) => {
