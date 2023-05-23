@@ -36,7 +36,7 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
-        NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
+        NegativeExpr, NotExpr, TryCastExpr,
     },
     functions, Partitioning,
 };
@@ -237,7 +237,7 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
             convert_required!(e.arrow_type)?,
-            DEFAULT_DATAFUSION_CAST_OPTIONS,
+            None,
         )),
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(

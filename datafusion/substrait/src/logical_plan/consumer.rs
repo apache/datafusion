@@ -22,7 +22,7 @@ use datafusion::logical_expr::{
     aggregate_function, window_function::find_df_window_func, BinaryExpr, Case, Expr,
     LogicalPlan, Operator,
 };
-use datafusion::logical_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion::logical_expr::{build_join_schema, Extension, LogicalPlanBuilder};
 use datafusion::logical_expr::{expr, Cast, WindowFrameBound, WindowFrameUnits};
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
@@ -429,6 +429,55 @@ pub async fn from_substrait_rel(
                 "Only NamedTable reads are supported".to_string(),
             )),
         },
+        Some(RelType::ExtensionLeaf(extension)) => {
+            let Some(ext_detail) = &extension.detail else {
+                return Err(DataFusionError::Substrait(
+                    "Unexpected empty detail in ExtensionLeafRel".to_string(),
+                ));
+            };
+            let plan = ctx
+                .state()
+                .serializer_registry()
+                .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
+        Some(RelType::ExtensionSingle(extension)) => {
+            let Some(ext_detail) = &extension.detail else {
+                return Err(DataFusionError::Substrait(
+                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
+                ));
+            };
+            let plan = ctx
+                .state()
+                .serializer_registry()
+                .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+            let Some(input_rel) = &extension.input else {
+                return Err(DataFusionError::Substrait(
+                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead".to_string()
+                ));
+            };
+            let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
+            let plan = plan.from_template(&plan.expressions(), &[input_plan]);
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
+        Some(RelType::ExtensionMulti(extension)) => {
+            let Some(ext_detail) = &extension.detail else {
+                return Err(DataFusionError::Substrait(
+                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
+                ));
+            };
+            let plan = ctx
+                .state()
+                .serializer_registry()
+                .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+            let mut inputs = Vec::with_capacity(extension.inputs.len());
+            for input in &extension.inputs {
+                let input_plan = from_substrait_rel(ctx, input, extensions).await?;
+                inputs.push(input_plan);
+            }
+            let plan = plan.from_template(&plan.expressions(), &inputs);
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported RelType: {:?}",
             rel.rel_type
