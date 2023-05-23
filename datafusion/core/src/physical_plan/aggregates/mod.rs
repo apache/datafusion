@@ -475,7 +475,7 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
-        let mut aggregator_requirements = [None, None];
+        let mut aggregator_requirements = vec![];
         // Ordering requirement makes sense only in Partial and Single modes.
         // In other modes, all groups are collapsed, therefore their input schema
         // can not contain expressions in the requirement.
@@ -501,18 +501,16 @@ impl AggregateExec {
             let aggregator_requirement = requirement
                 .as_ref()
                 .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
-            let reverse_agg_requirement =
-                if aggr_expr.iter().all(|expr| expr.reverse_expr().is_some()) {
-                    requirement.map(|reqs| {
-                        PhysicalSortRequirement::from_sort_exprs(
-                            reverse_order_bys(&reqs).iter(),
-                        )
-                    })
-                } else {
-                    None
-                };
-            aggregator_requirements[0] = aggregator_requirement;
-            aggregator_requirements[1] = reverse_agg_requirement;
+            aggregator_requirements.push(aggregator_requirement);
+            // If all aggregate expressions are reversible, consider reverse requirement also.
+            if aggr_expr.iter().all(|expr| expr.reverse_expr().is_some()) {
+                let reverse_agg_requirement = requirement.map(|reqs| {
+                    PhysicalSortRequirement::from_sort_exprs(
+                        reverse_order_bys(&reqs).iter(),
+                    )
+                });
+                aggregator_requirements.push(reverse_agg_requirement);
+            }
         }
 
         // construct a map from the input columns to the output columns of the Aggregation
