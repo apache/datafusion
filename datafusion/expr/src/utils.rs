@@ -60,10 +60,9 @@ pub fn convert_camel_to_upper_snake(in_str: String) -> String {
     let mut res = String::new();
     for ch in in_str.chars() {
         if ch.is_uppercase() && !res.is_empty() {
-            res = format!("{}_{}", res, ch.to_uppercase());
-        } else {
-            res = format!("{}{}", res, ch.to_uppercase());
+            res.push('_');
         }
+        res.push_str(format!("{}", ch.to_uppercase()).as_str());
     }
     res
 }

@@ -43,7 +43,6 @@ impl FirstAgg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        println!("first agg init");
         Self {
             name: name.into(),
             data_type,
@@ -80,10 +79,6 @@ impl AggregateExpr for FirstAgg {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -143,12 +138,6 @@ impl Accumulator for FirstAccumulator {
         Ok(())
     }
 
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.count -= (values.len() - values.null_count()) as u64;
-        Ok(())
-    }
-
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST(first1, first2, first3, ...)
         self.update_batch(states)
@@ -183,7 +172,6 @@ impl LastAgg {
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        println!("last agg init");
         Self {
             name: name.into(),
             data_type,
@@ -220,10 +208,6 @@ impl AggregateExpr for LastAgg {
 
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -282,12 +266,6 @@ impl Accumulator for LastAccumulator {
             self.last = ScalarValue::try_from_array(values, values.len() - 1)?;
         }
         self.count += (values.len() - values.null_count()) as u64;
-        Ok(())
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.count -= (values.len() - values.null_count()) as u64;
         Ok(())
     }
 
