@@ -492,6 +492,7 @@ impl SchemaAdapter {
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table schema
 /// and any necessary type conversions that need to be applied.
+#[derive(Debug)]
 pub struct SchemaMapping {
     #[allow(dead_code)]
     table_schema: SchemaRef,
@@ -511,7 +512,14 @@ impl SchemaMapping {
             mapped_cols.push(casted_array);
         }
 
-        let record_batch = RecordBatch::try_new(self.table_schema.clone(), mapped_cols)?;
+        // Necessary to handle empty batches
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+
+        let record_batch = RecordBatch::try_new_with_options(
+            self.table_schema.clone(),
+            mapped_cols,
+            &options,
+        )?;
         Ok(record_batch)
     }
 }
@@ -870,8 +878,10 @@ fn get_projected_output_ordering(
 #[cfg(test)]
 mod tests {
     use arrow_array::{
-        Float32Array, Float64Array, StringArray, UInt32Array, UInt64Array,
+        Float32Array,  StringArray,  UInt64Array,
     };
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Float64Type, UInt32Type};
     use chrono::Utc;
 
     use crate::{
@@ -1245,12 +1255,10 @@ mod tests {
             Field::new("c2", DataType::Int32, true),
         ]);
 
-        let mapping = adapter.map_schema(&file_schema);
+        let err = adapter.map_schema(&file_schema).unwrap_err();
 
-        assert!(
-            mapping.is_err(),
-            "Mapping should fail if a necessary column is missing."
-        );
+        assert!(err.to_string()
+                .contains("File schema does not contain expected field"));
 
         // file schema has columns of a different and non-castable type
         let file_schema = Schema::new(vec![
@@ -1258,12 +1266,10 @@ mod tests {
             Field::new("c2", DataType::Int32, true),
             Field::new("c3", DataType::Date64, true), // cannot be casted to Float64
         ]);
-        let mapping = adapter.map_schema(&file_schema);
+        let err = adapter.map_schema(&file_schema).unwrap_err();
 
-        assert!(
-            mapping.is_err(),
-            "Mapping should fail if a column cannot be casted to the required type."
-        );
+        assert!(err.to_string()
+            .contains("Cannot cast file schema field"));
     }
 
     #[test]
@@ -1300,20 +1306,11 @@ mod tests {
         assert_eq!(mapped_batch.num_rows(), 2);
 
         let c1 = mapped_batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+            .column(0).as_string::<i32>();
         let c2 = mapped_batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .unwrap();
+            .column(1).as_primitive::<UInt32Type>();
         let c3 = mapped_batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+            .column(2).as_primitive::<Float64Type>();
 
         assert_eq!(c1.value(0), "hello");
         assert_eq!(c1.value(1), "world");
