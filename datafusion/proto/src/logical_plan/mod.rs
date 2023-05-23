@@ -502,8 +502,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }
 
                 let mut order_exprs = vec![];
-                for order in &create_extern_table.order_exprs {
-                    let order_expr = order
+                for expr in &create_extern_table.order_exprs {
+                    let order_expr = expr
                         .logical_expr_node_vector
                         .iter()
                         .map(|expr| from_proto::parse_expr(expr, ctx))
@@ -850,15 +850,15 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     let options = listing_table.options();
 
-                    let mut converted_order_exprs: Vec<LogicalExprNodeVector> = vec![];
+                    let mut exprs_vec: Vec<LogicalExprNodeVector> = vec![];
                     for order in &options.file_sort_order {
-                        let temp = LogicalExprNodeVector {
+                        let expr_vec = LogicalExprNodeVector {
                             logical_expr_node_vector: order
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, to_proto::Error>>()?,
                         };
-                        converted_order_exprs.push(temp);
+                        exprs_vec.push(expr_vec);
                     }
 
                     Ok(protobuf::LogicalPlanNode {
@@ -882,7 +882,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 target_partitions: options.target_partitions as u32,
-                                file_sort_order: converted_order_exprs,
+                                file_sort_order: exprs_vec,
                             },
                         )),
                     })

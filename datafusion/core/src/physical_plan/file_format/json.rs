@@ -108,9 +108,15 @@ impl ExecutionPlan for NdJsonExec {
             None
         }
     }
+
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
         let mut oep = OrderingEquivalenceProperties::new(self.schema());
-        let first_ordering = &self.projected_output_ordering[0];
+        let first_ordering = if let Some(first) = self.projected_output_ordering.get(0) {
+            first
+        } else {
+            // returns an empty OrderingEquivalenceProperties
+            return oep;
+        };
         let first_column = first_ordering
             .iter()
             .map(|e| TryFrom::try_from(e.clone()))
@@ -121,7 +127,8 @@ impl ExecutionPlan for NdJsonExec {
                 .map(Result::unwrap)
                 .collect::<Vec<OrderedColumn>>()
         } else {
-            Vec::new()
+            // returns an empty OrderingEquivalenceProperties
+            return oep;
         };
         for i in 1..self.projected_output_ordering.len() {
             let ordering = &self.projected_output_ordering[i];
@@ -137,7 +144,9 @@ impl ExecutionPlan for NdJsonExec {
             } else {
                 Vec::new()
             };
-            oep.add_equal_conditions((&checked_column_first, &checked_column))
+            if !checked_column.is_empty() {
+                oep.add_equal_conditions((&checked_column_first, &checked_column))
+            }
         }
         oep
     }

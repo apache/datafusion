@@ -265,8 +265,12 @@ impl Display for FileScanConfig {
             write!(f, ", infinite_source=true")?;
         }
 
-        for order in ordering {
-            write!(f, ", output_ordering={}", OutputOrderingDisplay(&order))?;
+        if !ordering.is_empty() {
+            write!(
+                f,
+                ", output_ordering={}",
+                OutputOrderingDisplay(&ordering[0])
+            )?;
         }
 
         Ok(())
@@ -776,14 +780,14 @@ fn get_projected_output_ordering(
     projected_schema: &SchemaRef,
 ) -> Vec<Vec<PhysicalSortExpr>> {
     let mut all_orderings = vec![];
-    for e in &base_config.output_ordering {
+    for output_ordering in &base_config.output_ordering {
         if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
             base_config.output_ordering[0], base_config.file_groups);
             return vec![];
         }
         let mut new_ordering = vec![];
-        for PhysicalSortExpr { expr, options } in e {
+        for PhysicalSortExpr { expr, options } in output_ordering {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
                 if let Some((idx, _)) = projected_schema.column_with_name(name) {

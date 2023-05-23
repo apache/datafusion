@@ -613,12 +613,12 @@ impl ListingTable {
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<Vec<PhysicalSortExpr>>> {
-        let mut all_sort_exprs = vec![];
-        let file_sort_orders = &self.options.file_sort_order;
+        let mut all_sort_orders = vec![];
+        let file_sort_exprs = &self.options.file_sort_order;
 
-        for file_sort_order in file_sort_orders {
+        for expr in file_sort_exprs {
             // convert each expr to a physical sort expr
-            let sort_exprs = file_sort_order
+            let sort_expr = expr
             .iter()
             .map(|expr| {
                 if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
@@ -644,9 +644,9 @@ impl ListingTable {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-            all_sort_exprs.push(sort_exprs);
+            all_sort_orders.push(sort_expr);
         }
-        Ok(all_sort_exprs)
+        Ok(all_sort_orders)
     }
 }
 

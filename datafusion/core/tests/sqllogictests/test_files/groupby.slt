@@ -1967,7 +1967,7 @@ Projection: multiple_ordered_table.a
 physical_plan
 ProjectionExec: expr=[a@0 as a]
 --SortExec: expr=[b@1 DESC]
-----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST], output_ordering=[], has_header=true
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # Expected removal of sort exec for c ASC
 query TT
@@ -1979,7 +1979,7 @@ Projection: multiple_ordered_table.a
 ----TableScan: multiple_ordered_table projection=[a, c]
 physical_plan
 ProjectionExec: expr=[a@0 as a]
---CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST], output_ordering=[c@1 ASC NULLS LAST], has_header=true
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 # test_window_agg_sort
 statement ok

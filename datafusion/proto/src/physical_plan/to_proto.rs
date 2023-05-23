@@ -481,20 +481,20 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             .map(|p| p.as_slice().try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut output_ordering = vec![];
-        for o in &conf.output_ordering {
-            let ordering = o
+        let mut output_orderings = vec![];
+        for order in &conf.output_ordering {
+            let expr_node_vec = order
                 .iter()
-                .map(|o| {
-                    let expr = o.expr.clone().try_into()?;
+                .map(|sort_expr| {
+                    let expr = sort_expr.expr.clone().try_into()?;
                     Ok(PhysicalSortExprNode {
                         expr: Some(Box::new(expr)),
-                        asc: !o.options.descending,
-                        nulls_first: o.options.nulls_first,
+                        asc: !sort_expr.options.descending,
+                        nulls_first: sort_expr.options.nulls_first,
                     })
                 })
                 .collect::<Result<Vec<PhysicalSortExprNode>>>()?;
-            output_ordering.push(ordering)
+            output_orderings.push(expr_node_vec)
         }
 
         Ok(protobuf::FileScanExecConf {
@@ -515,7 +515,7 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .map(|x| x.0.clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
-            output_ordering: output_ordering
+            output_ordering: output_orderings
                 .into_iter()
                 .map(|e| PhysicalSortExprNodeVector {
                     physical_sort_expr_node_vector: e,

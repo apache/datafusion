@@ -563,12 +563,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut all_results = vec![];
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
-            let result = expr
+            let expr_vec = expr
                 .into_iter()
                 .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             // Verify that columns of all SortExprs exist in the schema:
-            for expr in result.iter() {
+            for expr in expr_vec.iter() {
                 for column in expr.to_columns()?.iter() {
                     if !schema.has_column(column) {
                         // Return an error if any column is not in the schema:
@@ -579,7 +579,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             // If all SortExprs are valid, return them as an expression vector
-            all_results.push(result)
+            all_results.push(expr_vec)
         }
         Ok(all_results)
     }

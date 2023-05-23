@@ -431,12 +431,12 @@ pub fn parse_protobuf_file_scan_config(
         .collect::<Result<Vec<(String, DataType)>>>()?;
 
     let mut output_ordering = vec![];
-    for order in &proto.output_ordering {
-        let temp = order
+    for node_vector in &proto.output_ordering {
+        let sort_expr = node_vector
             .physical_sort_expr_node_vector
             .iter()
-            .map(|o| {
-                let expr = o
+            .map(|node| {
+                let expr = node
                     .expr
                     .as_ref()
                     .map(|e| parse_physical_expr(e.as_ref(), registry, &schema))
@@ -444,13 +444,13 @@ pub fn parse_protobuf_file_scan_config(
                 Ok(PhysicalSortExpr {
                     expr,
                     options: SortOptions {
-                        descending: !o.asc,
-                        nulls_first: o.nulls_first,
+                        descending: !node.asc,
+                        nulls_first: node.nulls_first,
                     },
                 })
             })
             .collect::<Result<Vec<PhysicalSortExpr>>>()?;
-        output_ordering.push(temp);
+        output_ordering.push(sort_expr);
     }
 
     Ok(FileScanConfig {
