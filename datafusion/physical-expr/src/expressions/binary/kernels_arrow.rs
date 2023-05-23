@@ -214,6 +214,17 @@ pub(crate) fn is_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
         .collect())
 }
 
+pub(crate) fn is_distinct_from_binary<OffsetSize: OffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(x, y)| Some(x != y))
+        .collect())
+}
+
 pub(crate) fn is_distinct_from_null(
     left: &NullArray,
     _right: &NullArray,
@@ -237,6 +248,17 @@ fn make_boolean_array(length: usize, value: bool) -> Result<BooleanArray> {
 pub(crate) fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(x, y)| Some(x == y))
+        .collect())
+}
+
+pub(crate) fn is_not_distinct_from_binary<OffsetSize: OffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
     Ok(left
         .iter()

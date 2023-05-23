@@ -70,9 +70,9 @@ use kernels::{
 };
 use kernels_arrow::{
     add_decimal_dyn_scalar, add_dyn_decimal, add_dyn_temporal, divide_decimal_dyn_scalar,
-    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
+    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_binary, is_distinct_from_bool,
     is_distinct_from_decimal, is_distinct_from_f32, is_distinct_from_f64,
-    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
+    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_binary,
     is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
     is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
     modulus_decimal_dyn_scalar, modulus_dyn_decimal, multiply_decimal_dyn_scalar,
@@ -248,6 +248,21 @@ macro_rules! compute_utf8_op {
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
+    }};
+}
+
+/// Invoke a compute kernel on a pair of binary data arrays
+macro_rules! compute_binary_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _binary>]}(&ll, &rr)?))
     }};
 }
 
@@ -516,7 +531,10 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::Binary => compute_binary_op!($LEFT, $RIGHT, $OP, BinaryArray),
+            DataType::LargeBinary => compute_binary_op!($LEFT, $RIGHT, $OP, LargeBinaryArray),
             DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
+
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
