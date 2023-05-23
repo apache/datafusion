@@ -47,6 +47,7 @@ num_cpus = "1.13.0"
 object_store = { version = "0.5.4", default-features = false, optional = true }
 parquet = { workspace = true, optional = true }
 pyo3 = { version = "0.18.0", optional = true }
-sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "b759a95", features = ["visitor"] }
+sqlparser = "0.34"
+
 [dev-dependencies]
 rand = "0.8.4"
