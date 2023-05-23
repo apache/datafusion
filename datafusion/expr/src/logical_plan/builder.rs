@@ -1140,7 +1140,7 @@ pub fn project_with_column_index(
                 relation: _,
                 ref name,
             }) if name != schema.field(i).name() => {
-                e.unalias().alias(schema.field(i).name())
+                e.alias(schema.field(i).name())
             }
             Expr::Alias { .. } | Expr::Column { .. } => e,
             _ => e.alias(schema.field(i).name()),
