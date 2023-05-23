@@ -233,10 +233,10 @@ mod tests {
     ) {
         let dirs: Vec<&Path> = dirs.collect();
 
-        let found = dirs.iter().any(|file_path| {
+        let found = dirs.iter().any(|dir_path| {
             file_path
                 .ancestors()
-                .any(|candidate_path| *file_path == candidate_path)
+                .any(|candidate_path| *dir_path == candidate_path)
         });
 
         assert!(found, "Can't find {file_path:?} in dirs: {dirs:?}");

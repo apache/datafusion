@@ -15,21 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, DataFusionError, Result};
-use datafusion_expr::{BinaryExpr, Expr, Operator};
-use sqlparser::ast::{BinaryOperator, Expr as SQLExpr};
+use crate::planner::{ContextProvider, SqlToRel};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Operator;
+use sqlparser::ast::BinaryOperator;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    pub(crate) fn parse_sql_binary_op(
-        &self,
-        left: SQLExpr,
-        op: BinaryOperator,
-        right: SQLExpr,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        let operator = match op {
+    pub(crate) fn parse_sql_binary_op(&self, op: BinaryOperator) -> Result<Operator> {
+        match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
             BinaryOperator::GtEq => Ok(Operator::GtEq),
             BinaryOperator::Lt => Ok(Operator::Lt),
@@ -56,12 +49,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL binary operator {op:?}"
             ))),
-        }?;
-
-        Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(self.sql_expr_to_logical_expr(left, schema, planner_context)?),
-            operator,
-            Box::new(self.sql_expr_to_logical_expr(right, schema, planner_context)?),
-        )))
+        }
     }
 }
