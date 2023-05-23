@@ -877,11 +877,9 @@ fn get_projected_output_ordering(
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{
-        Float32Array,  StringArray,  UInt64Array,
-    };
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float64Type, UInt32Type};
+    use arrow_array::{Float32Array, StringArray, UInt64Array};
     use chrono::Utc;
 
     use crate::{
@@ -1257,8 +1255,9 @@ mod tests {
 
         let err = adapter.map_schema(&file_schema).unwrap_err();
 
-        assert!(err.to_string()
-                .contains("File schema does not contain expected field"));
+        assert!(err
+            .to_string()
+            .contains("File schema does not contain expected field"));
 
         // file schema has columns of a different and non-castable type
         let file_schema = Schema::new(vec![
@@ -1268,8 +1267,7 @@ mod tests {
         ]);
         let err = adapter.map_schema(&file_schema).unwrap_err();
 
-        assert!(err.to_string()
-            .contains("Cannot cast file schema field"));
+        assert!(err.to_string().contains("Cannot cast file schema field"));
     }
 
     #[test]
@@ -1305,12 +1303,9 @@ mod tests {
         assert_eq!(mapped_batch.num_columns(), 3);
         assert_eq!(mapped_batch.num_rows(), 2);
 
-        let c1 = mapped_batch
-            .column(0).as_string::<i32>();
-        let c2 = mapped_batch
-            .column(1).as_primitive::<UInt32Type>();
-        let c3 = mapped_batch
-            .column(2).as_primitive::<Float64Type>();
+        let c1 = mapped_batch.column(0).as_string::<i32>();
+        let c2 = mapped_batch.column(1).as_primitive::<UInt32Type>();
+        let c3 = mapped_batch.column(2).as_primitive::<Float64Type>();
 
         assert_eq!(c1.value(0), "hello");
         assert_eq!(c1.value(1), "world");
