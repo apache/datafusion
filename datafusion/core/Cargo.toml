@@ -85,10 +85,6 @@ percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
 smallvec = { version = "1.6", features = ["union"] }
-# sqlparser = { version = "0.33", features = ["visitor"] }
-# sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", branch="feature/first_last_support", features = ["visitor"] }
-# sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "870b3de", features = ["visitor"] }
-# sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "1c4c3b8", features = ["visitor"] }
 sqlparser = { git = "https://github.com/synnada-ai/sqlparser-rs.git", rev = "b759a95", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }

@@ -81,10 +81,6 @@ impl AggregateExpr for FirstAgg {
         &self.name
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(LastAgg::new(
             self.expr.clone(),
@@ -139,12 +135,6 @@ impl Accumulator for FirstAccumulator {
             self.first = ScalarValue::try_from_array(values, 0)?;
         }
         self.count += (values.len() - values.null_count()) as u64;
-        Ok(())
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.count -= (values.len() - values.null_count()) as u64;
         Ok(())
     }
 
@@ -220,10 +210,6 @@ impl AggregateExpr for LastAgg {
         &self.name
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(FirstAgg::new(
             self.expr.clone(),
@@ -280,12 +266,6 @@ impl Accumulator for LastAccumulator {
             self.last = ScalarValue::try_from_array(values, values.len() - 1)?;
         }
         self.count += (values.len() - values.null_count()) as u64;
-        Ok(())
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        self.count -= (values.len() - values.null_count()) as u64;
         Ok(())
     }
 
