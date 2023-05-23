@@ -126,7 +126,7 @@ test_source_distribution() {
   git clone https://github.com/apache/parquet-testing.git parquet-testing
 
   cargo build
-  cargo test --all
+  cargo test --all --features=avro
 
   if ( find -iname 'Cargo.toml' | xargs grep SNAPSHOT ); then
     echo "Cargo.toml version should not contain SNAPSHOT for releases"

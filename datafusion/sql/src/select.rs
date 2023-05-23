@@ -34,9 +34,8 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Expr, Filter, GroupingSet, LogicalPlan,
     LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{
-    self, Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType,
-};
+
+use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -78,7 +77,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // name must be defined. Otherwise, it gives an error.
         for proj in modified_projection.iter_mut() {
             if let SelectItem::ExprWithAlias {
-                expr: ast::Expr::Function(f),
+                expr: SQLExpr::Function(f),
                 alias: _,
             } = proj
             {

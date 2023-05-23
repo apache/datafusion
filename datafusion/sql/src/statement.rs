@@ -404,25 +404,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             Statement::Delete {
-                mut tables,
+                tables,
                 using,
                 selection,
                 returning,
                 from,
             } => {
-                let table_name = match tables.len() {
-                    0 => {
-                        return Err(DataFusionError::NotImplemented(
-                            "DELETE without target table not supported".to_string(),
-                        ))
-                    }
-                    1 => tables.pop().unwrap(),
-                    n => {
-                        return Err(DataFusionError::NotImplemented(format!(
-                            "DELETE only supports single table, got {n}: {tables:?}"
-                        )))
-                    }
-                };
+                if !tables.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                        "DELETE <TABLE> not supported".to_string(),
+                    ));
+                }
+
                 if using.is_some() {
                     Err(DataFusionError::Plan(
                         "Using clause not supported".to_owned(),
@@ -433,11 +426,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Delete-returning clause not yet supported".to_owned(),
                     ))?;
                 }
-                if !from.is_empty() {
-                    Err(DataFusionError::Plan(
-                        "DELETE FROM query not yet supported".to_owned(),
-                    ))?;
-                }
+                let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
             }
 
@@ -510,6 +499,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Unsupported SQL statement: {sql:?}"
             ))),
         }
+    }
+
+    fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
+        if from.len() != 1 {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got {}: {from:?}",
+                from.len()
+            )));
+        }
+        let table_factor = from.pop().unwrap();
+        if !table_factor.joins.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DELETE FROM only supports single table, got: joins".to_string(),
+            ));
+        }
+        let TableFactor::Table{name, ..} = table_factor.relation else {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got: {table_factor:?}"
+            )))
+        };
+
+        Ok(name)
     }
 
     /// Generate a logical plan from a "SHOW TABLES" query
