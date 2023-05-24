@@ -344,7 +344,8 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
 
 /// This function return ordering requirement of the first non-reversible ordering sensitive aggregate function
 // such as ARRAY_AGG. This requirement serves initial requirement while calculating finest requirement among all
-// aggregate functions.
+// aggregate functions. If None, this means that there is no hard requirement for the aggregate functions (in the direction sense)
+// we could generate two alternative requirements that have opposite directions.
 fn get_init_req(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
@@ -358,6 +359,27 @@ fn get_init_req(
             return fn_reqs.clone();
         }
     }
+    None
+}
+
+fn get_finer_ordering<
+    F: Fn() -> EquivalenceProperties,
+    F2: Fn() -> OrderingEquivalenceProperties,
+>(
+    provided: &[PhysicalSortExpr],
+    req: &[PhysicalSortExpr],
+    eq_properties: F,
+    ordering_eq_properties: F2,
+) -> Option<Vec<PhysicalSortExpr>> {
+    if ordering_satisfy_concrete(provided, req, &eq_properties, &ordering_eq_properties) {
+        // Finer requirement is `provided`, since it satisfies the other
+        return Some(provided.to_vec());
+    }
+    if ordering_satisfy_concrete(req, provided, &eq_properties, &ordering_eq_properties) {
+        // Finer requirement is `req`, since it satisfies the other
+        return Some(req.to_vec());
+    }
+    // Neither of the `provided` and `req` satisfies other, these requirements are not compatible
     None
 }
 
@@ -381,52 +403,27 @@ fn get_finest_requirement<
             continue;
         };
         if let Some(result) = &mut result {
-            if ordering_satisfy_concrete(
+            if let Some(finer) = get_finer_ordering(
                 result,
                 fn_reqs,
                 &eq_properties,
                 &ordering_eq_properties,
             ) {
-                // Do not update the result as it already satisfies current
-                // function's requirement:
-                continue;
-            }
-            if ordering_satisfy_concrete(
-                fn_reqs,
-                result,
-                &eq_properties,
-                &ordering_eq_properties,
-            ) {
-                // Update result with current function's requirements, as it is
-                // a finer requirement than what we currently have.
-                *result = fn_reqs.clone();
+                *result = finer.to_vec();
                 continue;
             }
             // If an aggregate function is reversible analyze its reverse direction whether it is compatible
             // with existing requirements
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_reqs_reverse = reverse_order_bys(fn_reqs);
-                if ordering_satisfy_concrete(
+                if let Some(finer) = get_finer_ordering(
                     result,
                     &fn_reqs_reverse,
                     &eq_properties,
                     &ordering_eq_properties,
                 ) {
-                    // Do not update the result as it already satisfies current
-                    // function's requirement:
                     *aggr_expr = reverse;
-                    continue;
-                }
-                if ordering_satisfy_concrete(
-                    &fn_reqs_reverse,
-                    result,
-                    &eq_properties,
-                    &ordering_eq_properties,
-                ) {
-                    // Update result with current function's requirements, as it is
-                    // a finer requirement than what we currently have.
-                    *result = fn_reqs_reverse;
-                    *aggr_expr = reverse;
+                    *result = finer.to_vec();
                     continue;
                 }
             }
