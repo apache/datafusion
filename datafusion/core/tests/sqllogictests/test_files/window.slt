@@ -3028,7 +3028,7 @@ drop table annotated_data_infinite2
 # The query should still work.
 query RR
 SELECT
-  MAX(c12) OVER window1 as min1,
+  MAX(c12) OVER window1,
   MIN(c12) OVER window2 as max1
   FROM aggregate_test_100
   WINDOW window1 AS (ORDER BY C12),

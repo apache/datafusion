@@ -79,7 +79,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if let SelectItem::ExprWithAlias {
                 expr: SQLExpr::Function(f),
                 alias: _,
-            } = proj
+            }
+            | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
             {
                 for NamedWindowDefinition(window_ident, window_spec) in
                     select.named_window.iter()
