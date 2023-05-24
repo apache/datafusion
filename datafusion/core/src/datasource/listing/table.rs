@@ -416,10 +416,12 @@ impl ListingOptions {
     ///   ))
     ///   .with_file_sort_order(file_sort_order.clone());
     ///
-    /// assert_eq!(listing_options.file_sort_order, file_sort_order);
+    /// assert_eq!(listing_options.file_sort_order, vec![file_sort_order.unwrap()]);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
-        self.file_sort_order = file_sort_order;
+    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
+        if let Some(file_sort_order) = file_sort_order {
+            self.file_sort_order.push(file_sort_order);
+        }
         self
     }
 
@@ -614,9 +616,8 @@ impl ListingTable {
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<Vec<PhysicalSortExpr>>> {
         let mut all_sort_orders = vec![];
-        let file_sort_exprs = &self.options.file_sort_order;
 
-        for expr in file_sort_exprs {
+        for expr in &self.options.file_sort_order {
             // convert each expr to a physical sort expr
             let sort_expr = expr
             .iter()
@@ -1007,7 +1008,9 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = options.clone().with_file_sort_order(file_sort_order);
+            let options = file_sort_order.iter().fold(options.clone(), |acc, order| {
+                acc.with_file_sort_order(Some(order.clone()))
+            });
 
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)

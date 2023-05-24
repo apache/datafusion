@@ -131,13 +131,15 @@ impl TableProviderFactory for ListingTableFactory {
         // look for 'infinite' as an option
         let infinite_source = cmd.unbounded;
 
-        let options = ListingOptions::new(file_format)
-            .with_collect_stat(state.config().collect_statistics())
-            .with_file_extension(file_extension)
-            .with_target_partitions(state.config().target_partitions())
-            .with_table_partition_cols(table_partition_cols)
-            .with_infinite_source(infinite_source)
-            .with_file_sort_order(cmd.order_exprs.clone());
+        let options = cmd.order_exprs.iter().fold(
+            ListingOptions::new(file_format)
+                .with_collect_stat(state.config().collect_statistics())
+                .with_file_extension(file_extension)
+                .with_target_partitions(state.config().target_partitions())
+                .with_table_partition_cols(table_partition_cols)
+                .with_infinite_source(infinite_source),
+            |acc, order| acc.with_file_sort_order(Some(order.clone())),
+        );
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {

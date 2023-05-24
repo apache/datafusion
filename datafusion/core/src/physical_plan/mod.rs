@@ -578,6 +578,51 @@ impl PartialEq for Partitioning {
     }
 }
 
+/// Retrieves the ordering equivalence properties for a given schema and output ordering.
+pub fn ordering_equivalence_properties_helper(
+    schema: SchemaRef,
+    output_ordering: &[Vec<PhysicalSortExpr>],
+) -> OrderingEquivalenceProperties {
+    let mut oep = OrderingEquivalenceProperties::new(schema);
+    let first_ordering = if let Some(first) = output_ordering.get(0) {
+        first
+    } else {
+        // returns an empty OrderingEquivalenceProperties
+        return oep;
+    };
+    let first_column = first_ordering
+        .iter()
+        .map(|e| TryFrom::try_from(e.clone()))
+        .collect::<Vec<_>>();
+    let checked_column_first = if first_column.iter().all(Result::is_ok) {
+        first_column
+            .into_iter()
+            .map(Result::unwrap)
+            .collect::<Vec<OrderedColumn>>()
+    } else {
+        // returns an empty OrderingEquivalenceProperties
+        return oep;
+    };
+    for ordering in output_ordering.iter().skip(1) {
+        let column = ordering
+            .iter()
+            .map(|e| TryFrom::try_from(e.clone()))
+            .collect::<Vec<_>>();
+        let checked_column = if column.iter().all(Result::is_ok) {
+            column
+                .into_iter()
+                .map(Result::unwrap)
+                .collect::<Vec<OrderedColumn>>()
+        } else {
+            Vec::new()
+        };
+        if !checked_column.is_empty() {
+            oep.add_equal_conditions((&checked_column_first, &checked_column))
+        }
+    }
+    oep
+}
+
 /// Distribution schemes
 #[derive(Debug, Clone)]
 pub enum Distribution {
@@ -608,7 +653,7 @@ impl Distribution {
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, OrderedColumn,
 };
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};

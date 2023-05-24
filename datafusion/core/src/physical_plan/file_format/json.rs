@@ -26,12 +26,13 @@ use crate::physical_plan::file_format::file_stream::{
 use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::{datatypes::SchemaRef, json};
 
 use bytes::{Buf, Bytes};
-use datafusion_physical_expr::{OrderedColumn, OrderingEquivalenceProperties};
+use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use crate::physical_plan::common::AbortOnDropSingle;
 use arrow::json::ReaderBuilder;
@@ -102,53 +103,16 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if let Some(first) = self.projected_output_ordering.get(0) {
-            Some(first.as_slice())
-        } else {
-            None
-        }
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
     }
 
     fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
-        let mut oep = OrderingEquivalenceProperties::new(self.schema());
-        let first_ordering = if let Some(first) = self.projected_output_ordering.get(0) {
-            first
-        } else {
-            // returns an empty OrderingEquivalenceProperties
-            return oep;
-        };
-        let first_column = first_ordering
-            .iter()
-            .map(|e| TryFrom::try_from(e.clone()))
-            .collect::<Vec<_>>();
-        let checked_column_first = if first_column.iter().all(Result::is_ok) {
-            first_column
-                .into_iter()
-                .map(Result::unwrap)
-                .collect::<Vec<OrderedColumn>>()
-        } else {
-            // returns an empty OrderingEquivalenceProperties
-            return oep;
-        };
-        for i in 1..self.projected_output_ordering.len() {
-            let ordering = &self.projected_output_ordering[i];
-            let column = ordering
-                .iter()
-                .map(|e| TryFrom::try_from(e.clone()))
-                .collect::<Vec<_>>();
-            let checked_column = if column.iter().all(Result::is_ok) {
-                column
-                    .into_iter()
-                    .map(Result::unwrap)
-                    .collect::<Vec<OrderedColumn>>()
-            } else {
-                Vec::new()
-            };
-            if !checked_column.is_empty() {
-                oep.add_equal_conditions((&checked_column_first, &checked_column))
-            }
-        }
-        oep
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
