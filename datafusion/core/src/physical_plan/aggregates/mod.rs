@@ -350,8 +350,11 @@ fn get_init_req(
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
 ) -> Option<Vec<PhysicalSortExpr>> {
     for (aggr_expr, fn_reqs) in aggr_expr.iter().zip(order_by_expr.iter()) {
-        // Cannot reverse and there is a requirement
-        if aggr_expr.reverse_expr().is_none() && fn_reqs.is_some() {
+        // Aggregate function is ordering sensitive, aggregate function cannot be reversed, and there is an ordering requirement
+        if is_ordering_sensitive(aggr_expr)
+            && aggr_expr.reverse_expr().is_none()
+            && fn_reqs.is_some()
+        {
             return fn_reqs.clone();
         }
     }
@@ -447,6 +450,77 @@ fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
         || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
+fn calc_required_input_ordering(
+    input: &Arc<dyn ExecutionPlan>,
+    aggr_expr: &mut [Arc<dyn AggregateExpr>],
+    aggregator_requirements: Vec<Option<Vec<PhysicalSortRequirement>>>,
+    aggregation_ordering: &Option<AggregationOrdering>,
+) -> Result<Option<Vec<PhysicalSortRequirement>>> {
+    let mut required_input_ordering = None;
+    for (idx, aggregator_requirement) in aggregator_requirements.into_iter().enumerate() {
+        if let Some(AggregationOrdering {
+            ordering,
+            // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
+            // running with bounded memory, without breaking pipeline), then
+            // we append aggregator ordering requirement to the existing
+            // ordering. This way, we can still run with bounded memory.
+            mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
+            ..
+        }) = aggregation_ordering
+        {
+            if let Some(aggregator_requirement) = aggregator_requirement {
+                // Get the section of the input ordering that enables us to run in the
+                // FullyOrdered or PartiallyOrdered mode:
+                let requirement_prefix =
+                    if let Some(existing_ordering) = input.output_ordering() {
+                        existing_ordering[0..ordering.len()].to_vec()
+                    } else {
+                        vec![]
+                    };
+                let mut requirement =
+                    PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
+                for req in aggregator_requirement {
+                    if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
+                        requirement.push(req);
+                    }
+                }
+                required_input_ordering = Some(requirement);
+            }
+        } else {
+            required_input_ordering = aggregator_requirement;
+        }
+        // If existing ordering already satisfies the one of the required ordering(s)
+        // (required ordering and its reverse, when all ordering sensitive aggregate expressions can be reversed
+        // such as when all ordering sensitive aggregate expressions are either FIRST_VALUE, LAST_VALUE)
+        if ordering_satisfy_requirement(
+            input.output_ordering(),
+            required_input_ordering.as_deref(),
+            || input.equivalence_properties(),
+            || input.ordering_equivalence_properties(),
+        ) {
+            if idx == 1 {
+                aggr_expr
+                    .iter_mut()
+                    .map(|elem| {
+                        if is_ordering_sensitive(elem) {
+                            if let Some(reverse) = elem.reverse_expr() {
+                                *elem = reverse;
+                            } else {
+                                return Err(DataFusionError::Execution(
+                                    "Aggregate expression should have a reverse expression".to_string(),
+                                ));
+                            }
+                        }
+                        Ok(())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+            }
+            break;
+        }
+    }
+    Ok(required_input_ordering)
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -495,7 +569,10 @@ impl AggregateExec {
                 .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
             aggregator_requirements.push(aggregator_requirement);
             // If all aggregate expressions are reversible, consider reverse requirement also.
-            if aggr_expr.iter().all(|expr| expr.reverse_expr().is_some()) {
+            if aggr_expr
+                .iter()
+                .all(|expr| !is_ordering_sensitive(expr) || expr.reverse_expr().is_some())
+            {
                 let reverse_agg_requirement = requirement.map(|reqs| {
                     PhysicalSortRequirement::from_sort_exprs(
                         reverse_order_bys(&reqs).iter(),
@@ -517,63 +594,12 @@ impl AggregateExec {
 
         let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
 
-        let mut required_input_ordering = None;
-
-        for (idx, aggregator_requirement) in
-            aggregator_requirements.into_iter().enumerate()
-        {
-            if let Some(AggregationOrdering {
-                ordering,
-                // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
-                // running with bounded memory, without breaking pipeline), then
-                // we append aggregator ordering requirement to the existing
-                // ordering. This way, we can still run with bounded memory.
-                mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-                ..
-            }) = &aggregation_ordering
-            {
-                if let Some(aggregator_requirement) = aggregator_requirement {
-                    // Get the section of the input ordering that enables us to run in the
-                    // FullyOrdered or PartiallyOrdered mode:
-                    let requirement_prefix =
-                        if let Some(existing_ordering) = input.output_ordering() {
-                            existing_ordering[0..ordering.len()].to_vec()
-                        } else {
-                            vec![]
-                        };
-                    let mut requirement = PhysicalSortRequirement::from_sort_exprs(
-                        requirement_prefix.iter(),
-                    );
-                    for req in aggregator_requirement {
-                        if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
-                            requirement.push(req);
-                        }
-                    }
-                    required_input_ordering = Some(requirement);
-                }
-            } else {
-                required_input_ordering = aggregator_requirement;
-            }
-            if ordering_satisfy_requirement(
-                input.output_ordering(),
-                required_input_ordering.as_deref(),
-                || input.equivalence_properties(),
-                || input.ordering_equivalence_properties(),
-            ) {
-                if idx == 1 {
-                    let res = aggr_expr
-                        .iter_mut()
-                        .map(|elem| elem.reverse_expr())
-                        .collect::<Option<Vec<_>>>();
-                    aggr_expr = res.ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "Should have a reverse expression".to_string(),
-                        )
-                    })?;
-                }
-                break;
-            }
-        }
+        let required_input_ordering = calc_required_input_ordering(
+            &input,
+            &mut aggr_expr,
+            aggregator_requirements,
+            &aggregation_ordering,
+        )?;
 
         Ok(AggregateExec {
             mode,
