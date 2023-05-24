@@ -50,9 +50,9 @@ arrow-schema = { workspace = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "24.0.0" }
-datafusion-expr = { path = "../expr", version = "24.0.0" }
-datafusion-row = { path = "../row", version = "24.0.0" }
+datafusion-common = { path = "../common", version = "25.0.0" }
+datafusion-expr = { path = "../expr", version = "25.0.0" }
+datafusion-row = { path = "../row", version = "25.0.0" }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.13", features = ["raw"] }
 indexmap = "1.9.2"
@@ -69,7 +69,7 @@ unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5"
 rand = "0.8"
 rstest = "0.17.0"
 

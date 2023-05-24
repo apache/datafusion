@@ -1964,7 +1964,7 @@ fn union_with_different_column_names() {
     let expected = "Union\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
-            \n  Projection: orders.customer_id\
+            \n  Projection: orders.customer_id AS order_id\
             \n    TableScan: orders";
     quick_test(sql, expected);
 }
@@ -2064,7 +2064,7 @@ fn union_with_binary_expr_and_cast() {
         \n      SubqueryAlias: x\
         \n        Projection: Int64(1) AS a\
         \n          EmptyRelation\
-        \n  Projection: Float64(2.1) + x.a\
+        \n  Projection: Float64(2.1) + x.a AS Float64(0) + x.a\
         \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
         \n      SubqueryAlias: x\
         \n        Projection: Int64(1) AS a\

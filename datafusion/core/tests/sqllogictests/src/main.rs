@@ -126,7 +126,10 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
         relative_path,
     } = test_file;
     info!("Running with DataFusion runner: {}", path.display());
-    let test_ctx = context_for_test_file(&relative_path).await;
+    let Some(test_ctx) = context_for_test_file(&relative_path).await else {
+        info!("Skipping: {}", path.display());
+        return Ok(())
+    };
     let ctx = test_ctx.session_ctx().clone();
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     runner.with_column_validator(strict_column_validator);
@@ -163,7 +166,10 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
 
     info!("Using complete mode to complete: {}", path.display());
 
-    let test_ctx = context_for_test_file(&relative_path).await;
+    let Some(test_ctx) = context_for_test_file(&relative_path).await else {
+        info!("Skipping: {}", path.display());
+        return Ok(())
+    };
     let ctx = test_ctx.session_ctx().clone();
     let mut runner =
         sqllogictest::Runner::new(DataFusion::new(ctx, relative_path.clone()));
@@ -230,15 +236,20 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
     )
 }
 
-/// Create a SessionContext, configured for the specific test
-async fn context_for_test_file(relative_path: &Path) -> TestContext {
+/// Create a SessionContext, configured for the specific test, if
+/// possible.
+///
+/// If `None` is returned (e.g. because some needed feature is not
+/// enabled), the file should be skipped
+async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
     let config = SessionConfig::new()
         // hardcode target partitions so plans are deterministic
         .with_target_partitions(4);
 
-    let mut test_ctx = TestContext::new(SessionContext::with_config(config));
+    let test_ctx = TestContext::new(SessionContext::with_config(config));
 
-    match relative_path.file_name().unwrap().to_str().unwrap() {
+    let file_name = relative_path.file_name().unwrap().to_str().unwrap();
+    match file_name {
         "aggregate.slt" => {
             info!("Registering aggregate tables");
             setup::register_aggregate_tables(test_ctx.session_ctx()).await;
@@ -248,14 +259,24 @@ async fn context_for_test_file(relative_path: &Path) -> TestContext {
             setup::register_scalar_tables(test_ctx.session_ctx()).await;
         }
         "avro.slt" => {
-            info!("Registering avro tables");
-            setup::register_avro_tables(&mut test_ctx).await;
+            #[cfg(feature = "avro")]
+            {
+                let mut test_ctx = test_ctx;
+                info!("Registering avro tables");
+                setup::register_avro_tables(&mut test_ctx).await;
+                return Some(test_ctx);
+            }
+            #[cfg(not(feature = "avro"))]
+            {
+                info!("Skipping {file_name} because avro feature is not enabled");
+                return None;
+            }
         }
         _ => {
             info!("Using default SessionContext");
         }
     };
-    test_ctx
+    Some(test_ctx)
 }
 
 /// Context for running tests
@@ -267,7 +288,7 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    fn new(ctx: SessionContext) -> Self {
+    pub fn new(ctx: SessionContext) -> Self {
         Self {
             ctx,
             test_dir: None,
@@ -276,7 +297,7 @@ impl TestContext {
 
     /// Enables the test directory feature. If not enabled,
     /// calling `testdir_path` will result in a panic.
-    fn enable_testdir(&mut self) {
+    pub fn enable_testdir(&mut self) {
         if self.test_dir.is_none() {
             self.test_dir = Some(TempDir::new().expect("failed to create testdir"));
         }
@@ -284,7 +305,7 @@ impl TestContext {
 
     /// Returns the path to the test directory. Panics if the test
     /// directory feature is not enabled via `enable_testdir`.
-    fn testdir_path(&self) -> &Path {
+    pub fn testdir_path(&self) -> &Path {
         self.test_dir.as_ref().expect("testdir not enabled").path()
     }
 
