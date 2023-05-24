@@ -43,7 +43,7 @@ pub fn main() {
     thread::Builder::new()
         .stack_size(2 * 1024 * 1024) // 2 MB
         .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap()
