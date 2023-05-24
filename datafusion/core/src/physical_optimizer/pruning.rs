@@ -38,7 +38,6 @@ use crate::{
     logical_expr::Operator,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
-use arrow::compute::DEFAULT_CAST_OPTIONS;
 use arrow::record_batch::RecordBatchOptions;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
@@ -549,7 +548,7 @@ fn rewrite_expr_to_prunable(
         let left = Arc::new(phys_expr::CastExpr::new(
             left,
             cast.cast_type().clone(),
-            DEFAULT_CAST_OPTIONS,
+            None,
         ));
         Ok((left, op, right))
     } else if let Some(try_cast) =
