@@ -29,11 +29,13 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, WindowFrame};
 
-use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
+use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
+use crate::{
+    expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
+};
 
 /// A window expr that takes the form of an aggregate function
 /// Aggregate Window Expressions that have the form

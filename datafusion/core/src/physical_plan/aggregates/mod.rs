@@ -39,7 +39,7 @@ use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
-    normalize_out_expr_with_columns_map,
+    normalize_out_expr_with_columns_map, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy_concrete},
     AggregateExpr, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -341,6 +341,10 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .map(|(index, (_, name))| Arc::new(Column::new(name, index)) as _)
         .collect()
 }
+
+/// This function return ordering requirement of the first non-reversible ordering sensitive aggregate function
+// such as ARRAY_AGG. This requirement serves initial requirement while calculating finest requirement among all
+// aggregate functions.
 fn get_init_req(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
@@ -353,6 +357,7 @@ fn get_init_req(
     }
     None
 }
+
 /// This function gets the finest ordering requirement among all the aggregation
 /// functions. If requirements are conflicting, (i.e. we can not compute the
 /// aggregations in a single [`AggregateExec`]), the function returns an error.
@@ -365,8 +370,7 @@ fn get_finest_requirement<
     eq_properties: F,
     ordering_eq_properties: F2,
 ) -> Result<Option<Vec<PhysicalSortExpr>>> {
-    let mut result: Option<Vec<PhysicalSortExpr>> =
-        get_init_req(aggr_expr, order_by_expr);
+    let mut result = get_init_req(aggr_expr, order_by_expr);
     for (aggr_expr, fn_reqs) in aggr_expr.iter_mut().zip(order_by_expr.iter()) {
         let fn_reqs = if let Some(fn_reqs) = fn_reqs {
             fn_reqs
@@ -395,6 +399,8 @@ fn get_finest_requirement<
                 *result = fn_reqs.clone();
                 continue;
             }
+            // If an aggregate function is reversible analyze its reverse direction whether it is compatible
+            // with existing requirements
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_reqs_reverse = reverse_order_bys(fn_reqs);
                 if ordering_satisfy_concrete(
@@ -439,19 +445,6 @@ fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<FirstAgg>()
         || aggr_expr.as_any().is::<LastAgg>()
         || aggr_expr.as_any().is::<ArrayAgg>()
-}
-
-/// Reverses the ORDER BY expression, which is useful during equivalent window
-/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
-/// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
-    order_bys
-        .iter()
-        .map(|e| PhysicalSortExpr {
-            expr: e.expr.clone(),
-            options: !e.options,
-        })
-        .collect()
 }
 
 impl AggregateExec {
