@@ -55,7 +55,7 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::{ArrayAgg, FirstAgg, LastAgg};
+use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -394,8 +394,8 @@ fn get_finest_requirement<
 // For instance, `SUM` aggregator doesn't depend on the order of the inputs as long as same set of values is used during computation,
 // However, `FirstAgg` depends on the order (if order changes, first value in the list would change).
 fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
-    aggr_expr.as_any().is::<FirstAgg>()
-        || aggr_expr.as_any().is::<LastAgg>()
+    aggr_expr.as_any().is::<FirstValue>()
+        || aggr_expr.as_any().is::<LastValue>()
         || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
