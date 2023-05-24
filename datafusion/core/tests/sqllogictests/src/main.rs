@@ -72,7 +72,7 @@ async fn run_tests() -> Result<()> {
     // Doing so is safe because each slt file runs with its own
     // `SessionContext` and should not have side effects (like
     // modifying shared state like `/tmp/`)
-    let errors: Vec<_> = futures::stream::iter(test_files)
+    let errors: Vec<_> = futures::stream::iter(read_test_files(&options))
         .map(|test_file| {
             tokio::task::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
@@ -89,6 +89,7 @@ async fn run_tests() -> Result<()> {
         // run up to num_cpus streams in parallel
         .buffer_unordered(num_cpus::get())
         .flat_map(|result| {
+            // Filter out any Ok() leaving only the DataFusionErrors
             futures::stream::iter(match result {
                 // Tokio panic error
                 Err(e) => Some(DataFusionError::External(Box::new(e))),
