@@ -2333,7 +2333,7 @@ TUR [75.0, 100.0] 75 75
 
 # test_reverse_aggregate_expr3
 # Some of the Aggregators can be reversed, by this way we can still run aggregators
-# that have contradictory requirements at first glance. This algorithm shoudln't depend
+# that have contradictory requirements at first glance. This algorithm shouldn't depend
 # on the order of the aggregation expressions.
 query TT
 EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
@@ -2362,3 +2362,71 @@ SELECT country, FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
 GRC 30 30 [30.0, 80.0]
 FRA 50 50 [50.0, 200.0]
 TUR 75 75 [75.0, 100.0]
+
+# test_reverse_aggregate_expr4
+# Ordering requirement by the ordering insensitive aggregators shouldn't have effect on
+# final plan. Hence seemingly conflicting requirements by SUM and ARRAY_AGG shouldn't raise error.
+query TT
+EXPLAIN SELECT country, SUM(amount ORDER BY ts DESC) AS sum1,
+  ARRAY_AGG(amount ORDER BY amount ASC) AS amounts
+  FROM sales_global
+  GROUP BY country
+----
+logical_plan
+Projection: sales_global.country, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS sum1, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts
+--Aggregate: groupBy=[[sales_global.country]], aggr=[[SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
+----TableScan: sales_global projection=[country, ts, amount]
+physical_plan
+ProjectionExec: expr=[country@0 as country, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as sum1, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as amounts]
+--AggregateExec: mode=Single, gby=[country@0 as country], aggr=[SUM(sales_global.amount), ARRAY_AGG(sales_global.amount)]
+----SortExec: expr=[amount@2 ASC NULLS LAST]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TR?
+SELECT country, SUM(amount ORDER BY ts DESC) AS sum1,
+  ARRAY_AGG(amount ORDER BY amount ASC) AS amounts
+  FROM sales_global
+  GROUP BY country
+----
+GRC 110 [30.0, 80.0]
+FRA 250 [50.0, 200.0]
+TUR 175 [75.0, 100.0]
+
+# test_reverse_aggregate_expr5
+# If all of the ordering sensitive aggregation functions are reversible
+# we should be able to reverse requirements, if this helps to remove a SortExec.
+# Hence in query below, FIRST_VALUE, and LAST_VALUE should be reversed to calculate its result according to `ts ASC` ordering.
+# Please note that after `ts ASC` ordering because of inner query. There is no SortExec in the final plan.
+query TT
+EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
+  LAST_VALUE(amount ORDER BY ts DESC) as lv1,
+  SUM(amount ORDER BY ts DESC) as sum1
+  FROM (SELECT *
+    FROM sales_global
+    ORDER BY ts ASC)
+  GROUP BY country
+----
+logical_plan
+Projection: sales_global.country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS sum1
+--Aggregate: groupBy=[[sales_global.country]], aggr=[[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
+----Sort: sales_global.ts ASC NULLS LAST
+------TableScan: sales_global projection=[country, ts, amount]
+physical_plan
+ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as lv1, SUM(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@3 as sum1]
+--AggregateExec: mode=Final, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), SUM(sales_global.amount)]
+----AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount), SUM(sales_global.amount)]
+------SortExec: expr=[ts@1 ASC NULLS LAST]
+--------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TRRR
+SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
+  LAST_VALUE(amount ORDER BY ts DESC) as lv1,
+  SUM(amount ORDER BY ts DESC) as sum1
+  FROM (SELECT *
+    FROM sales_global
+    ORDER BY ts ASC)
+  GROUP BY country
+----
+GRC 80 30 110
+FRA 200 50 250
+TUR 100 75 175
