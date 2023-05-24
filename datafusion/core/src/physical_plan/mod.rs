@@ -581,10 +581,10 @@ impl PartialEq for Partitioning {
 /// Retrieves the ordering equivalence properties for a given schema and output ordering.
 pub fn ordering_equivalence_properties_helper(
     schema: SchemaRef,
-    output_ordering: &[LexOrdering],
+    eq_orderings: &[LexOrdering],
 ) -> OrderingEquivalenceProperties {
     let mut oep = OrderingEquivalenceProperties::new(schema);
-    let first_ordering = if let Some(first) = output_ordering.first() {
+    let first_ordering = if let Some(first) = eq_orderings.first() {
         first
     } else {
         // returns an empty OrderingEquivalenceProperties
@@ -593,31 +593,23 @@ pub fn ordering_equivalence_properties_helper(
     let first_column = first_ordering
         .iter()
         .map(|e| TryFrom::try_from(e.clone()))
-        .collect::<Vec<_>>();
-    let checked_column_first = if first_column.iter().all(Result::is_ok) {
-        first_column
-            .into_iter()
-            .map(Result::unwrap)
-            .collect::<Vec<OrderedColumn>>()
+        .collect::<Result<Vec<OrderedColumn>>>();
+    let checked_column_first = if let Ok(first_col) = first_column {
+        first_col
     } else {
         // returns an empty OrderingEquivalenceProperties
         return oep;
     };
-    for ordering in output_ordering.iter().skip(1) {
+    // First entry among eq_orderings is head, skip it
+    for ordering in eq_orderings.iter().skip(1) {
         let column = ordering
             .iter()
             .map(|e| TryFrom::try_from(e.clone()))
-            .collect::<Vec<_>>();
-        let checked_column = if column.iter().all(Result::is_ok) {
-            column
-                .into_iter()
-                .map(Result::unwrap)
-                .collect::<Vec<OrderedColumn>>()
-        } else {
-            Vec::new()
-        };
-        if !checked_column.is_empty() {
-            oep.add_equal_conditions((&checked_column_first, &checked_column))
+            .collect::<Result<Vec<OrderedColumn>>>();
+        if let Ok(column) = column {
+            if !column.is_empty() {
+                oep.add_equal_conditions((&checked_column_first, &column))
+            }
         }
     }
     oep
