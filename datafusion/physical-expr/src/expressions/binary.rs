@@ -1092,84 +1092,69 @@ impl BinaryExpr {
         scalar: ScalarValue,
         result_type: &DataType,
     ) -> Result<Option<Result<ArrayRef>>> {
+        use Operator::*;
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
-            Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
-            }
-            Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
-            }
-            Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
-            }
-            Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
-            }
-            Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
-            }
-            Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
-            }
-            Operator::Plus => {
+            Lt => binary_array_op_dyn_scalar!(array, scalar, lt, bool_type),
+            LtEq => binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type),
+            Gt => binary_array_op_dyn_scalar!(array, scalar, gt, bool_type),
+            GtEq => binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type),
+            Eq => binary_array_op_dyn_scalar!(array, scalar, eq, bool_type),
+            NotEq => binary_array_op_dyn_scalar!(array, scalar, neq, bool_type),
+            Plus => {
                 binary_primitive_array_op_dyn_scalar!(array, scalar, add, result_type)
             }
-            Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(
-                    array,
-                    scalar,
-                    subtract,
-                    result_type
-                )
-            }
-            Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(
-                    array,
-                    scalar,
-                    multiply,
-                    result_type
-                )
-            }
-            Operator::Divide => {
+            Minus => binary_primitive_array_op_dyn_scalar!(
+                array,
+                scalar,
+                subtract,
+                result_type
+            ),
+            Multiply => binary_primitive_array_op_dyn_scalar!(
+                array,
+                scalar,
+                multiply,
+                result_type
+            ),
+            Divide => {
                 binary_primitive_array_op_dyn_scalar!(array, scalar, divide, result_type)
             }
-            Operator::Modulo => {
+            Modulo => {
                 binary_primitive_array_op_dyn_scalar!(array, scalar, modulus, result_type)
             }
-            Operator::RegexMatch => binary_string_array_flag_op_scalar!(
+            RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 false,
                 false
             ),
-            Operator::RegexIMatch => binary_string_array_flag_op_scalar!(
+            RegexIMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 false,
                 true
             ),
-            Operator::RegexNotMatch => binary_string_array_flag_op_scalar!(
+            RegexNotMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 true,
                 false
             ),
-            Operator::RegexNotIMatch => binary_string_array_flag_op_scalar!(
+            RegexNotIMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 true,
                 true
             ),
-            Operator::BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
-            Operator::BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
-            Operator::BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
-            Operator::BitwiseShiftRight => bitwise_shift_right_dyn_scalar(array, scalar),
-            Operator::BitwiseShiftLeft => bitwise_shift_left_dyn_scalar(array, scalar),
+            BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
+            BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
+            BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
+            BitwiseShiftRight => bitwise_shift_right_dyn_scalar(array, scalar),
+            BitwiseShiftLeft => bitwise_shift_left_dyn_scalar(array, scalar),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1184,26 +1169,15 @@ impl BinaryExpr {
         scalar: ScalarValue,
         array: &ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
+        use Operator::*;
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
-            Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
-            }
-            Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
-            }
-            Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
-            }
-            Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
-            }
-            Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
-            }
-            Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
-            }
+            Lt => binary_array_op_dyn_scalar!(array, scalar, gt, bool_type),
+            LtEq => binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type),
+            Gt => binary_array_op_dyn_scalar!(array, scalar, lt, bool_type),
+            GtEq => binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type),
+            Eq => binary_array_op_dyn_scalar!(array, scalar, eq, bool_type),
+            NotEq => binary_array_op_dyn_scalar!(array, scalar, neq, bool_type),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1218,14 +1192,15 @@ impl BinaryExpr {
         right_data_type: &DataType,
         result_type: &DataType,
     ) -> Result<ArrayRef> {
+        use Operator::*;
         match &self.op {
-            Operator::Lt => lt_dyn(&left, &right),
-            Operator::LtEq => lt_eq_dyn(&left, &right),
-            Operator::Gt => gt_dyn(&left, &right),
-            Operator::GtEq => gt_eq_dyn(&left, &right),
-            Operator::Eq => eq_dyn(&left, &right),
-            Operator::NotEq => neq_dyn(&left, &right),
-            Operator::IsDistinctFrom => {
+            Lt => lt_dyn(&left, &right),
+            LtEq => lt_eq_dyn(&left, &right),
+            Gt => gt_dyn(&left, &right),
+            GtEq => gt_eq_dyn(&left, &right),
+            Eq => eq_dyn(&left, &right),
+            NotEq => neq_dyn(&left, &right),
+            IsDistinctFrom => {
                 match (left_data_type, right_data_type) {
                     // exchange lhs and rhs when lhs is Null, since `binary_array_op` is
                     // always try to down cast array according to $LEFT expression.
@@ -1235,25 +1210,21 @@ impl BinaryExpr {
                     _ => binary_array_op!(left, right, is_distinct_from),
                 }
             }
-            Operator::IsNotDistinctFrom => {
-                binary_array_op!(left, right, is_not_distinct_from)
-            }
-            Operator::Plus => {
-                binary_primitive_array_op_dyn!(left, right, add_dyn, result_type)
-            }
-            Operator::Minus => {
+            IsNotDistinctFrom => binary_array_op!(left, right, is_not_distinct_from),
+            Plus => binary_primitive_array_op_dyn!(left, right, add_dyn, result_type),
+            Minus => {
                 binary_primitive_array_op_dyn!(left, right, subtract_dyn, result_type)
             }
-            Operator::Multiply => {
+            Multiply => {
                 binary_primitive_array_op_dyn!(left, right, multiply_dyn, result_type)
             }
-            Operator::Divide => {
+            Divide => {
                 binary_primitive_array_op_dyn!(left, right, divide_dyn_opt, result_type)
             }
-            Operator::Modulo => {
+            Modulo => {
                 binary_primitive_array_op_dyn!(left, right, modulus_dyn, result_type)
             }
-            Operator::And => {
+            And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
                 } else {
@@ -1265,7 +1236,7 @@ impl BinaryExpr {
                     )))
                 }
             }
-            Operator::Or => {
+            Or => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, or_kleene)
                 } else {
@@ -1275,24 +1246,24 @@ impl BinaryExpr {
                     )))
                 }
             }
-            Operator::RegexMatch => {
+            RegexMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, false, false)
             }
-            Operator::RegexIMatch => {
+            RegexIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, false, true)
             }
-            Operator::RegexNotMatch => {
+            RegexNotMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, false)
             }
-            Operator::RegexNotIMatch => {
+            RegexNotIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
             }
-            Operator::BitwiseAnd => bitwise_and_dyn(left, right),
-            Operator::BitwiseOr => bitwise_or_dyn(left, right),
-            Operator::BitwiseXor => bitwise_xor_dyn(left, right),
-            Operator::BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
-            Operator::BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
-            Operator::StringConcat => {
+            BitwiseAnd => bitwise_and_dyn(left, right),
+            BitwiseOr => bitwise_or_dyn(left, right),
+            BitwiseXor => bitwise_xor_dyn(left, right),
+            BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
+            BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
+            StringConcat => {
                 binary_string_array_op!(left, right, concat_elements)
             }
         }
@@ -1638,68 +1609,59 @@ pub fn scalar_ts_op_interval(
     sign: i32,
     array: &ArrayRef,
 ) -> Result<ArrayRef> {
+    use DataType::*;
+    use IntervalUnit::*;
+    use ScalarValue::*;
     let ret = match (scalar, array.data_type()) {
         // Second op YearMonth
-        (
-            ScalarValue::TimestampSecond(Some(ts_sec), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => ts_second_interval_ym_op(*ts_sec, tz, array, sign)?,
+        (TimestampSecond(Some(ts_sec), tz), Interval(YearMonth)) => {
+            ts_second_interval_ym_op(*ts_sec, tz, array, sign)?
+        }
         // Millisecond op YearMonth
-        (
-            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => ts_ms_interval_ym_op(*ts_ms, tz, array, sign)?,
+        (TimestampMillisecond(Some(ts_ms), tz), Interval(YearMonth)) => {
+            ts_ms_interval_ym_op(*ts_ms, tz, array, sign)?
+        }
         // Microsecond op YearMonth
-        (
-            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => ts_us_interval_ym_op(*ts_us, tz, array, sign)?,
+        (TimestampMicrosecond(Some(ts_us), tz), Interval(YearMonth)) => {
+            ts_us_interval_ym_op(*ts_us, tz, array, sign)?
+        }
         // Nanosecond op YearMonth
-        (
-            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => ts_ns_interval_ym_op(*ts_ns, tz, array, sign)?,
+        (TimestampNanosecond(Some(ts_ns), tz), Interval(YearMonth)) => {
+            ts_ns_interval_ym_op(*ts_ns, tz, array, sign)?
+        }
         // Second op DayTime
-        (
-            ScalarValue::TimestampSecond(Some(ts_sec), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => ts_second_interval_dt_op(*ts_sec, tz, array, sign)?,
+        (TimestampSecond(Some(ts_sec), tz), Interval(DayTime)) => {
+            ts_second_interval_dt_op(*ts_sec, tz, array, sign)?
+        }
         // Millisecond op DayTime
-        (
-            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => ts_ms_interval_dt_op(*ts_ms, tz, array, sign)?,
+        (TimestampMillisecond(Some(ts_ms), tz), Interval(DayTime)) => {
+            ts_ms_interval_dt_op(*ts_ms, tz, array, sign)?
+        }
         // Microsecond op DayTime
-        (
-            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => ts_us_interval_dt_op(*ts_us, tz, array, sign)?,
+        (TimestampMicrosecond(Some(ts_us), tz), Interval(DayTime)) => {
+            ts_us_interval_dt_op(*ts_us, tz, array, sign)?
+        }
         // Nanosecond op DayTime
-        (
-            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => ts_ns_interval_dt_op(*ts_ns, tz, array, sign)?,
+        (TimestampNanosecond(Some(ts_ns), tz), Interval(DayTime)) => {
+            ts_ns_interval_dt_op(*ts_ns, tz, array, sign)?
+        }
         // Second op MonthDayNano
-        (
-            ScalarValue::TimestampSecond(Some(ts_sec), tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => ts_second_interval_mdn_op(*ts_sec, tz, array, sign)?,
+        (TimestampSecond(Some(ts_sec), tz), Interval(MonthDayNano)) => {
+            ts_second_interval_mdn_op(*ts_sec, tz, array, sign)?
+        }
         // Millisecond op MonthDayNano
-        (
-            ScalarValue::TimestampMillisecond(Some(ts_ms), tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => ts_ms_interval_mdn_op(*ts_ms, tz, array, sign)?,
+        (TimestampMillisecond(Some(ts_ms), tz), Interval(MonthDayNano)) => {
+            ts_ms_interval_mdn_op(*ts_ms, tz, array, sign)?
+        }
         // Microsecond op MonthDayNano
-        (
-            ScalarValue::TimestampMicrosecond(Some(ts_us), tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => ts_us_interval_mdn_op(*ts_us, tz, array, sign)?,
+        (TimestampMicrosecond(Some(ts_us), tz), Interval(MonthDayNano)) => {
+            ts_us_interval_mdn_op(*ts_us, tz, array, sign)?
+        }
 
         // Nanosecond op MonthDayNano
-        (
-            ScalarValue::TimestampNanosecond(Some(ts_ns), tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => ts_ns_interval_mdn_op(*ts_ns, tz, array, sign)?,
+        (TimestampNanosecond(Some(ts_ns), tz), Interval(MonthDayNano)) => {
+            ts_ns_interval_mdn_op(*ts_ns, tz, array, sign)?
+        }
         _ => Err(DataFusionError::Internal(
             "Invalid types for Timestamp vs Interval operations".to_string(),
         ))?,
@@ -1738,11 +1700,11 @@ pub fn interval_op_scalar_interval(
     sign: i32,
     scalar: &ScalarValue,
 ) -> Result<ArrayRef> {
+    use DataType::*;
+    use IntervalUnit::*;
+    use ScalarValue::*;
     let ret = match (array.data_type(), scalar) {
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            ScalarValue::IntervalYearMonth(Some(rhs)),
-        ) => {
+        (Interval(YearMonth), IntervalYearMonth(Some(rhs))) => {
             op_interval_macro!(
                 array,
                 as_interval_ym_array,
@@ -1752,10 +1714,7 @@ pub fn interval_op_scalar_interval(
                 sign
             )
         }
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            ScalarValue::IntervalDayTime(Some(rhs)),
-        ) => {
+        (Interval(YearMonth), IntervalDayTime(Some(rhs))) => {
             op_interval_cross_macro!(
                 array,
                 as_interval_ym_array,
@@ -1767,10 +1726,7 @@ pub fn interval_op_scalar_interval(
                 i64
             )
         }
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            ScalarValue::IntervalMonthDayNano(Some(rhs)),
-        ) => {
+        (Interval(YearMonth), IntervalMonthDayNano(Some(rhs))) => {
             op_interval_cross_macro!(
                 array,
                 as_interval_ym_array,
@@ -1782,10 +1738,7 @@ pub fn interval_op_scalar_interval(
                 i128
             )
         }
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            ScalarValue::IntervalYearMonth(Some(rhs)),
-        ) => {
+        (Interval(DayTime), IntervalYearMonth(Some(rhs))) => {
             op_interval_cross_macro!(
                 array,
                 as_interval_dt_array,
@@ -1797,10 +1750,7 @@ pub fn interval_op_scalar_interval(
                 i64
             )
         }
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            ScalarValue::IntervalDayTime(Some(rhs)),
-        ) => {
+        (Interval(DayTime), IntervalDayTime(Some(rhs))) => {
             op_interval_macro!(
                 array,
                 as_interval_dt_array,
@@ -1810,10 +1760,7 @@ pub fn interval_op_scalar_interval(
                 sign
             )
         }
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            ScalarValue::IntervalMonthDayNano(Some(rhs)),
-        ) => {
+        (Interval(DayTime), IntervalMonthDayNano(Some(rhs))) => {
             op_interval_cross_macro!(
                 array,
                 as_interval_dt_array,
@@ -1825,10 +1772,7 @@ pub fn interval_op_scalar_interval(
                 i128
             )
         }
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            ScalarValue::IntervalYearMonth(Some(rhs)),
-        ) => {
+        (Interval(MonthDayNano), IntervalYearMonth(Some(rhs))) => {
             op_interval_cross_macro!(
                 array,
                 as_interval_mdn_array,
@@ -1840,10 +1784,7 @@ pub fn interval_op_scalar_interval(
                 i128
             )
         }
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            ScalarValue::IntervalDayTime(Some(rhs)),
-        ) => {
+        (Interval(MonthDayNano), IntervalDayTime(Some(rhs))) => {
             op_interval_cross_macro!(
                 array,
                 as_interval_mdn_array,
@@ -1855,10 +1796,7 @@ pub fn interval_op_scalar_interval(
                 i128
             )
         }
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            ScalarValue::IntervalMonthDayNano(Some(rhs)),
-        ) => {
+        (Interval(MonthDayNano), IntervalMonthDayNano(Some(rhs))) => {
             op_interval_macro!(
                 array,
                 as_interval_mdn_array,
@@ -1884,92 +1822,68 @@ pub fn scalar_interval_op_interval(
     sign: i32,
     array: &ArrayRef,
 ) -> Result<ArrayRef> {
+    use DataType::*;
+    use IntervalUnit::*;
+    use ScalarValue::*;
     let ret = match (scalar, array.data_type()) {
         // YearMonth op YearMonth
-        (
-            ScalarValue::IntervalYearMonth(Some(lhs)),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
+        (IntervalYearMonth(Some(lhs)), Interval(YearMonth)) => {
             let array = as_interval_ym_array(&array)?;
             let ret: PrimitiveArray<IntervalYearMonthType> =
                 unary(array, |rhs| op_ym(*lhs, rhs, sign));
             Arc::new(ret) as _
         }
         // DayTime op YearMonth
-        (
-            ScalarValue::IntervalDayTime(Some(lhs)),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
+        (IntervalDayTime(Some(lhs)), Interval(YearMonth)) => {
             let array = as_interval_ym_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_ym_dt(rhs, *lhs, sign, true));
             Arc::new(ret) as _
         }
         // MonthDayNano op YearMonth
-        (
-            ScalarValue::IntervalMonthDayNano(Some(lhs)),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => {
+        (IntervalMonthDayNano(Some(lhs)), Interval(YearMonth)) => {
             let array = as_interval_ym_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_ym_mdn(rhs, *lhs, sign, true));
             Arc::new(ret) as _
         }
         // YearMonth op DayTime
-        (
-            ScalarValue::IntervalYearMonth(Some(lhs)),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => {
+        (IntervalYearMonth(Some(lhs)), Interval(DayTime)) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_ym_dt(*lhs, rhs, sign, false));
             Arc::new(ret) as _
         }
         // DayTime op DayTime
-        (
-            ScalarValue::IntervalDayTime(Some(lhs)),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => {
+        (IntervalDayTime(Some(lhs)), Interval(DayTime)) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalDayTimeType> =
                 unary(array, |rhs| op_dt(*lhs, rhs, sign));
             Arc::new(ret) as _
         }
         // MonthDayNano op DayTime
-        (
-            ScalarValue::IntervalMonthDayNano(Some(lhs)),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => {
+        (IntervalMonthDayNano(Some(lhs)), Interval(DayTime)) => {
             let array = as_interval_dt_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_dt_mdn(rhs, *lhs, sign, true));
             Arc::new(ret) as _
         }
         // YearMonth op MonthDayNano
-        (
-            ScalarValue::IntervalYearMonth(Some(lhs)),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
+        (IntervalYearMonth(Some(lhs)), Interval(MonthDayNano)) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_ym_mdn(*lhs, rhs, sign, false));
             Arc::new(ret) as _
         }
         // DayTime op MonthDayNano
-        (
-            ScalarValue::IntervalDayTime(Some(lhs)),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
+        (IntervalDayTime(Some(lhs)), Interval(MonthDayNano)) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_dt_mdn(*lhs, rhs, sign, false));
             Arc::new(ret) as _
         }
         // MonthDayNano op MonthDayNano
-        (
-            ScalarValue::IntervalMonthDayNano(Some(lhs)),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
+        (IntervalMonthDayNano(Some(lhs)), Interval(MonthDayNano)) => {
             let array = as_interval_mdn_array(&array)?;
             let ret: PrimitiveArray<IntervalMonthDayNanoType> =
                 unary(array, |rhs| op_mdn(*lhs, rhs, sign));
@@ -2458,11 +2372,10 @@ macro_rules! ts_interval_op {
 
 /// Performs a timestamp subtraction operation on two arrays and returns the resulting array.
 pub fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRef> {
+    use DataType::*;
+    use TimeUnit::*;
     match (array_lhs.data_type(), array_rhs.data_type()) {
-        (
-            DataType::Timestamp(TimeUnit::Second, opt_tz_lhs),
-            DataType::Timestamp(TimeUnit::Second, opt_tz_rhs),
-        ) => Ok(ts_sub_op!(
+        (Timestamp(Second, opt_tz_lhs), Timestamp(Second, opt_tz_rhs)) => Ok(ts_sub_op!(
             array_lhs,
             array_rhs,
             opt_tz_lhs,
@@ -2474,51 +2387,48 @@ pub fn ts_array_op(array_lhs: &ArrayRef, array_rhs: &ArrayRef) -> Result<ArrayRe
             MILLISECOND_MODE,
             IntervalDayTimeType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Millisecond, opt_tz_lhs),
-            DataType::Timestamp(TimeUnit::Millisecond, opt_tz_rhs),
-        ) => Ok(ts_sub_op!(
-            array_lhs,
-            array_rhs,
-            opt_tz_lhs,
-            opt_tz_rhs,
-            1i64,
-            as_timestamp_millisecond_array,
-            milliseconds_sub,
-            NaiveDateTime::timestamp_millis,
-            MILLISECOND_MODE,
-            IntervalDayTimeType
-        )),
-        (
-            DataType::Timestamp(TimeUnit::Microsecond, opt_tz_lhs),
-            DataType::Timestamp(TimeUnit::Microsecond, opt_tz_rhs),
-        ) => Ok(ts_sub_op!(
-            array_lhs,
-            array_rhs,
-            opt_tz_lhs,
-            opt_tz_rhs,
-            1000i64,
-            as_timestamp_microsecond_array,
-            microseconds_sub,
-            NaiveDateTime::timestamp_micros,
-            NANOSECOND_MODE,
-            IntervalMonthDayNanoType
-        )),
-        (
-            DataType::Timestamp(TimeUnit::Nanosecond, opt_tz_lhs),
-            DataType::Timestamp(TimeUnit::Nanosecond, opt_tz_rhs),
-        ) => Ok(ts_sub_op!(
-            array_lhs,
-            array_rhs,
-            opt_tz_lhs,
-            opt_tz_rhs,
-            1i64,
-            as_timestamp_nanosecond_array,
-            nanoseconds_sub,
-            NaiveDateTime::timestamp_nanos,
-            NANOSECOND_MODE,
-            IntervalMonthDayNanoType
-        )),
+        (Timestamp(Millisecond, opt_tz_lhs), Timestamp(Millisecond, opt_tz_rhs)) => {
+            Ok(ts_sub_op!(
+                array_lhs,
+                array_rhs,
+                opt_tz_lhs,
+                opt_tz_rhs,
+                1i64,
+                as_timestamp_millisecond_array,
+                milliseconds_sub,
+                NaiveDateTime::timestamp_millis,
+                MILLISECOND_MODE,
+                IntervalDayTimeType
+            ))
+        }
+        (Timestamp(Microsecond, opt_tz_lhs), Timestamp(Microsecond, opt_tz_rhs)) => {
+            Ok(ts_sub_op!(
+                array_lhs,
+                array_rhs,
+                opt_tz_lhs,
+                opt_tz_rhs,
+                1000i64,
+                as_timestamp_microsecond_array,
+                microseconds_sub,
+                NaiveDateTime::timestamp_micros,
+                NANOSECOND_MODE,
+                IntervalMonthDayNanoType
+            ))
+        }
+        (Timestamp(Nanosecond, opt_tz_lhs), Timestamp(Nanosecond, opt_tz_rhs)) => {
+            Ok(ts_sub_op!(
+                array_lhs,
+                array_rhs,
+                opt_tz_lhs,
+                opt_tz_rhs,
+                1i64,
+                as_timestamp_nanosecond_array,
+                nanoseconds_sub,
+                NaiveDateTime::timestamp_nanos,
+                NANOSECOND_MODE,
+                IntervalMonthDayNanoType
+            ))
+        }
         (_, _) => Err(DataFusionError::Execution(format!(
             "Invalid array types for Timestamp subtraction: {} - {}",
             array_lhs.data_type(),
@@ -2534,11 +2444,10 @@ pub fn interval_array_op(
     array_rhs: &ArrayRef,
     sign: i32,
 ) -> Result<ArrayRef> {
+    use DataType::*;
+    use IntervalUnit::*;
     match (array_lhs.data_type(), array_rhs.data_type()) {
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(interval_op!(
+        (Interval(YearMonth), Interval(YearMonth)) => Ok(interval_op!(
             array_lhs,
             array_rhs,
             as_interval_ym_array,
@@ -2546,10 +2455,7 @@ pub fn interval_array_op(
             sign,
             IntervalYearMonthType
         )),
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(interval_cross_op!(
+        (Interval(YearMonth), Interval(DayTime)) => Ok(interval_cross_op!(
             array_lhs,
             array_rhs,
             as_interval_ym_array,
@@ -2560,10 +2466,7 @@ pub fn interval_array_op(
             IntervalYearMonthType,
             IntervalDayTimeType
         )),
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(interval_cross_op!(
+        (Interval(YearMonth), Interval(MonthDayNano)) => Ok(interval_cross_op!(
             array_lhs,
             array_rhs,
             as_interval_ym_array,
@@ -2574,10 +2477,7 @@ pub fn interval_array_op(
             IntervalYearMonthType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(interval_cross_op!(
+        (Interval(DayTime), Interval(YearMonth)) => Ok(interval_cross_op!(
             array_rhs,
             array_lhs,
             as_interval_ym_array,
@@ -2588,10 +2488,7 @@ pub fn interval_array_op(
             IntervalYearMonthType,
             IntervalDayTimeType
         )),
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(interval_op!(
+        (Interval(DayTime), Interval(DayTime)) => Ok(interval_op!(
             array_lhs,
             array_rhs,
             as_interval_dt_array,
@@ -2599,10 +2496,7 @@ pub fn interval_array_op(
             sign,
             IntervalDayTimeType
         )),
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(interval_cross_op!(
+        (Interval(DayTime), Interval(MonthDayNano)) => Ok(interval_cross_op!(
             array_lhs,
             array_rhs,
             as_interval_dt_array,
@@ -2613,10 +2507,7 @@ pub fn interval_array_op(
             IntervalDayTimeType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(interval_cross_op!(
+        (Interval(MonthDayNano), Interval(YearMonth)) => Ok(interval_cross_op!(
             array_rhs,
             array_lhs,
             as_interval_ym_array,
@@ -2627,10 +2518,7 @@ pub fn interval_array_op(
             IntervalYearMonthType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(interval_cross_op!(
+        (Interval(MonthDayNano), Interval(DayTime)) => Ok(interval_cross_op!(
             array_rhs,
             array_lhs,
             as_interval_dt_array,
@@ -2641,10 +2529,7 @@ pub fn interval_array_op(
             IntervalDayTimeType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(interval_op!(
+        (Interval(MonthDayNano), Interval(MonthDayNano)) => Ok(interval_op!(
             array_lhs,
             array_rhs,
             as_interval_mdn_array,
@@ -2668,11 +2553,11 @@ pub fn ts_interval_array_op(
     sign: i32,
     array_rhs: &ArrayRef,
 ) -> Result<ArrayRef> {
+    use DataType::*;
+    use IntervalUnit::*;
+    use TimeUnit::*;
     match (array_lhs.data_type(), array_rhs.data_type()) {
-        (
-            DataType::Timestamp(TimeUnit::Second, tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Second, tz), Interval(YearMonth)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2683,10 +2568,7 @@ pub fn ts_interval_array_op(
             TimestampSecondType,
             IntervalYearMonthType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Second, tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Second, tz), Interval(DayTime)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2697,10 +2579,7 @@ pub fn ts_interval_array_op(
             TimestampSecondType,
             IntervalDayTimeType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Second, tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Second, tz), Interval(MonthDayNano)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2711,10 +2590,7 @@ pub fn ts_interval_array_op(
             TimestampSecondType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Millisecond, tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Millisecond, tz), Interval(YearMonth)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2725,10 +2601,7 @@ pub fn ts_interval_array_op(
             TimestampMillisecondType,
             IntervalYearMonthType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Millisecond, tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Millisecond, tz), Interval(DayTime)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2739,10 +2612,7 @@ pub fn ts_interval_array_op(
             TimestampMillisecondType,
             IntervalDayTimeType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Millisecond, tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Millisecond, tz), Interval(MonthDayNano)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2753,10 +2623,7 @@ pub fn ts_interval_array_op(
             TimestampMillisecondType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Microsecond, tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Microsecond, tz), Interval(YearMonth)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2767,10 +2634,7 @@ pub fn ts_interval_array_op(
             TimestampMicrosecondType,
             IntervalYearMonthType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Microsecond, tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Microsecond, tz), Interval(DayTime)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2781,10 +2645,7 @@ pub fn ts_interval_array_op(
             TimestampMicrosecondType,
             IntervalDayTimeType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Microsecond, tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Microsecond, tz), Interval(MonthDayNano)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2795,10 +2656,7 @@ pub fn ts_interval_array_op(
             TimestampMicrosecondType,
             IntervalMonthDayNanoType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Nanosecond, tz),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Nanosecond, tz), Interval(YearMonth)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2809,10 +2667,7 @@ pub fn ts_interval_array_op(
             TimestampNanosecondType,
             IntervalYearMonthType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Nanosecond, tz),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Nanosecond, tz), Interval(DayTime)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
@@ -2823,10 +2678,7 @@ pub fn ts_interval_array_op(
             TimestampNanosecondType,
             IntervalDayTimeType
         )),
-        (
-            DataType::Timestamp(TimeUnit::Nanosecond, tz),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => Ok(ts_interval_op!(
+        (Timestamp(Nanosecond, tz), Interval(MonthDayNano)) => Ok(ts_interval_op!(
             array_lhs,
             array_rhs,
             tz,
