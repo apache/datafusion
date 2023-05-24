@@ -231,6 +231,10 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
+    // Inner vector defines pre-known sort order.
+    // Outer vector stores alternative ordering for the same schema
+    // (we can define ordering equivalences at the source.)
+    // If there is no ordering equivalence, outer vector will have size 1.
     pub file_sort_order: Vec<Vec<Expr>>,
     /// Infinite source means that the input is not guaranteed to end.
     /// Currently, CSV, JSON, and AVRO formats are supported.
@@ -480,6 +484,9 @@ impl StatisticsCache {
     }
 }
 
+// Vec<PhysicalSortExpr> defines lexicographical ordering of the schema
+type LexOrdering = Vec<PhysicalSortExpr>;
+
 /// Reads data from one or more files via an
 /// [`ObjectStore`](object_store::ObjectStore). For example, from
 /// local files or objects from AWS S3. Implements [`TableProvider`],
@@ -614,12 +621,12 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+    fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
         let mut all_sort_orders = vec![];
 
         for expr in &self.options.file_sort_order {
             // convert each expr to a physical sort expr
-            let sort_expr = expr
+            let sort_exprs = expr
             .iter()
             .map(|expr| {
                 if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
@@ -645,7 +652,7 @@ impl ListingTable {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-            all_sort_orders.push(sort_expr);
+            all_sort_orders.push(sort_exprs);
         }
         Ok(all_sort_orders)
     }
