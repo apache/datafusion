@@ -390,12 +390,12 @@ mod tests {
     use console::{style, Style};
     use datafusion::config::ConfigOptions;
     use datafusion::sql::TableReference;
+    use similar::{ChangeTag, TextDiff};
     use std::fmt;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use std::path::Path;
     use std::sync::Arc;
-    use similar::{ChangeTag, TextDiff};
 
     #[tokio::test]
     async fn q1_expected_plan() -> Result<()> {
@@ -568,10 +568,7 @@ mod tests {
 
     fn assert_text_eq(expected: String, actual: String) {
         if actual != expected {
-            let diff = TextDiff::from_lines(
-                &expected,
-                &actual,
-            );
+            let diff = TextDiff::from_lines(&expected, &actual);
 
             for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
                 if idx > 0 {

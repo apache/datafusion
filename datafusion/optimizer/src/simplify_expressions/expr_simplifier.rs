@@ -2987,11 +2987,11 @@ mod tests {
 
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
-            col("c1").eq(lit(2)).or(col("c1").eq(lit(1)))
+            col("c1").eq(lit(1)).or(col("c1").eq(lit(2)))
         );
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
-            col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+            col("c1").not_eq(lit(1)).and(col("c1").not_eq(lit(2)))
         );
 
         let subquery = Arc::new(test_table_scan_with_name("test").unwrap());
@@ -3017,7 +3017,7 @@ mod tests {
         let subquery2 =
             scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
 
-        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery1> AND c1 != <subquery2>
         assert_eq!(
             simplify(in_list(
                 col("c1"),
@@ -3025,18 +3025,18 @@ mod tests {
                 true
             )),
             col("c1")
-                .not_eq(subquery2.clone())
-                .and(col("c1").not_eq(subquery1.clone()))
+                .not_eq(subquery1.clone())
+                .and(col("c1").not_eq(subquery2.clone()))
         );
 
-        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery1> OR c1 == <subquery2>
         assert_eq!(
             simplify(in_list(
                 col("c1"),
                 vec![subquery1.clone(), subquery2.clone()],
                 false
             )),
-            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
+            col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
     }
 
