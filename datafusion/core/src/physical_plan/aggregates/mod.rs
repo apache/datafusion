@@ -390,6 +390,9 @@ fn get_finest_requirement<
 }
 
 // Check whether aggregate function is ordering sensitive
+// Ordering sensitive means that, the order data is fed to the aggregator, affects the result of aggregator.
+// For instance, `SUM` aggregator doesn't depend on the order of the inputs as long as same set of values is used during computation,
+// However, `FirstAgg` depends on the order (if order changes, first value in the list would change).
 fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<FirstAgg>()
         || aggr_expr.as_any().is::<LastAgg>()
