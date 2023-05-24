@@ -387,12 +387,15 @@ struct QueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use console::{style, Style};
     use datafusion::config::ConfigOptions;
     use datafusion::sql::TableReference;
+    use std::fmt;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use std::path::Path;
     use std::sync::Arc;
+    use similar::{ChangeTag, TextDiff};
 
     #[tokio::test]
     async fn q1_expected_plan() -> Result<()> {
@@ -537,9 +540,12 @@ mod tests {
         for path in &possibilities {
             let path = Path::new(&path);
             if let Ok(expected) = read_text_file(path) {
+                assert_text_eq(expected, actual);
+                /*
                 assert_eq!(expected, actual,
                            // generate output that is easier to copy/paste/update
                            "\n\nMismatch of expected content in: {path:?}\nExpected:\n\n{expected}\n\nActual:\n\n{actual}\n\n");
+                */
                 found = true;
                 break;
             }
@@ -547,6 +553,58 @@ mod tests {
         assert!(found);
 
         Ok(())
+    }
+
+    struct Line(Option<usize>);
+
+    impl fmt::Display for Line {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match self.0 {
+                None => write!(f, "    "),
+                Some(idx) => write!(f, "{:<4}", idx + 1),
+            }
+        }
+    }
+
+    fn assert_text_eq(expected: String, actual: String) {
+        if actual != expected {
+            let diff = TextDiff::from_lines(
+                &expected,
+                &actual,
+            );
+
+            for (idx, group) in diff.grouped_ops(3).iter().enumerate() {
+                if idx > 0 {
+                    println!("{:-^1$}", "-", 80);
+                }
+                for op in group {
+                    for change in diff.iter_inline_changes(op) {
+                        let (sign, s) = match change.tag() {
+                            ChangeTag::Delete => ("-", Style::new().red()),
+                            ChangeTag::Insert => ("+", Style::new().green()),
+                            ChangeTag::Equal => (" ", Style::new().dim()),
+                        };
+                        print!(
+                            "{}{} |{}",
+                            style(Line(change.old_index())).dim(),
+                            style(Line(change.new_index())).dim(),
+                            s.apply_to(sign).bold(),
+                        );
+                        for (emphasized, value) in change.iter_strings_lossy() {
+                            if emphasized {
+                                print!("{}", s.apply_to(value).underlined().on_black());
+                            } else {
+                                print!("{}", s.apply_to(value));
+                            }
+                        }
+                        if change.missing_newline() {
+                            println!();
+                        }
+                    }
+                }
+            }
+        }
+        assert!(actual == expected, "actual != expected");
     }
 
     fn create_context() -> Result<SessionContext> {
