@@ -342,21 +342,18 @@ impl TreeNodeRewriter for OrInListSimplifier {
     type N = Expr;
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match &expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                if *op == Operator::Or {
-                    // TODO: Possible to make this more efficient?
-                    let left = as_inlist(left);
-                    let right = as_inlist(right);
-                    if let (Some(mut left), Some(mut right)) = (left, right) {
-                        if mergeable_inlist(&left, &right) {
-                            let merged_inlist = merge_inlist(&mut left, &mut right);
-                            return Ok(Expr::InList(merged_inlist));
-                        }
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
+            if *op == Operator::Or {
+                // TODO: Possible to make this more efficient?
+                let left = as_inlist(left);
+                let right = as_inlist(right);
+                if let (Some(mut left), Some(mut right)) = (left, right) {
+                    if mergeable_inlist(&left, &right) {
+                        let merged_inlist = merge_inlist(&mut left, &mut right);
+                        return Ok(Expr::InList(merged_inlist));
                     }
                 }
             }
-            _ => {},
         }
 
         Ok(expr)
@@ -367,24 +364,20 @@ impl TreeNodeRewriter for OrInListSimplifier {
 fn as_inlist(expr: &Expr) -> Option<InList> {
     match expr {
         Expr::InList(inlist) => Some(inlist.clone()),
-        Expr::BinaryExpr(BinaryExpr { left, op, right}) if *op == Operator::Eq => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
             let unboxed_left = *left.clone();
             let unboxed_right = *right.clone();
             match (&unboxed_left, &unboxed_right) {
-                (Expr::Column(_), Expr::Literal(_)) => {
-                    Some(InList {
-                        expr: left.clone(),
-                        list: vec![unboxed_right],
-                        negated: false,
-                    })
-                }
-                (Expr::Literal(_), Expr::Column(_)) => {
-                    Some(InList {
-                        expr: right.clone(),
-                        list: vec![unboxed_left],
-                        negated: false,
-                    })
-                }
+                (Expr::Column(_), Expr::Literal(_)) => Some(InList {
+                    expr: left.clone(),
+                    list: vec![unboxed_right],
+                    negated: false,
+                }),
+                (Expr::Literal(_), Expr::Column(_)) => Some(InList {
+                    expr: right.clone(),
+                    list: vec![unboxed_left],
+                    negated: false,
+                }),
                 _ => None,
             }
         }
@@ -396,8 +389,10 @@ fn as_inlist(expr: &Expr) -> Option<InList> {
 ///
 /// Only in-list expressions with the same column and negation status
 fn mergeable_inlist(a: &InList, b: &InList) -> bool {
-    a.expr.try_into_col().is_ok() && b.expr.try_into_col().is_ok()
-        && a.expr == b.expr && a.negated == b.negated
+    a.expr.try_into_col().is_ok()
+        && b.expr.try_into_col().is_ok()
+        && a.expr == b.expr
+        && a.negated == b.negated
 }
 
 /// Merge two in-list expressions into a single in-list expression
@@ -520,17 +515,37 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 let first_val = list[0].clone();
                 if negated {
-                    list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
-                            (*expr.clone()).not_eq(y).and(acc)
-                        })
+                    list.into_iter().skip(1).fold(
+                        (*expr.clone()).not_eq(first_val),
+                        |acc, y| {
+                            // Note that `A and B and C and D` is a left-heavy tree structure
+                            // as such we want to maintain this structure as much as possible
+                            // to avoid reordering the expression during each optimization
+                            // pass.
+                            //
+                            // Left-heavy tree structure for `A and B and C and D`:
+                            // ```
+                            //        &
+                            //       / \
+                            //      &   D
+                            //     / \
+                            //    &   C
+                            //   / \
+                            //  A   B
+                            // ```
+                            //
+                            // The code below maintain the left-heavy tree structure.
+                            acc.and((*expr.clone()).not_eq(y))
+                        },
+                    )
                 } else {
-                    list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).eq(first_val), |acc, y| {
-                            (*expr.clone()).eq(y).or(acc)
-                        })
+                    list.into_iter().skip(1).fold(
+                        (*expr.clone()).eq(first_val),
+                        |acc, y| {
+                            // Same reasoning as above
+                            acc.or((*expr.clone()).eq(y))
+                        },
+                    )
                 }
             }
             //
