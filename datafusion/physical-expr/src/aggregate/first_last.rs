@@ -28,15 +28,15 @@ use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
-/// FIRST aggregate expression
+/// FIRST_VALUE aggregate expression
 #[derive(Debug)]
-pub struct FirstAgg {
+pub struct FirstValue {
     name: String,
     pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
 }
 
-impl FirstAgg {
+impl FirstValue {
     /// Create a new ArrayAgg aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
@@ -51,7 +51,7 @@ impl FirstAgg {
     }
 }
 
-impl AggregateExpr for FirstAgg {
+impl AggregateExpr for FirstValue {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -62,12 +62,12 @@ impl AggregateExpr for FirstAgg {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(FirstAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(FirstValueAccumulator::try_new(&self.data_type)?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            format_state_name(&self.name, "first"),
+            format_state_name(&self.name, "first_value"),
             self.data_type.clone(),
             true,
         )])
@@ -82,7 +82,7 @@ impl AggregateExpr for FirstAgg {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(LastAgg::new(
+        Some(Arc::new(LastValue::new(
             self.expr.clone(),
             self.name.clone(),
             self.data_type.clone(),
@@ -90,11 +90,11 @@ impl AggregateExpr for FirstAgg {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(FirstAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(FirstValueAccumulator::try_new(&self.data_type)?))
     }
 }
 
-impl PartialEq<dyn Any> for FirstAgg {
+impl PartialEq<dyn Any> for FirstValue {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -108,12 +108,12 @@ impl PartialEq<dyn Any> for FirstAgg {
 }
 
 #[derive(Debug)]
-struct FirstAccumulator {
+struct FirstValueAccumulator {
     first: ScalarValue,
     count: u64,
 }
 
-impl FirstAccumulator {
+impl FirstValueAccumulator {
     /// new First accumulator
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
@@ -123,7 +123,7 @@ impl FirstAccumulator {
     }
 }
 
-impl Accumulator for FirstAccumulator {
+impl Accumulator for FirstValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.first.clone(), ScalarValue::from(self.count)])
     }
@@ -139,7 +139,7 @@ impl Accumulator for FirstAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // FIRST(first1, first2, first3, ...)
+        // FIRST_VALUE(first1, first2, first3, ...)
         self.update_batch(states)
     }
 
@@ -157,15 +157,15 @@ impl Accumulator for FirstAccumulator {
     }
 }
 
-/// LAST aggregate expression
+/// LAST_VALUE aggregate expression
 #[derive(Debug)]
-pub struct LastAgg {
+pub struct LastValue {
     name: String,
     pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
 }
 
-impl LastAgg {
+impl LastValue {
     /// Create a new ArrayAgg aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
@@ -180,7 +180,7 @@ impl LastAgg {
     }
 }
 
-impl AggregateExpr for LastAgg {
+impl AggregateExpr for LastValue {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -191,12 +191,12 @@ impl AggregateExpr for LastAgg {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(LastAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(LastValueAccumulator::try_new(&self.data_type)?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            format_state_name(&self.name, "last"),
+            format_state_name(&self.name, "last_value"),
             self.data_type.clone(),
             true,
         )])
@@ -211,7 +211,7 @@ impl AggregateExpr for LastAgg {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        Some(Arc::new(FirstAgg::new(
+        Some(Arc::new(FirstValue::new(
             self.expr.clone(),
             self.name.clone(),
             self.data_type.clone(),
@@ -219,11 +219,11 @@ impl AggregateExpr for LastAgg {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(LastAccumulator::try_new(&self.data_type)?))
+        Ok(Box::new(LastValueAccumulator::try_new(&self.data_type)?))
     }
 }
 
-impl PartialEq<dyn Any> for LastAgg {
+impl PartialEq<dyn Any> for LastValue {
     fn eq(&self, other: &dyn Any) -> bool {
         down_cast_any_ref(other)
             .downcast_ref::<Self>()
@@ -237,15 +237,14 @@ impl PartialEq<dyn Any> for LastAgg {
 }
 
 #[derive(Debug)]
-struct LastAccumulator {
+struct LastValueAccumulator {
     last: ScalarValue,
     count: u64,
 }
 
-impl LastAccumulator {
+impl LastValueAccumulator {
     /// new Last accumulator
     pub fn try_new(data_type: &DataType) -> Result<Self> {
-        println!("last accumulator init");
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
             count: 0,
@@ -253,7 +252,7 @@ impl LastAccumulator {
     }
 }
 
-impl Accumulator for LastAccumulator {
+impl Accumulator for LastValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.last.clone(), ScalarValue::from(self.count)])
     }
@@ -270,7 +269,7 @@ impl Accumulator for LastAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        // LAST(last1, last2, last3, ...)
+        // LAST_VALUE(last1, last2, last3, ...)
         self.update_batch(states)
     }
 

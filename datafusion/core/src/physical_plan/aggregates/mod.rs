@@ -55,7 +55,7 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::{ArrayAgg, FirstAgg, LastAgg};
+use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 use datafusion_physical_expr::utils::ordering_satisfy_requirement;
 
 /// Hash aggregate modes
@@ -441,9 +441,12 @@ fn get_finest_requirement<
 }
 
 // Check whether aggregate function is ordering sensitive
+// Ordering sensitive means that, the order data is fed to the aggregator, affects the result of aggregator.
+// For instance, `SUM` aggregator doesn't depend on the order of the inputs as long as same set of values is used during computation,
+// However, `FirstAgg` depends on the order (if order changes, first value in the list would change).
 fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
-    aggr_expr.as_any().is::<FirstAgg>()
-        || aggr_expr.as_any().is::<LastAgg>()
+    aggr_expr.as_any().is::<FirstValue>()
+        || aggr_expr.as_any().is::<LastValue>()
         || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
@@ -1205,7 +1208,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{
-        lit, ApproxDistinct, Column, Count, FirstAgg, Median,
+        lit, ApproxDistinct, Column, Count, FirstValue, Median,
     };
     use datafusion_physical_expr::{
         AggregateExpr, EquivalenceProperties, OrderedColumn,
@@ -1854,6 +1857,7 @@ mod tests {
             descending: false,
             nulls_first: false,
         };
+        // This is the reverse requirement of options1
         let options2 = SortOptions {
             descending: true,
             nulls_first: true,
@@ -1869,33 +1873,6 @@ mod tests {
             &OrderedColumn::new(col_a.clone(), options1),
             &OrderedColumn::new(col_c.clone(), options2),
         ));
-        let mut aggr_exprs = vec![
-            Arc::new(FirstAgg::new(
-                Arc::new(col_a.clone()),
-                "first1",
-                DataType::Int32,
-            )) as Arc<dyn AggregateExpr>,
-            Arc::new(FirstAgg::new(
-                Arc::new(col_a.clone()),
-                "first1",
-                DataType::Int32,
-            )) as Arc<dyn AggregateExpr>,
-            Arc::new(FirstAgg::new(
-                Arc::new(col_a.clone()),
-                "first1",
-                DataType::Int32,
-            )) as Arc<dyn AggregateExpr>,
-            Arc::new(FirstAgg::new(
-                Arc::new(col_a.clone()),
-                "first1",
-                DataType::Int32,
-            )) as Arc<dyn AggregateExpr>,
-            Arc::new(FirstAgg::new(
-                Arc::new(col_a.clone()),
-                "first1",
-                DataType::Int32,
-            )) as Arc<dyn AggregateExpr>,
-        ];
         let order_by_exprs = vec![
             None,
             Some(vec![PhysicalSortExpr {
@@ -1912,7 +1889,7 @@ mod tests {
             }]),
             Some(vec![
                 PhysicalSortExpr {
-                    expr: Arc::new(col_a),
+                    expr: Arc::new(col_a.clone()),
                     options: options1,
                 },
                 PhysicalSortExpr {
@@ -1920,7 +1897,19 @@ mod tests {
                     options: options1,
                 },
             ]),
+            // Since aggregate expression is reversible (FirstValue), we should be able to resolve below
+            // contradictory requirement by reversing it.
+            Some(vec![PhysicalSortExpr {
+                expr: Arc::new(col_b.clone()),
+                options: options2,
+            }]),
         ];
+        let aggr_expr = Arc::new(FirstValue::new(
+            Arc::new(col_a.clone()),
+            "first1",
+            DataType::Int32,
+        )) as _;
+        let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(
             &mut aggr_exprs,
             &order_by_exprs,
