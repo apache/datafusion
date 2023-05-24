@@ -361,7 +361,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(ListingTableUrl::parse)
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let mut options = ListingOptions::new(file_format)
+                let options = ListingOptions::new(file_format)
                     .with_file_extension(scan.file_extension.clone())
                     .with_table_partition_cols(
                         scan.table_partition_cols
@@ -381,9 +381,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize);
 
-                for order in &all_sort_orders {
-                    options = options.with_file_sort_order(Some(order.clone()));
-                }
+                let options = all_sort_orders.iter().fold(options, |acc, order| {
+                    acc.with_file_sort_order(Some(order.clone()))
+                });
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())

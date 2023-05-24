@@ -42,8 +42,11 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
-use crate::protobuf::{self, PhysicalSortExprNodeVector};
-use crate::protobuf::{physical_aggregate_expr_node, PhysicalSortExprNode, ScalarValue};
+use crate::protobuf;
+use crate::protobuf::{
+    physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeVector,
+    ScalarValue,
+};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};

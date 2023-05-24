@@ -116,6 +116,9 @@ impl fmt::Display for CopyToSource {
     }
 }
 
+// Vec<OrderByExpr> defines lexicographical ordering
+type LexOrdering = Vec<OrderByExpr>;
+
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 ///
 /// Syntax:
@@ -158,7 +161,7 @@ pub struct CreateExternalTable {
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Ordered expressions
-    pub order_exprs: Vec<Vec<OrderByExpr>>,
+    pub order_exprs: Vec<LexOrdering>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
