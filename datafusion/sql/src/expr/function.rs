@@ -25,7 +25,7 @@ use datafusion_expr::{
     WindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr,
+    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
 };
 use std::str::FromStr;
 
@@ -54,7 +54,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // then, window function
-        if let Some(window) = function.over.take() {
+        let window = function
+            .over
+            .take()
+            // TODO support named windows
+            .map(|window| match window {
+                WindowType::WindowSpec(window_spec) => Ok(window_spec),
+                WindowType::NamedWindow(name) => Err(DataFusionError::NotImplemented(
+                    format!("Named windows ({name}) are not supported"),
+                )),
+            })
+            .transpose()?;
+
+        if let Some(window) = window {
             let partition_by = window
                 .partition_by
                 .into_iter()

@@ -702,9 +702,9 @@ impl PhysicalExpr for BinaryExpr {
             &right_data_type,
         );
         let (left_value, right_value) = if let Some(coerced_type) = coerced_type {
-            let options = CastOptions { safe: true };
-            let left_value = cast_column(&left_value, &coerced_type, &options)?;
-            let right_value = cast_column(&right_value, &coerced_type, &options)?;
+            let options = CastOptions::default();
+            let left_value = cast_column(&left_value, &coerced_type, Some(&options))?;
+            let right_value = cast_column(&right_value, &coerced_type, Some(&options))?;
             (left_value, right_value)
         } else {
             // No need to coerce if it is not decimal or not math operation

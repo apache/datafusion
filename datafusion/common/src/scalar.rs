@@ -36,7 +36,7 @@ use arrow::compute::nullif;
 use arrow::datatypes::{FieldRef, Fields, SchemaBuilder};
 use arrow::{
     array::*,
-    compute::kernels::cast::{cast, cast_with_options, CastOptions},
+    compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
@@ -1760,17 +1760,17 @@ macro_rules! build_array_from_option {
             None => new_null_array(&DataType::$DATA_TYPE($ENUM), $SIZE),
         }
     }};
-    ($DATA_TYPE:ident, $ENUM:expr, $ENUM2:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+}
+
+macro_rules! build_timestamp_array_from_option {
+    ($TIME_UNIT:expr, $TZ:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {
         match $EXPR {
             Some(value) => {
-                let array: ArrayRef = Arc::new($ARRAY_TYPE::from_value(*value, $SIZE));
-                // Need to call cast to cast to final data type with timezone/extra param
-                cast(&array, &DataType::$DATA_TYPE($ENUM, $ENUM2))
-                    .expect("cannot do temporal cast")
+                Arc::new($ARRAY_TYPE::from_value(*value, $SIZE).with_timezone_opt($TZ))
             }
-            None => new_null_array(&DataType::$DATA_TYPE($ENUM, $ENUM2), $SIZE),
+            None => new_null_array(&DataType::Timestamp($TIME_UNIT, $TZ), $SIZE),
         }
-    }};
+    };
 }
 
 macro_rules! eq_array_primitive {
@@ -2718,39 +2718,43 @@ impl ScalarValue {
             ScalarValue::UInt64(e) => {
                 build_array_from_option!(UInt64, UInt64Array, e, size)
             }
-            ScalarValue::TimestampSecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Second,
-                tz_opt.clone(),
-                TimestampSecondArray,
-                e,
-                size
-            ),
-            ScalarValue::TimestampMillisecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Millisecond,
-                tz_opt.clone(),
-                TimestampMillisecondArray,
-                e,
-                size
-            ),
+            ScalarValue::TimestampSecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Second,
+                    tz_opt.clone(),
+                    TimestampSecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::TimestampMillisecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Millisecond,
+                    tz_opt.clone(),
+                    TimestampMillisecondArray,
+                    e,
+                    size
+                )
+            }
 
-            ScalarValue::TimestampMicrosecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Microsecond,
-                tz_opt.clone(),
-                TimestampMicrosecondArray,
-                e,
-                size
-            ),
-            ScalarValue::TimestampNanosecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Nanosecond,
-                tz_opt.clone(),
-                TimestampNanosecondArray,
-                e,
-                size
-            ),
+            ScalarValue::TimestampMicrosecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Microsecond,
+                    tz_opt.clone(),
+                    TimestampMicrosecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::TimestampNanosecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Nanosecond,
+                    tz_opt.clone(),
+                    TimestampNanosecondArray,
+                    e,
+                    size
+                )
+            }
             ScalarValue::Utf8(e) => match e {
                 Some(value) => {
                     Arc::new(StringArray::from_iter_values(repeat(value).take(size)))
@@ -3128,7 +3132,10 @@ impl ScalarValue {
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
         let value = ScalarValue::Utf8(Some(value));
-        let cast_options = CastOptions { safe: false };
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
         let cast_arr = cast_with_options(&value.to_array(), target_type, &cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }
