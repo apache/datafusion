@@ -131,7 +131,7 @@ impl Accumulator for FirstValueAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
         let values = &values[0];
-        if self.count == 0 && values.len() > 0 {
+        if self.count == 0 && !values.is_empty() {
             self.first = ScalarValue::try_from_array(values, 0)?;
         }
         self.count += (values.len() - values.null_count()) as u64;
@@ -258,9 +258,8 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // If we have seen first value, we shouldn't update it
         let values = &values[0];
-        if values.len() > 0 {
+        if !values.is_empty() {
             // Update with last value in the array.
             self.last = ScalarValue::try_from_array(values, values.len() - 1)?;
         }
