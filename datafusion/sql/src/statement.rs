@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
+    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
+    Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -85,6 +86,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
+            DFStatement::CopyTo(s) => self.copy_to_plan(s),
         }
     }
 
@@ -402,11 +404,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             Statement::Delete {
-                table_name,
+                tables,
                 using,
                 selection,
                 returning,
+                from,
             } => {
+                if !tables.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                        "DELETE <TABLE> not supported".to_string(),
+                    ));
+                }
+
                 if using.is_some() {
                     Err(DataFusionError::Plan(
                         "Using clause not supported".to_owned(),
@@ -417,6 +426,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Delete-returning clause not yet supported".to_owned(),
                     ))?;
                 }
+                let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
             }
 
@@ -491,6 +501,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
+        if from.len() != 1 {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got {}: {from:?}",
+                from.len()
+            )));
+        }
+        let table_factor = from.pop().unwrap();
+        if !table_factor.joins.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DELETE FROM only supports single table, got: joins".to_string(),
+            ));
+        }
+        let TableFactor::Table{name, ..} = table_factor.relation else {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got: {table_factor:?}"
+            )))
+        };
+
+        Ok(name)
+    }
+
     /// Generate a logical plan from a "SHOW TABLES" query
     fn show_tables_to_plan(
         &self,
@@ -535,6 +567,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             schema,
             dummy_schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
+        // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
+        Err(DataFusionError::NotImplemented(
+            "`COPY .. TO ..` statement is not yet supported".to_string(),
+        ))
     }
 
     fn build_order_by(
@@ -780,16 +819,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn delete_to_plan(
         &self,
-        table_factor: TableFactor,
+        table_name: ObjectName,
         predicate_expr: Option<Expr>,
     ) -> Result<LogicalPlan> {
-        let table_name = match &table_factor {
-            TableFactor::Table { name, .. } => name.clone(),
-            _ => Err(DataFusionError::Plan(
-                "Cannot delete from non-table relations!".to_string(),
-            ))?,
-        };
-
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self.schema_provider.get_table_provider(table_ref.clone())?;

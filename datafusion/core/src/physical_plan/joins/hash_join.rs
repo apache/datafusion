@@ -422,7 +422,7 @@ impl ExecutionPlan for HashJoinExec {
             DisplayFormatType::Default => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
-                    |f| format!(", filter={:?}", f.expression()),
+                    |f| format!(", filter={}", f.expression()),
                 );
                 write!(
                     f,
