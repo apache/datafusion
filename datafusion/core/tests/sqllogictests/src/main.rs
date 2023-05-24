@@ -67,10 +67,8 @@ async fn run_tests() -> Result<()> {
 
     let options = Options::new();
 
-    let test_files: Vec<_> = read_test_files(&options).collect();
-
     // Run all tests in parallel, reporting failures at the end
-    let results: Vec<_> = futures::stream::iter(test_files)
+    let results: Vec<_> = futures::stream::iter(read_test_files(&options))
         .map(|test_file| {
             tokio::task::spawn(async move {
                 println!("Running {:?}", test_file.relative_path);
@@ -86,14 +84,8 @@ async fn run_tests() -> Result<()> {
         })
         // run up to num_cpus streams in parallel
         .buffer_unordered(num_cpus::get())
-        .collect()
-        .await;
-
-    // Collect and examine errors
-    let errors: Vec<_> = results
-        .into_iter()
-        .filter_map(|result| {
-            match result {
+        .flat_map(|result| {
+            futures::stream::iter(match result {
                 // Tokio panic error
                 Err(e) => Some(DataFusionError::External(Box::new(e))),
                 Ok(thread_result) => match thread_result {
@@ -102,9 +94,10 @@ async fn run_tests() -> Result<()> {
                     // success
                     Ok(_) => None,
                 },
-            }
+            })
         })
-        .collect();
+        .collect()
+        .await;
 
     // report on any errors
     if !errors.is_empty() {
