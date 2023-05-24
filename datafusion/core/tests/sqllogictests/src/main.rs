@@ -70,6 +70,10 @@ async fn run_tests() -> Result<()> {
     let test_files: Vec<_> = read_test_files(&options).collect();
 
     // Run all tests in parallel, reporting failures at the end
+    //
+    // Doing so is safe because each slt file runs with its own
+    // `SessionContext` and should not have side effects (like
+    // modifying shared state like `/tmp/`)
     let results: Vec<_> = futures::stream::iter(test_files)
         .map(|test_file| {
             tokio::task::spawn(async move {
