@@ -39,7 +39,7 @@ const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
 #[cfg(target_family = "windows")]
 pub fn main() {
-    // Tests from `tpch.slt` fail with stackoverflow with the default stack size.
+    // Tests from `tpch/tpch.slt` fail with stackoverflow with the default stack size.
     thread::Builder::new()
         .stack_size(2 * 1024 * 1024) // 2 MB
         .spawn(move || {

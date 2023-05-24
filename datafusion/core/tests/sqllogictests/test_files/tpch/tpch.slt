@@ -1,0 +1,4 @@
+include ./create_tables.slt.part
+include ./insert*.slt.part
+include ./q*.slt.part
+include ./drop_table.slt.part
