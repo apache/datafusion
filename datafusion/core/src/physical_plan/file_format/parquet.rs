@@ -32,7 +32,7 @@ use crate::config::ConfigOptions;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::FileMeta;
+use crate::physical_plan::file_format::{FileMeta, LexOrdering};
 use crate::physical_plan::ordering_equivalence_properties_helper;
 use crate::{
     datasource::listing::FileRange,
@@ -92,7 +92,7 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan

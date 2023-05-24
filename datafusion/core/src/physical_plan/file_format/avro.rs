@@ -26,6 +26,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::file_format::LexOrdering;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use std::any::Any;
 use std::sync::Arc;
@@ -39,7 +40,7 @@ pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }

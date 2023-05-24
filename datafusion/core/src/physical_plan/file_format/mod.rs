@@ -122,7 +122,7 @@ pub fn get_scan_files(
 }
 
 // Vec<PhysicalSortExpr> defines lexicographical ordering of the schema
-type LexOrdering = Vec<PhysicalSortExpr>;
+pub(crate) type LexOrdering = Vec<PhysicalSortExpr>;
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
@@ -167,7 +167,7 @@ pub struct FileScanConfig {
 
 impl FileScanConfig {
     /// Project the schema and the statistics on the given column indices
-    fn project(&self) -> (SchemaRef, Statistics, Vec<Vec<PhysicalSortExpr>>) {
+    fn project(&self) -> (SchemaRef, Statistics, Vec<LexOrdering>) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
             return (
                 Arc::clone(&self.file_schema),
@@ -254,7 +254,7 @@ impl Debug for FileScanConfig {
 
 impl Display for FileScanConfig {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let (schema, _, ordering) = self.project();
+        let (schema, _, orderings) = self.project();
 
         write!(f, "file_groups={}", FileGroupsDisplay(&self.file_groups))?;
 
@@ -270,12 +270,10 @@ impl Display for FileScanConfig {
             write!(f, ", infinite_source=true")?;
         }
 
-        if !ordering.is_empty() {
-            write!(
-                f,
-                ", output_ordering={}",
-                OutputOrderingDisplay(&ordering[0])
-            )?;
+        if let Some(ordering) = orderings.first() {
+            if !ordering.is_empty() {
+                write!(f, ", output_ordering={}", OutputOrderingDisplay(ordering))?;
+            }
         }
 
         Ok(())

@@ -18,7 +18,7 @@
 //! Execution plan for reading Arrow files
 use crate::error::Result;
 use crate::physical_plan::file_format::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
+    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, LexOrdering,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -41,7 +41,7 @@ pub struct ArrowExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }

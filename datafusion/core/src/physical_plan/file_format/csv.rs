@@ -24,7 +24,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::FileMeta;
+use crate::physical_plan::file_format::{FileMeta, LexOrdering};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
@@ -56,7 +56,7 @@ pub struct CsvExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Vec<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     has_header: bool,
     delimiter: u8,
     /// Execution metrics

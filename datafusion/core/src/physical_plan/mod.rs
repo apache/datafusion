@@ -581,10 +581,10 @@ impl PartialEq for Partitioning {
 /// Retrieves the ordering equivalence properties for a given schema and output ordering.
 pub fn ordering_equivalence_properties_helper(
     schema: SchemaRef,
-    output_ordering: &[Vec<PhysicalSortExpr>],
+    output_ordering: &[LexOrdering],
 ) -> OrderingEquivalenceProperties {
     let mut oep = OrderingEquivalenceProperties::new(schema);
-    let first_ordering = if let Some(first) = output_ordering.get(0) {
+    let first_ordering = if let Some(first) = output_ordering.first() {
         first
     } else {
         // returns an empty OrderingEquivalenceProperties
@@ -728,6 +728,7 @@ pub mod windows;
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::file_format::LexOrdering;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{
