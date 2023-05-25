@@ -167,7 +167,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 leading_precision,
                 last_field,
                 fractional_seconds_precision,
-            }) => self.sql_interval_to_expr(
+            })=> self.sql_interval_to_expr(
                 *value,
                 schema,
                 planner_context,
@@ -350,28 +350,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             within_group,
         } = array_agg;
 
-        let order_by = if let Some(mut order_by) = order_by {
-            // TODO: Once sqlparser supports multiple order by clause, handle it
-            //       see issue: https://github.com/sqlparser-rs/sqlparser-rs/issues/875
-            let order_by = match order_by.len() {
-                0 => {
-                    return Err(DataFusionError::NotImplemented(
-                        "ARRAY_AGG with empty ORDER BY not supported".to_string(),
-                    ))
-                }
-                1 => order_by.pop().unwrap(),
-                n => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "ARRAY_AGG only supports a single ORDER BY expression. Got {n}"
-                    )))
-                }
-            };
-
-            Some(vec![self.order_by_to_sort_expr(
-                order_by,
-                input_schema,
-                planner_context,
-            )?])
+        let order_by = if let Some(order_by) = order_by {
+            Some(self.order_by_to_sort_expr(&order_by, input_schema, planner_context)?)
         } else {
             None
         };
