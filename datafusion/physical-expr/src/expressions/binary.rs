@@ -1059,22 +1059,26 @@ fn to_result_type_array(
     array: ArrayRef,
     result_type: &DataType,
 ) -> Result<ArrayRef> {
-    if op.is_numerical_operators() {
-        match array.data_type() {
-            DataType::Dictionary(_, value_type) => {
-                if value_type.as_ref() == result_type {
-                    Ok(cast(&array, result_type)?)
-                } else {
-                    Err(DataFusionError::Internal(format!(
-                        "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
-                        value_type, result_type, op
-                    )))
-                }
-            }
-            _ => Ok(array),
-        }
-    } else {
+    if array.data_type() == result_type {
         Ok(array)
+    } else {
+        if op.is_numerical_operators() {
+            match array.data_type() {
+                DataType::Dictionary(_, value_type) => {
+                    if value_type.as_ref() == result_type {
+                        Ok(cast(&array, result_type)?)
+                    } else {
+                        Err(DataFusionError::Internal(format!(
+                            "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
+                            value_type, result_type, op
+                        )))
+                    }
+                }
+                _ => Ok(array),
+            }
+        } else {
+            Ok(array)
+        }
     }
 }
 
