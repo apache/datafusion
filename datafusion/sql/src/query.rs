@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::select;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
