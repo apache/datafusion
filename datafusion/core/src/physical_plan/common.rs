@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 /// [`MemoryReservation`] used across query execution streams
 pub(crate) type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
@@ -98,12 +98,13 @@ fn build_file_list_recurse(
 
 /// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
 pub(crate) fn spawn_execution(
+    join_set: &mut JoinSet<()>,
     input: Arc<dyn ExecutionPlan>,
     output: mpsc::Sender<Result<RecordBatch>>,
     partition: usize,
     context: Arc<TaskContext>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
+) {
+    join_set.spawn(async move {
         let mut stream = match input.execute(partition, context) {
             Err(e) => {
                 // If send fails, plan being torn down,
@@ -129,7 +130,7 @@ pub(crate) fn spawn_execution(
                 return;
             }
         }
-    })
+    });
 }
 
 /// If running in a tokio context spawns the execution of `stream` to a separate task

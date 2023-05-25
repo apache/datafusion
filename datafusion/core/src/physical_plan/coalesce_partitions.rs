@@ -19,16 +19,17 @@
 //! into a single partition
 
 use std::any::Any;
+use std::panic;
 use std::sync::Arc;
 use std::task::Poll;
 
-use futures::Stream;
+use futures::{FutureExt, Stream};
 use tokio::sync::mpsc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use tokio::task::JoinSet;
 
-use super::common::AbortOnDropMany;
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, Statistics};
@@ -142,21 +143,22 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
-                let mut join_handles = Vec::with_capacity(input_partitions);
+                let mut tasks = JoinSet::new();
                 for part_i in 0..input_partitions {
-                    join_handles.push(spawn_execution(
+                    spawn_execution(
+                        &mut tasks,
                         self.input.clone(),
                         sender.clone(),
                         part_i,
                         context.clone(),
-                    ));
+                    );
                 }
 
                 Ok(Box::pin(MergeStream {
                     input: receiver,
                     schema: self.schema(),
                     baseline_metrics,
-                    drop_helper: AbortOnDropMany(join_handles),
+                    tasks,
                 }))
             }
         }
@@ -187,8 +189,7 @@ struct MergeStream {
     schema: SchemaRef,
     input: mpsc::Receiver<Result<RecordBatch>>,
     baseline_metrics: BaselineMetrics,
-    #[allow(unused)]
-    drop_helper: AbortOnDropMany<()>,
+    tasks: JoinSet<()>,
 }
 
 impl Stream for MergeStream {
@@ -199,6 +200,25 @@ impl Stream for MergeStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.input.poll_recv(cx);
+
+        // If the input stream is done, wait for all tasks to finish and return
+        // the failure if any.
+        if let Poll::Ready(None) = poll {
+            match Box::pin(self.tasks.join_next()).poll_unpin(cx) {
+                Poll::Ready(task_poll) => {
+                    if let Some(Err(e)) = task_poll {
+                        if e.is_panic() {
+                            panic::resume_unwind(e.into_panic());
+                        }
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(
+                            format!("{e:?}"),
+                        ))));
+                    }
+                }
+                Poll::Pending => {}
+            }
+        }
+
         self.baseline_metrics.record_poll(poll)
     }
 }
@@ -218,7 +238,9 @@ mod tests {
     use super::*;
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{
+        assert_strong_count_converges_to_zero, BlockingExec, PanickingExec,
+    };
     use crate::test::{self, assert_is_pending};
 
     #[tokio::test]
@@ -269,5 +291,20 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "PanickingStream did panic")]
+    async fn test_panic() -> () {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let panicking_exec = Arc::new(PanickingExec::new(Arc::clone(&schema), 2));
+        let coalesce_partitions_exec =
+            Arc::new(CoalescePartitionsExec::new(panicking_exec));
+
+        collect(coalesce_partitions_exec, task_ctx).await.unwrap();
     }
 }
