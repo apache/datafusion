@@ -17344,6 +17344,10 @@ impl serde::Serialize for ScalarFunction {
             Self::Lcm => "Lcm",
             Self::Gcd => "Gcd",
             Self::ArrayNdims => "ArrayNdims",
+            Self::ArrayAppend => "ArrayAppend",
+            Self::ArrayPrepend => "ArrayPrepend",
+            Self::ArrayConcat => "ArrayConcat",
+            Self::ArrayFill => "ArrayFill",
         };
         serializer.serialize_str(variant)
     }
@@ -17442,6 +17446,10 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Lcm",
             "Gcd",
             "ArrayNdims",
+            "ArrayAppend",
+            "ArrayPrepend",
+            "ArrayConcat",
+            "ArrayFill",
         ];
 
         struct GeneratedVisitor;
@@ -17571,6 +17579,10 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Lcm" => Ok(ScalarFunction::Lcm),
                     "Gcd" => Ok(ScalarFunction::Gcd),
                     "ArrayNdims" => Ok(ScalarFunction::ArrayNdims),
+                    "ArrayAppend" => Ok(ScalarFunction::ArrayAppend),
+                    "ArrayPrepend" => Ok(ScalarFunction::ArrayPrepend),
+                    "ArrayConcat" => Ok(ScalarFunction::ArrayConcat),
+                    "ArrayFill" => Ok(ScalarFunction::ArrayFill),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

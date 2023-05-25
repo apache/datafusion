@@ -538,6 +538,10 @@ enum ScalarFunction {
   Lcm = 84;
   Gcd = 85;
   ArrayNdims = 86;
+  ArrayAppend = 87;
+  ArrayPrepend = 88;
+  ArrayConcat = 89;
+  ArrayFill = 90;
 }
 
 message ScalarFunctionNode {

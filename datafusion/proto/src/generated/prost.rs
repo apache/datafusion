@@ -2171,6 +2171,10 @@ pub enum ScalarFunction {
     Lcm = 84,
     Gcd = 85,
     ArrayNdims = 86,
+    ArrayAppend = 87,
+    ArrayPrepend = 88,
+    ArrayConcat = 89,
+    ArrayFill = 90,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2266,6 +2270,10 @@ impl ScalarFunction {
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
             ScalarFunction::ArrayNdims => "ArrayNdims",
+            ScalarFunction::ArrayAppend => "ArrayAppend",
+            ScalarFunction::ArrayPrepend => "ArrayPrepend",
+            ScalarFunction::ArrayConcat => "ArrayConcat",
+            ScalarFunction::ArrayFill => "ArrayFill",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2358,6 +2366,10 @@ impl ScalarFunction {
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
             "ArrayNdims" => Some(Self::ArrayNdims),
+            "ArrayAppend" => Some(Self::ArrayAppend),
+            "ArrayPrepend" => Some(Self::ArrayPrepend),
+            "ArrayConcat" => Some(Self::ArrayConcat),
+            "ArrayFill" => Some(Self::ArrayFill),
             _ => None,
         }
     }

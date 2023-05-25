@@ -386,6 +386,10 @@ pub fn create_physical_fun(
 
         // array functions
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::ArrayAppend => Arc::new(array_expressions::array_append),
+        BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
+        BuiltinScalarFunction::ArrayConcat => Arc::new(array_expressions::array_concat),
+        BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
         BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
 
         // string functions
@@ -801,7 +805,7 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::{as_fixed_size_list_array, as_uint64_array};
+    use datafusion_common::cast::{as_list_array, as_uint64_array};
     use datafusion_common::{Result, ScalarValue};
 
     /// $FUNC function to test
@@ -2814,7 +2818,7 @@ mod tests {
         assert_eq!(
             expr.data_type(&schema)?,
             // type equals to a common coercion
-            DataType::FixedSizeList(Arc::new(Field::new("item", expected_type, true)), 2)
+            DataType::List(Arc::new(Field::new("item", expected_type, true)))
         );
 
         // evaluate works
@@ -2822,7 +2826,7 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
 
         // downcast works
-        let result = as_fixed_size_list_array(&result)?;
+        let result = as_list_array(&result)?;
 
         // value is correct
         assert_eq!(format!("{:?}", result.value(0)), expected);

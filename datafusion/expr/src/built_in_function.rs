@@ -100,6 +100,14 @@ pub enum BuiltinScalarFunction {
     // array functions
     /// construct an array from columns
     MakeArray,
+    /// array_append
+    ArrayAppend,
+    /// array_prepend
+    ArrayPrepend,
+    /// array_concat
+    ArrayConcat,
+    /// array_fill
+    ArrayFill,
     /// array_ndims
     ArrayNdims,
 
@@ -258,6 +266,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
@@ -433,6 +445,10 @@ impl FromStr for BuiltinScalarFunction {
 
             // array functions
             "make_array" => BuiltinScalarFunction::MakeArray,
+            "array_append" => BuiltinScalarFunction::ArrayAppend,
+            "array_prepend" => BuiltinScalarFunction::ArrayPrepend,
+            "array_concat" => BuiltinScalarFunction::ArrayConcat,
+            "array_fill" => BuiltinScalarFunction::ArrayFill,
             "array_ndims" => BuiltinScalarFunction::ArrayNdims,
 
             _ => {

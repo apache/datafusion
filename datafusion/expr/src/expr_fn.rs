@@ -515,6 +515,25 @@ nary_scalar_expr!(
     "returns an array of fixed size with each argument on it."
 );
 scalar_expr!(
+    ArrayAppend,
+    array_append,
+    array element,
+    "appends an element to the end of an array."
+);
+scalar_expr!(
+    ArrayPrepend,
+    array_prepend,
+    array element,
+    "prepends an element to the beginning of an array."
+);
+nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
+scalar_expr!(
+    ArrayFill,
+    array_fill,
+    element dimension,
+    "returns an array filled with copies of the given value, having dimensions of the lengths specified by the second argument."
+);
+scalar_expr!(
     ArrayNdims,
     array_ndims,
     array,
@@ -882,6 +901,9 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_nary_scalar_expr!(MakeArray, array, input);
+        test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
+        test_scalar_expr!(ArrayFill, array_fill, element, array);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);

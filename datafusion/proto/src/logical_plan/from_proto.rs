@@ -36,9 +36,10 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
-    abs, acos, acosh, array, array_ndims, ascii, asin, asinh, atan, atan2, atanh,
-    bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
-    concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees, digest, exp,
+    abs, acos, acosh, array, array_append, array_concat, array_fill, array_ndims,
+    array_prepend, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
+    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, date_bin,
+    date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -445,6 +446,10 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
             ScalarFunction::Array => Self::MakeArray,
+            ScalarFunction::ArrayAppend => Self::ArrayAppend,
+            ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
+            ScalarFunction::ArrayConcat => Self::ArrayConcat,
+            ScalarFunction::ArrayFill => Self::ArrayFill,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
@@ -1152,6 +1157,24 @@ pub fn parse_expr(
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ArrayAppend => Ok(array_append(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayPrepend => Ok(array_append(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayConcat => Ok(array_concat(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ArrayFill => Ok(array_fill(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))

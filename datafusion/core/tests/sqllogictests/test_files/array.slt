@@ -19,14 +19,92 @@
 ## Array expressions Tests
 #############
 
-# array scalar function
+# array scalar function #1
+query ??? rowsort
+select make_array(1, 2, 3), make_array(1.0, 2.0, 3.0), make_array('h', 'e', 'l', 'l', 'o');
+----
+[1, 2, 3] [1.0, 2.0, 3.0] [h, e, l, l, o]
+
+# array scalar function #2
 query ??? rowsort
 select make_array(1, 2, 3), make_array(make_array(1, 2), make_array(3, 4)), make_array([[[[1], [2]]]]);
 ----
 [1, 2, 3] [[1, 2], [3, 4]] [[[[[1], [2]]]]]
+
+# array scalar function #3
+query ?? rowsort
+select make_array([1, 2, 3], [4, 5, 6], [7, 8, 9]), make_array([[1, 2], [3, 4]], [[5, 6], [7, 8]]);
+----
+[[1, 2, 3], [4, 5, 6], [7, 8, 9]] [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+
+# array scalar function #4
+query ?? rowsort
+select make_array([1.0, 2.0], [3.0, 4.0]), make_array('h', 'e', 'l', 'l', 'o');
+----
+[[1.0, 2.0], [3.0, 4.0]] [h, e, l, l, o]
+
+# array scalar function #5
+query ? rowsort
+select make_array(make_array(make_array(make_array(1, 2, 3), make_array(4, 5, 6)), make_array(make_array(7, 8, 9), make_array(10, 11, 12))))
+----
+[[[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]]]
+
+# array_append scalar function
+query ??? rowsort
+select array_append(make_array(1, 2, 3), 4), array_append(make_array(1.0, 2.0, 3.0), 4.0), array_append(make_array('h', 'e', 'l', 'l'), 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_prepend scalar function
+query ??? rowsort
+select array_prepend(1, make_array(2, 3, 4)), array_prepend(1.0, make_array(2.0, 3.0, 4.0)), array_prepend('h', make_array('e', 'l', 'l', 'o'));
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array_fill scalar function #1
+query ??? rowsort
+select array_fill(11, make_array(1, 2, 3)), array_fill(3, make_array(2, 3)), array_fill(2, make_array(2));
+----
+[[[11, 11, 11], [11, 11, 11]]] [[3, 3, 3], [3, 3, 3]] [2, 2]
+
+# array_fill scalar function #2
+query ?? rowsort
+select array_fill(1, make_array(1, 1, 1)), array_fill(2, make_array(2, 2, 2, 2, 2));
+----
+[[[1]]] [[[[[2, 2], [2, 2]], [[2, 2], [2, 2]]], [[[2, 2], [2, 2]], [[2, 2], [2, 2]]]], [[[[2, 2], [2, 2]], [[2, 2], [2, 2]]], [[[2, 2], [2, 2]], [[2, 2], [2, 2]]]]]
+
+# array_concat scalar function #1
+query ?? rowsort
+select array_concat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), array_concat(make_array([1], [2]), make_array([3], [4]));
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
+
+# array_concat scalar function #2
+query ? rowsort
+select array_concat(make_array(make_array(1, 2), make_array(3, 4)), make_array(make_array(5, 6), make_array(7, 8)));
+----
+[[1, 2], [3, 4], [5, 6], [7, 8]]
+
+# array_concat scalar function #3
+query ? rowsort
+select array_concat(make_array([1], [2], [3]), make_array([4], [5], [6]), make_array([7], [8], [9]));
+----
+[[1], [2], [3], [4], [5], [6], [7], [8], [9]]
+
+# array_concat scalar function #4
+query ? rowsort
+select array_concat(make_array([[1]]), make_array([[2]]));
+----
+[[[1]], [[2]]]
 
 # array_ndims scalar function
 query III rowsort
 select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
 ----
 1 2 5
+
+# array_ndims scalar function #2
+query I rowsort
+select array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
+----
+21

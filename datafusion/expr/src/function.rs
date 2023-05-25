@@ -111,10 +111,46 @@ pub fn return_type(
     // the return type of the built in function.
     // Some built-in functions' return type depends on the incoming type.
     match fun {
-        BuiltinScalarFunction::MakeArray => Ok(DataType::FixedSizeList(
-            Arc::new(Field::new("item", input_expr_types[0].clone(), true)),
-            input_expr_types.len() as i32,
-        )),
+        BuiltinScalarFunction::MakeArray => Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            input_expr_types[0].clone(),
+            true,
+        )))),
+        BuiltinScalarFunction::ArrayAppend => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept list as the first argument"
+            ))),
+        },
+        BuiltinScalarFunction::ArrayPrepend => match &input_expr_types[1] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept list as the first argument"
+            ))),
+        },
+        BuiltinScalarFunction::ArrayConcat => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept fixed size list as the args."
+            ))),
+        },
+        BuiltinScalarFunction::ArrayFill => Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            input_expr_types[0].clone(),
+            true,
+        )))),
         BuiltinScalarFunction::ArrayNdims => Ok(DataType::Int64),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
         BuiltinScalarFunction::BitLength => {
@@ -320,6 +356,10 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
     // for now, the list is small, as we do not have many built-in functions.
     match fun {
         BuiltinScalarFunction::MakeArray => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayAppend => Signature::any(2, fun.volatility()),
+        BuiltinScalarFunction::ArrayPrepend => Signature::any(2, fun.volatility()),
+        BuiltinScalarFunction::ArrayConcat => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayFill => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayNdims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::Struct => Signature::variadic(
             struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
