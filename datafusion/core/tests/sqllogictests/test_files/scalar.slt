@@ -1223,7 +1223,7 @@ statement error Error during planning: No function matches the given name and ar
 SELECT pi(3.14);
 
 # error message for wrong function signature (Any: fixed number of args of arbitrary types)
-statement error Error during planning: No function matches the given name and argument types 'arrowtypeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrowtypeof\(Any\)
+statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
 SELECT arrow_typeof(1, 1);
 
 # error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
