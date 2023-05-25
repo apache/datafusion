@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::error::Error;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
@@ -215,11 +217,12 @@ fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile
         read_dir_recursive(TEST_DIRECTORY)
             .map(TestFile::new)
             .filter(|f| options.check_test_file(&f.relative_path))
+            .filter(|(_, relative_path)| options.check_test_file(relative_path))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     )
 }
 
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBuf>> {
+fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item=PathBuf>> {
     Box::new(
         std::fs::read_dir(path)
             .expect("Readable directory")
