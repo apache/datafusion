@@ -54,17 +54,17 @@ pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result
     Ok(())
 }
 
-/// Convert Camel form to uppercase snake
-/// such as FirstValue => FIRST_VALUE
+/// Converts a camel case string to upper snake case (a.k.a. macro case).
+/// Example: "FirstValue" maps to "FIRST_VALUE".
 pub fn convert_camel_to_upper_snake(in_str: String) -> String {
-    let mut res = String::new();
+    let mut result = String::new();
     for ch in in_str.chars() {
-        if ch.is_uppercase() && !res.is_empty() {
-            res.push('_');
+        if ch.is_uppercase() && !result.is_empty() {
+            result.push('_');
         }
-        res.push_str(format!("{}", ch.to_uppercase()).as_str());
+        result.push_str(format!("{}", ch.to_uppercase()).as_str());
     }
-    res
+    result
 }
 
 /// Count the number of distinct exprs in a list of group by expressions. If the

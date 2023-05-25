@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::Array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,7 +39,7 @@ pub struct FirstValue {
 }
 
 impl FirstValue {
-    /// Create a new ArrayAgg aggregate function
+    /// Creates a new FIRST_VALUE aggregation function.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
@@ -114,10 +116,10 @@ struct FirstValueAccumulator {
 }
 
 impl FirstValueAccumulator {
-    /// new First accumulator
+    /// Creates a new `FirstValueAccumulator` for the given `data_type`.
     pub fn try_new(data_type: &DataType) -> Result<Self> {
-        Ok(Self {
-            first: ScalarValue::try_from(data_type)?,
+        ScalarValue::try_from(data_type).map(|value| Self {
+            first: value,
             count: 0,
         })
     }
@@ -166,7 +168,7 @@ pub struct LastValue {
 }
 
 impl LastValue {
-    /// Create a new ArrayAgg aggregate function
+    /// Creates a new LAST_VALUE aggregation function.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
@@ -243,7 +245,7 @@ struct LastValueAccumulator {
 }
 
 impl LastValueAccumulator {
-    /// new Last accumulator
+    /// Creates a new `LastValueAccumulator` for the given `data_type`.
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
