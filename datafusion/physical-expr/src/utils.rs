@@ -210,6 +210,14 @@ fn collapse_vec<T: PartialEq>(input: Vec<T>) -> Vec<T> {
     output
 }
 
+/// Transform `sort_exprs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
+/// Assume `eq_properties` states that `Column a` and `Column b` are aliases.
+/// Also assume `ordering_eq_properties` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
+/// ordering equivalent (in the sense that both describe the ordering of the table).
+/// If the `sort_exprs` input to this function were `vec![b ASC, c ASC]`,
+/// This function converts `sort_exprs` `vec![b ASC, c ASC]` to first `vec![a ASC, c ASC]` after considering `eq_properties`
+/// Then converts `vec![a ASC, c ASC]` to `vec![d ASC]` after considering `ordering_eq_properties`.
+/// Standardized version `vec![d ASC]` is used in subsequent operations.
 pub fn normalize_sort_exprs(
     sort_exprs: &[PhysicalSortExpr],
     eq_properties: &[EquivalentClass],
@@ -225,6 +233,14 @@ pub fn normalize_sort_exprs(
     collapse_vec(normalized_exprs)
 }
 
+/// Transform `sort_reqs` vector, to standardized version using `eq_properties` and `ordering_eq_properties`
+/// Assume `eq_properties` states that `Column a` and `Column b` are aliases.
+/// Also assume `ordering_eq_properties` states that ordering `vec![d ASC]` and `vec![a ASC, c ASC]` are
+/// ordering equivalent (in the sense that both describe the ordering of the table).
+/// If the `sort_reqs` input to this function were `vec![b Some(ASC), c None]`,
+/// This function converts `sort_exprs` `vec![b Some(ASC), c None]` to first `vec![a Some(ASC), c None]` after considering `eq_properties`
+/// Then converts `vec![a Some(ASC), c None]` to `vec![d Some(ASC)]` after considering `ordering_eq_properties`.
+/// Standardized version `vec![d Some(ASC)]` is used in subsequent operations.
 pub fn normalize_sort_requirements(
     sort_reqs: &[PhysicalSortRequirement],
     eq_properties: &[EquivalentClass],
