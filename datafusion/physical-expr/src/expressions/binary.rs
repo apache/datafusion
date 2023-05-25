@@ -5636,4 +5636,37 @@ mod tests {
         );
         assert_eq!(expr.to_string(), "(1 OR 2) AND (3 OR 4)");
     }
+
+    #[test]
+    fn test_to_result_type_array() {
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, values).unwrap()) as ArrayRef;
+
+        // Casting Dictionary to Int32
+        let casted =
+            to_result_type_array(&Operator::Plus, dictionary.clone(), &DataType::Int32)
+                .unwrap();
+        assert_eq!(
+            &casted,
+            &(Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(4)]))
+                as ArrayRef)
+        );
+
+        // Array has same datatype as result type, no casting
+        let casted = to_result_type_array(
+            &Operator::Plus,
+            dictionary.clone(),
+            dictionary.data_type(),
+        )
+        .unwrap();
+        assert_eq!(&casted, &dictionary);
+
+        // Not numerical operator, no casting
+        let casted =
+            to_result_type_array(&Operator::Eq, dictionary.clone(), &DataType::Int32)
+                .unwrap();
+        assert_eq!(&casted, &dictionary);
+    }
 }
