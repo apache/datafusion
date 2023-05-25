@@ -2415,16 +2415,14 @@ mod tests {
             Field::new("a2", DataType::UInt32, false),
         ]));
         // Specify the ordering:
-        let file_sort_order = Some(
-            [datafusion_expr::col("a1")]
-                .into_iter()
-                .map(|e| {
-                    let ascending = true;
-                    let nulls_first = false;
-                    e.sort(ascending, nulls_first)
-                })
-                .collect::<Vec<_>>(),
-        );
+        let file_sort_order = vec![[datafusion_expr::col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>()];
         register_unbounded_file_with_ordering(
             &ctx,
             schema.clone(),

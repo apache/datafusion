@@ -44,14 +44,12 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
+use crate::physical_plan::file_format::{FileScanConfig, LexOrdering};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
-    physical_plan::{
-        empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
-        Statistics,
-    },
+    physical_plan::{empty::EmptyExec, project_schema, ExecutionPlan, Statistics},
 };
 
 use super::PartitionedFile;
@@ -222,7 +220,7 @@ pub struct ListingOptions {
     /// Group files to avoid that the number of partitions exceeds
     /// this limit
     pub target_partitions: usize,
-    /// Optional pre-known sort order. Must be `SortExpr`s.
+    /// Optional pre-known sort order(s). Must be `SortExpr`s.
     ///
     /// DataFusion may take advantage of this ordering to omit sorts
     /// or use more efficient algorithms. Currently sortedness must be
@@ -231,10 +229,11 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
-    // Inner vector defines pre-known sort order.
-    // Outer vector stores alternative ordering for the same schema
-    // (we can define ordering equivalences at the source.)
-    // If there is no ordering equivalence, outer vector will have size 1.
+    /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
+    ///       where each ordering consists of an individual lexicographic
+    ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
+    ///       multiple equivalent orderings, the outer `Vec` will have a
+    ///       single element.
     pub file_sort_order: Vec<Vec<Expr>>,
     /// Infinite source means that the input is not guaranteed to end.
     /// Currently, CSV, JSON, and AVRO formats are supported.
@@ -411,21 +410,19 @@ impl ListingOptions {
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
-    ///  let file_sort_order = Some(vec![
+    ///  let file_sort_order = vec![vec![
     ///    col("a").sort(true, true)
-    ///  ]);
+    ///  ]];
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
     ///   ))
     ///   .with_file_sort_order(file_sort_order.clone());
     ///
-    /// assert_eq!(listing_options.file_sort_order, vec![file_sort_order.unwrap()]);
+    /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
-        if let Some(file_sort_order) = file_sort_order {
-            self.file_sort_order.push(file_sort_order);
-        }
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
         self
     }
 
@@ -483,9 +480,6 @@ impl StatisticsCache {
             .insert(meta.location.clone(), (meta, statistics));
     }
 }
-
-// Vec<PhysicalSortExpr> defines lexicographical ordering of the schema
-type LexOrdering = Vec<PhysicalSortExpr>;
 
 /// Reads data from one or more files via an
 /// [`ObjectStore`](object_store::ObjectStore). For example, from
@@ -624,9 +618,9 @@ impl ListingTable {
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
         let mut all_sort_orders = vec![];
 
-        for expr in &self.options.file_sort_order {
-            // convert each expr to a physical sort expr
-            let sort_exprs = expr
+        for exprs in &self.options.file_sort_order {
+            // Construct PhsyicalSortExpr objects from Expr objects:
+            let sort_exprs = exprs
             .iter()
             .map(|expr| {
                 if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
@@ -642,7 +636,7 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Only support single column references in output_ordering, got {expr:?}")
+                            format!("Expected single column references in output_ordering, got {expr:?}")
                         ))
                     }
                 } else {
@@ -973,7 +967,7 @@ mod tests {
                 vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
                 ]],
-                Err("Only support single column references in output_ordering, got int_col + Int32(1)"),
+                Err("Expected single column references in output_ordering, got int_col + Int32(1)"),
             ),
             // ok with one column
             (
@@ -1015,9 +1009,7 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = file_sort_order.iter().fold(options.clone(), |acc, order| {
-                acc.with_file_sort_order(Some(order.clone()))
-            });
+            let options = options.clone().with_file_sort_order(file_sort_order);
 
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)

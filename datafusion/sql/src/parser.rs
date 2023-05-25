@@ -116,7 +116,7 @@ impl fmt::Display for CopyToSource {
     }
 }
 
-// Vec<OrderByExpr> defines lexicographical ordering
+/// This type defines a lexicographical ordering.
 type LexOrdering = Vec<OrderByExpr>;
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`

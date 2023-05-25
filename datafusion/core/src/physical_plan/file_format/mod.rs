@@ -121,7 +121,7 @@ pub fn get_scan_files(
     Ok(collector)
 }
 
-// Vec<PhysicalSortExpr> defines lexicographical ordering of the schema
+/// Specifies a lexicographical ordering that describes a schema.
 pub(crate) type LexOrdering = Vec<PhysicalSortExpr>;
 
 /// The base configurations to provide when creating a physical plan for
@@ -158,8 +158,7 @@ pub struct FileScanConfig {
     pub limit: Option<usize>,
     /// The partitioning columns
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Each lexicographical ordering is the order in which the data is sorted.
-    // Each vector stores different equivalent orderings, that describes the schema.
+    /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// Indicates whether this plan may produce an infinite stream of records.
     pub infinite_source: bool,

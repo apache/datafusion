@@ -587,25 +587,25 @@ pub fn ordering_equivalence_properties_helper(
     let first_ordering = if let Some(first) = eq_orderings.first() {
         first
     } else {
-        // returns an empty OrderingEquivalenceProperties
+        // Return an empty OrderingEquivalenceProperties:
         return oep;
     };
     let first_column = first_ordering
         .iter()
         .map(|e| TryFrom::try_from(e.clone()))
-        .collect::<Result<Vec<OrderedColumn>>>();
-    let checked_column_first = if let Ok(first_col) = first_column {
-        first_col
+        .collect::<Result<Vec<_>>>();
+    let checked_column_first = if let Ok(first) = first_column {
+        first
     } else {
-        // returns an empty OrderingEquivalenceProperties
+        // Return an empty OrderingEquivalenceProperties:
         return oep;
     };
-    // First entry among eq_orderings is head, skip it
+    // First entry among eq_orderings is the head, skip it:
     for ordering in eq_orderings.iter().skip(1) {
         let column = ordering
             .iter()
             .map(|e| TryFrom::try_from(e.clone()))
-            .collect::<Result<Vec<OrderedColumn>>>();
+            .collect::<Result<Vec<_>>>();
         if let Ok(column) = column {
             if !column.is_empty() {
                 oep.add_equal_conditions((&checked_column_first, &column))
@@ -645,7 +645,7 @@ impl Distribution {
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, OrderedColumn,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
 };
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};

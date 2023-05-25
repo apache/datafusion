@@ -44,7 +44,7 @@ use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
 use crate::protobuf::{
-    physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeVector,
+    physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     ScalarValue,
 };
 use datafusion::logical_expr::BuiltinScalarFunction;
@@ -520,8 +520,8 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             object_store_url: conf.object_store_url.to_string(),
             output_ordering: output_orderings
                 .into_iter()
-                .map(|e| PhysicalSortExprNodeVector {
-                    physical_sort_expr_node_vector: e,
+                .map(|e| PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: e,
                 })
                 .collect::<Vec<_>>(),
         })

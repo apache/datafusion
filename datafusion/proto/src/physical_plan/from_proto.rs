@@ -431,9 +431,9 @@ pub fn parse_protobuf_file_scan_config(
         .collect::<Result<Vec<(String, DataType)>>>()?;
 
     let mut output_ordering = vec![];
-    for node_vector in &proto.output_ordering {
-        let sort_expr = node_vector
-            .physical_sort_expr_node_vector
+    for node_collection in &proto.output_ordering {
+        let sort_expr = node_collection
+            .physical_sort_expr_nodes
             .iter()
             .map(|node| {
                 let expr = node

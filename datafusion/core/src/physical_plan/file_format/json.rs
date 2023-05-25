@@ -19,6 +19,7 @@
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -29,13 +30,12 @@ use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::{datatypes::SchemaRef, json};
 
-use bytes::{Buf, Bytes};
+use arrow::json::ReaderBuilder;
+use arrow::{datatypes::SchemaRef, json};
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
-use crate::physical_plan::common::AbortOnDropSingle;
-use arrow::json::ReaderBuilder;
+use bytes::{Buf, Bytes};
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;

@@ -17,17 +17,18 @@
 
 //! Execution plan for reading line-delimited Avro files
 use crate::error::Result;
+use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::file_format::LexOrdering;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::OrderingEquivalenceProperties;
 
-use crate::execution::context::TaskContext;
-use crate::physical_plan::file_format::LexOrdering;
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use std::any::Any;
 use std::sync::Arc;
 

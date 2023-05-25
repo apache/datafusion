@@ -17,7 +17,7 @@
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{CustomTableScanNode, LogicalExprNodeVector};
+use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
     convert_required,
     protobuf::{
@@ -328,7 +328,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let mut all_sort_orders = vec![];
                 for order in &scan.file_sort_order {
                     let file_sort_order = order
-                        .logical_expr_node_vector
+                        .logical_expr_nodes
                         .iter()
                         .map(|expr| from_proto::parse_expr(expr, ctx))
                         .collect::<Result<Vec<_>, _>>()?;
@@ -379,11 +379,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .collect(),
                     )
                     .with_collect_stat(scan.collect_stat)
-                    .with_target_partitions(scan.target_partitions as usize);
-
-                let options = all_sort_orders.iter().fold(options, |acc, order| {
-                    acc.with_file_sort_order(Some(order.clone()))
-                });
+                    .with_target_partitions(scan.target_partitions as usize)
+                    .with_file_sort_order(all_sort_orders);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -507,7 +504,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let mut order_exprs = vec![];
                 for expr in &create_extern_table.order_exprs {
                     let order_expr = expr
-                        .logical_expr_node_vector
+                        .logical_expr_nodes
                         .iter()
                         .map(|expr| from_proto::parse_expr(expr, ctx))
                         .collect::<Result<Vec<Expr>, _>>()?;
@@ -853,10 +850,10 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     let options = listing_table.options();
 
-                    let mut exprs_vec: Vec<LogicalExprNodeVector> = vec![];
+                    let mut exprs_vec: Vec<LogicalExprNodeCollection> = vec![];
                     for order in &options.file_sort_order {
-                        let expr_vec = LogicalExprNodeVector {
-                            logical_expr_node_vector: order
+                        let expr_vec = LogicalExprNodeCollection {
+                            logical_expr_nodes: order
                                 .iter()
                                 .map(|expr| expr.try_into())
                                 .collect::<Result<Vec<_>, to_proto::Error>>()?,
@@ -1194,13 +1191,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     options,
                 },
             )) => {
-                let mut converted_order_exprs: Vec<LogicalExprNodeVector> = vec![];
+                let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
                 for order in order_exprs {
-                    let temp = LogicalExprNodeVector {
-                        logical_expr_node_vector: order
+                    let temp = LogicalExprNodeCollection {
+                        logical_expr_nodes: order
                             .iter()
                             .map(|expr| expr.try_into())
-                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                            .collect::<Result<Vec<_>, to_proto::Error>>(
+                        )?,
                     };
                     converted_order_exprs.push(temp);
                 }
