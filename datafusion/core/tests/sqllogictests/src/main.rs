@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::error::Error;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
@@ -128,7 +127,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
     info!("Running with DataFusion runner: {}", path.display());
     let Some(test_ctx) = context_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
-        return Ok(())
+        return Ok(());
     };
     let ctx = test_ctx.session_ctx().clone();
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
@@ -168,7 +167,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
 
     let Some(test_ctx) = context_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
-        return Ok(())
+        return Ok(());
     };
     let ctx = test_ctx.session_ctx().clone();
     let mut runner =
@@ -210,14 +209,18 @@ impl TestFile {
             relative_path,
         }
     }
+
+    fn is_slt_file(&self) -> bool {
+        self.path.extension() == Some(OsStr::new("slt"))
+    }
 }
 
-fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile> + 'a> {
+fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item=TestFile> + 'a> {
     Box::new(
         read_dir_recursive(TEST_DIRECTORY)
             .map(TestFile::new)
             .filter(|f| options.check_test_file(&f.relative_path))
-            .filter(|(_, relative_path)| options.check_test_file(relative_path))
+            .filter(|f| f.is_slt_file())
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     )
 }
