@@ -112,31 +112,26 @@ impl PartialEq<dyn Any> for FirstValue {
 #[derive(Debug)]
 struct FirstValueAccumulator {
     first: ScalarValue,
-    count: u64,
 }
 
 impl FirstValueAccumulator {
     /// Creates a new `FirstValueAccumulator` for the given `data_type`.
     pub fn try_new(data_type: &DataType) -> Result<Self> {
-        ScalarValue::try_from(data_type).map(|value| Self {
-            first: value,
-            count: 0,
-        })
+        ScalarValue::try_from(data_type).map(|value| Self { first: value })
     }
 }
 
 impl Accumulator for FirstValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.first.clone(), ScalarValue::from(self.count)])
+        Ok(vec![self.first.clone()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // If we have seen first value, we shouldn't update it
         let values = &values[0];
-        if self.count == 0 && !values.is_empty() {
+        if !values.is_empty() {
             self.first = ScalarValue::try_from_array(values, 0)?;
         }
-        self.count += (values.len() - values.null_count()) as u64;
         Ok(())
     }
 
@@ -146,11 +141,7 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        if self.count == 0 {
-            ScalarValue::try_from(&self.first.get_datatype())
-        } else {
-            Ok(self.first.clone())
-        }
+        Ok(self.first.clone())
     }
 
     fn size(&self) -> usize {
@@ -241,7 +232,6 @@ impl PartialEq<dyn Any> for LastValue {
 #[derive(Debug)]
 struct LastValueAccumulator {
     last: ScalarValue,
-    count: u64,
 }
 
 impl LastValueAccumulator {
@@ -249,14 +239,13 @@ impl LastValueAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
-            count: 0,
         })
     }
 }
 
 impl Accumulator for LastValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.last.clone(), ScalarValue::from(self.count)])
+        Ok(vec![self.last.clone()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -265,7 +254,6 @@ impl Accumulator for LastValueAccumulator {
             // Update with last value in the array.
             self.last = ScalarValue::try_from_array(values, values.len() - 1)?;
         }
-        self.count += (values.len() - values.null_count()) as u64;
         Ok(())
     }
 
@@ -275,11 +263,7 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        if self.count == 0 {
-            ScalarValue::try_from(&self.last.get_datatype())
-        } else {
-            Ok(self.last.clone())
-        }
+        Ok(self.last.clone())
     }
 
     fn size(&self) -> usize {

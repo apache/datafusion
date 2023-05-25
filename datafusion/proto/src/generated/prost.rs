@@ -2400,8 +2400,8 @@ pub enum AggregateFunction {
     BitXor = 21,
     BoolAnd = 22,
     BoolOr = 23,
-    /// since function with same names exists in builtin window functions
-    /// because of name scope rules, we append their name with _AGG identifiers
+    /// When a function with the same name exists among built-in window functions,
+    /// we append "_AGG" to obey name scoping rules.
     FirstValueAgg = 24,
     LastValueAgg = 25,
 }
