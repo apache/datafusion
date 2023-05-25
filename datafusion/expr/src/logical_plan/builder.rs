@@ -1236,11 +1236,10 @@ pub fn project(
         let e = e.into();
         match e {
             Expr::Wildcard => {
-                projected_expr.extend(expand_wildcard(input_schema, &plan)?)
+                projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => {
-                projected_expr.extend(expand_qualified_wildcard(qualifier, input_schema)?)
-            }
+            Expr::QualifiedWildcard { ref qualifier } => projected_expr
+                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1328,7 +1327,7 @@ pub fn wrap_projection_for_join_if_necessary(
 
     let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
     let plan = if need_project {
-        let mut projection = expand_wildcard(input_schema, &input)?;
+        let mut projection = expand_wildcard(input_schema, &input, None)?;
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
