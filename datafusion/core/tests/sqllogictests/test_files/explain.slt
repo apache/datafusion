@@ -147,6 +147,7 @@ analyzed_logical_plan SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
 logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
 logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
 logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
@@ -175,6 +176,7 @@ logical_plan after push_down_limit SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after unwrap_cast_in_comparison SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
 logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
 logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
 logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
