@@ -92,6 +92,14 @@ ORDER BY empno ASC;
 +-----------+-------+--------+--------------------+---------+
 ```
 
+When a query involves multiple window functions, it is possible to write out each one with a separate OVER clause, but this is duplicative and error-prone if the same windowing behavior is wanted for several functions. Instead, each windowing behavior can be named in a WINDOW clause and then referenced in OVER. For example:
+
+```sql
+SELECT sum(salary) OVER w, avg(salary) OVER w
+FROM empsalary
+WINDOW w AS (PARTITION BY depname ORDER BY salary DESC);
+```
+
 ## Syntax
 
 The syntax for the OVER-clause is
@@ -123,6 +131,8 @@ UNBOUNDED FOLLOWING
 ```
 
 where **offset** is an non-negative integer.
+
+RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must specify exactly one column).
 
 ## Aggregate functions
 
