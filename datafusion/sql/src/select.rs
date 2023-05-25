@@ -44,7 +44,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
-        select: Select,
+        mut select: Select,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
@@ -73,13 +73,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
-        let modified_projection =
-            match_window_definitions(&select.projection, &select.named_window)?;
+        match_window_definitions(&mut select.projection, &select.named_window)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &plan,
-            modified_projection,
+            select.projection,
             empty_from,
             planner_context,
         )?;
@@ -545,11 +544,10 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
 // If the projection is done over a named window, that window
 // name must be defined. Otherwise, it gives an error.
 fn match_window_definitions(
-    projection: &[SelectItem],
+    projection: &mut [SelectItem],
     named_windows: &[NamedWindowDefinition],
-) -> Result<Vec<SelectItem>> {
-    let mut modified_projection = projection.to_vec();
-    for proj in modified_projection.iter_mut() {
+) -> Result<()> {
+    for proj in projection.iter_mut() {
         if let SelectItem::ExprWithAlias {
             expr: SQLExpr::Function(f),
             alias: _,
@@ -571,5 +569,5 @@ fn match_window_definitions(
             }
         }
     }
-    Ok(modified_projection)
+    Ok(())
 }
