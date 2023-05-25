@@ -218,13 +218,24 @@ impl From<OrderedColumn> for PhysicalSortRequirement {
     }
 }
 
+/// `Vec<OrderedColumn>` stores the lexicographical ordering for a schema.
+/// OrderingEquivalentClass keeps track of different alternative orderings than can
+/// describe the schema.
+/// For instance, for the table below
+/// |a|b|c|d|
+/// |1|4|3|1|
+/// |2|3|3|2|
+/// |3|1|2|2|
+/// |3|2|1|3|
+/// both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the ordering of the table.
+/// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
 pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
 
 impl OrderingEquivalentClass {
     /// This function extends ordering equivalences with alias information.
-    // For instance, assume column a and b are aliases,
-    // and column (a ASC), (c DESC) are ordering equivalent. We append (b ASC) to ordering equivalence,
-    // since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
+    /// For instance, assume column a and b are aliases,
+    /// and column (a ASC), (c DESC) are ordering equivalent. We append (b ASC) to ordering equivalence,
+    /// since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         for (column, columns) in columns_map {
             let mut to_insert = vec![];
