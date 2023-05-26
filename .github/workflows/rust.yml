@@ -200,9 +200,11 @@ jobs:
       - name: Generate benchmark data and expected query results
         run: |
           mkdir -p datafusion/core/tests/sqllogictests/test_files/tpch/data
-          docker run -it \
-            -v "$(realpath datafusion/core/tests/sqllogictests/test_files/tpch/data)":/data \
-            ghcr.io/databloom-ai/tpch-docker:main -vf -s 0.1
+          git clone https://github.com/databricks/tpch-dbgen.git
+          cd tpch-dbgen
+          make
+          ./dbgen -f -s 0.1
+          mv *.tbl ../datafusion/core/tests/sqllogictests/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
           export TPCH_DATA=`$(realpath datafusion/core/tests/sqllogictests/test_files/tpch/data)`
