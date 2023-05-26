@@ -396,35 +396,35 @@ fn get_finest_requirement<
     eq_properties: F,
     ordering_eq_properties: F2,
 ) -> Result<Option<Vec<PhysicalSortExpr>>> {
-    let mut finest_result = get_init_req(aggr_expr, order_by_expr);
-    for (aggr_expr, fn_reqs) in aggr_expr.iter_mut().zip(order_by_expr.iter()) {
-        let fn_reqs = if let Some(fn_reqs) = fn_reqs {
-            fn_reqs
+    let mut finest_req = get_init_req(aggr_expr, order_by_expr);
+    for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter()) {
+        let fn_req = if let Some(fn_req) = fn_req {
+            fn_req
         } else {
             continue;
         };
-        if let Some(finest_result) = &mut finest_result {
+        if let Some(finest_req) = &mut finest_req {
             if let Some(finer) = get_finer_ordering(
-                finest_result,
-                fn_reqs,
+                finest_req,
+                fn_req,
                 &eq_properties,
                 &ordering_eq_properties,
             ) {
-                *finest_result = finer.to_vec();
+                *finest_req = finer.to_vec();
                 continue;
             }
             // If an aggregate function is reversible analyze its reverse direction whether it is compatible
             // with existing requirements
             if let Some(reverse) = aggr_expr.reverse_expr() {
-                let fn_reqs_reverse = reverse_order_bys(fn_reqs);
+                let fn_req_reverse = reverse_order_bys(fn_req);
                 if let Some(finer) = get_finer_ordering(
-                    finest_result,
-                    &fn_reqs_reverse,
+                    finest_req,
+                    &fn_req_reverse,
                     &eq_properties,
                     &ordering_eq_properties,
                 ) {
                     *aggr_expr = reverse;
-                    *finest_result = finer.to_vec();
+                    *finest_req = finer.to_vec();
                     continue;
                 }
             }
@@ -435,10 +435,10 @@ fn get_finest_requirement<
                 "Conflicting ordering requirements in aggregate functions is not supported".to_string(),
             ));
         } else {
-            finest_result = Some(fn_reqs.clone());
+            finest_req = Some(fn_req.clone());
         }
     }
-    Ok(finest_result)
+    Ok(finest_req)
 }
 
 /// Checks whether the given aggregate expression is order-sensitive.
@@ -472,7 +472,7 @@ fn calc_required_input_ordering(
             if let Some(aggregator_requirement) = aggregator_requirement {
                 // Get the section of the input ordering that enables us to run in the
                 // FullyOrdered or PartiallyOrdered mode:
-                let requirement_prefix: &[PhysicalSortExpr] =
+                let requirement_prefix =
                     if let Some(existing_ordering) = input.output_ordering() {
                         &existing_ordering[0..ordering.len()]
                     } else {
