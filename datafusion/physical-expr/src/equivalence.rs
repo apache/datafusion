@@ -261,6 +261,8 @@ impl OrderingEquivalentClass {
     }
 }
 
+/// This is a builder object facilitating incremental construction
+/// for ordering equivalences.
 pub struct OrderingEquivalenceBuilder {
     eq_properties: EquivalenceProperties,
     ordering_eq_properties: OrderingEquivalenceProperties,
@@ -310,8 +312,8 @@ impl OrderingEquivalenceBuilder {
                 item.expr.clone(),
                 self.eq_properties.classes(),
             );
-            // Currently we only support, ordering equivalences for `Column` expressions.
-            // TODO: Add support for ordering equivalence for all `PhysicalExpr`s
+            // Currently we only support ordering equivalences for `Column` expressions.
+            // TODO: Add support for ordering equivalence for all `PhysicalExpr`s.
             if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
                 normalized_out_ordering
                     .push(OrderedColumn::new(column.clone(), item.options));
