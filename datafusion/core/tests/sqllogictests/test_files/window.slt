@@ -3022,7 +3022,13 @@ SELECT a, b, c,
 # should be defined in the window frame. Therefore, the query below should generate an error. Note that
 # PostgreSQL also behaves this way.
 statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
-SELECT SUM(inc_col ORDER BY a DESC) OVER() as last
+SELECT SUM(b ORDER BY a ASC) OVER() as sum1
+       FROM annotated_data_infinite2
+
+# Even if, requirement of window clause and aggregate function match;
+# we should raise an error, when an ordering requirement is given to aggregate functions in window clauses.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_c
        FROM annotated_data_infinite2
 
 statement ok
