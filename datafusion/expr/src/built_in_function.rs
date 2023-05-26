@@ -20,6 +20,7 @@
 use crate::Volatility;
 use datafusion_common::{DataFusionError, Result};
 use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -205,9 +206,12 @@ pub enum BuiltinScalarFunction {
 
 lazy_static! {
     /// Mapping between SQL function names to `BuiltinScalarFunction` types.
-    /// Note that multiple SQL function names can represent the same `BuiltinScalarFunction`. These are treated as aliases.
-    /// In case of such aliases, the first SQL function name in the vector is used when displaying the function.
-    static ref NAME_TO_FUNCTION: Vec<(&'static str, BuiltinScalarFunction)> = vec![
+    ///
+    /// Note that multiple SQL function names can represent the same
+    /// `BuiltinScalarFunction`. These are treated as aliases and the
+    /// first SQL function name in the vector is used when displaying
+    /// the function.
+    static ref ALL_FUNCTIONS: Vec<(&'static str, BuiltinScalarFunction)> = vec![
         // math functions
         ("abs", BuiltinScalarFunction::Abs),
         ("acos", BuiltinScalarFunction::Acos),
@@ -315,6 +319,23 @@ lazy_static! {
         // array functions
         ("make_array", BuiltinScalarFunction::MakeArray),
     ];
+}
+
+lazy_static! {
+    /// Maps the sql function name to `BuiltinScalarFunction`
+    static ref NAME_TO_FUNCTION: HashMap<&'static str, BuiltinScalarFunction> = ALL_FUNCTIONS
+        .iter()
+        .cloned()
+        .collect();
+
+
+    /// Maps `BuiltinScalarFunction` --> canonical sql function
+    static ref FUNCTION_TO_NAME: HashMap<BuiltinScalarFunction, &'static str> = ALL_FUNCTIONS
+        .iter()
+        .map(|(name, func)| (func.clone(), *name))
+        // reverse so the first entry in the array is the one that is in the map
+        .rev()
+        .collect();
 }
 
 impl BuiltinScalarFunction {
@@ -431,29 +452,21 @@ impl BuiltinScalarFunction {
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for (func_name, func) in NAME_TO_FUNCTION.iter() {
-            if func == self {
-                return write!(f, "{}", func_name);
-            }
+        if let Some(func_name) = FUNCTION_TO_NAME.get(self) {
+            write!(f, "{}", func_name)
+        } else {
+            // Should not be reached
+            panic!("Internal error: {self:?} not in ALL_FUNCTIONS list");
         }
-
-        // Should not be reached
-        write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
 
 impl FromStr for BuiltinScalarFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
-        for (func_name, func) in NAME_TO_FUNCTION.iter() {
-            if name == *func_name {
-                return Ok(func.clone());
-            }
-        }
-
-        Err(DataFusionError::Plan(format!(
-            "There is no built-in function named {name}"
-        )))
+        NAME_TO_FUNCTION.get(name).cloned().ok_or_else(|| {
+            DataFusionError::Plan(format!("There is no built-in function named {name}"))
+        })
     }
 }
 
