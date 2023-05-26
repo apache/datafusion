@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                 opt.batch_size,
                 compression,
             )
-            .await
+                .await
         }
     }
 }
@@ -261,7 +261,7 @@ async fn register_tables(
                 opt.file_format.as_str(),
                 opt.partitions,
             )
-            .await?
+                .await?
         };
 
         if opt.mem_table {
@@ -397,7 +397,6 @@ mod tests {
         use std::path::Path;
 
         use super::*;
-        use arrow::datatypes::{DataType, Field};
         use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
         async fn serde_round_trip(query: usize) -> Result<()> {
@@ -537,262 +536,6 @@ mod tests {
         #[tokio::test]
         async fn serde_q22() -> Result<()> {
             serde_round_trip(22).await
-        }
-
-        #[tokio::test]
-        async fn verify_q1() -> Result<()> {
-            verify_query(1).await
-        }
-
-        #[tokio::test]
-        async fn verify_q2() -> Result<()> {
-            verify_query(2).await
-        }
-
-        #[tokio::test]
-        async fn verify_q3() -> Result<()> {
-            verify_query(3).await
-        }
-
-        #[tokio::test]
-        async fn verify_q4() -> Result<()> {
-            verify_query(4).await
-        }
-
-        #[tokio::test]
-        async fn verify_q5() -> Result<()> {
-            verify_query(5).await
-        }
-
-        #[tokio::test]
-        async fn verify_q6() -> Result<()> {
-            verify_query(6).await
-        }
-
-        #[tokio::test]
-        async fn verify_q7() -> Result<()> {
-            verify_query(7).await
-        }
-
-        #[tokio::test]
-        async fn verify_q8() -> Result<()> {
-            verify_query(8).await
-        }
-
-        #[tokio::test]
-        async fn verify_q9() -> Result<()> {
-            verify_query(9).await
-        }
-
-        #[tokio::test]
-        async fn verify_q10() -> Result<()> {
-            verify_query(10).await
-        }
-
-        #[tokio::test]
-        async fn verify_q11() -> Result<()> {
-            verify_query(11).await
-        }
-
-        #[tokio::test]
-        async fn verify_q12() -> Result<()> {
-            verify_query(12).await
-        }
-
-        #[tokio::test]
-        async fn verify_q13() -> Result<()> {
-            verify_query(13).await
-        }
-
-        #[tokio::test]
-        async fn verify_q14() -> Result<()> {
-            verify_query(14).await
-        }
-
-        #[tokio::test]
-        async fn verify_q15() -> Result<()> {
-            verify_query(15).await
-        }
-
-        #[tokio::test]
-        async fn verify_q16() -> Result<()> {
-            verify_query(16).await
-        }
-
-        #[tokio::test]
-        async fn verify_q17() -> Result<()> {
-            verify_query(17).await
-        }
-
-        #[tokio::test]
-        async fn verify_q18() -> Result<()> {
-            verify_query(18).await
-        }
-
-        #[tokio::test]
-        async fn verify_q19() -> Result<()> {
-            verify_query(19).await
-        }
-
-        #[tokio::test]
-        async fn verify_q20() -> Result<()> {
-            verify_query(20).await
-        }
-
-        #[tokio::test]
-        async fn verify_q21() -> Result<()> {
-            verify_query(21).await
-        }
-
-        #[tokio::test]
-        async fn verify_q22() -> Result<()> {
-            verify_query(22).await
-        }
-
-        /// compares query results against stored answers from the git repo
-        /// verifies that:
-        ///  * datatypes returned in columns is correct
-        ///  * the correct number of rows are returned
-        ///  * the content of the rows is correct
-        async fn verify_query(n: usize) -> Result<()> {
-            use datafusion::common::ScalarValue;
-            use datafusion::logical_expr::expr::Cast;
-
-            let path = get_tpch_data_path()?;
-
-            let answer_file = format!("{}/answers/q{}.out", path, n);
-            if !Path::new(&answer_file).exists() {
-                return Err(DataFusionError::Execution(format!(
-                    "Expected results not found: {}",
-                    answer_file
-                )));
-            }
-
-            // load expected answers from tpch-dbgen
-            // read csv as all strings, trim and cast to expected type as the csv string
-            // to value parser does not handle data with leading/trailing spaces
-            let ctx = SessionContext::new();
-            let schema = string_schema(get_answer_schema(n));
-            let options = CsvReadOptions::new()
-                .schema(&schema)
-                .delimiter(b'|')
-                .file_extension(".out");
-            let df = ctx.read_csv(&answer_file, options).await?;
-            let df = df.select(
-                get_answer_schema(n)
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        match Field::data_type(field) {
-                            DataType::Decimal128(_, _) => {
-                                // there's no support for casting from Utf8 to Decimal, so
-                                // we'll cast from Utf8 to Float64 to Decimal for Decimal types
-                                let inner_cast = Box::new(Expr::Cast(Cast::new(
-                                    Box::new(trim(col(Field::name(field)))),
-                                    DataType::Float64,
-                                )));
-                                Expr::Cast(Cast::new(
-                                    inner_cast,
-                                    Field::data_type(field).to_owned(),
-                                ))
-                                .alias(Field::name(field))
-                            }
-                            _ => Expr::Cast(Cast::new(
-                                Box::new(trim(col(Field::name(field)))),
-                                Field::data_type(field).to_owned(),
-                            ))
-                            .alias(Field::name(field)),
-                        }
-                    })
-                    .collect::<Vec<Expr>>(),
-            )?;
-            let expected = df.collect().await?;
-
-            // run the query to compute actual results of the query
-            let opt = DataFusionBenchmarkOpt {
-                query: Some(n),
-                debug: false,
-                iterations: 1,
-                partitions: 2,
-                batch_size: 8192,
-                path: PathBuf::from(path.to_string()),
-                file_format: "tbl".to_string(),
-                mem_table: false,
-                output_path: None,
-                disable_statistics: false,
-            };
-            let mut results = benchmark_datafusion(opt).await?;
-            assert_eq!(results.len(), 1);
-
-            let actual = results.remove(0);
-            let transformed = transform_actual_result(actual, n).await?;
-
-            // assert schema data types match
-            let transformed_fields = &transformed[0].schema().fields;
-            let expected_fields = &expected[0].schema().fields;
-            let schema_matches = transformed_fields
-                .iter()
-                .zip(expected_fields.iter())
-                .all(|(t, e)| match t.data_type() {
-                    DataType::Decimal128(_, _) => {
-                        matches!(e.data_type(), DataType::Decimal128(_, _))
-                    }
-                    data_type => data_type == e.data_type(),
-                });
-            if !schema_matches {
-                panic!(
-                    "expected_fields: {:?}\ntransformed_fields: {:?}",
-                    expected_fields, transformed_fields
-                )
-            }
-
-            // convert both datasets to Vec<Vec<String>> for simple comparison
-            let expected_vec = result_vec(&expected);
-            let actual_vec = result_vec(&transformed);
-
-            // basic result comparison
-            assert_eq!(expected_vec.len(), actual_vec.len());
-
-            // compare each row. this works as all TPC-H queries have deterministically ordered results
-            for i in 0..expected_vec.len() {
-                let expected_row = &expected_vec[i];
-                let actual_row = &actual_vec[i];
-                assert_eq!(expected_row.len(), actual_row.len());
-
-                let tolerance = 0.1;
-                for j in 0..expected_row.len() {
-                    match (&expected_row[j], &actual_row[j]) {
-                        (
-                            ScalarValue::Float64(Some(l)),
-                            ScalarValue::Float64(Some(r)),
-                        ) => {
-                            // allow for rounding errors until we move to decimal types
-                            if (l - r).abs() > tolerance {
-                                panic!(
-                                    "Expected: {}; Actual: {}; Tolerance: {}",
-                                    l, r, tolerance
-                                )
-                            }
-                        }
-                        (
-                            ScalarValue::Decimal128(Some(l), _, s),
-                            ScalarValue::Decimal128(Some(r), _, _),
-                        ) => {
-                            if ((l - r) as f64 / 10_i32.pow(*s as u32) as f64).abs()
-                                > tolerance
-                            {
-                                panic!(
-                                    "Expected: {}; Actual: {}; Tolerance: {}",
-                                    l, r, tolerance
-                                )
-                            }
-                        }
-                        (l, r) => assert_eq!(format!("{:?}", l), format!("{:?}", r)),
-                    }
-                }
-            }
-
-            Ok(())
         }
 
         fn get_tpch_data_path() -> Result<String> {

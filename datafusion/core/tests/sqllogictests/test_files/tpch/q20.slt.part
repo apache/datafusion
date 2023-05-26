@@ -94,14 +94,14 @@ SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]
 --------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------RepartitionExec: partitioning=Hash([Column { name: "s_nationkey", index: 3 }], 4), input_partitions=4
 ------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/supplier.csv]]}, projection=[s_suppkey, s_name, s_address, s_nationkey], has_header=true
+--------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_nationkey], has_header=false
 --------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------RepartitionExec: partitioning=Hash([Column { name: "n_nationkey", index: 0 }], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
 --------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------FilterExec: n_name@1 = CANADA
 ------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/nation.csv]]}, projection=[n_nationkey, n_name], has_header=true
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([Column { name: "ps_suppkey", index: 0 }], 4), input_partitions=4
 --------------ProjectionExec: expr=[ps_suppkey@1 as ps_suppkey]
@@ -114,14 +114,14 @@ SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]
 ----------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------RepartitionExec: partitioning=Hash([Column { name: "ps_partkey", index: 0 }], 4), input_partitions=4
 --------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/partsupp.csv]]}, projection=[ps_partkey, ps_suppkey, ps_availqty], has_header=true
+----------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/partsupp.tbl]]}, projection=[ps_partkey, ps_suppkey, ps_availqty], has_header=false
 ----------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------RepartitionExec: partitioning=Hash([Column { name: "p_partkey", index: 0 }], 4), input_partitions=4
 --------------------------------ProjectionExec: expr=[p_partkey@0 as p_partkey]
 ----------------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------------FilterExec: p_name@1 LIKE forest%
 --------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/part.csv]]}, projection=[p_partkey, p_name], has_header=true
+----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/part.tbl]]}, projection=[p_partkey, p_name], has_header=false
 --------------------ProjectionExec: expr=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey, 0.5 * CAST(SUM(lineitem.l_quantity)@2 AS Float64) as __value]
 ----------------------AggregateExec: mode=FinalPartitioned, gby=[l_partkey@0 as l_partkey, l_suppkey@1 as l_suppkey], aggr=[SUM(lineitem.l_quantity)]
 ------------------------CoalesceBatchesExec: target_batch_size=8192
@@ -131,7 +131,7 @@ SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]
 --------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------FilterExec: l_shipdate@3 >= 8766 AND l_shipdate@3 < 9131
 ------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], has_header=true
+--------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], has_header=false
 
 
 
@@ -174,3 +174,12 @@ where
 order by
     s_name;
 ----
+Supplier#000000157 ,mEGorBfVIm
+Supplier#000000197 YC2Acon6kjY3zj3Fbxs2k4Vdf7X0cd2F
+Supplier#000000287 7a9SP7qW5Yku5PvSg
+Supplier#000000378 FfbhyCxWvcPrO8ltp9
+Supplier#000000530 0qwCMwobKY OcmLyfRXlagA8ukENJv,
+Supplier#000000555 TfB,a5bfl3Ah 3Z 74GqnNs6zKVGM
+Supplier#000000557 jj0wUYh9K3fG5Jhdhrkuy ,4
+Supplier#000000729 pqck2ppy758TQpZCUAjPvlU55K3QjfL7Bi
+Supplier#000000935 ij98czM 2KzWe7dDTOxB8sq0UfCdvrX

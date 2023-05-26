@@ -61,7 +61,7 @@ Sort: custsale.cntrycode ASC NULLS LAST
 ----Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(custsale.c_acctbal)]]
 ------SubqueryAlias: custsale
 --------Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
-----------Filter: CAST(customer.c_acctbal AS Decimal128(38, 14)) > __scalar_sq_11.__value
+----------Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_11.__value
 ------------CrossJoin:
 --------------Projection: customer.c_phone, customer.c_acctbal
 ----------------LeftAnti Join: customer.c_custkey = __correlated_sq_13.o_custkey
@@ -73,8 +73,8 @@ Sort: custsale.cntrycode ASC NULLS LAST
 ----------------Projection: AVG(customer.c_acctbal) AS __value
 ------------------Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
 --------------------Projection: customer.c_acctbal
-----------------------Filter: customer.c_acctbal > Decimal128(Some(0),38,10) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
-------------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),38,10) AS customer.c_acctbal > Decimal128(Some(0),38,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),38,10)]
+----------------------Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+------------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2) AS customer.c_acctbal > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),15,2)]
 physical_plan
 SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 --SortExec: expr=[cntrycode@0 ASC NULLS LAST]
@@ -85,7 +85,7 @@ SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 ------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(UInt8(1)), SUM(custsale.c_acctbal)]
 --------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
 ----------------CoalesceBatchesExec: target_batch_size=8192
-------------------FilterExec: CAST(c_acctbal@1 AS Decimal128(38, 14)) > __value@2
+------------------FilterExec: CAST(c_acctbal@1 AS Decimal128(19, 6)) > __value@2
 --------------------CrossJoinExec
 ----------------------CoalescePartitionsExec
 ------------------------ProjectionExec: expr=[c_phone@1 as c_phone, c_acctbal@2 as c_acctbal]
@@ -96,20 +96,20 @@ SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 ----------------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------------FilterExec: Use substr(c_phone@1, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }])
 --------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/customer.csv]]}, projection=[c_custkey, c_phone, c_acctbal], has_header=true
+----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_phone, c_acctbal], has_header=false
 ------------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------------RepartitionExec: partitioning=Hash([Column { name: "o_custkey", index: 0 }], 4), input_partitions=4
 ----------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_custkey], has_header=true
+------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl]]}, projection=[o_custkey], has_header=false
 ----------------------ProjectionExec: expr=[AVG(customer.c_acctbal)@0 as __value]
 ------------------------AggregateExec: mode=Final, gby=[], aggr=[AVG(customer.c_acctbal)]
 --------------------------CoalescePartitionsExec
 ----------------------------AggregateExec: mode=Partial, gby=[], aggr=[AVG(customer.c_acctbal)]
 ------------------------------ProjectionExec: expr=[c_acctbal@1 as c_acctbal]
 --------------------------------CoalesceBatchesExec: target_batch_size=8192
-----------------------------------FilterExec: c_acctbal@1 > Some(0),38,10 AND Use substr(c_phone@0, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }])
+----------------------------------FilterExec: c_acctbal@1 > Some(0),15,2 AND Use substr(c_phone@0, 1, 2) IN (SET) ([Literal { value: Utf8("13") }, Literal { value: Utf8("31") }, Literal { value: Utf8("23") }, Literal { value: Utf8("29") }, Literal { value: Utf8("30") }, Literal { value: Utf8("18") }, Literal { value: Utf8("17") }])
 ------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/customer.csv]]}, projection=[c_phone, c_acctbal], has_header=true
+--------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/customer.tbl]]}, projection=[c_phone, c_acctbal], has_header=false
 
 
 
@@ -152,5 +152,10 @@ group by
 order by
     cntrycode;
 ----
-18 1 8324.07
-30 1 7638.57
+13 94 714035.05
+17 96 722560.15
+18 99 738012.52
+23 93 708285.25
+29 85 632693.46
+30 87 646748.02
+31 87 647372.5

@@ -213,19 +213,28 @@ impl TestFile {
     fn is_slt_file(&self) -> bool {
         self.path.extension() == Some(OsStr::new("slt"))
     }
+
+    fn check_tpch(&self, options: &Options) -> bool {
+        if !self.relative_path.starts_with("tpch") {
+            return true;
+        }
+
+        options.include_tpch
+    }
 }
 
-fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile> + 'a> {
+fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item=TestFile> + 'a> {
     Box::new(
         read_dir_recursive(TEST_DIRECTORY)
             .map(TestFile::new)
             .filter(|f| options.check_test_file(&f.relative_path))
             .filter(|f| f.is_slt_file())
+            .filter(|f| f.check_tpch(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     )
 }
 
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBuf>> {
+fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item=PathBuf>> {
     Box::new(
         std::fs::read_dir(path)
             .expect("Readable directory")
@@ -331,6 +340,9 @@ struct Options {
 
     /// Run Postgres compatibility tests with Postgres runner
     postgres_runner: bool,
+
+    /// Include tpch files
+    include_tpch: bool,
 }
 
 impl Options {
@@ -339,6 +351,7 @@ impl Options {
 
         let complete_mode = args.iter().any(|a| a == "--complete");
         let postgres_runner = std::env::var("PG_COMPAT").map_or(false, |_| true);
+        let include_tpch = std::env::var("INCLUDE_TPCH").map_or(false, |_| true);
 
         // treat args after the first as filters to run (substring matching)
         let filters = if !args.is_empty() {
@@ -355,6 +368,7 @@ impl Options {
             filters,
             complete_mode,
             postgres_runner,
+            include_tpch,
         }
     }
 

@@ -120,39 +120,39 @@ SortPreservingMergeExec: [numwait@1 DESC,s_name@0 ASC NULLS LAST]
 ------------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------------------------------------RepartitionExec: partitioning=Hash([Column { name: "s_suppkey", index: 0 }], 4), input_partitions=4
 ----------------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/supplier.csv]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=true
+------------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_nationkey], has_header=false
 ------------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------------------------------------RepartitionExec: partitioning=Hash([Column { name: "l_suppkey", index: 1 }], 4), input_partitions=4
 ----------------------------------------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
 ------------------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------------------------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
 ----------------------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=true
+------------------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
 --------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------------------RepartitionExec: partitioning=Hash([Column { name: "o_orderkey", index: 0 }], 4), input_partitions=4
 ------------------------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey]
 --------------------------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------------------------FilterExec: o_orderstatus@1 = F
 ------------------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/orders.csv]]}, projection=[o_orderkey, o_orderstatus], has_header=true
+--------------------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl]]}, projection=[o_orderkey, o_orderstatus], has_header=false
 ----------------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------------RepartitionExec: partitioning=Hash([Column { name: "n_nationkey", index: 0 }], 4), input_partitions=4
 --------------------------------------ProjectionExec: expr=[n_nationkey@0 as n_nationkey]
 ----------------------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------------------FilterExec: n_name@1 = SAUDI ARABIA
 --------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/nation.csv]]}, projection=[n_nationkey, n_name], has_header=true
+----------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], has_header=false
 ------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------RepartitionExec: partitioning=Hash([Column { name: "l_orderkey", index: 0 }], 4), input_partitions=4
 ----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_orderkey, l_suppkey], has_header=true
+------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_orderkey, l_suppkey], has_header=false
 --------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------RepartitionExec: partitioning=Hash([Column { name: "l_orderkey", index: 0 }], 4), input_partitions=4
 ------------------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey, l_suppkey@1 as l_suppkey]
 --------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------FilterExec: l_receiptdate@3 > l_commitdate@2
 ------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=true
+--------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate], has_header=false
 
 
 
@@ -197,3 +197,50 @@ order by
     numwait desc,
     s_name;
 ----
+Supplier#000000445 16
+Supplier#000000825 16
+Supplier#000000709 15
+Supplier#000000762 15
+Supplier#000000357 14
+Supplier#000000399 14
+Supplier#000000496 14
+Supplier#000000977 13
+Supplier#000000144 12
+Supplier#000000188 12
+Supplier#000000415 12
+Supplier#000000472 12
+Supplier#000000633 12
+Supplier#000000708 12
+Supplier#000000889 12
+Supplier#000000380 11
+Supplier#000000602 11
+Supplier#000000659 11
+Supplier#000000821 11
+Supplier#000000929 11
+Supplier#000000262 10
+Supplier#000000460 10
+Supplier#000000486 10
+Supplier#000000669 10
+Supplier#000000718 10
+Supplier#000000778 10
+Supplier#000000167 9
+Supplier#000000578 9
+Supplier#000000673 9
+Supplier#000000687 9
+Supplier#000000074 8
+Supplier#000000565 8
+Supplier#000000648 8
+Supplier#000000918 8
+Supplier#000000427 7
+Supplier#000000503 7
+Supplier#000000610 7
+Supplier#000000670 7
+Supplier#000000811 7
+Supplier#000000114 6
+Supplier#000000379 6
+Supplier#000000436 6
+Supplier#000000500 6
+Supplier#000000660 6
+Supplier#000000788 6
+Supplier#000000846 6
+Supplier#000000920 4

@@ -19,73 +19,78 @@
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS supplier (
-        s_suppkey  INTEGER,
+        s_suppkey  BIGINT,
         s_name VARCHAR,
         s_address VARCHAR,
-        s_nationkey INTEGER,
+        s_nationkey BIGINT,
         s_phone VARCHAR,
-        s_acctbal NUMERIC,
+        s_acctbal DECIMAL(15, 2),
         s_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/supplier.csv';
+        s_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/supplier.tbl';
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS part (
-        p_partkey INTEGER,
+        p_partkey BIGINT,
         p_name VARCHAR,
         p_mfgr VARCHAR,
         p_brand VARCHAR,
         p_type VARCHAR,
         p_size INTEGER,
         p_container VARCHAR,
-        p_retailprice NUMERIC,
+        p_retailprice DECIMAL(15, 2),
         p_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/part.csv';
+        p_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/part.tbl';
 
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS partsupp (
-        ps_partkey INTEGER,
-        ps_suppkey INTEGER,
+        ps_partkey BIGINT,
+        ps_suppkey BIGINT,
         ps_availqty INTEGER,
-        ps_supplycost NUMERIC,
+        ps_supplycost DECIMAL(15, 2),
         ps_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/partsupp.csv';
+        ps_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/partsupp.tbl';
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS customer (
-        c_custkey INTEGER,
+        c_custkey BIGINT,
         c_name VARCHAR,
         c_address VARCHAR,
-        c_nationkey INTEGER,
+        c_nationkey BIGINT,
         c_phone VARCHAR,
-        c_acctbal NUMERIC,
+        c_acctbal DECIMAL(15, 2),
         c_mktsegment VARCHAR,
         c_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/customer.csv';
+        c_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/customer.tbl';
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS orders (
         o_orderkey BIGINT,
-        o_custkey INTEGER,
+        o_custkey BIGINT,
         o_orderstatus VARCHAR,
-        o_totalprice NUMERIC,
+        o_totalprice DECIMAL(15, 2),
         o_orderdate DATE,
         o_orderpriority VARCHAR,
         o_clerk VARCHAR,
         o_shippriority INTEGER,
         o_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/orders.csv';
+        o_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/orders.tbl';
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
         l_orderkey BIGINT,
-        l_partkey INTEGER,
-        l_suppkey INTEGER,
+        l_partkey BIGINT,
+        l_suppkey BIGINT,
         l_linenumber INTEGER,
-        l_quantity NUMERIC,
-        l_extendedprice NUMERIC,
-        l_discount NUMERIC,
-        l_tax NUMERIC,
+        l_quantity DECIMAL(15, 2),
+        l_extendedprice DECIMAL(15, 2),
+        l_discount DECIMAL(15, 2),
+        l_tax DECIMAL(15, 2),
         l_returnflag VARCHAR,
         l_linestatus VARCHAR,
         l_shipdate DATE,
@@ -94,19 +99,22 @@ CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
         l_shipinstruct VARCHAR,
         l_shipmode VARCHAR,
         l_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/lineitem.csv';
+        l_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/lineitem.tbl';
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS nation (
-        n_nationkey INTEGER,
+        n_nationkey BIGINT,
         n_name VARCHAR,
-        n_regionkey INTEGER,
+        n_regionkey BIGINT,
         n_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/nation.csv';
+        n_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/nation.tbl';
 
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS region (
-        r_regionkey INTEGER,
+        r_regionkey BIGINT,
         r_name VARCHAR,
         r_comment VARCHAR,
-) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/region.csv';
+        r_rev VARCHAR,
+) STORED AS CSV DELIMITER '|' LOCATION 'tests/sqllogictests/test_files/tpch/data/region.tbl';

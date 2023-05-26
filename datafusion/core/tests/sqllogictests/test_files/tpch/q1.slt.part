@@ -18,26 +18,26 @@
 
 query TT
 explain select
-    l_returnflag,
-    l_linestatus,
-    sum(l_quantity) as sum_qty,
-    sum(l_extendedprice) as sum_base_price,
-    sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
-    sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
-    avg(l_quantity) as avg_qty,
-    avg(l_extendedprice) as avg_price,
-    avg(l_discount) as avg_disc,
-    count(*) as count_order
-from
-    lineitem
-where
-        l_shipdate <= date '1998-09-02'
-group by
-    l_returnflag,
-    l_linestatus
-order by
-    l_returnflag,
-    l_linestatus;
+            l_returnflag,
+            l_linestatus,
+            sum(l_quantity) as sum_qty,
+            sum(l_extendedprice) as sum_base_price,
+            sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+            sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+            avg(l_quantity) as avg_qty,
+            avg(l_extendedprice) as avg_price,
+            avg(l_discount) as avg_disc,
+            count(*) as count_order
+        from
+            lineitem
+        where
+                l_shipdate <= date '1998-09-02'
+        group by
+            l_returnflag,
+            l_linestatus
+        order by
+            l_returnflag,
+            l_linestatus;
 ----
 logical_plan
 Sort: lineitem.l_returnflag ASC NULLS LAST, lineitem.l_linestatus ASC NULLS LAST
@@ -58,8 +58,7 @@ SortPreservingMergeExec: [l_returnflag@0 ASC NULLS LAST,l_linestatus@1 ASC NULLS
 ----------------CoalesceBatchesExec: target_batch_size=8192
 ------------------FilterExec: l_shipdate@6 <= 10471
 --------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/tpch-csv/lineitem.csv]]}, projection=[l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate], has_header=true
-
+----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_quantity, l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate], has_header=false
 
 
 query TTRRRRRRRI
@@ -85,6 +84,7 @@ order by
     l_returnflag,
     l_linestatus;
 ----
-A F 27 39890.88 37497.4272 40122.247104 27 39890.88 0.06 1
-N O 166 205387.5 191556.1888 199866.759336 27.666666666667 34231.25 0.075 6
-R F 94 100854.52 92931.39 92931.39 47 50427.26 0.08 2
+A F 3774200 5320753880.69 5054096266.6828 5256751331.449234 25.537587 36002.123829 0.050144 147790
+N F 95257 133737795.84 127132372.6512 132286291.229445 25.300664 35521.326916 0.049394 3765
+N O 7459297 10512270008.9 9986238338.3847 10385578376.585467 25.545537 36000.924688 0.050095 292000
+R F 3785523 5337950526.47 5071818532.942 5274405503.049367 25.525943 35994.029214 0.049989 148301
