@@ -53,10 +53,12 @@ use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
+
 use arrow::array::new_null_array;
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
+
 use file_stream::FileSinkStream;
 use futures::StreamExt;
 use log::{debug, info, warn};

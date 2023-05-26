@@ -24,6 +24,7 @@
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
@@ -37,15 +38,16 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion_common::ScalarValue;
+
+use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{ready, FutureExt, Stream, StreamExt};
-use std::sync::Arc;
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type FileOpenFuture =
@@ -463,9 +465,8 @@ impl<S: BatchSerializer, O: FileWriterFactory> FileSinkStream<S, O> {
     }
 }
 
-/// Note that all of these metrics are in terms of wall clock time
-/// (not cpu time) so they include time spent waiting on I/O as well
-/// as other operators.
+/// Note that all the following metrics are in terms of wall-clock time,
+/// so they include time spent waiting on I/O as well as other operations.
 pub struct FileSinkStreamMetrics {
     /// Time spent waiting for the FileStream's input.
     pub time_processing: StartableTime,

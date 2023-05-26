@@ -17,9 +17,15 @@
 
 //! Execution plan for reading CSV files
 
+use crate::datasource::file_format::csv::CsvSerializer;
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::{
+    AsyncAppend, AsyncPut, AsyncPutMultipart, AsyncPutWriter, FileWriterExt,
+    FileWriterMode,
+};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileSinkStream, FileSinkStreamMetrics, FileStream,
@@ -34,20 +40,13 @@ use crate::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use arrow::csv;
+use arrow::csv::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 
-use bytes::Buf;
-
 use super::FileScanConfig;
-use crate::datasource::file_format::csv::CsvSerializer;
-use crate::datasource::file_format::{
-    AsyncAppend, AsyncPut, AsyncPutMultipart, AsyncPutWriter, FileWriterExt,
-    FileWriterMode,
-};
-use crate::physical_plan::common::AbortOnDropSingle;
-use arrow::csv::WriterBuilder;
+
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
@@ -348,7 +347,6 @@ impl CsvWriterOpener {
 #[async_trait]
 impl FileWriterFactory for CsvWriterOpener {
     async fn create_writer(&self, file_meta: FileMeta) -> Result<Box<dyn FileWriterExt>> {
-        // Clone the object and store references
         let object = &file_meta.object_meta;
         match self.writer_mode {
             // If the mode is append, call the store's append method and return a ready poll
@@ -361,7 +359,7 @@ impl FileWriterFactory for CsvWriterOpener {
                     .map_err(DataFusionError::ObjectStore)?;
                 let writer = Box::new(AsyncAppend::new(
                     self.file_compression_type.convert_async_writer(writer)?,
-                )) as Box<dyn FileWriterExt>;
+                )) as _;
                 Ok(writer)
             }
             // If the mode is put, create a new AsyncPut writer and return it wrapped in
@@ -373,7 +371,7 @@ impl FileWriterFactory for CsvWriterOpener {
                 ));
                 let writer = Box::new(AsyncPut::new(
                     self.file_compression_type.convert_async_writer(writer)?,
-                )) as Box<dyn FileWriterExt>;
+                )) as _;
                 Ok(writer)
             }
             // If the mode is put multipart, call the store's put_multipart method and
@@ -536,12 +534,9 @@ impl ExecutionPlan for CsvWriterExec {
             .runtime_env()
             .object_store(&self.base_config.object_store_url)?;
 
-        let header = if matches!(&self.base_config.writer_mode, FileWriterMode::Append) {
-            self.base_config.file_groups[partition].object_meta.size == 0
-                && self.has_header
-        } else {
-            self.has_header
-        };
+        let header = self.has_header
+            && (!matches!(&self.base_config.writer_mode, FileWriterMode::Append)
+                || self.base_config.file_groups[partition].object_meta.size == 0);
 
         let builder = WriterBuilder::new().with_delimiter(self.delimiter);
         let serializer = CsvSerializer::new()

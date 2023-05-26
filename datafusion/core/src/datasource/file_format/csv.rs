@@ -354,14 +354,14 @@ impl Default for CsvSerializer {
 pub struct CsvSerializer {
     // CSV writer builder
     builder: WriterBuilder,
-    // Inner buffer for avoiding re allocation
+    // Inner buffer for avoiding reallocation
     buffer: Vec<u8>,
-    // Flag to indicate whether the CSV header
+    // Flag to indicate whether there will be a header
     header: bool,
 }
 
 impl CsvSerializer {
-    /// Constructor function for the CsvSerializer struct
+    /// Constructor for the CsvSerializer object
     pub fn new() -> Self {
         Self {
             builder: WriterBuilder::new(),

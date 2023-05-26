@@ -150,7 +150,8 @@ impl FileCompressionType {
         })
     }
 
-    /// Given a `AsyncWrite`, wrap the `AsyncWrite` which data are compressed with `FileCompressionType`.
+    /// Wrap the given `AsyncWrite` so that it performs compressed writes
+    /// according to this `FileCompressionType`.
     pub fn convert_async_writer(
         &self,
         w: Box<dyn AsyncWrite + Send + Unpin>,

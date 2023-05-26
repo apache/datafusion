@@ -27,7 +27,6 @@ pub mod json;
 pub mod options;
 pub mod parquet;
 
-use arrow_array::RecordBatch;
 use std::any::Any;
 use std::io::Error;
 use std::pin::Pin;
@@ -37,14 +36,16 @@ use std::{fmt, mem};
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{FileScanConfig, FileSinkConfig};
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use crate::execution::context::SessionState;
-use async_trait::async_trait;
-use bytes::Bytes;
+use arrow_array::RecordBatch;
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalExpr;
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::ready;
 use futures::FutureExt;
@@ -97,8 +98,8 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Take a list of files and config to convert it to the appropriate writer executor
-    /// according to this file format.
+    /// Take a list of files and the configuration to convert it to the
+    /// appropriate writer executor according to this file format.
     async fn create_writer_physical_plan(
         &self,
         _input: Arc<dyn ExecutionPlan>,
@@ -110,9 +111,9 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     }
 }
 
-/// `AsyncPutWriter` is a struct that implements asynchronous writing to an object store.
+/// `AsyncPutWriter` is an object that facilitates asynchronous writing to object stores.
 /// It is specifically designed for the `object_store` crate's `put` method and sends
-/// the whole bytes at once when the buffer is flushed.
+/// whole bytes at once when the buffer is flushed.
 pub struct AsyncPutWriter {
     /// Object metadata
     object_meta: ObjectMeta,
@@ -125,13 +126,13 @@ pub struct AsyncPutWriter {
 }
 
 impl AsyncPutWriter {
-    /// Define a constructor for the `AsyncPutWriter` struct
+    /// Constructor for the `AsyncPutWriter` object
     pub fn new(object_meta: ObjectMeta, store: Arc<dyn ObjectStore>) -> Self {
         Self {
             object_meta,
             store,
             current_buffer: vec![],
-            // Set the inner state to Buffer initially
+            // The writer starts out in buffering mode
             inner_state: AsyncPutState::Buffer,
         }
     }
@@ -152,16 +153,13 @@ impl AsyncPutWriter {
                 }
                 AsyncPutState::Put { bytes } => {
                     // Send the bytes to the object store's put method
-                    return match ready!(self
-                        .store
-                        .put(&self.object_meta.location, bytes.clone())
-                        .poll_unpin(cx))
-                    {
-                        // If the put operation is successful, return a ready poll with an empty result
-                        Ok(_) => Poll::Ready(Ok(())),
-                        // If the put operation fails, return a ready poll with the error wrapped in a custom error type
-                        Err(e) => Poll::Ready(Err(Error::from(e))),
-                    };
+                    return Poll::Ready(
+                        ready!(self
+                            .store
+                            .put(&self.object_meta.location, bytes.clone())
+                            .poll_unpin(cx))
+                        .map_err(Error::from),
+                    );
                 }
             }
         }
@@ -183,12 +181,10 @@ impl AsyncWrite for AsyncPutWriter {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::result::Result<usize, Error>> {
-        // Get the length of the incoming buffer
-        let len = buf.len();
         // Extend the current buffer with the incoming buffer
         self.current_buffer.extend_from_slice(buf);
         // Return a ready poll with the length of the incoming buffer
-        Poll::Ready(Ok(len))
+        Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(
