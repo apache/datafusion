@@ -1758,8 +1758,8 @@ mod tests {
         eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &OrderedColumn::new(col_a.clone(), options1),
-            &OrderedColumn::new(col_c.clone(), options2),
+            &vec![OrderedColumn::new(col_a.clone(), options1)],
+            &vec![OrderedColumn::new(col_c.clone(), options2)],
         ));
 
         let order_by_exprs = vec![

@@ -22,51 +22,53 @@ use datafusion_expr::Expr;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    /// convert sql OrderByExpr to Expr::Sort
+    /// convert sql [OrderByExpr] to `Vec<Expr>`
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        e: OrderByExpr,
+        exprs: &[OrderByExpr],
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        let OrderByExpr {
-            asc,
-            expr,
-            nulls_first,
-        } = e;
+    ) -> Result<Vec<Expr>> {
+        let mut expr_vec = vec![];
+        for e in exprs {
+            let OrderByExpr {
+                asc,
+                expr,
+                nulls_first,
+            } = e;
 
-        let expr = match expr {
-            SQLExpr::Value(Value::Number(v, _)) => {
-                let field_index = v
-                    .parse::<usize>()
-                    .map_err(|err| DataFusionError::Plan(err.to_string()))?;
+            let expr = match expr {
+                SQLExpr::Value(Value::Number(v, _)) => {
+                    let field_index = v
+                        .parse::<usize>()
+                        .map_err(|err| DataFusionError::Plan(err.to_string()))?;
 
-                if field_index == 0 {
-                    return Err(DataFusionError::Plan(
-                        "Order by index starts at 1 for column indexes".to_string(),
-                    ));
-                } else if schema.fields().len() < field_index {
-                    return Err(DataFusionError::Plan(format!(
-                        "Order by column out of bounds, specified: {}, max: {}",
-                        field_index,
-                        schema.fields().len()
-                    )));
+                    if field_index == 0 {
+                        return Err(DataFusionError::Plan(
+                            "Order by index starts at 1 for column indexes".to_string(),
+                        ));
+                    } else if schema.fields().len() < field_index {
+                        return Err(DataFusionError::Plan(format!(
+                            "Order by column out of bounds, specified: {}, max: {}",
+                            field_index,
+                            schema.fields().len()
+                        )));
+                    }
+
+                    let field = schema.field(field_index - 1);
+                    Expr::Column(field.qualified_column())
                 }
-
-                let field = schema.field(field_index - 1);
-                Expr::Column(field.qualified_column())
-            }
-            e => self.sql_expr_to_logical_expr(e, schema, planner_context)?,
-        };
-        Ok({
+                e => self.sql_expr_to_logical_expr(e.clone(), schema, planner_context)?,
+            };
             let asc = asc.unwrap_or(true);
-            Expr::Sort(Sort::new(
+            expr_vec.push(Expr::Sort(Sort::new(
                 Box::new(expr),
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
                 nulls_first.unwrap_or(!asc),
-            ))
-        })
+            )))
+        }
+        Ok(expr_vec)
     }
 }
