@@ -255,8 +255,7 @@ fn build_join(
             })),
         ) => {
             let right_expr_name = format!("{:?}", unnormalize_col(right.deref().clone()));
-            let right_col =
-                Column::new(Some(subquery_alias), right_expr_name);
+            let right_col = Column::new(Some(subquery_alias), right_expr_name);
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
             Some(in_predicate.and(join_filter))
         }
@@ -270,8 +269,7 @@ fn build_join(
             })),
         ) => {
             let right_expr_name = format!("{:?}", unnormalize_col(right.deref().clone()));
-            let right_col =
-                Column::new(Some(subquery_alias), right_expr_name);
+            let right_col = Column::new(Some(subquery_alias), right_expr_name);
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
             Some(in_predicate)
         }

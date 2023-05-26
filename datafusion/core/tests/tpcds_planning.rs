@@ -801,7 +801,6 @@ async fn tpcds_physical_q53() -> Result<()> {
     create_physical_plan(53).await
 }
 
-//#[ignore] // Physical plan does not support logical expression (<subquery>)
 #[tokio::test]
 async fn tpcds_physical_q54() -> Result<()> {
     create_physical_plan(54).await
