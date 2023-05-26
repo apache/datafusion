@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::Column;
-use crate::{PhysicalSortExpr, PhysicalSortRequirement};
+use crate::expressions::{BinaryExpr, Column};
+use crate::{PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
@@ -32,7 +32,7 @@ pub struct EquivalenceProperties<T = Column> {
     schema: SchemaRef,
 }
 
-impl<T: Eq + Clone> EquivalenceProperties<T> {
+impl<T: PartialEq + Clone> EquivalenceProperties<T> {
     pub fn new(schema: SchemaRef) -> Self {
         EquivalenceProperties {
             classes: vec![],
@@ -127,6 +127,25 @@ fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, elem: &T) -> bool {
     }
 }
 
+fn get_column_indices_helper(
+    indices: &mut Vec<(usize, String)>,
+    expr: &Arc<dyn PhysicalExpr>,
+) {
+    if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        indices.push((col.index(), col.name().to_string()))
+    } else if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        get_column_indices_helper(indices, binary_expr.left());
+        get_column_indices_helper(indices, binary_expr.right());
+    };
+}
+
+/// Get the indices of the columns occur in the expression
+fn get_column_indices_names(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
+    let mut result = vec![];
+    get_column_indices_helper(&mut result, expr);
+    result
+}
+
 /// `OrderingEquivalenceProperties` keeps track of columns that describe the
 /// global ordering of the schema. These columns are not necessarily same; e.g.
 /// ```text
@@ -142,7 +161,7 @@ fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, elem: &T) -> bool {
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-pub type OrderingEquivalenceProperties = EquivalenceProperties<Vec<OrderedColumn>>;
+pub type OrderingEquivalenceProperties = EquivalenceProperties<Vec<PhysicalSortExpr>>;
 
 /// EquivalentClass is a set of [`Column`]s or [`OrderedColumn`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -157,7 +176,7 @@ pub struct EquivalentClass<T = Column> {
     others: Vec<T>,
 }
 
-impl<T: Eq + Clone> EquivalentClass<T> {
+impl<T: PartialEq + Clone> EquivalentClass<T> {
     pub fn new(head: T, others: Vec<T>) -> EquivalentClass<T> {
         let others = deduplicate_vector(others);
         EquivalentClass { head, others }
@@ -214,36 +233,36 @@ impl<T: Eq + Clone> EquivalentClass<T> {
     }
 }
 
-/// This object represents a [`Column`] with a definite ordering.
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub struct OrderedColumn {
-    pub col: Column,
-    pub options: SortOptions,
-}
-
-impl OrderedColumn {
-    pub fn new(col: Column, options: SortOptions) -> Self {
-        Self { col, options }
-    }
-}
-
-impl From<OrderedColumn> for PhysicalSortExpr {
-    fn from(value: OrderedColumn) -> Self {
-        PhysicalSortExpr {
-            expr: Arc::new(value.col) as _,
-            options: value.options,
-        }
-    }
-}
-
-impl From<OrderedColumn> for PhysicalSortRequirement {
-    fn from(value: OrderedColumn) -> Self {
-        PhysicalSortRequirement {
-            expr: Arc::new(value.col) as _,
-            options: Some(value.options),
-        }
-    }
-}
+// /// This object represents a [`Column`] with a definite ordering.
+// #[derive(Debug, Hash, PartialEq, Eq, Clone)]
+// pub struct OrderedColumn {
+//     pub col: Column,
+//     pub options: SortOptions,
+// }
+//
+// impl OrderedColumn {
+//     pub fn new(col: Column, options: SortOptions) -> Self {
+//         Self { col, options }
+//     }
+// }
+//
+// impl From<OrderedColumn> for PhysicalSortExpr {
+//     fn from(value: OrderedColumn) -> Self {
+//         PhysicalSortExpr {
+//             expr: Arc::new(value.col) as _,
+//             options: value.options,
+//         }
+//     }
+// }
+//
+// impl From<OrderedColumn> for PhysicalSortRequirement {
+//     fn from(value: OrderedColumn) -> Self {
+//         PhysicalSortRequirement {
+//             expr: Arc::new(value.col) as _,
+//             options: Some(value.options),
+//         }
+//     }
+// }
 
 /// `Vec<OrderedColumn>` stores the lexicographical ordering for a schema.
 /// OrderingEquivalentClass keeps track of different alternative orderings than can
@@ -256,7 +275,7 @@ impl From<OrderedColumn> for PhysicalSortRequirement {
 /// |3|2|1|3|
 /// both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the ordering of the table.
 /// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
-pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
+pub type OrderingEquivalentClass = EquivalentClass<Vec<PhysicalSortExpr>>;
 
 impl OrderingEquivalentClass {
     /// This function extends ordering equivalences with alias information.
@@ -265,15 +284,17 @@ impl OrderingEquivalentClass {
     /// since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
     fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
         for (column, columns) in columns_map {
+            let col_expr = Arc::new(column.clone()) as Arc<dyn PhysicalExpr>;
             let mut to_insert = vec![];
             for ordering in std::iter::once(&self.head).chain(self.others.iter()) {
                 for (idx, item) in ordering.iter().enumerate() {
-                    if item.col.eq(column) {
+                    if item.expr.eq(&col_expr) {
                         for col in columns {
+                            let col_expr = Arc::new(col.clone()) as Arc<dyn PhysicalExpr>;
                             let mut normalized = self.head.clone();
                             // Change the corresponding entry in the head with the alias column:
                             let entry = &mut normalized[idx];
-                            (entry.col, entry.options) = (col.clone(), item.options);
+                            (entry.expr, entry.options) = (col_expr, item.options);
                             to_insert.push(normalized);
                         }
                     }
@@ -359,8 +380,12 @@ pub fn project_ordering_equivalence_properties(
             .iter()
             .filter(|columns| {
                 columns.iter().any(|column| {
-                    let idx = column.col.index();
-                    idx >= fields.len() || fields[idx].name() != column.col.name()
+                    let indices_names = get_column_indices_names(&column.expr);
+                    indices_names.into_iter().any(|(idx, name)| {
+                        idx >= fields.len() || fields[idx].name() != &name
+                    })
+                    // let idx = column.col.index();
+                    // idx >= fields.len() || fields[idx].name() != column.col.name()
                 })
             })
             .cloned()
@@ -381,6 +406,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
 
+    use datafusion_expr::Operator;
     use std::sync::Arc;
 
     #[test]
@@ -489,6 +515,42 @@ mod tests {
         assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &2), Some(2));
         assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &1), Some(0));
         assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &5), None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_from_vec() -> Result<()> {
+        let mut in_data = vec![1, 1, 2, 3, 3];
+        remove_from_vec(&mut in_data, &5);
+        assert_eq!(in_data, vec![1, 1, 2, 3, 3]);
+        remove_from_vec(&mut in_data, &2);
+        assert_eq!(in_data, vec![1, 1, 3, 3]);
+        remove_from_vec(&mut in_data, &2);
+        assert_eq!(in_data, vec![1, 1, 3, 3]);
+        remove_from_vec(&mut in_data, &3);
+        assert_eq!(in_data, vec![1, 1, 3]);
+        remove_from_vec(&mut in_data, &3);
+        assert_eq!(in_data, vec![1, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_indices_names() -> Result<()> {
+        let expr1 = Arc::new(Column::new("col1", 2)) as _;
+        assert_eq!(
+            get_column_indices_names(&expr1),
+            vec![(2, "col1".to_string())]
+        );
+        let expr2 = Arc::new(Column::new("col2", 5)) as _;
+        assert_eq!(
+            get_column_indices_names(&expr2),
+            vec![(5, "col2".to_string())]
+        );
+        let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
+        assert_eq!(
+            get_column_indices_names(&expr3),
+            vec![(2, "col1".to_string()), (5, "col2".to_string())]
+        );
         Ok(())
     }
 }
