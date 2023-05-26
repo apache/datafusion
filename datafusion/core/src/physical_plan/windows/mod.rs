@@ -53,8 +53,8 @@ pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr::{
-    normalize_expr_with_equivalence_properties, OrderedColumn,
-    OrderingEquivalenceProperties, PhysicalSortRequirement,
+    normalize_expr_with_equivalence_properties, OrderingEquivalenceProperties,
+    PhysicalSortRequirement,
 };
 pub use window_agg_exec::WindowAggExec;
 
@@ -269,14 +269,10 @@ pub(crate) fn window_ordering_equivalence(
             item.expr.clone(),
             input.equivalence_properties().classes(),
         );
-        // Currently we only support, ordering equivalences for `Column` expressions.
-        // TODO: Add support for ordering equivalence for all `PhysicalExpr`s
-        if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
-            normalized_out_ordering
-                .push(OrderedColumn::new(column.clone(), item.options));
-        } else {
-            break;
-        }
+        normalized_out_ordering.push(PhysicalSortExpr {
+            expr: normalized,
+            options: item.options,
+        });
     }
     for expr in window_expr {
         if let Some(builtin_window_expr) =
@@ -299,7 +295,10 @@ pub(crate) fn window_ordering_equivalence(
                             descending: false,
                             nulls_first: false,
                         }; // ASC, NULLS LAST
-                        let rhs = OrderedColumn::new(column, options);
+                        let rhs = PhysicalSortExpr {
+                            expr: Arc::new(column) as _,
+                            options,
+                        };
                         result
                             .add_equal_conditions((&normalized_out_ordering, &vec![rhs]));
                     }
