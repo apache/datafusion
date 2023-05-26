@@ -18,20 +18,23 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
-use datafusion_expr::expr_rewriter::{replace_col, strip_outer_reference};
+use datafusion_expr::expr_rewriter::{
+    replace_col, strip_outer_reference, unnormalize_col,
+};
 use datafusion_expr::logical_plan::LogicalPlanBuilder;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
-    Expr, Operator,
+    EmptyRelation, Expr, Operator,
 };
 use log::{debug, trace};
 use std::collections::{BTreeSet, HashMap};
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -346,29 +349,6 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     }
 }
 
-/// Extract join predicates from the correlated subquery's [Filter] expressions.
-/// The join predicate means that the expression references columns
-/// from both the subquery and outer table or only from the outer table.
-///
-/// Returns join predicates and subquery(extracted).
-pub(crate) fn extract_join_filters(
-    maybe_filter: &LogicalPlan,
-) -> Result<(Vec<Expr>, LogicalPlan)> {
-    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
-        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-        let (join_filters, subquery_filters) = find_join_exprs(subquery_filter_exprs)?;
-        // if the subquery still has filter expressions, restore them.
-        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
-        if let Some(expr) = conjunction(subquery_filters) {
-            plan = plan.filter(expr)?
-        }
-
-        Ok((join_filters, plan.build()?))
-    } else {
-        Ok((vec![], maybe_filter.clone()))
-    }
-}
-
 pub(crate) fn collect_subquery_cols(
     exprs: &[Expr],
     subquery_schema: DFSchemaRef,
@@ -407,6 +387,235 @@ pub(crate) fn replace_qualified_name(
 pub fn log_plan(description: &str, plan: &LogicalPlan) {
     debug!("{description}:\n{}\n", plan.display_indent());
     trace!("{description}::\n{}\n", plan.display_indent_schema());
+}
+
+/// This struct rewrite the sub query plan by pull up the correlated expressions(contains outer reference columns) from the inner subquery's [Filter].
+/// It adds the inner reference columns to the [Projection] or [Aggregate] of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
+pub struct PullUpCorrelatedExpr {
+    pub join_filters: Vec<Expr>,
+    // map of the plan and its holding correlated columns
+    pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
+    pub in_predicate_opt: Option<Expr>,
+    // indicate whether it is Exists(Not Exists) SubQuery
+    pub exists_sub_query: bool,
+    // indicate whether the correlated expressions can pull up or not
+    pub can_pull_up: bool,
+}
+
+impl TreeNodeRewriter for PullUpCorrelatedExpr {
+    type N = LogicalPlan;
+
+    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<RewriteRecursion> {
+        match plan {
+            LogicalPlan::Filter(_) => Ok(RewriteRecursion::Continue),
+            LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
+                let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
+                if plan_hold_outer {
+                    // the unsupported case
+                    self.can_pull_up = false;
+                    Ok(RewriteRecursion::Stop)
+                } else {
+                    Ok(RewriteRecursion::Continue)
+                }
+            }
+            LogicalPlan::Limit(_) => {
+                let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
+                match (self.exists_sub_query, plan_hold_outer) {
+                    (false, true) => {
+                        // the unsupported case
+                        self.can_pull_up = false;
+                        Ok(RewriteRecursion::Stop)
+                    }
+                    _ => Ok(RewriteRecursion::Continue),
+                }
+            }
+            _ if plan.expressions().iter().any(|expr| expr.contains_outer()) => {
+                // the unsupported cases, the plan expressions contain out reference columns(like window expressions or agg expressions)
+                self.can_pull_up = false;
+                Ok(RewriteRecursion::Stop)
+            }
+            _ => Ok(RewriteRecursion::Continue),
+        }
+    }
+
+    fn mutate(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        let subquery_schema = plan.schema().clone();
+        match &plan {
+            LogicalPlan::Filter(plan_filter) => {
+                let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
+                let (mut join_filters, subquery_filters) =
+                    find_join_exprs(subquery_filter_exprs)?;
+                if let Some(in_predicate) = &self.in_predicate_opt {
+                    // in_predicate may be already included in the join filters, remove it from the join filters first.
+                    join_filters = remove_duplicated_filter(join_filters, in_predicate);
+                }
+                let correlated_subquery_cols =
+                    collect_subquery_cols(&join_filters, subquery_schema)?;
+                for expr in join_filters {
+                    if !self.join_filters.contains(&expr) {
+                        self.join_filters.push(expr)
+                    }
+                }
+                // if the subquery still has filter expressions, restore them.
+                let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
+                if let Some(expr) = conjunction(subquery_filters) {
+                    plan = plan.filter(expr)?
+                }
+                let new_plan = plan.build()?;
+                self.correlated_subquery_cols_map
+                    .insert(new_plan.clone(), correlated_subquery_cols);
+                Ok(new_plan)
+            }
+            LogicalPlan::Projection(projection)
+                if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
+            {
+                let mut local_correlated_cols = BTreeSet::new();
+                collect_local_correlated_cols(
+                    &plan,
+                    &self.correlated_subquery_cols_map,
+                    &mut local_correlated_cols,
+                );
+                // add missing columns to Projection
+                let missing_exprs =
+                    self.collect_missing_exprs(&projection.expr, &local_correlated_cols)?;
+                let new_plan = LogicalPlanBuilder::from((*projection.input).clone())
+                    .project(missing_exprs)?
+                    .build()?;
+                Ok(new_plan)
+            }
+            LogicalPlan::Aggregate(aggregate)
+                if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
+            {
+                let mut local_correlated_cols = BTreeSet::new();
+                collect_local_correlated_cols(
+                    &plan,
+                    &self.correlated_subquery_cols_map,
+                    &mut local_correlated_cols,
+                );
+                // add missing columns to Aggregation's group expression
+                let missing_exprs = self.collect_missing_exprs(
+                    &aggregate.group_expr,
+                    &local_correlated_cols,
+                )?;
+                let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
+                    .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
+                    .build()?;
+                Ok(new_plan)
+            }
+            LogicalPlan::SubqueryAlias(alias) => {
+                let mut local_correlated_cols = BTreeSet::new();
+                collect_local_correlated_cols(
+                    &plan,
+                    &self.correlated_subquery_cols_map,
+                    &mut local_correlated_cols,
+                );
+                let mut new_correlated_cols = BTreeSet::new();
+                for col in local_correlated_cols.iter() {
+                    new_correlated_cols
+                        .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
+                }
+                self.correlated_subquery_cols_map
+                    .insert(plan.clone(), new_correlated_cols);
+                Ok(plan)
+            }
+            LogicalPlan::Limit(limit) => {
+                // handling the limit clause in the subquery
+                match (self.exists_sub_query, self.join_filters.is_empty()) {
+                    // un-correlated exist subquery, keep the limit
+                    (true, true) => Ok(plan),
+                    // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
+                    (true, false) => {
+                        if limit.fetch.filter(|limit_row| *limit_row == 0).is_some() {
+                            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                                produce_one_row: false,
+                                schema: limit.input.schema().clone(),
+                            }))
+                        } else {
+                            LogicalPlanBuilder::from((*limit.input).clone()).build()
+                        }
+                    }
+                    _ => Ok(plan),
+                }
+            }
+            _ => Ok(plan),
+        }
+    }
+}
+
+impl PullUpCorrelatedExpr {
+    fn collect_missing_exprs(
+        &self,
+        exprs: &[Expr],
+        correlated_subquery_cols: &BTreeSet<Column>,
+    ) -> Result<Vec<Expr>> {
+        let mut missing_exprs = vec![];
+        if let Some(Expr::BinaryExpr(BinaryExpr {
+            left: _,
+            op: Operator::Eq,
+            right,
+        })) = &self.in_predicate_opt
+        {
+            if !matches!(right.deref(), Expr::Column(_))
+                && !matches!(right.deref(), Expr::Literal(_))
+                && !matches!(right.deref(), Expr::Alias(_, _))
+            {
+                let alias_expr = right
+                    .deref()
+                    .clone()
+                    .alias(format!("{:?}", unnormalize_col(right.deref().clone())));
+                missing_exprs.push(alias_expr)
+            }
+        }
+        for expr in exprs {
+            if !missing_exprs.contains(expr) {
+                missing_exprs.push(expr.clone())
+            }
+        }
+        for col in correlated_subquery_cols.iter() {
+            let col_expr = Expr::Column(col.clone());
+            if !missing_exprs.contains(&col_expr) {
+                missing_exprs.push(col_expr)
+            }
+        }
+        Ok(missing_exprs)
+    }
+}
+
+fn collect_local_correlated_cols(
+    plan: &LogicalPlan,
+    all_cols_map: &HashMap<LogicalPlan, BTreeSet<Column>>,
+    local_cols: &mut BTreeSet<Column>,
+) {
+    for child in plan.inputs() {
+        if let Some(cols) = all_cols_map.get(child) {
+            local_cols.extend(cols.clone());
+        }
+        // SubqueryAlias is treated as the leaf node
+        if !matches!(child, LogicalPlan::SubqueryAlias(_)) {
+            collect_local_correlated_cols(child, all_cols_map, local_cols);
+        }
+    }
+}
+
+fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: &Expr) -> Vec<Expr> {
+    filters
+        .into_iter()
+        .filter(|filter| {
+            if filter == in_predicate {
+                return false;
+            }
+
+            // ignore the binary order
+            !match (filter, in_predicate) {
+                (Expr::BinaryExpr(a_expr), Expr::BinaryExpr(b_expr)) => {
+                    (a_expr.op == b_expr.op)
+                        && (a_expr.left == b_expr.left && a_expr.right == b_expr.right)
+                        || (a_expr.left == b_expr.right && a_expr.right == b_expr.left)
+                }
+                _ => false,
+            }
+        })
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]

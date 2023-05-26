@@ -52,16 +52,16 @@ where c_acctbal < (
     let actual = format!("{}", plan.display_indent());
     let expected =  "Sort: customer.c_custkey ASC NULLS LAST\
     \n  Projection: customer.c_custkey\
-    \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.__value\
+    \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.SUM(orders.o_totalprice)\
     \n      TableScan: customer projection=[c_custkey, c_acctbal]\
     \n      SubqueryAlias: __scalar_sq_1\
-    \n        Projection: orders.o_custkey, SUM(orders.o_totalprice) AS __value\
+    \n        Projection: SUM(orders.o_totalprice), orders.o_custkey\
     \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]\
     \n            Projection: orders.o_custkey, orders.o_totalprice\
-    \n              Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.__value\
+    \n              Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price\
     \n                TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]\
     \n                SubqueryAlias: __scalar_sq_2\
-    \n                  Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice) AS price AS __value\
+    \n                  Projection: SUM(lineitem.l_extendedprice) AS price, lineitem.l_orderkey\
     \n                    Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]\
     \n                      TableScan: lineitem projection=[l_orderkey, l_extendedprice]";
     assert_eq!(actual, expected);
@@ -337,13 +337,12 @@ async fn non_aggregated_correlated_scalar_subquery_with_single_row() -> Result<(
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: t1.t1_id, (<subquery>) AS t2_int [t1_id:UInt32;N, t2_int:Int64]",
-        "  Subquery: [a:Int64]",
-        "    Projection: a [a:Int64]",
-        "      Filter: a = CAST(outer_ref(t1.t1_int) AS Int64) [a:Int64]",
-        "        Projection: Int64(1) AS a [a:Int64]",
-        "          EmptyRelation []",
-        "  TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "Projection: t1.t1_id, __scalar_sq_5.a AS t2_int [t1_id:UInt32;N, t2_int:Int64;N]",
+        "  Left Join: CAST(t1.t1_int AS Int64) = __scalar_sq_5.a [t1_id:UInt32;N, t1_int:UInt32;N, a:Int64;N]",
+        "    TableScan: t1 projection=[t1_id, t1_int] [t1_id:UInt32;N, t1_int:UInt32;N]",
+        "    SubqueryAlias: __scalar_sq_5 [a:Int64]",
+        "      Projection: Int64(1) AS a [a:Int64]",
+        "        EmptyRelation []",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -351,6 +350,21 @@ async fn non_aggregated_correlated_scalar_subquery_with_single_row() -> Result<(
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
+
+    // TODO infer nullability in the schema has bug
+    // // assert data
+    // let results = execute_to_batches(&ctx, sql).await;
+    // let expected = vec![
+    //     "+-------+--------+",
+    //     "| t1_id | t2_int |",
+    //     "+-------+--------+",
+    //     "| 22    |        |",
+    //     "| 33    |        |",
+    //     "| 11    | 1      |",
+    //     "| 44    |        |",
+    //     "+-------+--------+",
+    // ];
+    // assert_batches_eq!(expected, &results);
 
     Ok(())
 }
@@ -382,11 +396,11 @@ async fn aggregated_correlated_scalar_subquery() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: t1.t1_id, __scalar_sq_1.__value AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
-        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, __value:UInt64;N]",
+        "Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int) AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
+        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
         "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
-        "    SubqueryAlias: __scalar_sq_1 [t2_id:UInt32;N, __value:UInt64;N]",
-        "      Projection: t2.t2_id, SUM(t2.t2_int) AS __value [t2_id:UInt32;N, __value:UInt64;N]",
+        "    SubqueryAlias: __scalar_sq_1 [SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
+        "      Projection: SUM(t2.t2_int), t2.t2_id [SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
         "        Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, SUM(t2.t2_int):UInt64;N]",
         "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
     ];
@@ -396,6 +410,105 @@ async fn aggregated_correlated_scalar_subquery() -> Result<()> {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+--------+",
+        "| t1_id | t2_sum |",
+        "+-------+--------+",
+        "| 11    | 3      |",
+        "| 22    | 1      |",
+        "| 44    | 3      |",
+        "| 33    |        |",
+        "+-------+--------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregated_correlated_scalar_subquery_with_having() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    let expected = vec![
+        "Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int) AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
+        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "    SubqueryAlias: __scalar_sq_1 [SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
+        "      Projection: SUM(t2.t2_int), t2.t2_id [SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
+        "        Filter: SUM(t2.t2_int) < UInt64(3) [t2_id:UInt32;N, SUM(t2.t2_int):UInt64;N]",
+        "          Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, SUM(t2.t2_int):UInt64;N]",
+        "            TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+--------+",
+        "| t1_id | t2_sum |",
+        "+-------+--------+",
+        "| 22    | 1      |",
+        "| 11    |        |",
+        "| 33    |        |",
+        "| 44    |        |",
+        "+-------+--------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregated_correlated_scalar_subquery_with_cast() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, (SELECT sum(t2_int * 1.0) + 1 FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    let expected = vec![
+        "Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int * Float64(1)) + Int64(1) AS t2_sum [t1_id:UInt32;N, t2_sum:Float64;N]",
+        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, SUM(t2.t2_int * Float64(1)) + Int64(1):Float64;N, t2_id:UInt32;N]",
+        "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "    SubqueryAlias: __scalar_sq_1 [SUM(t2.t2_int * Float64(1)) + Int64(1):Float64;N, t2_id:UInt32;N]",
+        "      Projection: SUM(t2.t2_int * Float64(1)) + Float64(1) AS SUM(t2.t2_int * Float64(1)) + Int64(1), t2.t2_id [SUM(t2.t2_int * Float64(1)) + Int64(1):Float64;N, t2_id:UInt32;N]",
+        "        Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(CAST(t2.t2_int AS Float64)) AS SUM(t2.t2_int * Float64(1))]] [t2_id:UInt32;N, SUM(t2.t2_int * Float64(1)):Float64;N]",
+        "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+--------+",
+        "| t1_id | t2_sum |",
+        "+-------+--------+",
+        "| 11    | 4.0    |",
+        "| 22    | 2.0    |",
+        "| 44    | 4.0    |",
+        "| 33    |        |",
+        "+-------+--------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
@@ -429,12 +542,12 @@ async fn aggregated_correlated_scalar_subquery_with_extra_group_by_constant() ->
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: t1.t1_id, __scalar_sq_1.__value AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
-        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, __value:UInt64;N]",
+        "Projection: t1.t1_id, __scalar_sq_1.SUM(t2.t2_int) AS t2_sum [t1_id:UInt32;N, t2_sum:UInt64;N]",
+        "  Left Join: t1.t1_id = __scalar_sq_1.t2_id [t1_id:UInt32;N, SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
         "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
-        "    SubqueryAlias: __scalar_sq_1 [t2_id:UInt32;N, __value:UInt64;N]",
-        "      Projection: t2.t2_id, SUM(t2.t2_int) AS __value [t2_id:UInt32;N, __value:UInt64;N]",
-        "        Aggregate: groupBy=[[t2.t2_id]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, SUM(t2.t2_int):UInt64;N]",
+        "    SubqueryAlias: __scalar_sq_1 [SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
+        "      Projection: SUM(t2.t2_int), t2.t2_id [SUM(t2.t2_int):UInt64;N, t2_id:UInt32;N]",
+        "        Aggregate: groupBy=[[t2.t2_id, Utf8(\"a\")]], aggr=[[SUM(t2.t2_int)]] [t2_id:UInt32;N, Utf8(\"a\"):Utf8, SUM(t2.t2_int):UInt64;N]",
         "          TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
@@ -443,6 +556,20 @@ async fn aggregated_correlated_scalar_subquery_with_extra_group_by_constant() ->
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+--------+",
+        "| t1_id | t2_sum |",
+        "+-------+--------+",
+        "| 11    | 3      |",
+        "| 22    | 1      |",
+        "| 44    | 3      |",
+        "| 33    |        |",
+        "+-------+--------+",
+    ];
+    assert_batches_eq!(expected, &results);
 
     Ok(())
 }
@@ -549,7 +676,7 @@ async fn support_join_correlated_columns() -> Result<()> {
 }
 
 #[tokio::test]
-async fn support_join_correlated_columns2() -> Result<()> {
+async fn subquery_contains_join_contains_correlated_columns() -> Result<()> {
     let ctx = create_sub_query_join_context("t0_id", "t1_id", "t2_id", true)?;
     let sql = "SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as t2 ON(t1.t1_id = t2.t2_id ))";
     let msg = format!("Creating logical plan for '{sql}'");
@@ -557,16 +684,44 @@ async fn support_join_correlated_columns2() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Filter: EXISTS (<subquery>) [t0_id:UInt32;N, t0_name:Utf8;N]",
-        "  Subquery: [Int64(1):Int64]",
-        "    Projection: Int64(1) [Int64(1):Int64]",
-        "      Inner Join:  Filter: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        TableScan: t1 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        SubqueryAlias: t2 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "          Projection: t2.t2_id, t2.t2_name, t2.t2_int [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "            Filter: t2.t2_name = outer_ref(t0.t0_name) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "              TableScan: t2 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "LeftSemi Join: t0.t0_name = __correlated_sq_1.t2_name [t0_id:UInt32;N, t0_name:Utf8;N]",
         "  TableScan: t0 projection=[t0_id, t0_name] [t0_id:UInt32;N, t0_name:Utf8;N]",
+        "  SubqueryAlias: __correlated_sq_1 [t2_name:Utf8;N]",
+        "    Projection: t2.t2_name [t2_name:Utf8;N]",
+        "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N]",
+        "        TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "        SubqueryAlias: t2 [t2_id:UInt32;N, t2_name:Utf8;N]",
+        "          TableScan: t2 projection=[t2_id, t2_name] [t2_id:UInt32;N, t2_name:Utf8;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn subquery_contains_join_contains_sub_query_alias_correlated_columns() -> Result<()>
+{
+    let ctx = create_sub_query_join_context("t0_id", "t1_id", "t2_id", true)?;
+    let sql = "SELECT t0_id, t0_name FROM t0 WHERE EXISTS (select 1 from (SELECT * FROM t1 where t1.t1_id = t0.t0_id) as x INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as y ON(x.t1_id = y.t2_id))";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    let expected = vec![
+        "LeftSemi Join: t0.t0_id = __correlated_sq_1.t1_id, t0.t0_name = __correlated_sq_1.t2_name [t0_id:UInt32;N, t0_name:Utf8;N]",
+        "  TableScan: t0 projection=[t0_id, t0_name] [t0_id:UInt32;N, t0_name:Utf8;N]",
+        "  SubqueryAlias: __correlated_sq_1 [t1_id:UInt32;N, t2_name:Utf8;N]",
+        "    Projection: x.t1_id, y.t2_name [t1_id:UInt32;N, t2_name:Utf8;N]",
+        "      Inner Join: x.t1_id = y.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N]",
+        "        SubqueryAlias: x [t1_id:UInt32;N]",
+        "          TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "        SubqueryAlias: y [t2_id:UInt32;N, t2_name:Utf8;N]",
+        "          TableScan: t2 projection=[t2_id, t2_name] [t2_id:UInt32;N, t2_name:Utf8;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -606,10 +761,35 @@ async fn support_order_by_correlated_columns() -> Result<()> {
     Ok(())
 }
 
-// TODO: issue https://github.com/apache/arrow-datafusion/issues/6263
-#[ignore]
 #[tokio::test]
-async fn support_limit_subquery() -> Result<()> {
+async fn exists_subquery_with_select_null() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT NULL)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    // decorrelated, limit is removed
+    let expected = vec![
+        "Filter: EXISTS (<subquery>) [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  Subquery: [NULL:Null;N]",
+        "    Projection: NULL [NULL:Null;N]",
+        "      EmptyRelation []",
+        "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exists_subquery_with_limit() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
     let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1)";
@@ -617,12 +797,121 @@ async fn support_limit_subquery() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
 
+    // de-correlated, limit is removed
     let expected = vec![
-        "Filter: EXISTS (<subquery>) [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "  Subquery: [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Limit: skip=0, fetch=1 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Projection: t2.t2_id, t2.t2_name, t2.t2_int [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "        Filter: t2.t2_id = outer_ref(t1.t1_id) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+        "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+",
+        "| t1_id | t1_name |",
+        "+-------+---------+",
+        "| 11    | a       |",
+        "| 22    | b       |",
+        "| 44    | d       |",
+        "+-------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exists_subquery_with_limit0() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    // de-correlated, limit is removed and replaced with EmptyRelation
+    let expected = vec![
+        "LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  EmptyRelation [t2_id:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn not_exists_subquery_with_limit0() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    // de-correlated, limit is removed and replaced with EmptyRelation
+    let expected = vec![
+        "LeftAnti Join: t1.t1_id = __correlated_sq_1.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  EmptyRelation [t2_id:UInt32;N]",
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    // assert data
+    let results = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+---------+",
+        "| t1_id | t1_name |",
+        "+-------+---------+",
+        "| 11    | a       |",
+        "| 22    | b       |",
+        "| 33    | c       |",
+        "| 44    | d       |",
+        "+-------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_correlated_subquery_with_limit() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 where t1_name = t2_name limit 10)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+
+    // not de-correlated
+    let expected = vec![
+        "Filter: t1.t1_id IN (<subquery>) [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  Subquery: [t2_id:UInt32;N]",
+        "    Limit: skip=0, fetch=10 [t2_id:UInt32;N]",
+        "      Projection: t2.t2_id [t2_id:UInt32;N]",
+        "        Filter: outer_ref(t1.t1_name) = t2.t2_name [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "          TableScan: t2 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
     ];
@@ -633,19 +922,26 @@ async fn support_limit_subquery() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 where t1_name = t2_name limit 10)";
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_non_correlated_subquery_with_limit() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
+
+    let sql =
+        "SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 limit 10)";
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
 
+    // de-correlated, limit is kept
     let expected = vec![
-        "Filter: t1.t1_id IN (<subquery>) [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "  Subquery: [t2_id:UInt32;N]",
-        "    Limit: skip=0, fetch=10 [t2_id:UInt32;N]",
-        "      Projection: t2.t2_id [t2_id:UInt32;N]",
-        "        Filter: outer_ref(t1.t1_name) = t2.t2_name [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "          TableScan: t2 [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
         "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "  SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
+        "    Limit: skip=0, fetch=10 [t2_id:UInt32;N]",
+        "      TableScan: t2 projection=[t2_id], fetch=10 [t2_id:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -702,11 +998,10 @@ async fn simple_uncorrelated_scalar_subquery() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: __scalar_sq_1.__value AS b [b:Int64;N]",
-        "  SubqueryAlias: __scalar_sq_1 [__value:Int64;N]",
-        "    Projection: COUNT(UInt8(1)) AS __value [__value:Int64;N]",
-        "      Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]] [COUNT(UInt8(1)):Int64;N]",
-        "        TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "Projection: __scalar_sq_1.COUNT(UInt8(1)) AS b [b:Int64;N]",
+        "  SubqueryAlias: __scalar_sq_1 [COUNT(UInt8(1)):Int64;N]",
+        "    Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]] [COUNT(UInt8(1)):Int64;N]",
+        "      TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -734,16 +1029,14 @@ async fn simple_uncorrelated_scalar_subquery2() -> Result<()> {
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: __scalar_sq_1.__value AS b, __scalar_sq_2.__value AS c [b:Int64;N, c:Int64;N]",
-        "  CrossJoin: [__value:Int64;N, __value:Int64;N]",
-        "    SubqueryAlias: __scalar_sq_1 [__value:Int64;N]",
-        "      Projection: COUNT(UInt8(1)) AS __value [__value:Int64;N]",
-        "        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]] [COUNT(UInt8(1)):Int64;N]",
-        "          TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
-        "    SubqueryAlias: __scalar_sq_2 [__value:Int64;N]",
-        "      Projection: COUNT(Int64(1)) AS __value [__value:Int64;N]",
-        "        Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]] [COUNT(Int64(1)):Int64;N]",
-        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "Projection: __scalar_sq_1.COUNT(UInt8(1)) AS b, __scalar_sq_2.COUNT(Int64(1)) AS c [b:Int64;N, c:Int64;N]",
+        "  CrossJoin: [COUNT(UInt8(1)):Int64;N, COUNT(Int64(1)):Int64;N]",
+        "    SubqueryAlias: __scalar_sq_1 [COUNT(UInt8(1)):Int64;N]",
+        "      Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]] [COUNT(UInt8(1)):Int64;N]",
+        "        TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
+        "    SubqueryAlias: __scalar_sq_2 [COUNT(Int64(1)):Int64;N]",
+        "      Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]] [COUNT(Int64(1)):Int64;N]",
+        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();

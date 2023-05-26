@@ -100,6 +100,16 @@ pub fn check_subquery_expr(
         }
         check_correlations_in_subquery(inner_plan, true)
     } else {
+        if let Expr::InSubquery(subquery) = expr {
+            // InSubquery should only return one column
+            if subquery.subquery.subquery.schema().fields().len() > 1 {
+                return Err(datafusion_common::DataFusionError::Plan(format!(
+                    "InSubquery should only return one column, but found {}: {}",
+                    subquery.subquery.subquery.schema().fields().len(),
+                    subquery.subquery.subquery.schema().field_names().join(", "),
+                )));
+            }
+        }
         match outer_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
