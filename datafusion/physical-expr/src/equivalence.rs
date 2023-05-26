@@ -102,6 +102,7 @@ impl<T: PartialEq + Clone> EquivalenceProperties<T> {
     }
 }
 
+/// Remove duplicates inside the `in_data` vector, returned vector would consist of unique entries
 fn deduplicate_vector<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
     let mut result = vec![];
     for elem in in_data {
@@ -163,7 +164,7 @@ fn get_column_infos(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-pub type OrderingEquivalenceProperties = EquivalenceProperties<Vec<PhysicalSortExpr>>;
+pub type OrderingEquivalenceProperties = EquivalenceProperties<LexOrdering>;
 
 /// EquivalentClass is a set of [`Column`]s or [`PhysicalSortExpr`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -235,7 +236,10 @@ impl<T: PartialEq + Clone> EquivalentClass<T> {
     }
 }
 
-/// `Vec<PhysicalSortExpr>` stores the lexicographical ordering for a schema.
+// `LexOrdering` is type alias for lexicographical ordering definition `Vec<PhysicalSortExpr>`
+type LexOrdering = Vec<PhysicalSortExpr>;
+
+/// `LexOrdering` stores the lexicographical ordering for a schema.
 /// OrderingEquivalentClass keeps track of different alternative orderings than can
 /// describe the schema.
 /// For instance, for the table below
@@ -246,7 +250,7 @@ impl<T: PartialEq + Clone> EquivalentClass<T> {
 /// |3|2|1|3|
 /// both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the ordering of the table.
 /// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
-pub type OrderingEquivalentClass = EquivalentClass<Vec<PhysicalSortExpr>>;
+pub type OrderingEquivalentClass = EquivalentClass<LexOrdering>;
 
 impl OrderingEquivalentClass {
     /// This function extends ordering equivalences with alias information.
@@ -361,8 +365,8 @@ pub fn project_ordering_equivalence_properties(
             })
             .cloned()
             .collect::<Vec<_>>();
-        for column in sort_exprs_to_remove {
-            class.remove(&column);
+        for sort_exprs in sort_exprs_to_remove {
+            class.remove(&sort_exprs);
         }
     }
     eq_classes.retain(|props| props.len() > 1);
