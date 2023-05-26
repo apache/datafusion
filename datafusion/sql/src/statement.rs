@@ -593,10 +593,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut all_results = vec![];
         for expr in order_exprs {
             // Convert each OrderByExpr to a SortExpr:
-            let expr_vec = expr
-                .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-                .collect::<Result<Vec<_>>>()?;
+            let expr_vec = self.order_by_to_sort_expr(&expr, schema, planner_context)?;
             // Verify that columns of all SortExprs exist in the schema:
             for expr in expr_vec.iter() {
                 for column in expr.to_columns()?.iter() {

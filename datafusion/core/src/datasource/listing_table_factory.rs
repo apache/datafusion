@@ -137,7 +137,6 @@ impl TableProviderFactory for ListingTableFactory {
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_infinite_source(infinite_source)
-            .with_infinite_source(infinite_source)
             .with_file_sort_order(cmd.order_exprs.clone());
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
