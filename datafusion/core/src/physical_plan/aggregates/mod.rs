@@ -58,6 +58,12 @@ pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 use datafusion_physical_expr::utils::ordering_satisfy_requirement;
 
+/// Type alias for the lexicographical ordering requirement.
+type LexOrderingReq = Vec<PhysicalSortRequirement>;
+
+/// Type alias for the lexicographical ordering.
+type LexOrdering = Vec<PhysicalSortExpr>;
+
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
@@ -216,7 +222,7 @@ pub(crate) struct AggregationOrdering {
     /// expressions match input ordering.
     order_indices: Vec<usize>,
     /// Actual ordering information of the GROUP BY columns.
-    ordering: Vec<PhysicalSortExpr>,
+    ordering: LexOrdering,
 }
 
 /// Hash aggregate execution plan
@@ -231,7 +237,7 @@ pub struct AggregateExec {
     /// FILTER (WHERE clause) expression for each aggregate expression
     pub(crate) filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// (ORDER BY clause) expression for each aggregate expression
-    pub(crate) order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
+    pub(crate) order_by_expr: Vec<Option<LexOrdering>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -247,7 +253,7 @@ pub struct AggregateExec {
     metrics: ExecutionPlanMetricsSet,
     /// Stores mode and output ordering information for the `AggregateExec`.
     aggregation_ordering: Option<AggregationOrdering>,
-    required_input_ordering: Option<Vec<PhysicalSortRequirement>>,
+    required_input_ordering: Option<LexOrderingReq>,
 }
 
 /// Calculates the working mode for `GROUP BY` queries.
@@ -348,8 +354,8 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
 // we could generate two alternative requirements that have opposite directions.
 fn get_init_req(
     aggr_expr: &[Arc<dyn AggregateExpr>],
-    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
-) -> Option<Vec<PhysicalSortExpr>> {
+    order_by_expr: &[Option<LexOrdering>],
+) -> Option<LexOrdering> {
     for (aggr_expr, fn_reqs) in aggr_expr.iter().zip(order_by_expr.iter()) {
         // Aggregate function is ordering sensitive, aggregate function cannot be reversed, and there is an ordering requirement
         if is_order_sensitive(aggr_expr)
@@ -392,10 +398,10 @@ fn get_finest_requirement<
     F2: Fn() -> OrderingEquivalenceProperties,
 >(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
-    order_by_expr: &[Option<Vec<PhysicalSortExpr>>],
+    order_by_expr: &[Option<LexOrdering>],
     eq_properties: F,
     ordering_eq_properties: F2,
-) -> Result<Option<Vec<PhysicalSortExpr>>> {
+) -> Result<Option<LexOrdering>> {
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
     for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter()) {
         let fn_req = if let Some(fn_req) = fn_req {
@@ -413,7 +419,7 @@ fn get_finest_requirement<
                 *finest_req = finer.to_vec();
                 continue;
             }
-            // If an aggregate function is reversible analyze its reverse direction whether it is compatible
+            // If an aggregate function is reversible, analyze whether its reverse direction is compatible
             // with existing requirements
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_req_reverse = reverse_order_bys(fn_req);
@@ -423,6 +429,8 @@ fn get_finest_requirement<
                     &eq_properties,
                     &ordering_eq_properties,
                 ) {
+                    // We need to update `aggr_expr` with its reverse, because only its reverse requirement
+                    // is compatible with existing requirements
                     *aggr_expr = reverse;
                     *finest_req = finer.to_vec();
                     continue;
@@ -451,12 +459,14 @@ fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
         || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
+/// Calculate required input ordering for the `AggregateExec` by considering requirement of order-sensitive
+/// aggregate functions.
 fn calc_required_input_ordering(
     input: &Arc<dyn ExecutionPlan>,
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
-    aggregator_requirements: Vec<Option<Vec<PhysicalSortRequirement>>>,
+    aggregator_requirements: Vec<Option<LexOrderingReq>>,
     aggregation_ordering: &Option<AggregationOrdering>,
-) -> Result<Option<Vec<PhysicalSortRequirement>>> {
+) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = None;
     for (idx, aggregator_requirement) in aggregator_requirements.into_iter().enumerate() {
         if let Some(AggregationOrdering {
@@ -499,6 +509,9 @@ fn calc_required_input_ordering(
             || input.equivalence_properties(),
             || input.ordering_equivalence_properties(),
         ) {
+            // idx == 1, corresponds to case where reverse ordering requirement is met.
+            // If existing ordering satisfies the reverse requirement, we should reverse
+            // each `aggr_expr` to be able to correctly calculate their result in reverse order.
             if idx == 1 {
                 aggr_expr
                     .iter_mut()
@@ -529,7 +542,7 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        mut order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
+        mut order_by_expr: Vec<Option<LexOrdering>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -570,6 +583,8 @@ impl AggregateExec {
                 .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
             aggregator_requirements.push(aggregator_requirement);
             // If all aggregate expressions are reversible, consider reverse requirement also.
+            // The reason is that existing ordering may satisfy naive requirement or reverse requirement.
+            // By considering all possible cases, we can generate better plans.
             if aggr_expr
                 .iter()
                 .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
@@ -644,7 +659,7 @@ impl AggregateExec {
     }
 
     /// ORDER BY clause expression for each aggregate expression
-    pub fn order_by_expr(&self) -> &[Option<Vec<PhysicalSortExpr>>] {
+    pub fn order_by_expr(&self) -> &[Option<LexOrdering>] {
         &self.order_by_expr
     }
 
@@ -787,7 +802,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+    fn required_input_ordering(&self) -> Vec<Option<LexOrderingReq>> {
         vec![self.required_input_ordering.clone()]
     }
 
