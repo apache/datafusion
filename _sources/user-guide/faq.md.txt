@@ -40,7 +40,7 @@ When compared to similar systems, DataFusion typically is:
 4. Implemented in `Rust`, rather than `C/C++`
 
 Here is a comparison with similar projects that may help understand
-when DataFusion might be be suitable and unsuitable for your needs:
+when DataFusion might be suitable or unsuitable for your needs:
 
 - [DuckDB](https://www.duckdb.org) is an open source, in process analytic database.
   Like DataFusion, it supports very fast execution, both from its custom file format
