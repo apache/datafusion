@@ -262,7 +262,22 @@ pub(crate) fn window_ordering_equivalence(
             .iter()
             .cloned(),
     );
-    let out_ordering = input.output_ordering().unwrap_or(&[]);
+    let mut normalized_out_ordering = vec![];
+    for item in input.output_ordering().unwrap_or(&[]) {
+        // To account for ordering equivalences, first normalize the expression:
+        let normalized = normalize_expr_with_equivalence_properties(
+            item.expr.clone(),
+            input.equivalence_properties().classes(),
+        );
+        // Currently we only support, ordering equivalences for `Column` expressions.
+        // TODO: Add support for ordering equivalence for all `PhysicalExpr`s
+        if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
+            normalized_out_ordering
+                .push(OrderedColumn::new(column.clone(), item.options));
+        } else {
+            break;
+        }
+    }
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
@@ -275,28 +290,18 @@ pub(crate) fn window_ordering_equivalence(
                 .is::<RowNumber>()
             {
                 // If there is an existing ordering, add new ordering as an equivalence:
-                if let Some(first) = out_ordering.first() {
-                    // Normalize expression, as we search for ordering equivalences
-                    // on normalized versions:
-                    let normalized = normalize_expr_with_equivalence_properties(
-                        first.expr.clone(),
-                        input.equivalence_properties().classes(),
-                    );
-                    if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
-                        let column_info =
-                            schema.column_with_name(expr.field().unwrap().name());
-                        if let Some((idx, field)) = column_info {
-                            let lhs = OrderedColumn::new(column.clone(), first.options);
-                            let options = SortOptions {
-                                descending: false,
-                                nulls_first: false,
-                            }; // ASC, NULLS LAST
-                            let rhs = OrderedColumn::new(
-                                Column::new(field.name(), idx),
-                                options,
-                            );
-                            result.add_equal_conditions((&lhs, &rhs));
-                        }
+                if !normalized_out_ordering.is_empty() {
+                    if let Some((idx, field)) =
+                        schema.column_with_name(expr.field().unwrap().name())
+                    {
+                        let column = Column::new(field.name(), idx);
+                        let options = SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        }; // ASC, NULLS LAST
+                        let rhs = OrderedColumn::new(column, options);
+                        result
+                            .add_equal_conditions((&normalized_out_ordering, &vec![rhs]));
                     }
                 }
             }

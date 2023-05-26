@@ -209,7 +209,7 @@ array_agg(expression [ORDER BY expression])
 
 ### `first_value`
 
-Returns the first entry in aggregation group. If ordering requirement is given, returns the first element of the ordered group.
+Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
 
 ```
 first_value(expression [ORDER BY expression])
@@ -222,7 +222,7 @@ first_value(expression [ORDER BY expression])
 
 ### `last_value`
 
-Returns the last entry in aggregation group. If ordering requirement is given, returns the last element of the ordered group.
+Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
 
 ```
 last_value(expression [ORDER BY expression])

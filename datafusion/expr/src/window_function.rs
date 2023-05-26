@@ -43,9 +43,11 @@ pub enum WindowFunction {
 /// Find DataFusion's built-in window function by name.
 pub fn find_df_window_func(name: &str) -> Option<WindowFunction> {
     let name = name.to_lowercase();
-    // We first search for window functions (They may have specialized implementations for windows with same name)
-    // Since the requirements for aggregators and window functions may be quite different, the same function may have different
-    // implementation. If function is not found among specialized window functions search them among AggregateFunctions.
+    // Code paths for window functions leveraging ordinary aggregators and
+    // built-in window functions are quite different, and the same function
+    // may have different implementations for these cases. If the sought
+    // function is not found among built-in window functions, we search for
+    // it among aggregate functions.
     if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name.as_str()) {
         Some(WindowFunction::BuiltInWindowFunction(built_in_function))
     } else if let Ok(aggregate) = AggregateFunction::from_str(name.as_str()) {

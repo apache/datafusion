@@ -143,11 +143,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(plan);
         }
 
-        let order_by_rex = order_by
-            .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, plan.schema(), planner_context))
-            .collect::<Result<Vec<_>>>()?;
-
+        let order_by_rex =
+            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
         LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
     }
 }

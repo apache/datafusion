@@ -352,7 +352,7 @@ fn get_init_req(
 ) -> Option<Vec<PhysicalSortExpr>> {
     for (aggr_expr, fn_reqs) in aggr_expr.iter().zip(order_by_expr.iter()) {
         // Aggregate function is ordering sensitive, aggregate function cannot be reversed, and there is an ordering requirement
-        if is_ordering_sensitive(aggr_expr)
+        if is_order_sensitive(aggr_expr)
             && aggr_expr.reverse_expr().is_none()
             && fn_reqs.is_some()
         {
@@ -440,11 +440,11 @@ fn get_finest_requirement<
     Ok(result)
 }
 
-// Check whether aggregate function is ordering sensitive
-// Ordering sensitive means that, the order data is fed to the aggregator, affects the result of aggregator.
-// For instance, `SUM` aggregator doesn't depend on the order of the inputs as long as same set of values is used during computation,
-// However, `FirstAgg` depends on the order (if order changes, first value in the list would change).
-fn is_ordering_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
+/// Checks whether the given aggregate expression is order-sensitive.
+/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
+/// However, a `FirstAgg` depends on the input ordering (if the order changes,
+/// the first value in the list would change).
+fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<FirstValue>()
         || aggr_expr.as_any().is::<LastValue>()
         || aggr_expr.as_any().is::<ArrayAgg>()
@@ -502,7 +502,7 @@ fn calc_required_input_ordering(
                 aggr_expr
                     .iter_mut()
                     .map(|elem| {
-                        if is_ordering_sensitive(elem) {
+                        if is_order_sensitive(elem) {
                             if let Some(reverse) = elem.reverse_expr() {
                                 *elem = reverse;
                             } else {
@@ -551,7 +551,7 @@ impl AggregateExec {
                 .zip(order_by_expr.into_iter())
                 .map(|(aggr_expr, fn_reqs)| {
                     // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
-                    if is_ordering_sensitive(aggr_expr) {
+                    if is_order_sensitive(aggr_expr) {
                         fn_reqs
                     } else {
                         None
@@ -571,7 +571,7 @@ impl AggregateExec {
             // If all aggregate expressions are reversible, consider reverse requirement also.
             if aggr_expr
                 .iter()
-                .all(|expr| !is_ordering_sensitive(expr) || expr.reverse_expr().is_some())
+                .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
             {
                 let reverse_agg_requirement = requirement.map(|reqs| {
                     PhysicalSortRequirement::from_sort_exprs(
@@ -1870,8 +1870,8 @@ mod tests {
         eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &OrderedColumn::new(col_a.clone(), options1),
-            &OrderedColumn::new(col_c.clone(), options2),
+            &vec![OrderedColumn::new(col_a.clone(), options1)],
+            &vec![OrderedColumn::new(col_c.clone(), options2)],
         ));
         let order_by_exprs = vec![
             None,

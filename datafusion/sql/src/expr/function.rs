@@ -63,29 +63,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // then, window function
-        let window = function
-            .over
-            .take()
-            // TODO support named windows
-            .map(|window| match window {
-                WindowType::WindowSpec(window_spec) => Ok(window_spec),
-                WindowType::NamedWindow(name) => Err(DataFusionError::NotImplemented(
-                    format!("Named windows ({name}) are not supported"),
-                )),
-            })
-            .transpose()?;
-
-        if let Some(window) = window {
+        if let Some(WindowType::WindowSpec(window)) = function.over.take() {
             let partition_by = window
                 .partition_by
                 .into_iter()
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
-            let order_by = window
-                .order_by
-                .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-                .collect::<Result<Vec<_>>>()?;
+            let order_by =
+                self.order_by_to_sort_expr(&window.order_by, schema, planner_context)?;
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -131,11 +116,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         if let Ok(fun) = AggregateFunction::from_str(&name) {
             let distinct = function.distinct;
-            let order_by = function
-                .order_by
-                .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-                .collect::<Result<Vec<_>>>()?;
+            let order_by =
+                self.order_by_to_sort_expr(&function.order_by, schema, planner_context)?;
             let order_by = (!order_by.is_empty()).then_some(order_by);
             let (fun, args) =
                 self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
