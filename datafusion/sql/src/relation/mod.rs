@@ -23,6 +23,7 @@ use sqlparser::ast::TableFactor;
 mod join;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+    /// Create a `LogicalPlan` that scans the named relation
     fn create_relation(
         &self,
         relation: TableFactor,

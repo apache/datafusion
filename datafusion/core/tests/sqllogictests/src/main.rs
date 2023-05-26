@@ -15,15 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::error::Error;
 use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
 
+use futures::stream::StreamExt;
 use log::info;
 use sqllogictest::strict_column_validator;
+use tempfile::TempDir;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::{DataFusionError, Result};
 
 use crate::engines::datafusion::DataFusion;
 use crate::engines::postgres::Postgres;
@@ -41,7 +43,7 @@ pub fn main() {
     thread::Builder::new()
         .stack_size(2 * 1024 * 1024) // 2 MB
         .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap()
@@ -55,63 +57,120 @@ pub fn main() {
 
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
-pub async fn main() -> Result<(), Box<dyn Error>> {
+pub async fn main() -> Result<()> {
     run_tests().await
 }
 
-async fn run_tests() -> Result<(), Box<dyn Error>> {
+async fn run_tests() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
     env_logger::init();
 
     let options = Options::new();
 
-    for (path, relative_path) in read_test_files(&options) {
-        if options.complete_mode {
-            run_complete_file(&path, relative_path).await?;
-        } else if options.postgres_runner {
-            run_test_file_with_postgres(&path, relative_path).await?;
-        } else {
-            run_test_file(&path, relative_path).await?;
-        }
-    }
+    // Run all tests in parallel, reporting failures at the end
+    //
+    // Doing so is safe because each slt file runs with its own
+    // `SessionContext` and should not have side effects (like
+    // modifying shared state like `/tmp/`)
+    let errors: Vec<_> = futures::stream::iter(read_test_files(&options))
+        .map(|test_file| {
+            tokio::task::spawn(async move {
+                println!("Running {:?}", test_file.relative_path);
+                if options.complete_mode {
+                    run_complete_file(test_file).await?;
+                } else if options.postgres_runner {
+                    run_test_file_with_postgres(test_file).await?;
+                } else {
+                    run_test_file(test_file).await?;
+                }
+                Ok(()) as Result<()>
+            })
+        })
+        // run up to num_cpus streams in parallel
+        .buffer_unordered(num_cpus::get())
+        .flat_map(|result| {
+            // Filter out any Ok() leaving only the DataFusionErrors
+            futures::stream::iter(match result {
+                // Tokio panic error
+                Err(e) => Some(DataFusionError::External(Box::new(e))),
+                Ok(thread_result) => match thread_result {
+                    // Test run error
+                    Err(e) => Some(e),
+                    // success
+                    Ok(_) => None,
+                },
+            })
+        })
+        .collect()
+        .await;
 
-    Ok(())
+    // report on any errors
+    if !errors.is_empty() {
+        for e in &errors {
+            println!("{e}");
+        }
+        Err(DataFusionError::Execution(format!(
+            "{} failures",
+            errors.len()
+        )))
+    } else {
+        Ok(())
+    }
 }
 
-async fn run_test_file(
-    path: &Path,
-    relative_path: PathBuf,
-) -> Result<(), Box<dyn Error>> {
+async fn run_test_file(test_file: TestFile) -> Result<()> {
+    let TestFile {
+        path,
+        relative_path,
+    } = test_file;
     info!("Running with DataFusion runner: {}", path.display());
-    let ctx = context_for_test_file(&relative_path).await;
+    let Some(test_ctx) = context_for_test_file(&relative_path).await else {
+        info!("Skipping: {}", path.display());
+        return Ok(())
+    };
+    let ctx = test_ctx.session_ctx().clone();
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
     runner.with_column_validator(strict_column_validator);
-    runner.run_file_async(path).await?;
-    Ok(())
+    runner
+        .run_file_async(path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
-async fn run_test_file_with_postgres(
-    path: &Path,
-    relative_path: PathBuf,
-) -> Result<(), Box<dyn Error>> {
+async fn run_test_file_with_postgres(test_file: TestFile) -> Result<()> {
+    let TestFile {
+        path,
+        relative_path,
+    } = test_file;
     info!("Running with Postgres runner: {}", path.display());
-    let postgres_client = Postgres::connect(relative_path).await?;
+    let postgres_client = Postgres::connect(relative_path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let mut runner = sqllogictest::Runner::new(postgres_client);
     runner.with_column_validator(strict_column_validator);
-    runner.run_file_async(path).await?;
+    runner
+        .run_file_async(path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Ok(())
 }
 
-async fn run_complete_file(
-    path: &Path,
-    relative_path: PathBuf,
-) -> Result<(), Box<dyn Error>> {
+async fn run_complete_file(test_file: TestFile) -> Result<()> {
+    let TestFile {
+        path,
+        relative_path,
+    } = test_file;
     use sqllogictest::default_validator;
 
     info!("Using complete mode to complete: {}", path.display());
 
-    let ctx = context_for_test_file(&relative_path).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
+    let Some(test_ctx) = context_for_test_file(&relative_path).await else {
+        info!("Skipping: {}", path.display());
+        return Ok(())
+    };
+    let ctx = test_ctx.session_ctx().clone();
+    let mut runner =
+        sqllogictest::Runner::new(DataFusion::new(ctx, relative_path.clone()));
     let col_separator = " ";
     runner
         .update_test_file(
@@ -121,26 +180,42 @@ async fn run_complete_file(
             strict_column_validator,
         )
         .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
+        // Can't use e directly because it isn't marked Send, so turn it into a string.
+        .map_err(|e| {
+            DataFusionError::Execution(format!("Error completing {relative_path:?}: {e}"))
+        })
 }
 
-fn read_test_files<'a>(
-    options: &'a Options,
-) -> Box<dyn Iterator<Item = (PathBuf, PathBuf)> + 'a> {
+/// Represents a parsed test file
+#[derive(Debug)]
+struct TestFile {
+    /// The absolute path to the file
+    pub path: PathBuf,
+    /// The relative path of the file (used for display)
+    pub relative_path: PathBuf,
+}
+
+impl TestFile {
+    fn new(path: PathBuf) -> Self {
+        let relative_path = PathBuf::from(
+            path.to_string_lossy()
+                .strip_prefix(TEST_DIRECTORY)
+                .unwrap_or(""),
+        );
+
+        Self {
+            path,
+            relative_path,
+        }
+    }
+}
+
+fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile> + 'a> {
     Box::new(
         read_dir_recursive(TEST_DIRECTORY)
-            .map(|path| {
-                (
-                    path.clone(),
-                    PathBuf::from(
-                        path.to_string_lossy().strip_prefix(TEST_DIRECTORY).unwrap(),
-                    ),
-                )
-            })
-            .filter(|(_, relative_path)| options.check_test_file(relative_path))
-            .filter(|(path, _)| options.check_pg_compat_file(path.as_path())),
+            .map(TestFile::new)
+            .filter(|f| options.check_test_file(&f.relative_path))
+            .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     )
 }
 
@@ -159,28 +234,83 @@ fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBu
     )
 }
 
-/// Create a SessionContext, configured for the specific test
-async fn context_for_test_file(relative_path: &Path) -> SessionContext {
+/// Create a SessionContext, configured for the specific test, if
+/// possible.
+///
+/// If `None` is returned (e.g. because some needed feature is not
+/// enabled), the file should be skipped
+async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
     let config = SessionConfig::new()
         // hardcode target partitions so plans are deterministic
         .with_target_partitions(4);
 
-    let ctx = SessionContext::with_config(config);
+    let test_ctx = TestContext::new(SessionContext::with_config(config));
 
-    match relative_path.file_name().unwrap().to_str().unwrap() {
+    let file_name = relative_path.file_name().unwrap().to_str().unwrap();
+    match file_name {
         "aggregate.slt" => {
             info!("Registering aggregate tables");
-            setup::register_aggregate_tables(&ctx).await;
+            setup::register_aggregate_tables(test_ctx.session_ctx()).await;
         }
         "scalar.slt" => {
             info!("Registering scalar tables");
-            setup::register_scalar_tables(&ctx).await;
+            setup::register_scalar_tables(test_ctx.session_ctx()).await;
+        }
+        "avro.slt" => {
+            #[cfg(feature = "avro")]
+            {
+                let mut test_ctx = test_ctx;
+                info!("Registering avro tables");
+                setup::register_avro_tables(&mut test_ctx).await;
+                return Some(test_ctx);
+            }
+            #[cfg(not(feature = "avro"))]
+            {
+                info!("Skipping {file_name} because avro feature is not enabled");
+                return None;
+            }
         }
         _ => {
             info!("Using default SessionContext");
         }
     };
-    ctx
+    Some(test_ctx)
+}
+
+/// Context for running tests
+pub struct TestContext {
+    /// Context for running queries
+    ctx: SessionContext,
+    /// Temporary directory created and cleared at the end of the test
+    test_dir: Option<TempDir>,
+}
+
+impl TestContext {
+    pub fn new(ctx: SessionContext) -> Self {
+        Self {
+            ctx,
+            test_dir: None,
+        }
+    }
+
+    /// Enables the test directory feature. If not enabled,
+    /// calling `testdir_path` will result in a panic.
+    pub fn enable_testdir(&mut self) {
+        if self.test_dir.is_none() {
+            self.test_dir = Some(TempDir::new().expect("failed to create testdir"));
+        }
+    }
+
+    /// Returns the path to the test directory. Panics if the test
+    /// directory feature is not enabled via `enable_testdir`.
+    pub fn testdir_path(&self) -> &Path {
+        self.test_dir.as_ref().expect("testdir not enabled").path()
+    }
+
+    /// Returns a reference to the internal SessionContext
+    fn session_ctx(&self) -> &SessionContext {
+        &self.ctx
+    }
 }
 
 /// Parsed command line options

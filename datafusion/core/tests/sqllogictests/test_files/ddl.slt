@@ -310,6 +310,18 @@ DROP TABLE my_table;
 statement ok
 DROP TABLE aggregate_simple
 
+# Arrow format
+statement ok
+CREATE external table arrow_simple STORED as ARROW LOCATION 'tests/data/example.arrow';
+
+query ITB rowsort
+SELECT * FROM arrow_simple order by f1 LIMIT 1
+----
+2 bar NULL
+
+statement ok
+DROP TABLE arrow_simple
+
 # create_table_with_schema_as_select_mismatch
 statement error table 'datafusion.public.aggregate_simple' not found
 CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * FROM aggregate_simple;
@@ -332,6 +344,22 @@ query IRT rowsort
 SELECT * FROM new_table;
 ----
 1 2 hello
+
+statement ok
+DROP TABLE new_table
+
+# create_table_with_schema_as_multiple_values
+statement ok
+CREATE TABLE test_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello'),(2, 1, 'there'),(3, 0, '!');
+
+statement ok
+SELECT * INTO new_table FROM test_table ORDER BY c1 DESC LIMIT 2
+
+query IRT
+SELECT * FROM new_table
+----
+3 0 !
+2 1 there
 
 statement ok
 DROP TABLE my_table;
@@ -711,10 +739,9 @@ DROP SCHEMA empty_schema;
 
 # external table with infinite source
 statement ok
-CREATE external table t(c1 integer, c2 integer, c3 integer)
+CREATE UNBOUNDED external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
 WITH HEADER ROW
-OPTIONS('infinite_source' 'true')
 LOCATION 'tests/data/empty.csv';
 
 # should see infinite_source=true in the explain
@@ -733,7 +760,6 @@ statement ok
 CREATE external table t(c1 integer, c2 integer, c3 integer)
 STORED as CSV
 WITH HEADER ROW
-OPTIONS('infinite_source' 'false')
 LOCATION 'tests/data/empty.csv';
 
 # expect to see no infinite_source in the explain
@@ -745,20 +771,3 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 
 statement ok
 drop table t;
-
-
-# error conditions
-statement error DataFusion error: Error during planning: Unknown value for infinite_source: FALSE\. Expected 'true' or 'false'
-CREATE external table t(c1 integer, c2 integer, c3 integer)
-STORED as CSV
-WITH HEADER ROW
-OPTIONS('infinite_source' 'FALSE')
-LOCATION 'tests/data/empty.csv';
-
-# error conditions
-statement error DataFusion error: Error during planning: Unknown value for infinite_source: g\. Expected 'true' or 'false'
-CREATE external table t(c1 integer, c2 integer, c3 integer)
-STORED as CSV
-WITH HEADER ROW
-OPTIONS('infinite_source' 'g')
-LOCATION 'tests/data/empty.csv';

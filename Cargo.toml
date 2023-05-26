@@ -35,7 +35,7 @@ members = [
 ]
 
 [workspace.package]
-version = "24.0.0"
+version = "25.0.0"
 edition = "2021"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -45,12 +45,12 @@ repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.64"
 
 [workspace.dependencies]
-arrow = { version = "39.0.0", features = ["prettyprint"] }
-arrow-flight = { version = "39.0.0", features = ["flight-sql-experimental"] }
-arrow-buffer = { version = "39.0.0", default-features = false }
-arrow-schema = { version = "39.0.0", default-features = false }
-arrow-array = { version = "39.0.0", default-features = false, features = ["chrono-tz"] }
-parquet = { version = "39.0.0", features = ["arrow", "async", "object_store"] }
+arrow = { version = "40.0.0", features = ["prettyprint"] }
+arrow-flight = { version = "40.0.0", features = ["flight-sql-experimental"] }
+arrow-buffer = { version = "40.0.0", default-features = false }
+arrow-schema = { version = "40.0.0", default-features = false }
+arrow-array = { version = "40.0.0", default-features = false, features = ["chrono-tz"] }
+parquet = { version = "40.0.0", features = ["arrow", "async", "object_store"] }
 
 [profile.release]
 codegen-units = 1

@@ -70,13 +70,14 @@ use kernels::{
 use kernels_arrow::{
     add_decimal_dyn_scalar, add_dyn_decimal, add_dyn_temporal, add_dyn_temporal_scalar,
     divide_decimal_dyn_scalar, divide_dyn_opt_decimal, is_distinct_from,
-    is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_f32,
-    is_distinct_from_f64, is_distinct_from_null, is_distinct_from_utf8,
-    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
-    is_not_distinct_from_f32, is_not_distinct_from_f64, is_not_distinct_from_null,
-    is_not_distinct_from_utf8, modulus_decimal_dyn_scalar, modulus_dyn_decimal,
-    multiply_decimal_dyn_scalar, multiply_dyn_decimal, subtract_decimal_dyn_scalar,
-    subtract_dyn_decimal, subtract_dyn_temporal, subtract_dyn_temporal_scalar,
+    is_distinct_from_binary, is_distinct_from_bool, is_distinct_from_decimal,
+    is_distinct_from_f32, is_distinct_from_f64, is_distinct_from_null,
+    is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_binary,
+    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_f32,
+    is_not_distinct_from_f64, is_not_distinct_from_null, is_not_distinct_from_utf8,
+    modulus_decimal_dyn_scalar, modulus_dyn_decimal, multiply_decimal_dyn_scalar,
+    multiply_dyn_decimal, subtract_decimal_dyn_scalar, subtract_dyn_decimal,
+    subtract_dyn_temporal, subtract_dyn_temporal_scalar,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -242,6 +243,21 @@ macro_rules! compute_utf8_op {
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
+    }};
+}
+
+/// Invoke a compute kernel on a pair of binary data arrays
+macro_rules! compute_binary_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _binary>]}(&ll, &rr)?))
     }};
 }
 
@@ -510,7 +526,10 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::Binary => compute_binary_op!($LEFT, $RIGHT, $OP, BinaryArray),
+            DataType::LargeBinary => compute_binary_op!($LEFT, $RIGHT, $OP, LargeBinaryArray),
             DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
+
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
@@ -678,9 +697,9 @@ impl PhysicalExpr for BinaryExpr {
             &right_data_type,
         );
         let (left_value, right_value) = if let Some(coerced_type) = coerced_type {
-            let options = CastOptions { safe: true };
-            let left_value = cast_column(&left_value, &coerced_type, &options)?;
-            let right_value = cast_column(&right_value, &coerced_type, &options)?;
+            let options = CastOptions::default();
+            let left_value = cast_column(&left_value, &coerced_type, Some(&options))?;
+            let right_value = cast_column(&right_value, &coerced_type, Some(&options))?;
             (left_value, right_value)
         } else {
             // No need to coerce if it is not decimal or not math operation
@@ -1040,16 +1059,18 @@ fn to_result_type_array(
     array: ArrayRef,
     result_type: &DataType,
 ) -> Result<ArrayRef> {
-    if op.is_numerical_operators() {
+    if array.data_type() == result_type {
+        Ok(array)
+    } else if op.is_numerical_operators() {
         match array.data_type() {
             DataType::Dictionary(_, value_type) => {
                 if value_type.as_ref() == result_type {
                     Ok(cast(&array, result_type)?)
                 } else {
                     Err(DataFusionError::Internal(format!(
-                        "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
-                        value_type, result_type, op
-                    )))
+                            "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
+                            value_type, result_type, op
+                        )))
                 }
             }
             _ => Ok(array),
@@ -5614,5 +5635,38 @@ mod tests {
             )),
         );
         assert_eq!(expr.to_string(), "(1 OR 2) AND (3 OR 4)");
+    }
+
+    #[test]
+    fn test_to_result_type_array() {
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, values).unwrap()) as ArrayRef;
+
+        // Casting Dictionary to Int32
+        let casted =
+            to_result_type_array(&Operator::Plus, dictionary.clone(), &DataType::Int32)
+                .unwrap();
+        assert_eq!(
+            &casted,
+            &(Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(4)]))
+                as ArrayRef)
+        );
+
+        // Array has same datatype as result type, no casting
+        let casted = to_result_type_array(
+            &Operator::Plus,
+            dictionary.clone(),
+            dictionary.data_type(),
+        )
+        .unwrap();
+        assert_eq!(&casted, &dictionary);
+
+        // Not numerical operator, no casting
+        let casted =
+            to_result_type_array(&Operator::Eq, dictionary.clone(), &DataType::Int32)
+                .unwrap();
+        assert_eq!(&casted, &dictionary);
     }
 }

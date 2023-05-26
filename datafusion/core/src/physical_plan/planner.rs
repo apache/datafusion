@@ -2105,7 +2105,7 @@ mod tests {
     async fn test_with_zero_offset_plan() -> Result<()> {
         let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
         let plan = plan(&logical_plan).await?;
-        assert!(format!("{plan:?}").contains("limit: None"));
+        assert!(!format!("{plan:?}").contains("limit="));
         Ok(())
     }
 

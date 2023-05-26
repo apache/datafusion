@@ -98,7 +98,26 @@ pub trait TableProvider: Sync + Send {
         None
     }
 
-    /// Insert into this table
+    /// Return an [`ExecutionPlan`] to insert data into this table, if
+    /// supported.
+    ///
+    /// The returned plan should return a single row in a UInt64
+    /// column called "count" such as the following
+    ///
+    /// ```text
+    /// +-------+,
+    /// | count |,
+    /// +-------+,
+    /// | 6     |,
+    /// +-------+,
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// See [`InsertExec`] for the common pattern of inserting a
+    /// single stream of `RecordBatch`es.
+    ///
+    /// [`InsertExec`]: crate::physical_plan::insert::InsertExec
     async fn insert_into(
         &self,
         _state: &SessionState,

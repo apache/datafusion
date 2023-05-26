@@ -327,6 +327,7 @@ impl<'a> RowAccessor<'a> {
     fn_add_idx!(f64);
     fn_add_idx!(i128);
 
+    fn_max_min_idx!(bool, max);
     fn_max_min_idx!(u8, max);
     fn_max_min_idx!(u16, max);
     fn_max_min_idx!(u32, max);
@@ -339,6 +340,7 @@ impl<'a> RowAccessor<'a> {
     fn_max_min_idx!(f64, max);
     fn_max_min_idx!(i128, max);
 
+    fn_max_min_idx!(bool, min);
     fn_max_min_idx!(u8, min);
     fn_max_min_idx!(u16, min);
     fn_max_min_idx!(u32, min);
