@@ -386,10 +386,6 @@ struct QueryResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::io::BufRead;
-    use std::path::Path;
-
     /// CI checks
     #[cfg(test)]
     #[cfg(feature = "ci")]
