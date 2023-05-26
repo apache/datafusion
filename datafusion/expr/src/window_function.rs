@@ -23,7 +23,6 @@
 
 use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
-use crate::utils::convert_camel_to_upper_snake;
 use crate::{aggregate_function, AggregateUDF, Signature, TypeSignature, Volatility};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
@@ -59,7 +58,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunction> {
 
 impl fmt::Display for BuiltInWindowFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", convert_camel_to_upper_snake(format!("{self:?}")))
+        write!(f, "{}", self.name())
     }
 }
 
@@ -104,6 +103,25 @@ pub enum BuiltInWindowFunction {
     LastValue,
     /// returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row
     NthValue,
+}
+
+impl BuiltInWindowFunction {
+    fn name(&self) -> &str {
+        use BuiltInWindowFunction::*;
+        match self {
+            RowNumber => "ROW_NUMBER",
+            Rank => "RANK",
+            DenseRank => "DENSE_RANK",
+            PercentRank => "PERCENT_RANK",
+            CumeDist => "CUME_DIST",
+            Ntile => "NTILE",
+            Lag => "LAG",
+            Lead => "LEAD",
+            FirstValue => "FIRST_VALUE",
+            LastValue => "LAST_VALUE",
+            NthValue => "NTH_VALUE",
+        }
+    }
 }
 
 impl FromStr for BuiltInWindowFunction {
