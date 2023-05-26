@@ -394,6 +394,7 @@ impl SchemaAdapter {
 
     /// Map projected column indexes to the file schema. This will fail if the table schema
     /// and the file schema contain a field with the same name and different types.
+    #[allow(dead_code)]
     pub fn map_projections(
         &self,
         file_schema: &Schema,
@@ -418,6 +419,7 @@ impl SchemaAdapter {
     /// Re-order projected columns by index in record batch to match table schema column ordering. If the record
     /// batch does not contain a column for an expected field, insert a null-valued column at the
     /// required column index.
+    #[allow(dead_code)]
     pub fn adapt_batch(
         &self,
         batch: RecordBatch,
@@ -489,21 +491,56 @@ impl SchemaAdapter {
             field_mappings,
         })
     }
+
+    /// Creates a `SchemaMapping` that can be used to cast or map the columns from the file schema
+    /// to the table schema, taking into account the provided projections.
+    pub fn map_schema_with_projection(
+        &self,
+        file_schema: &Schema,
+        projections: &[usize],
+    ) -> Result<SchemaMapping> {
+        let mut field_mappings = Vec::new();
+
+        for idx in projections {
+            let field = self.table_schema.field(*idx);
+            match file_schema.field_with_name(field.name()) {
+                Ok(file_field) => {
+                    if can_cast_types(file_field.data_type(), field.data_type()) {
+                        field_mappings.push((*idx, field.data_type().clone()))
+                    } else {
+                        return Err(DataFusionError::Plan(format!(
+                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                            field.name(),
+                            file_field.data_type(),
+                            field.data_type()
+                        )));
+                    }
+                }
+                Err(_) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "File schema does not contain expected field {}",
+                        field.name()
+                    )));
+                }
+            }
+        }
+        Ok(SchemaMapping {
+            table_schema: Arc::new(self.table_schema.project(projections)?),
+            field_mappings,
+        })
+    }
 }
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table schema
 /// and any necessary type conversions that need to be applied.
 #[derive(Debug)]
 pub struct SchemaMapping {
-    #[allow(dead_code)]
     table_schema: SchemaRef,
-    #[allow(dead_code)]
     field_mappings: Vec<(usize, DataType)>,
 }
 
 impl SchemaMapping {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
-    #[allow(dead_code)]
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let mut mapped_cols = Vec::with_capacity(self.field_mappings.len());
 

@@ -505,13 +505,14 @@ impl FileOpener for ParquetOpener {
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
-            let adapted_projections =
-                schema_adapter.map_projections(builder.schema(), &projection)?;
+
+            let schema_mapping =
+                schema_adapter.map_schema_with_projection(builder.schema(), &projection)?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
-                adapted_projections.iter().cloned(),
+                projection.iter().cloned(),
             );
 
             // Filter pushdown: evaluate predicates during scan
@@ -575,11 +576,8 @@ impl FileOpener for ParquetOpener {
             let adapted = stream
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                 .map(move |maybe_batch| {
-                    maybe_batch.and_then(|b| {
-                        schema_adapter
-                            .adapt_batch(b, &projection)
-                            .map_err(Into::into)
-                    })
+                    maybe_batch
+                        .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
                 });
 
             Ok(adapted.boxed())
