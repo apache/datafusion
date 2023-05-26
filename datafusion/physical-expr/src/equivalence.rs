@@ -330,8 +330,8 @@ impl OrderingEquivalenceBuilder {
         }
     }
 
-    pub fn ordering_equivalence(&self) -> OrderingEquivalenceProperties {
-        self.ordering_eq_properties.clone()
+    pub fn build(self) -> OrderingEquivalenceProperties {
+        self.ordering_eq_properties
     }
 }
 
