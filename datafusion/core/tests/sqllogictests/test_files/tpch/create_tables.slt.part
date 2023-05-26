@@ -18,7 +18,7 @@
 # under the License.
 
 statement ok
-CREATE TABLE supplier (
+CREATE EXTERNAL TABLE IF NOT EXISTS supplier (
         s_suppkey  INTEGER,
         s_name VARCHAR,
         s_address VARCHAR,
@@ -26,10 +26,10 @@ CREATE TABLE supplier (
         s_phone VARCHAR,
         s_acctbal NUMERIC,
         s_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/supplier.csv';
 
 statement ok
-CREATE TABLE part (
+CREATE EXTERNAL TABLE IF NOT EXISTS part (
         p_partkey INTEGER,
         p_name VARCHAR,
         p_mfgr VARCHAR,
@@ -39,19 +39,20 @@ CREATE TABLE part (
         p_container VARCHAR,
         p_retailprice NUMERIC,
         p_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/part.csv';
+
 
 statement ok
-CREATE TABLE partsupp (
+CREATE EXTERNAL TABLE IF NOT EXISTS partsupp (
         ps_partkey INTEGER,
         ps_suppkey INTEGER,
         ps_availqty INTEGER,
         ps_supplycost NUMERIC,
         ps_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/partsupp.csv';
 
 statement ok
-CREATE TABLE customer (
+CREATE EXTERNAL TABLE IF NOT EXISTS customer (
         c_custkey INTEGER,
         c_name VARCHAR,
         c_address VARCHAR,
@@ -60,10 +61,10 @@ CREATE TABLE customer (
         c_acctbal NUMERIC,
         c_mktsegment VARCHAR,
         c_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/customer.csv';
 
 statement ok
-CREATE TABLE orders (
+CREATE EXTERNAL TABLE IF NOT EXISTS orders (
         o_orderkey BIGINT,
         o_custkey INTEGER,
         o_orderstatus VARCHAR,
@@ -73,10 +74,10 @@ CREATE TABLE orders (
         o_clerk VARCHAR,
         o_shippriority INTEGER,
         o_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/orders.csv';
 
 statement ok
-CREATE TABLE lineitem (
+CREATE EXTERNAL TABLE IF NOT EXISTS lineitem (
         l_orderkey BIGINT,
         l_partkey INTEGER,
         l_suppkey INTEGER,
@@ -93,19 +94,19 @@ CREATE TABLE lineitem (
         l_shipinstruct VARCHAR,
         l_shipmode VARCHAR,
         l_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/lineitem.csv';
 
 statement ok
-CREATE TABLE nation (
+CREATE EXTERNAL TABLE IF NOT EXISTS nation (
         n_nationkey INTEGER,
         n_name VARCHAR,
         n_regionkey INTEGER,
         n_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/nation.csv';
 
 statement ok
-CREATE TABLE region (
+CREATE EXTERNAL TABLE IF NOT EXISTS region (
         r_regionkey INTEGER,
         r_name VARCHAR,
         r_comment VARCHAR,
-);
+) STORED AS CSV WITH HEADER ROW LOCATION 'tests/tpch-csv/region.csv';
