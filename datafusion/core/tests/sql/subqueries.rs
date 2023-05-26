@@ -770,7 +770,6 @@ async fn exists_subquery_with_select_null() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
 
-    // decorrelated, limit is removed
     let expected = vec![
         "Filter: EXISTS (<subquery>) [t1_id:UInt32;N, t1_name:Utf8;N]",
         "  Subquery: [NULL:Null;N]",
