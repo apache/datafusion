@@ -341,6 +341,7 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use crate::test_util;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::utils::DataPtr;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -378,7 +379,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::vtable_address_comparisons)]
     async fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
@@ -391,11 +391,11 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input.clone())?);
 
         let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
-        assert!(!Arc::ptr_eq(&filter, &new_filter));
+        assert!(!Arc::data_ptr_eq(&filter, &new_filter));
 
         let new_filter2 =
             with_new_children_if_necessary(filter.clone(), vec![input])?.into();
-        assert!(Arc::ptr_eq(&filter, &new_filter2));
+        assert!(Arc::data_ptr_eq(&filter, &new_filter2));
 
         Ok(())
     }

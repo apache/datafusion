@@ -30,6 +30,7 @@ use sqlparser::tokenizer::{Token, TokenWithLocation};
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -334,6 +335,30 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
         count += 1;
     }
     count
+}
+
+pub trait DataPtr {
+    /// Returns a raw pointer to the data, stripping away all metadata.
+    fn data_ptr(this: &Self) -> *const ();
+
+    /// Check if two pointers point to the same data.
+    fn data_ptr_eq(this: &Self, other: &Self) -> bool {
+        // Discard pointer metadata (including the v-table).
+        let this = Self::data_ptr(this);
+        let other = Self::data_ptr(other);
+
+        std::ptr::eq(this, other)
+    }
+}
+
+/// Currently, it's brittle to compare `Arc`s of dyn traits with `Arc::ptr_eq`
+/// due to this check including v-table equality. It may be possible to use
+/// `Arc::ptr_eq` directly if a fix to https://github.com/rust-lang/rust/issues/103763
+/// is stabilized.
+impl<T: ?Sized> DataPtr for Arc<T> {
+    fn data_ptr(this: &Self) -> *const () {
+        Arc::as_ptr(this) as *const ()
+    }
 }
 
 #[cfg(test)]

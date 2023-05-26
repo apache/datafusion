@@ -404,8 +404,6 @@ pub async fn from_substrait_rel(
                                         .iter()
                                         .map(|i| scan.projected_schema.field(*i).clone())
                                         .collect();
-                                    // clippy thinks this clone is redundant but it is not
-                                    #[allow(clippy::redundant_clone)]
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
                                     scan.projected_schema =

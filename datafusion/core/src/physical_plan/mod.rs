@@ -29,6 +29,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 
+use datafusion_common::utils::DataPtr;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
@@ -270,9 +271,6 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
-/// Allow the vtable address comparisons for ExecutionPlan Trait Objects，it is harmless even
-/// in the case of 'false-native'.
-#[allow(clippy::vtable_address_comparisons)]
 pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
@@ -286,7 +284,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
         Ok(Transformed::Yes(plan.with_new_children(children)?))
     } else {

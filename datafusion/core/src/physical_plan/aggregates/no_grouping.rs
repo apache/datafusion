@@ -27,7 +27,7 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -36,6 +36,8 @@ use std::task::{Context, Poll};
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::filter::batch_filter;
 use futures::stream::{Stream, StreamExt};
+
+use super::AggregateExec;
 
 /// stream struct for aggregation without grouping columns
 pub(crate) struct AggregateStream {
@@ -63,33 +65,33 @@ struct AggregateStreamInner {
 }
 
 impl AggregateStream {
-    #[allow(clippy::too_many_arguments)]
     /// Create a new AggregateStream
     pub fn new(
-        mode: AggregateMode,
-        schema: SchemaRef,
-        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
-        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        input: SendableRecordBatchStream,
-        baseline_metrics: BaselineMetrics,
+        agg: &AggregateExec,
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
-        let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
-        let filter_expressions = match mode {
-            AggregateMode::Partial | AggregateMode::Single => filter_expr,
+        let agg_schema = Arc::clone(&agg.schema);
+        let agg_filter_expr = agg.filter_expr.clone();
+
+        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
+        let input = agg.input.execute(partition, Arc::clone(&context))?;
+
+        let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
+        let filter_expressions = match agg.mode {
+            AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; aggr_expr.len()]
+                vec![None; agg.aggr_expr.len()]
             }
         };
-        let accumulators = create_accumulators(&aggr_expr)?;
+        let accumulators = create_accumulators(&agg.aggr_expr)?;
 
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
 
         let inner = AggregateStreamInner {
-            schema: Arc::clone(&schema),
-            mode,
+            schema: Arc::clone(&agg.schema),
+            mode: agg.mode,
             input,
             baseline_metrics,
             aggregate_expressions,
@@ -155,7 +157,10 @@ impl AggregateStream {
         let stream = stream.fuse();
         let stream = Box::pin(stream);
 
-        Ok(Self { schema, stream })
+        Ok(Self {
+            schema: agg_schema,
+            stream,
+        })
     }
 }
 

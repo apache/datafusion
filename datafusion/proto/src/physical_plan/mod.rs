@@ -61,7 +61,7 @@ use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{self, PhysicalPlanNode};
-use crate::{convert_required, into_physical_plan, into_required};
+use crate::{convert_required, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -86,7 +86,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
@@ -109,11 +108,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 explain.verbose,
             ))),
             PhysicalPlanType::Projection(projection) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    projection.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &projection.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let exprs = projection
                     .expr
@@ -129,11 +128,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    filter.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &filter.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let predicate = filter
                     .expr
@@ -184,11 +183,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?)))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    coalesce_batches.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &coalesce_batches.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
@@ -197,15 +196,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&merge.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    repart.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &repart.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
@@ -248,7 +247,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
                 let fetch = if limit.fetch >= 0 {
                     Some(limit.fetch as usize)
                 } else {
@@ -262,15 +261,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::LocalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    window_agg.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &window_agg.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let input_schema = window_agg
                     .input_schema
@@ -338,11 +337,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hash_agg.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hash_agg.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(
                     || {
@@ -491,17 +490,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hashjoin.left,
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hashjoin.left,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hashjoin.right,
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hashjoin.right,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
@@ -590,17 +589,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(UnionExec::new(inputs)))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    crossjoin.left,
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &crossjoin.left,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    crossjoin.right,
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &crossjoin.right,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 Ok(Arc::new(CrossJoinExec::new(left, right)))
             }
@@ -610,7 +609,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -657,7 +656,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -1237,17 +1236,17 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
     }
 }
 
-#[macro_export]
-macro_rules! into_physical_plan {
-    ($PB:expr, $REG:expr, $RUNTIME:expr, $CODEC:expr) => {{
-        if let Some(field) = $PB.as_ref() {
-            field
-                .as_ref()
-                .try_into_physical_plan($REG, $RUNTIME, $CODEC)
-        } else {
-            Err(proto_error("Missing required field in protobuf"))
-        }
-    }};
+fn into_physical_plan(
+    node: &Option<Box<PhysicalPlanNode>>,
+    registry: &dyn FunctionRegistry,
+    runtime: &RuntimeEnv,
+    extension_codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    if let Some(field) = node {
+        field.try_into_physical_plan(registry, runtime, extension_codec)
+    } else {
+        Err(proto_error("Missing required field in protobuf"))
+    }
 }
 
 #[cfg(test)]

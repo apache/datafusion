@@ -486,22 +486,18 @@ mod test {
         );
     }
 
-    /// Model what happens when implementing SendableRecrordBatchStream:
+    /// Model what happens when implementing SendableRecordBatchStream:
     /// DataFusion code needs to return an ArrowError
-    #[allow(clippy::try_err)]
     fn return_arrow_error() -> arrow::error::Result<()> {
         // Expect the '?' to work
-        Err(DataFusionError::Plan("foo".to_string()))?;
-        Ok(())
+        Err(DataFusionError::Plan("foo".to_string()).into())
     }
 
     /// Model what happens when using arrow kernels in DataFusion
     /// code: need to turn an ArrowError into a DataFusionError
-    #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        Err(ArrowError::SchemaError("bar".to_string()))?;
-        Ok(())
+        Err(ArrowError::SchemaError("bar".to_string()).into())
     }
 
     fn do_root_test(e: DataFusionError, exp: DataFusionError) {
