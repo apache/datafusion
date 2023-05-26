@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                 opt.batch_size,
                 compression,
             )
-                .await
+            .await
         }
     }
 }
@@ -261,7 +261,7 @@ async fn register_tables(
                 opt.file_format.as_str(),
                 opt.partitions,
             )
-                .await?
+            .await?
         };
 
         if opt.mem_table {

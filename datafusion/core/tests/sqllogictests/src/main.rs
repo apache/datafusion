@@ -223,7 +223,7 @@ impl TestFile {
     }
 }
 
-fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item=TestFile> + 'a> {
+fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile> + 'a> {
     Box::new(
         read_dir_recursive(TEST_DIRECTORY)
             .map(TestFile::new)
@@ -234,7 +234,7 @@ fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item=TestFile> 
     )
 }
 
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item=PathBuf>> {
+fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Box<dyn Iterator<Item = PathBuf>> {
     Box::new(
         std::fs::read_dir(path)
             .expect("Readable directory")
