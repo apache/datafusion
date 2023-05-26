@@ -17,6 +17,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Some modification to original tpch:
+# 1. Add `_rev` field in each table to make csv reader compatible with generated tbl format
+# 2. Add `limit xx` to some queries to avoid making slt files too large.
+
 statement ok
 CREATE EXTERNAL TABLE IF NOT EXISTS supplier (
         s_suppkey  BIGINT,
