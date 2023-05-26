@@ -390,7 +390,7 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 }
 
 /// This struct rewrite the sub query plan by pull up the correlated expressions(contains outer reference columns) from the inner subquery's [Filter].
-/// It adds the inner reference columns to the [Projection] or [Aggregate] of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
+/// It adds the inner reference columns to the 'Projection' or 'Aggregate' of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
 pub struct PullUpCorrelatedExpr {
     pub join_filters: Vec<Expr>,
     // map of the plan and its holding correlated columns
