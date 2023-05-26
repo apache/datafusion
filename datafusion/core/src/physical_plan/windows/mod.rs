@@ -288,7 +288,7 @@ pub(crate) fn window_ordering_equivalence(
                 // If there is an existing ordering, add new ordering as an equivalence:
                 if !normalized_out_ordering.is_empty() {
                     if let Some((idx, field)) =
-                        schema.column_with_name(expr.field().unwrap().name())
+                        schema.column_with_name(builtin_window_expr.name())
                     {
                         let column = Column::new(field.name(), idx);
                         let options = SortOptions {

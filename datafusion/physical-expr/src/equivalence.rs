@@ -112,12 +112,15 @@ fn deduplicate_vector<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
     result
 }
 
-fn get_elem_position<T: PartialEq>(in_data: &[T], elem: &T) -> Option<usize> {
-    in_data.iter().position(|item| item.eq(elem))
+/// Find the position of `entry` inside `in_data`, if `entry` is not found return `None`.
+fn get_entry_position<T: PartialEq>(in_data: &[T], entry: &T) -> Option<usize> {
+    in_data.iter().position(|item| item.eq(entry))
 }
 
-fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, elem: &T) -> bool {
-    if let Some(idx) = get_elem_position(in_data, elem) {
+/// Remove `entry` for the `in_data`, returns `true` if removal is successful (e.g `entry` is indeed in the `in_data`)
+/// Otherwise return `false`
+fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, entry: &T) -> bool {
+    if let Some(idx) = get_entry_position(in_data, entry) {
         in_data.remove(idx);
         true
     } else {
@@ -125,22 +128,23 @@ fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, elem: &T) -> bool {
     }
 }
 
-fn get_column_indices_helper(
+// Helper function to calculate column info recursively
+fn get_column_infos_helper(
     indices: &mut Vec<(usize, String)>,
     expr: &Arc<dyn PhysicalExpr>,
 ) {
     if let Some(col) = expr.as_any().downcast_ref::<Column>() {
         indices.push((col.index(), col.name().to_string()))
     } else if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_column_indices_helper(indices, binary_expr.left());
-        get_column_indices_helper(indices, binary_expr.right());
+        get_column_infos_helper(indices, binary_expr.left());
+        get_column_infos_helper(indices, binary_expr.right());
     };
 }
 
-/// Get the indices of the columns occur in the expression
-fn get_column_indices_names(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
+/// Get index and name of each column that is in the expression (Can return multiple entries for `BinaryExpr`s)
+fn get_column_infos(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
     let mut result = vec![];
-    get_column_indices_helper(&mut result, expr);
+    get_column_infos_helper(&mut result, expr);
     result
 }
 
@@ -343,21 +347,21 @@ pub fn project_ordering_equivalence_properties(
     let schema = output_eq.schema();
     let fields = schema.fields();
     for class in eq_classes.iter_mut() {
-        let columns_to_remove = class
+        let sort_exprs_to_remove = class
             .iter()
-            .filter(|columns| {
-                columns.iter().any(|column| {
-                    let indices_names = get_column_indices_names(&column.expr);
-                    indices_names.into_iter().any(|(idx, name)| {
+            .filter(|sort_exprs| {
+                sort_exprs.iter().any(|sort_expr| {
+                    let col_infos = get_column_infos(&sort_expr.expr);
+                    // If any one of the columns, used in Expression is invalid, remove expression
+                    // from ordering equivalences
+                    col_infos.into_iter().any(|(idx, name)| {
                         idx >= fields.len() || fields[idx].name() != &name
                     })
-                    // let idx = column.col.index();
-                    // idx >= fields.len() || fields[idx].name() != column.col.name()
                 })
             })
             .cloned()
             .collect::<Vec<_>>();
-        for column in columns_to_remove {
+        for column in sort_exprs_to_remove {
             class.remove(&column);
         }
     }
@@ -478,10 +482,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_elem_position() -> Result<()> {
-        assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &2), Some(2));
-        assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &1), Some(0));
-        assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &5), None);
+    fn test_get_entry_position() -> Result<()> {
+        assert_eq!(get_entry_position(&[1, 1, 2, 3, 3], &2), Some(2));
+        assert_eq!(get_entry_position(&[1, 1, 2, 3, 3], &1), Some(0));
+        assert_eq!(get_entry_position(&[1, 1, 2, 3, 3], &5), None);
         Ok(())
     }
 
@@ -502,20 +506,14 @@ mod tests {
     }
 
     #[test]
-    fn test_column_indices_names() -> Result<()> {
+    fn test_get_column_infos() -> Result<()> {
         let expr1 = Arc::new(Column::new("col1", 2)) as _;
-        assert_eq!(
-            get_column_indices_names(&expr1),
-            vec![(2, "col1".to_string())]
-        );
+        assert_eq!(get_column_infos(&expr1), vec![(2, "col1".to_string())]);
         let expr2 = Arc::new(Column::new("col2", 5)) as _;
-        assert_eq!(
-            get_column_indices_names(&expr2),
-            vec![(5, "col2".to_string())]
-        );
+        assert_eq!(get_column_infos(&expr2), vec![(5, "col2".to_string())]);
         let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
         assert_eq!(
-            get_column_indices_names(&expr3),
+            get_column_infos(&expr3),
             vec![(2, "col1".to_string()), (5, "col2".to_string())]
         );
         Ok(())

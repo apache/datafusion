@@ -1743,8 +1743,6 @@ mod tests {
                 expr: Arc::new(col_c.clone()) as _,
                 options: options2,
             }],
-            // &vec![OrderedColumn::new(col_a.clone(), options1)],
-            // &vec![OrderedColumn::new(col_c.clone(), options2)],
         ));
 
         let order_by_exprs = vec![

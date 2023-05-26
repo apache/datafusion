@@ -798,11 +798,6 @@ mod tests {
                     options: option1,
                 },
             ],
-            // &vec![OrderedColumn::new(col_a.clone(), option1)],
-            // &vec![
-            //     OrderedColumn::new(col_d.clone(), option1),
-            //     OrderedColumn::new(col_b.clone(), option1),
-            // ],
         ));
         ordering_eq_properties.add_equal_conditions((
             &vec![PhysicalSortExpr {
@@ -819,11 +814,6 @@ mod tests {
                     options: option1,
                 },
             ],
-            // &vec![OrderedColumn::new(col_a.clone(), option1)],
-            // &vec![
-            //     OrderedColumn::new(col_e.clone(), option2),
-            //     OrderedColumn::new(col_b.clone(), option1),
-            // ],
         ));
         Ok((test_schema, eq_properties, ordering_eq_properties))
     }
@@ -1427,8 +1417,6 @@ mod tests {
                 expr: Arc::new(col_e.clone()),
                 options: option1,
             }],
-            // &vec![OrderedColumn::new(col_a.clone(), option1)],
-            // &vec![OrderedColumn::new(col_e.clone(), option1)],
         ));
         let sort_req_a = PhysicalSortExpr {
             expr: Arc::new((col_a).clone()) as _,
