@@ -155,11 +155,11 @@ async fn test_fn_approx_median() -> Result<()> {
     let expr = approx_median(col("b"));
 
     let expected = vec![
-        "+----------------------+",
-        "| APPROXMEDIAN(test.b) |",
-        "+----------------------+",
-        "| 10                   |",
-        "+----------------------+",
+        "+-----------------------+",
+        "| APPROX_MEDIAN(test.b) |",
+        "+-----------------------+",
+        "| 10                    |",
+        "+-----------------------+",
     ];
 
     let df = create_test_table().await?;
@@ -175,11 +175,11 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
     let expr = approx_percentile_cont(col("b"), lit(0.5));
 
     let expected = vec![
-        "+-------------------------------------------+",
-        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
-        "+-------------------------------------------+",
-        "| 10                                        |",
-        "+-------------------------------------------+",
+        "+---------------------------------------------+",
+        "| APPROX_PERCENTILE_CONT(test.b,Float64(0.5)) |",
+        "+---------------------------------------------+",
+        "| 10                                          |",
+        "+---------------------------------------------+",
     ];
 
     let df = create_test_table().await?;
