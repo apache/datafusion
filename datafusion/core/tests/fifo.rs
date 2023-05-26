@@ -340,7 +340,6 @@ mod unix_test {
     #[tokio::test]
     async fn test_sql_insert_into_fifo() -> Result<()> {
         // To make unbounded deterministic
-        // To make unbounded deterministic
         let waiting = Arc::new(AtomicBool::new(true));
         let waiting_thread = waiting.clone();
         // create local execution context
