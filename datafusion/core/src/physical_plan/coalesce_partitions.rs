@@ -23,7 +23,7 @@ use std::panic;
 use std::sync::Arc;
 use std::task::Poll;
 
-use futures::{FutureExt, Stream};
+use futures::{Future, Stream};
 use tokio::sync::mpsc;
 
 use arrow::datatypes::SchemaRef;
@@ -204,7 +204,10 @@ impl Stream for MergeStream {
         // If the input stream is done, wait for all tasks to finish and return
         // the failure if any.
         if let Poll::Ready(None) = poll {
-            match Box::pin(self.tasks.join_next()).poll_unpin(cx) {
+            let fut = self.tasks.join_next();
+            tokio::pin!(fut);
+
+            match fut.poll(cx) {
                 Poll::Ready(task_poll) => {
                     if let Some(Err(e)) = task_poll {
                         if e.is_panic() {
@@ -295,7 +298,7 @@ mod tests {
 
     #[tokio::test]
     #[should_panic(expected = "PanickingStream did panic")]
-    async fn test_panic() -> () {
+    async fn test_panic() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let schema =
