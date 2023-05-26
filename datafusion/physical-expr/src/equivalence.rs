@@ -21,7 +21,7 @@ use crate::{PhysicalSortExpr, PhysicalSortRequirement};
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ pub struct EquivalenceProperties<T = Column> {
     schema: SchemaRef,
 }
 
-impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
+impl<T: Eq + Clone> EquivalenceProperties<T> {
     pub fn new(schema: SchemaRef) -> Self {
         EquivalenceProperties {
             classes: vec![],
@@ -104,6 +104,29 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
     }
 }
 
+fn deduplicate_vector<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
+    let mut result = vec![];
+    for elem in in_data {
+        if !result.contains(&elem) {
+            result.push(elem);
+        }
+    }
+    result
+}
+
+fn get_elem_position<T: PartialEq>(in_data: &[T], elem: &T) -> Option<usize> {
+    in_data.iter().position(|item| item.eq(elem))
+}
+
+fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, elem: &T) -> bool {
+    if let Some(idx) = get_elem_position(in_data, elem) {
+        in_data.remove(idx);
+        true
+    } else {
+        false
+    }
+}
+
 /// `OrderingEquivalenceProperties` keeps track of columns that describe the
 /// global ordering of the schema. These columns are not necessarily same; e.g.
 /// ```text
@@ -131,22 +154,20 @@ pub struct EquivalentClass<T = Column> {
     /// First element in the EquivalentClass
     head: T,
     /// Other equal columns
-    others: HashSet<T>,
+    others: Vec<T>,
 }
 
-impl<T: Eq + Hash + Clone> EquivalentClass<T> {
+impl<T: Eq + Clone> EquivalentClass<T> {
     pub fn new(head: T, others: Vec<T>) -> EquivalentClass<T> {
-        EquivalentClass {
-            head,
-            others: HashSet::from_iter(others),
-        }
+        let others = deduplicate_vector(others);
+        EquivalentClass { head, others }
     }
 
     pub fn head(&self) -> &T {
         &self.head
     }
 
-    pub fn others(&self) -> &HashSet<T> {
+    pub fn others(&self) -> &[T] {
         &self.others
     }
 
@@ -155,15 +176,21 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     }
 
     pub fn insert(&mut self, col: T) -> bool {
-        self.head != col && self.others.insert(col)
+        if self.head != col && !self.others.contains(&col) {
+            self.others.push(col);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn remove(&mut self, col: &T) -> bool {
-        let removed = self.others.remove(col);
+        let removed = remove_from_vec(&mut self.others, col);
+        // If the the removed entry is head, shit other such that first entry becomes head in others.
         if !removed && *col == self.head {
-            let one_col = self.others.iter().next().cloned();
+            let one_col = self.others.first().cloned();
             if let Some(col) = one_col {
-                let removed = self.others.remove(&col);
+                let removed = remove_from_vec(&mut self.others, &col);
                 self.head = col;
                 removed
             } else {
@@ -444,6 +471,24 @@ mod tests {
         assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
         assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_deduplicate_vector() -> Result<()> {
+        assert_eq!(deduplicate_vector(vec![1, 1, 2, 3, 3]), vec![1, 2, 3]);
+        assert_eq!(
+            deduplicate_vector(vec![1, 2, 3, 4, 3, 2, 1, 0]),
+            vec![1, 2, 3, 4, 0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_elem_position() -> Result<()> {
+        assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &2), Some(2));
+        assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &1), Some(0));
+        assert_eq!(get_elem_position(&[1, 1, 2, 3, 3], &5), None);
         Ok(())
     }
 }
