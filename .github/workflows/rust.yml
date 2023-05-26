@@ -182,6 +182,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
+      - name: Setup docker
+        uses: docker-practice/actions-setup-docker@1.0.11
       - uses: actions/checkout@v3
         with:
           submodules: true
