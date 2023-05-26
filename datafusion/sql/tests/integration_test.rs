@@ -1495,8 +1495,8 @@ fn select_count_column() {
 #[test]
 fn select_approx_median() {
     let sql = "SELECT approx_median(age) FROM person";
-    let expected = "Projection: APPROXMEDIAN(person.age)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXMEDIAN(person.age)]]\
+    let expected = "Projection: APPROX_MEDIAN(person.age)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROX_MEDIAN(person.age)]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -2427,8 +2427,8 @@ fn approx_median_window() {
     let sql =
         "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
     let expected = "\
-        Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        Projection: orders.order_id, APPROX_MEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[APPROX_MEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
     quick_test(sql, expected);
 }
