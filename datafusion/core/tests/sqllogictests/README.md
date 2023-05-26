@@ -156,8 +156,6 @@ Then you need to add `INCLUDE_TPCH=true` to run tpch tests:
 INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
 ```
 
-
-
 #### Updating tests: Completion Mode
 
 In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the
@@ -196,20 +194,20 @@ query <type_string> <sort_mode>
 - `test_name`: Uniquely identify the test name (arrow-datafusion only)
 - `type_string`: A short string that specifies the number of result columns and the expected datatype of each result
   column. There is one character in the <type_string> for each result column. The characters codes are:
-    - 'B' - **B**oolean,
-    - 'D' - **D**atetime,
-    - 'I' - **I**nteger,
-    - 'P' - timestam**P**,
-    - 'R' - floating-point results,
-    - 'T' - **T**ext,
-    - "?" - any other types
+  - 'B' - **B**oolean,
+  - 'D' - **D**atetime,
+  - 'I' - **I**nteger,
+  - 'P' - timestam**P**,
+  - 'R' - floating-point results,
+  - 'T' - **T**ext,
+  - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
-    - floating point values are rounded to the scale of "12",
-    - NULL values are rendered as `NULL`,
-    - empty strings are rendered as `(empty)`,
-    - boolean values are rendered as `true`/`false`,
-    - this list can be not exhaustive, check the `datafusion/core/tests/sqllogictests/src/engines/conversion.rs` for
-      details.
+  - floating point values are rounded to the scale of "12",
+  - NULL values are rendered as `NULL`,
+  - empty strings are rendered as `(empty)`,
+  - boolean values are rendered as `true`/`false`,
+  - this list can be not exhaustive, check the `datafusion/core/tests/sqllogictests/src/engines/conversion.rs` for
+    details.
 - `sort_mode`: If included, it must be one of `nosort` (**default**), `rowsort`, or `valuesort`. In `nosort` mode, the
   results appear in exactly the order in which they were received from the database engine. The `nosort` mode should
   only be used on queries that have an `ORDER BY` clause or which only have a single row of result, since otherwise the
