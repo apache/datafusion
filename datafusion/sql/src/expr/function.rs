@@ -25,7 +25,7 @@ use datafusion_expr::{
     WindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr,
+    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
 };
 use std::str::FromStr;
 
@@ -54,17 +54,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // then, window function
-        if let Some(window) = function.over.take() {
+        if let Some(WindowType::WindowSpec(window)) = function.over.take() {
             let partition_by = window
                 .partition_by
                 .into_iter()
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
-            let order_by = window
-                .order_by
-                .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-                .collect::<Result<Vec<_>>>()?;
+            let order_by =
+                self.order_by_to_sort_expr(&window.order_by, schema, planner_context)?;
             let window_frame = window
                 .window_frame
                 .as_ref()

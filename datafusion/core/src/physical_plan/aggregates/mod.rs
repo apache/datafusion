@@ -30,7 +30,6 @@ use crate::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 use arrow::array::ArrayRef;
-use arrow::compute::DEFAULT_CAST_OPTIONS;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
@@ -883,7 +882,7 @@ fn aggregate_expressions(
                     .into_iter()
                     .map(|expr| {
                         pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
-                            Arc::new(CastExpr::new(expr, cast_type, DEFAULT_CAST_OPTIONS))
+                            Arc::new(CastExpr::new(expr, cast_type, None))
                         })
                     })
                     .collect::<Vec<_>>()
@@ -1736,8 +1735,8 @@ mod tests {
         eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &OrderedColumn::new(col_a.clone(), options1),
-            &OrderedColumn::new(col_c.clone(), options2),
+            &vec![OrderedColumn::new(col_a.clone(), options1)],
+            &vec![OrderedColumn::new(col_c.clone(), options2)],
         ));
 
         let order_by_exprs = vec![
