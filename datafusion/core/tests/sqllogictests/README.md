@@ -43,6 +43,52 @@ cargo test -p datafusion --test sqllogictests -- information_schema
 cargo test -p datafusion --test sqllogictests -- ddl --complete
 ```
 
+```shell
+# Run ddl.slt, printing debug logging to stdout
+RUST_LOG=debug cargo test -p datafusion --test sqllogictests -- ddl
+```
+
+#### Cookbook: Adding Tests
+
+1. Add queries
+
+Add the setup and queries you want to run to a `.slt` file
+(`my_awesome_test.slt` in this example) using the following format:
+
+```text
+query
+CREATE TABLE foo AS VALUES (1);
+
+query
+SELECT * from foo;
+```
+
+2. Fill in expected answers with `--complete` mode
+
+Running the following command will update `my_awesome_test.slt` with the expected output:
+
+```shell
+cargo test -p datafusion --test sqllogictests -- my_awesome_test --complete
+```
+
+3. Verify the content
+
+In the case above, `my_awesome_test.slt` will look something like
+
+```
+statement ok
+CREATE TABLE foo AS VALUES (1);
+
+query I
+SELECT * from foo;
+----
+1
+```
+
+Assuming it looks good, check it in!
+
+#### Reference
+
 #### Running tests: Validation Mode
 
 In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the file to the output produced by that run.
@@ -103,11 +149,11 @@ cargo test -p datafusion --test sqllogictests -- ddl --complete
 
 #### sqllogictests
 
-> :warning: **Warning**:Datafusion's sqllogictest implementation and migration is still in progress. Definitions taken from https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
-
 sqllogictest is a program originally written for SQLite to verify the correctness of SQL queries against the SQLite engine. The program is engine-agnostic and can parse sqllogictest files (`.slt`), runs queries against an SQL engine and compare the output to the expected output.
 
 Tests in the `.slt` file are a sequence of query record generally starting with `CREATE` statements to populate tables and then further queries to test the populated data (arrow-datafusion exception).
+
+Each `.slt` file runs in its own, isolated `SessionContext`, to make the test setup explicit and so they can run in parallel. Thus it important to keep the tests from having externally visible side effects (like writing to a global location such as `/tmp/`)
 
 Query records follow the format:
 
