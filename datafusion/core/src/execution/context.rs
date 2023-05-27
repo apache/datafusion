@@ -129,7 +129,7 @@ use super::options::{
 };
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
-/// This allows methods such [`SessionContext::read_csv`] and `[`SessionContext::read_avro`]
+/// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
 /// to take either a single file or multiple files.
 pub trait DataFilePaths {
     /// Parse to a vector of [`ListingTableUrl`] URLs.
@@ -777,8 +777,8 @@ impl SessionContext {
     /// Note in SQL queries, function names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
-    /// `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
+    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
     pub fn register_udf(&self, f: ScalarUDF) {
         self.state
             .write()
@@ -791,8 +791,8 @@ impl SessionContext {
     /// Note in SQL queries, aggregate names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
-    /// `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
+    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
+    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
     pub fn register_udaf(&self, f: AggregateUDF) {
         self.state
             .write()
@@ -938,7 +938,7 @@ impl SessionContext {
         ))
     }
 
-    /// Registers a [`ListingTable]` that can assemble multiple files
+    /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
     ///
