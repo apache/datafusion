@@ -1498,7 +1498,8 @@ pub struct Analyze {
 
 /// Extension operator defined outside of DataFusion
 // TODO(clippy): This clippy `allow` should be removed if
-// https://github.com/rust-lang/rust/issues/39128 is fixed.
+// the manual `PartialEq` is removed in favor of a derive.
+// (see `PartialEq` the impl for details.)
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Eq, Hash)]
 pub struct Extension {
