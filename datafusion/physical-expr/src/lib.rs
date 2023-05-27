@@ -60,5 +60,5 @@ pub use sort_expr::{PhysicalSortExpr, PhysicalSortRequirement};
 pub use utils::{
     expr_list_eq_any_order, expr_list_eq_strict_order,
     normalize_expr_with_equivalence_properties, normalize_out_expr_with_columns_map,
-    reverse_order_bys, sort_expr_list_eq_strict_order, split_conjunction,
+    reverse_order_bys, split_conjunction,
 };

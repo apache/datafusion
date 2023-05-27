@@ -2479,7 +2479,7 @@ fn select_groupby_orderby() {
     // expect that this is not an ambiguous reference
     let expected =
         "Sort: birth_date ASC NULLS LAST\
-         \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n  Projection: AVG(person.age) AS value, date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
          \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
          \n      TableScan: person";
     quick_test(sql, expected);

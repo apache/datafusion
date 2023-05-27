@@ -17,7 +17,6 @@
 
 //! Aggregate function module contains all built-in aggregate functions definitions
 
-use crate::utils::convert_camel_to_upper_snake;
 use crate::{type_coercion::aggregates::*, Signature, TypeSignature, Volatility};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
@@ -81,12 +80,43 @@ pub enum AggregateFunction {
     BoolOr,
 }
 
+impl AggregateFunction {
+    fn name(&self) -> &str {
+        use AggregateFunction::*;
+        match self {
+            Count => "COUNT",
+            Sum => "SUM",
+            Min => "MIN",
+            Max => "MAX",
+            Avg => "AVG",
+            Median => "MEDIAN",
+            ApproxDistinct => "APPROX_DISTINCT",
+            ArrayAgg => "ARRAY_AGG",
+            FirstValue => "FIRST_VALUE",
+            LastValue => "LAST_VALUE",
+            Variance => "VARIANCE",
+            VariancePop => "VARIANCE_POP",
+            Stddev => "STDDEV",
+            StddevPop => "STDDEV_POP",
+            Covariance => "COVARIANCE",
+            CovariancePop => "COVARIANCE_POP",
+            Correlation => "CORRELATION",
+            ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
+            ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
+            ApproxMedian => "APPROX_MEDIAN",
+            Grouping => "GROUPING",
+            BitAnd => "BIT_AND",
+            BitOr => "BIT_OR",
+            BitXor => "BIT_XOR",
+            BoolAnd => "BOOL_AND",
+            BoolOr => "BOOL_OR",
+        }
+    }
+}
+
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // uppercase of the debug.
-        // Convert Camel form to uppercase snake
-        // such as FirstValue => FIRST_VALUE
-        write!(f, "{}", convert_camel_to_upper_snake(format!("{self:?}")))
+        write!(f, "{}", self.name())
     }
 }
 
