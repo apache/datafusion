@@ -1948,6 +1948,7 @@ mod tests {
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
+    use std::ops::Not;
     use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {

@@ -120,6 +120,8 @@ impl SimplifyExpressions {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+
     use crate::simplify_expressions::utils::for_test::{
         cast_to_int64_expr, now_expr, to_timestamp_expr,
     };
