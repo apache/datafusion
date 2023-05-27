@@ -242,10 +242,8 @@ impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();
-        match res {
-            Some(_) => Ok(VisitRecursion::Continue),
-            None => Err(DataFusionError::Internal("Fail to format".to_string())),
-        }
+        res.ok_or(DataFusionError::Internal("Fail to format".to_string()))
+            .map(|_| VisitRecursion::Continue)
     }
 }
 

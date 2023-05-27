@@ -42,10 +42,15 @@ pub enum WindowFunction {
 /// Find DataFusion's built-in window function by name.
 pub fn find_df_window_func(name: &str) -> Option<WindowFunction> {
     let name = name.to_lowercase();
-    if let Ok(aggregate) = AggregateFunction::from_str(name.as_str()) {
-        Some(WindowFunction::AggregateFunction(aggregate))
-    } else if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name.as_str()) {
+    // Code paths for window functions leveraging ordinary aggregators and
+    // built-in window functions are quite different, and the same function
+    // may have different implementations for these cases. If the sought
+    // function is not found among built-in window functions, we search for
+    // it among aggregate functions.
+    if let Ok(built_in_function) = BuiltInWindowFunction::from_str(name.as_str()) {
         Some(WindowFunction::BuiltInWindowFunction(built_in_function))
+    } else if let Ok(aggregate) = AggregateFunction::from_str(name.as_str()) {
+        Some(WindowFunction::AggregateFunction(aggregate))
     } else {
         None
     }
@@ -53,19 +58,7 @@ pub fn find_df_window_func(name: &str) -> Option<WindowFunction> {
 
 impl fmt::Display for BuiltInWindowFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            BuiltInWindowFunction::RowNumber => write!(f, "ROW_NUMBER"),
-            BuiltInWindowFunction::Rank => write!(f, "RANK"),
-            BuiltInWindowFunction::DenseRank => write!(f, "DENSE_RANK"),
-            BuiltInWindowFunction::PercentRank => write!(f, "PERCENT_RANK"),
-            BuiltInWindowFunction::CumeDist => write!(f, "CUME_DIST"),
-            BuiltInWindowFunction::Ntile => write!(f, "NTILE"),
-            BuiltInWindowFunction::Lag => write!(f, "LAG"),
-            BuiltInWindowFunction::Lead => write!(f, "LEAD"),
-            BuiltInWindowFunction::FirstValue => write!(f, "FIRST_VALUE"),
-            BuiltInWindowFunction::LastValue => write!(f, "LAST_VALUE"),
-            BuiltInWindowFunction::NthValue => write!(f, "NTH_VALUE"),
-        }
+        write!(f, "{}", self.name())
     }
 }
 
@@ -110,6 +103,25 @@ pub enum BuiltInWindowFunction {
     LastValue,
     /// returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row
     NthValue,
+}
+
+impl BuiltInWindowFunction {
+    fn name(&self) -> &str {
+        use BuiltInWindowFunction::*;
+        match self {
+            RowNumber => "ROW_NUMBER",
+            Rank => "RANK",
+            DenseRank => "DENSE_RANK",
+            PercentRank => "PERCENT_RANK",
+            CumeDist => "CUME_DIST",
+            Ntile => "NTILE",
+            Lag => "LAG",
+            Lead => "LEAD",
+            FirstValue => "FIRST_VALUE",
+            LastValue => "LAST_VALUE",
+            NthValue => "NTH_VALUE",
+        }
+    }
 }
 
 impl FromStr for BuiltInWindowFunction {

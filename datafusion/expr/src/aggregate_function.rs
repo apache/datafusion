@@ -42,6 +42,10 @@ pub enum AggregateFunction {
     ApproxDistinct,
     /// array_agg
     ArrayAgg,
+    /// first_value
+    FirstValue,
+    /// last_value
+    LastValue,
     /// Variance (Sample)
     Variance,
     /// Variance (Population)
@@ -76,10 +80,43 @@ pub enum AggregateFunction {
     BoolOr,
 }
 
+impl AggregateFunction {
+    fn name(&self) -> &str {
+        use AggregateFunction::*;
+        match self {
+            Count => "COUNT",
+            Sum => "SUM",
+            Min => "MIN",
+            Max => "MAX",
+            Avg => "AVG",
+            Median => "MEDIAN",
+            ApproxDistinct => "APPROX_DISTINCT",
+            ArrayAgg => "ARRAY_AGG",
+            FirstValue => "FIRST_VALUE",
+            LastValue => "LAST_VALUE",
+            Variance => "VARIANCE",
+            VariancePop => "VARIANCE_POP",
+            Stddev => "STDDEV",
+            StddevPop => "STDDEV_POP",
+            Covariance => "COVARIANCE",
+            CovariancePop => "COVARIANCE_POP",
+            Correlation => "CORRELATION",
+            ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
+            ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
+            ApproxMedian => "APPROX_MEDIAN",
+            Grouping => "GROUPING",
+            BitAnd => "BIT_AND",
+            BitOr => "BIT_OR",
+            BitXor => "BIT_XOR",
+            BoolAnd => "BOOL_AND",
+            BoolOr => "BOOL_OR",
+        }
+    }
+}
+
 impl fmt::Display for AggregateFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // uppercase of the debug.
-        write!(f, "{}", format!("{self:?}").to_uppercase())
+        write!(f, "{}", self.name())
     }
 }
 
@@ -101,6 +138,8 @@ impl FromStr for AggregateFunction {
             "min" => AggregateFunction::Min,
             "sum" => AggregateFunction::Sum,
             "array_agg" => AggregateFunction::ArrayAgg,
+            "first_value" => AggregateFunction::FirstValue,
+            "last_value" => AggregateFunction::LastValue,
             // statistical
             "corr" => AggregateFunction::Correlation,
             "covar" => AggregateFunction::Covariance,
@@ -182,6 +221,9 @@ pub fn return_type(
             Ok(coerced_data_types[0].clone())
         }
         AggregateFunction::Grouping => Ok(DataType::Int32),
+        AggregateFunction::FirstValue | AggregateFunction::LastValue => {
+            Ok(coerced_data_types[0].clone())
+        }
     }
 }
 
@@ -232,7 +274,9 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::Stddev
         | AggregateFunction::StddevPop
         | AggregateFunction::Median
-        | AggregateFunction::ApproxMedian => {
+        | AggregateFunction::ApproxMedian
+        | AggregateFunction::FirstValue
+        | AggregateFunction::LastValue => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
         AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
