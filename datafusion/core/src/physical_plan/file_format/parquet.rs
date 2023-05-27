@@ -506,8 +506,8 @@ impl FileOpener for ParquetOpener {
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
 
-            let schema_mapping =
-                schema_adapter.map_schema_with_projection(builder.schema(), &projection)?;
+            let schema_mapping = schema_adapter
+                .map_schema_with_projection(builder.schema(), &projection)?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(

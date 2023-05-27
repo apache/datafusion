@@ -525,7 +525,7 @@ impl SchemaAdapter {
             }
         }
         Ok(SchemaMapping {
-            table_schema: Arc::new(self.table_schema.project(projections)?),
+            table_schema: self.table_schema.clone(),
             field_mappings,
         })
     }
@@ -542,22 +542,35 @@ pub struct SchemaMapping {
 impl SchemaMapping {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let mut mapped_cols = Vec::with_capacity(self.field_mappings.len());
+        let mut cols = Vec::with_capacity(self.field_mappings.len());
 
+        let batch_schema = batch.schema();
+        let batch_rows = batch.num_rows();
+        let batch_cols = batch.columns().to_vec();
         for (idx, data_type) in &self.field_mappings {
-            let array = batch.column(*idx);
-            let casted_array = arrow::compute::cast(array, data_type)?;
-            mapped_cols.push(casted_array);
+            let table_field = &self.table_schema.fields()[*idx];
+            if let Some((batch_idx, _name)) =
+                batch_schema.column_with_name(table_field.name().as_str())
+            {
+                cols.push(arrow::compute::cast(&batch_cols[batch_idx], data_type)?);
+            } else {
+                cols.push(new_null_array(table_field.data_type(), batch_rows))
+            }
         }
 
         // Necessary to handle empty batches
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
-        let record_batch = RecordBatch::try_new_with_options(
-            self.table_schema.clone(),
-            mapped_cols,
-            &options,
-        )?;
+        let batch_schema: SchemaRef;
+        if cols.len() != self.table_schema.fields.len() {
+            let projection: Vec<usize> =
+                self.field_mappings.iter().map(|(idx, _)| *idx).collect();
+            batch_schema = Arc::new(self.table_schema.project(&projection)?);
+        } else {
+            batch_schema = self.table_schema.clone();
+        }
+        let record_batch =
+            RecordBatch::try_new_with_options(batch_schema, cols, &options)?;
         Ok(record_batch)
     }
 }
@@ -918,8 +931,11 @@ fn get_projected_output_ordering(
 #[cfg(test)]
 mod tests {
     use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float64Type, UInt32Type};
-    use arrow_array::{Float32Array, StringArray, UInt64Array};
+    use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
+    use arrow_array::{
+        BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, StringArray,
+        UInt64Array,
+    };
     use chrono::Utc;
 
     use crate::{
@@ -1353,6 +1369,78 @@ mod tests {
         assert_eq!(c2.value(1), 5_u32);
         assert_eq!(c3.value(0), 2.0_f64);
         assert_eq!(c3.value(1), 7.0_f64);
+    }
+
+    #[test]
+    fn schema_adapter_map_schema_with_projection() {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Utf8, true),
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Int32, true),
+            Field::new("c4", DataType::Float32, true),
+        ]));
+
+        let adapter = SchemaAdapter::new(table_schema.clone());
+
+        let file_schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("c1", DataType::Boolean, true),
+            Field::new("c2", DataType::Float32, true),
+            Field::new("c3", DataType::Binary, true),
+            Field::new("c4", DataType::Int64, true),
+        ]);
+        let indices = vec![1, 2, 4];
+        let mapping = adapter
+            .map_schema_with_projection(&file_schema, &indices)
+            .unwrap();
+
+        let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let c1 = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let c2 = Float32Array::from(vec![Some(2.0_f32), Some(7.0_f32), Some(3.0_f32)]);
+        let c3 = BinaryArray::from_opt_vec(vec![
+            Some(b"hallo"),
+            Some(b"danke"),
+            Some(b"super"),
+        ]);
+        let c4 = Int64Array::from(vec![1, 2, 3]);
+        let batch = RecordBatch::try_new(
+            Arc::new(file_schema),
+            vec![
+                Arc::new(id),
+                Arc::new(c1),
+                Arc::new(c2),
+                Arc::new(c3),
+                Arc::new(c4),
+            ],
+        )
+        .unwrap();
+
+        let rows_num = batch.num_rows();
+        let mapped_batch = mapping.map_batch(batch).unwrap();
+
+        assert_eq!(
+            mapped_batch.schema(),
+            Arc::new(table_schema.project(&indices).unwrap())
+        );
+        assert_eq!(mapped_batch.num_columns(), indices.len());
+        assert_eq!(mapped_batch.num_rows(), rows_num);
+
+        let c1 = mapped_batch.column(0).as_string::<i32>();
+        let c2 = mapped_batch.column(1).as_primitive::<Float64Type>();
+        let c4 = mapped_batch.column(2).as_primitive::<Float32Type>();
+
+        assert_eq!(c1.value(0), "1");
+        assert_eq!(c1.value(1), "0");
+        assert_eq!(c1.value(2), "1");
+
+        assert_eq!(c2.value(0), 2.0_f64);
+        assert_eq!(c2.value(1), 7.0_f64);
+        assert_eq!(c2.value(2), 3.0_f64);
+
+        assert_eq!(c4.value(0), 1.0_f32);
+        assert_eq!(c4.value(1), 2.0_f32);
+        assert_eq!(c4.value(2), 3.0_f32);
     }
 
     // sets default for configs that play no role in projections
