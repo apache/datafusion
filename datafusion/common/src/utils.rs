@@ -725,4 +725,24 @@ mod tests {
         assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
         assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
     }
+
+    #[test]
+    fn arc_data_ptr_eq() {
+        let x = Arc::new(());
+        let y = Arc::new(());
+        let y_clone = Arc::clone(&y);
+
+        assert!(
+            Arc::data_ptr_eq(&x, &x),
+            "same `Arc`s should point to same data"
+        );
+        assert!(
+            !Arc::data_ptr_eq(&x, &y),
+            "different `Arc`s should point to different data"
+        );
+        assert!(
+            Arc::data_ptr_eq(&y, &y_clone),
+            "cloned `Arc` should point to same data as the original"
+        );
+    }
 }
