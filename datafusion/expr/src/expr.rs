@@ -32,7 +32,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::ops::Not;
 use std::sync::Arc;
 
 /// `Expr` is a central struct of DataFusion's query API, and
@@ -909,34 +908,6 @@ impl Expr {
     }
 }
 
-impl Not for Expr {
-    type Output = Self;
-
-    fn not(self) -> Self::Output {
-        match self {
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
-            _ => Expr::Not(Box::new(self)),
-        }
-    }
-}
-
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl fmt::Display for Expr {
@@ -1546,11 +1517,6 @@ mod test {
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.display_name()?);
         Ok(())
-    }
-
-    #[test]
-    fn test_not() {
-        assert_eq!(lit(1).not(), !lit(1));
     }
 
     #[test]
