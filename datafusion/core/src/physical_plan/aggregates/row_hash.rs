@@ -120,8 +120,8 @@ impl GroupedHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let group_by = agg.group_by.clone();
-        let filter_expr = agg.filter_expr.clone();
+        let agg_group_by = agg.group_by.clone();
+        let agg_filter_expr = agg.filter_expr.clone();
 
         let batch_size = context.session_config().batch_size();
         let scalar_update_factor = context.session_config().agg_scalar_update_factor();
@@ -130,7 +130,7 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let mut start_idx = group_by.expr.len();
+        let mut start_idx = agg_group_by.expr.len();
         let mut row_aggr_expr = vec![];
         let mut row_agg_indices = vec![];
         let mut row_aggregate_expressions = vec![];
@@ -145,7 +145,7 @@ impl GroupedHashAggregateStream {
         let all_aggregate_expressions =
             aggregates::aggregate_expressions(&agg.aggr_expr, &agg.mode, start_idx)?;
         let filter_expressions = match agg.mode {
-            AggregateMode::Partial | AggregateMode::Single => filter_expr,
+            AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; agg.aggr_expr.len()]
             }
@@ -185,7 +185,7 @@ impl GroupedHashAggregateStream {
 
         let row_aggr_schema = aggr_state_schema(&row_aggr_expr);
 
-        let group_schema = group_schema(&agg_schema, group_by.expr.len());
+        let group_schema = group_schema(&agg_schema, agg_group_by.expr.len());
         let row_converter = RowConverter::new(
             group_schema
                 .fields()
@@ -220,7 +220,7 @@ impl GroupedHashAggregateStream {
             row_converter,
             row_aggr_schema,
             row_aggr_layout,
-            group_by,
+            group_by: agg_group_by,
             aggr_state,
             exec_state,
             baseline_metrics,
