@@ -337,6 +337,10 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// An extension trait for smart pointers. Provides an interface to get a
+/// raw pointer to the data (with metadata stripped away).
+///
+/// This is useful to see if two smart pointers point to the same allocation.
 pub trait DataPtr {
     /// Returns a raw pointer to the data, stripping away all metadata.
     fn data_ptr(this: &Self) -> *const ();
