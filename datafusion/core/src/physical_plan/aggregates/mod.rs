@@ -348,16 +348,19 @@ fn output_group_expr_helper(group_by: &PhysicalGroupBy) -> Vec<Arc<dyn PhysicalE
         .collect()
 }
 
-/// This function return ordering requirement of the first non-reversible ordering sensitive aggregate function
-// such as ARRAY_AGG. This requirement serves initial requirement while calculating finest requirement among all
-// aggregate functions. If None, this means that there is no hard requirement for the aggregate functions (in the direction sense)
-// we could generate two alternative requirements that have opposite directions.
+/// This function returns the ordering requirement of the first non-reversible
+/// order-sensitive aggregate function such as ARRAY_AGG. This requirement serves
+/// as the initial requirement while calculating the finest requirement among all
+/// aggregate functions. If this function returns `None`, it means there is no
+/// hard ordering requirement for the aggregate functions (in terms of direction).
+/// Then, we can generate two alternative requirements with opposite directions.
 fn get_init_req(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     order_by_expr: &[Option<LexOrdering>],
 ) -> Option<LexOrdering> {
     for (aggr_expr, fn_reqs) in aggr_expr.iter().zip(order_by_expr.iter()) {
-        // Aggregate function is ordering sensitive, aggregate function cannot be reversed, and there is an ordering requirement
+        // If the aggregation function is a non-reversible order-sensitive function
+        // and there is a hard requirement, choose first such requirement:
         if is_order_sensitive(aggr_expr)
             && aggr_expr.reverse_expr().is_none()
             && fn_reqs.is_some()
@@ -379,14 +382,14 @@ fn get_finer_ordering<
     ordering_eq_properties: F2,
 ) -> Option<&'a [PhysicalSortExpr]> {
     if ordering_satisfy_concrete(provided, req, &eq_properties, &ordering_eq_properties) {
-        // Finer requirement is `provided`, since it satisfies the other
+        // Finer requirement is `provided`, since it satisfies the other:
         return Some(provided);
     }
     if ordering_satisfy_concrete(req, provided, &eq_properties, &ordering_eq_properties) {
-        // Finer requirement is `req`, since it satisfies the other
+        // Finer requirement is `req`, since it satisfies the other:
         return Some(req);
     }
-    // Neither of the `provided` and `req` satisfies other, these requirements are not compatible
+    // Neither `provided` nor `req` satisfies one another, they are incompatible.
     None
 }
 
@@ -419,8 +422,8 @@ fn get_finest_requirement<
                 *finest_req = finer.to_vec();
                 continue;
             }
-            // If an aggregate function is reversible, analyze whether its reverse direction is compatible
-            // with existing requirements
+            // If an aggregate function is reversible, analyze whether its reverse
+            // direction is compatible with existing requirements:
             if let Some(reverse) = aggr_expr.reverse_expr() {
                 let fn_req_reverse = reverse_order_bys(fn_req);
                 if let Some(finer) = get_finer_ordering(
@@ -429,8 +432,8 @@ fn get_finest_requirement<
                     &eq_properties,
                     &ordering_eq_properties,
                 ) {
-                    // We need to update `aggr_expr` with its reverse, because only its reverse requirement
-                    // is compatible with existing requirements
+                    // We need to update `aggr_expr` with its reverse, since only its
+                    // reverse requirement is compatible with existing requirements:
                     *aggr_expr = reverse;
                     *finest_req = finer.to_vec();
                     continue;
@@ -459,8 +462,8 @@ fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
         || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
-/// Calculate required input ordering for the `AggregateExec` by considering requirement of order-sensitive
-/// aggregate functions.
+/// Calculate the required input ordering for the [`AggregateExec`] by considering
+/// ordering requirements of order-sensitive aggregation functions.
 fn calc_required_input_ordering(
     input: &Arc<dyn ExecutionPlan>,
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
@@ -472,16 +475,16 @@ fn calc_required_input_ordering(
         if let Some(AggregationOrdering {
             ordering,
             // If the mode is FullyOrdered or PartiallyOrdered (i.e. we are
-            // running with bounded memory, without breaking pipeline), then
-            // we append aggregator ordering requirement to the existing
+            // running with bounded memory, without breaking the pipeline),
+            // then we append the aggregator ordering requirement to the existing
             // ordering. This way, we can still run with bounded memory.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
             ..
         }) = aggregation_ordering
         {
             if let Some(aggregator_requirement) = aggregator_requirement {
-                // Get the section of the input ordering that enables us to run in the
-                // FullyOrdered or PartiallyOrdered mode:
+                // Get the section of the input ordering that enables us to run in
+                // FullyOrdered or PartiallyOrdered modes:
                 let requirement_prefix =
                     if let Some(existing_ordering) = input.output_ordering() {
                         &existing_ordering[0..ordering.len()]
@@ -500,7 +503,7 @@ fn calc_required_input_ordering(
         } else {
             required_input_ordering = aggregator_requirement;
         }
-        // If existing ordering already satisfies the one of the required ordering(s)
+        // If existing ordering already satisfies one of the required ordering(s)
         // (required ordering and its reverse, when all ordering sensitive aggregate expressions can be reversed
         // such as when all ordering sensitive aggregate expressions are either FIRST_VALUE, LAST_VALUE)
         if ordering_satisfy_requirement(
@@ -582,9 +585,9 @@ impl AggregateExec {
                 .as_ref()
                 .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
             aggregator_requirements.push(aggregator_requirement);
-            // If all aggregate expressions are reversible, consider reverse requirement also.
-            // The reason is that existing ordering may satisfy naive requirement or reverse requirement.
-            // By considering all possible cases, we can generate better plans.
+            // If all aggregate expressions are reversible, also consider reverse
+            // requirement(s). The reason is that existing ordering may satisfy the
+            // given requirement or its reverse. By considering both, we can generate better plans.
             if aggr_expr
                 .iter()
                 .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
