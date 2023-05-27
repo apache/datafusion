@@ -37,12 +37,7 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
                 ))
             } else {
                 let field = fields.iter().find(|f| f.name() == s);
-                match field {
-                    None => Err(DataFusionError::Plan(format!(
-                        "Field {s} not found in struct"
-                    ))),
-                    Some(f) => Ok(f.as_ref().clone()),
-                }
+                field.ok_or(DataFusionError::Plan(format!("Field {s} not found in struct"))).map(|f| f.as_ref().clone())
             }
         }
         (DataType::Struct(_), _) => Err(DataFusionError::Plan(

@@ -1057,6 +1057,7 @@ dependencies = [
  "ahash",
  "arrow",
  "datafusion-common",
+ "lazy_static",
  "sqlparser",
 ]
 

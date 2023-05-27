@@ -28,7 +28,13 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
 
-/// Equivalence Properties is a vec of EquivalentClass.
+/// Represents a collection of [`EquivalentClass`] (equivalences
+/// between columns in relations)
+///
+/// This is used to represent both:
+///
+/// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
+/// 2. Ordering (like `A ASC = B ASC`), when `T` = [`OrderedColumn`]
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties<T = Column> {
     classes: Vec<EquivalentClass<T>>,
@@ -43,6 +49,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         }
     }
 
+    /// return the set of equivalences
     pub fn classes(&self) -> &[EquivalentClass<T>] {
         &self.classes
     }
@@ -51,6 +58,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         self.schema.clone()
     }
 
+    /// Add the [`EquivalentClass`] from `iter` to this list
     pub fn extend<I: IntoIterator<Item = EquivalentClass<T>>>(&mut self, iter: I) {
         for ec in iter {
             self.classes.push(ec)
@@ -190,7 +198,9 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     }
 }
 
-/// This object represents a [`Column`] with a definite ordering.
+/// This object represents a [`Column`] with a definite ordering, for
+/// example `A ASC` and is used to represent equivalent orderings in
+/// the optimizer.
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct OrderedColumn {
     pub col: Column,

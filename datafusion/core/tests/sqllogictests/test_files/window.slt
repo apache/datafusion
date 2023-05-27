@@ -2007,16 +2007,16 @@ query TT
 EXPLAIN SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
 ----
 logical_plan
-Projection: ARRAYAGG(aggregate_test_100.c13) AS array_agg1
---Aggregate: groupBy=[[]], aggr=[[ARRAYAGG(aggregate_test_100.c13)]]
+Projection: ARRAY_AGG(aggregate_test_100.c13) AS array_agg1
+--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(aggregate_test_100.c13)]]
 ----Limit: skip=0, fetch=1
 ------Sort: aggregate_test_100.c13 ASC NULLS LAST, fetch=1
 --------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
-ProjectionExec: expr=[ARRAYAGG(aggregate_test_100.c13)@0 as array_agg1]
---AggregateExec: mode=Final, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]
+ProjectionExec: expr=[ARRAY_AGG(aggregate_test_100.c13)@0 as array_agg1]
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
 ----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]
+------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------GlobalLimitExec: skip=0, fetch=1
 ------------SortExec: fetch=1, expr=[c13@0 ASC NULLS LAST]
@@ -3017,6 +3017,19 @@ SELECT a, b, c,
 0 0 3 11 96 11 2 10 36 10 36 11 5 11 9
 0 0 4 9 72 9 NULL 14 45 14 45 9 4 9 9
 
+#fn aggregate order by with window frame
+# In window expressions, aggregate functions should not have an ordering requirement, such requirements
+# should be defined in the window frame. Therefore, the query below should generate an error. Note that
+# PostgreSQL also behaves this way.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+SELECT SUM(b ORDER BY a ASC) OVER() as sum1
+       FROM annotated_data_infinite2
+
+# Even if, requirement of window clause and aggregate function match;
+# we should raise an error, when an ordering requirement is given to aggregate functions in window clauses.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_c
+       FROM annotated_data_infinite2
 
 statement ok
 drop table annotated_data_finite2

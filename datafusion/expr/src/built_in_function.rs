@@ -19,6 +19,7 @@
 
 use crate::Volatility;
 use datafusion_common::{DataFusionError, Result};
+use lazy_static::lazy_static;
 use std::fmt;
 use std::str::FromStr;
 
@@ -202,6 +203,120 @@ pub enum BuiltinScalarFunction {
     ArrowTypeof,
 }
 
+lazy_static! {
+    /// Mapping between SQL function names to `BuiltinScalarFunction` types.
+    /// Note that multiple SQL function names can represent the same `BuiltinScalarFunction`. These are treated as aliases.
+    /// In case of such aliases, the first SQL function name in the vector is used when displaying the function.
+    static ref NAME_TO_FUNCTION: Vec<(&'static str, BuiltinScalarFunction)> = vec![
+        // math functions
+        ("abs", BuiltinScalarFunction::Abs),
+        ("acos", BuiltinScalarFunction::Acos),
+        ("acosh", BuiltinScalarFunction::Acosh),
+        ("asin", BuiltinScalarFunction::Asin),
+        ("asinh", BuiltinScalarFunction::Asinh),
+        ("atan", BuiltinScalarFunction::Atan),
+        ("atanh", BuiltinScalarFunction::Atanh),
+        ("atan2", BuiltinScalarFunction::Atan2),
+        ("cbrt", BuiltinScalarFunction::Cbrt),
+        ("ceil", BuiltinScalarFunction::Ceil),
+        ("cos", BuiltinScalarFunction::Cos),
+        ("cosh", BuiltinScalarFunction::Cosh),
+        ("degrees", BuiltinScalarFunction::Degrees),
+        ("exp", BuiltinScalarFunction::Exp),
+        ("factorial", BuiltinScalarFunction::Factorial),
+        ("floor", BuiltinScalarFunction::Floor),
+        ("gcd", BuiltinScalarFunction::Gcd),
+        ("lcm", BuiltinScalarFunction::Lcm),
+        ("ln", BuiltinScalarFunction::Ln),
+        ("log", BuiltinScalarFunction::Log),
+        ("log10", BuiltinScalarFunction::Log10),
+        ("log2", BuiltinScalarFunction::Log2),
+        ("pi", BuiltinScalarFunction::Pi),
+        ("power", BuiltinScalarFunction::Power),
+        ("pow", BuiltinScalarFunction::Power),
+        ("radians", BuiltinScalarFunction::Radians),
+        ("random", BuiltinScalarFunction::Random),
+        ("round", BuiltinScalarFunction::Round),
+        ("signum", BuiltinScalarFunction::Signum),
+        ("sin", BuiltinScalarFunction::Sin),
+        ("sinh", BuiltinScalarFunction::Sinh),
+        ("sqrt", BuiltinScalarFunction::Sqrt),
+        ("tan", BuiltinScalarFunction::Tan),
+        ("tanh", BuiltinScalarFunction::Tanh),
+        ("trunc", BuiltinScalarFunction::Trunc),
+
+        // conditional functions
+        ("coalesce", BuiltinScalarFunction::Coalesce),
+        ("nullif", BuiltinScalarFunction::NullIf),
+
+        // string functions
+        ("ascii", BuiltinScalarFunction::Ascii),
+        ("bit_length", BuiltinScalarFunction::BitLength),
+        ("btrim", BuiltinScalarFunction::Btrim),
+        ("character_length", BuiltinScalarFunction::CharacterLength),
+        ("char_length", BuiltinScalarFunction::CharacterLength),
+        ("concat", BuiltinScalarFunction::Concat),
+        ("concat_ws", BuiltinScalarFunction::ConcatWithSeparator),
+        ("chr", BuiltinScalarFunction::Chr),
+        ("initcap", BuiltinScalarFunction::InitCap),
+        ("left", BuiltinScalarFunction::Left),
+        ("length", BuiltinScalarFunction::CharacterLength),
+        ("lower", BuiltinScalarFunction::Lower),
+        ("lpad", BuiltinScalarFunction::Lpad),
+        ("ltrim", BuiltinScalarFunction::Ltrim),
+        ("octet_length", BuiltinScalarFunction::OctetLength),
+        ("repeat", BuiltinScalarFunction::Repeat),
+        ("replace", BuiltinScalarFunction::Replace),
+        ("reverse", BuiltinScalarFunction::Reverse),
+        ("right", BuiltinScalarFunction::Right),
+        ("rpad", BuiltinScalarFunction::Rpad),
+        ("rtrim", BuiltinScalarFunction::Rtrim),
+        ("split_part", BuiltinScalarFunction::SplitPart),
+        ("starts_with", BuiltinScalarFunction::StartsWith),
+        ("strpos", BuiltinScalarFunction::Strpos),
+        ("substr", BuiltinScalarFunction::Substr),
+        ("to_hex", BuiltinScalarFunction::ToHex),
+        ("translate", BuiltinScalarFunction::Translate),
+        ("trim", BuiltinScalarFunction::Trim),
+        ("upper", BuiltinScalarFunction::Upper),
+        ("uuid", BuiltinScalarFunction::Uuid),
+
+        // regex functions
+        ("regexp_match", BuiltinScalarFunction::RegexpMatch),
+        ("regexp_replace", BuiltinScalarFunction::RegexpReplace),
+
+        // time/date functions
+        ("now", BuiltinScalarFunction::Now),
+        ("current_date", BuiltinScalarFunction::CurrentDate),
+        ("current_time", BuiltinScalarFunction::CurrentTime),
+        ("date_bin", BuiltinScalarFunction::DateBin),
+        ("date_trunc", BuiltinScalarFunction::DateTrunc),
+        ("datetrunc", BuiltinScalarFunction::DateTrunc),
+        ("date_part", BuiltinScalarFunction::DatePart),
+        ("datepart", BuiltinScalarFunction::DatePart),
+        ("to_timestamp", BuiltinScalarFunction::ToTimestamp),
+        ("to_timestamp_millis", BuiltinScalarFunction::ToTimestampMillis),
+        ("to_timestamp_micros", BuiltinScalarFunction::ToTimestampMicros),
+        ("to_timestamp_seconds", BuiltinScalarFunction::ToTimestampSeconds),
+        ("from_unixtime", BuiltinScalarFunction::FromUnixtime),
+
+        // hashing functions
+        ("digest", BuiltinScalarFunction::Digest),
+        ("md5", BuiltinScalarFunction::MD5),
+        ("sha224", BuiltinScalarFunction::SHA224),
+        ("sha256", BuiltinScalarFunction::SHA256),
+        ("sha384", BuiltinScalarFunction::SHA384),
+        ("sha512", BuiltinScalarFunction::SHA512),
+
+        // other functions
+        ("struct", BuiltinScalarFunction::Struct),
+        ("arrow_typeof", BuiltinScalarFunction::ArrowTypeof),
+
+        // array functions
+        ("make_array", BuiltinScalarFunction::MakeArray),
+    ];
+}
+
 impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
@@ -316,7 +431,13 @@ impl BuiltinScalarFunction {
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // lowercase of the debug.
+        for (func_name, func) in NAME_TO_FUNCTION.iter() {
+            if func == self {
+                return write!(f, "{}", func_name);
+            }
+        }
+
+        // Should not be reached
         write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
@@ -324,116 +445,32 @@ impl fmt::Display for BuiltinScalarFunction {
 impl FromStr for BuiltinScalarFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
-        Ok(match name {
-            // math functions
-            "abs" => BuiltinScalarFunction::Abs,
-            "acos" => BuiltinScalarFunction::Acos,
-            "acosh" => BuiltinScalarFunction::Acosh,
-            "asin" => BuiltinScalarFunction::Asin,
-            "asinh" => BuiltinScalarFunction::Asinh,
-            "atan" => BuiltinScalarFunction::Atan,
-            "atanh" => BuiltinScalarFunction::Atanh,
-            "atan2" => BuiltinScalarFunction::Atan2,
-            "cbrt" => BuiltinScalarFunction::Cbrt,
-            "ceil" => BuiltinScalarFunction::Ceil,
-            "cos" => BuiltinScalarFunction::Cos,
-            "cosh" => BuiltinScalarFunction::Cosh,
-            "degrees" => BuiltinScalarFunction::Degrees,
-            "exp" => BuiltinScalarFunction::Exp,
-            "factorial" => BuiltinScalarFunction::Factorial,
-            "floor" => BuiltinScalarFunction::Floor,
-            "gcd" => BuiltinScalarFunction::Gcd,
-            "lcm" => BuiltinScalarFunction::Lcm,
-            "ln" => BuiltinScalarFunction::Ln,
-            "log" => BuiltinScalarFunction::Log,
-            "log10" => BuiltinScalarFunction::Log10,
-            "log2" => BuiltinScalarFunction::Log2,
-            "pi" => BuiltinScalarFunction::Pi,
-            "power" | "pow" => BuiltinScalarFunction::Power,
-            "radians" => BuiltinScalarFunction::Radians,
-            "random" => BuiltinScalarFunction::Random,
-            "round" => BuiltinScalarFunction::Round,
-            "signum" => BuiltinScalarFunction::Signum,
-            "sin" => BuiltinScalarFunction::Sin,
-            "sinh" => BuiltinScalarFunction::Sinh,
-            "sqrt" => BuiltinScalarFunction::Sqrt,
-            "tan" => BuiltinScalarFunction::Tan,
-            "tanh" => BuiltinScalarFunction::Tanh,
-            "trunc" => BuiltinScalarFunction::Trunc,
-
-            // conditional functions
-            "coalesce" => BuiltinScalarFunction::Coalesce,
-            "nullif" => BuiltinScalarFunction::NullIf,
-
-            // string functions
-            "ascii" => BuiltinScalarFunction::Ascii,
-            "bit_length" => BuiltinScalarFunction::BitLength,
-            "btrim" => BuiltinScalarFunction::Btrim,
-            "char_length" => BuiltinScalarFunction::CharacterLength,
-            "character_length" => BuiltinScalarFunction::CharacterLength,
-            "concat" => BuiltinScalarFunction::Concat,
-            "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
-            "chr" => BuiltinScalarFunction::Chr,
-            "initcap" => BuiltinScalarFunction::InitCap,
-            "left" => BuiltinScalarFunction::Left,
-            "length" => BuiltinScalarFunction::CharacterLength,
-            "lower" => BuiltinScalarFunction::Lower,
-            "lpad" => BuiltinScalarFunction::Lpad,
-            "ltrim" => BuiltinScalarFunction::Ltrim,
-            "octet_length" => BuiltinScalarFunction::OctetLength,
-            "repeat" => BuiltinScalarFunction::Repeat,
-            "replace" => BuiltinScalarFunction::Replace,
-            "reverse" => BuiltinScalarFunction::Reverse,
-            "right" => BuiltinScalarFunction::Right,
-            "rpad" => BuiltinScalarFunction::Rpad,
-            "rtrim" => BuiltinScalarFunction::Rtrim,
-            "split_part" => BuiltinScalarFunction::SplitPart,
-            "starts_with" => BuiltinScalarFunction::StartsWith,
-            "strpos" => BuiltinScalarFunction::Strpos,
-            "substr" => BuiltinScalarFunction::Substr,
-            "to_hex" => BuiltinScalarFunction::ToHex,
-            "translate" => BuiltinScalarFunction::Translate,
-            "trim" => BuiltinScalarFunction::Trim,
-            "upper" => BuiltinScalarFunction::Upper,
-            "uuid" => BuiltinScalarFunction::Uuid,
-
-            // regex functions
-            "regexp_match" => BuiltinScalarFunction::RegexpMatch,
-            "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
-
-            // time/date functions
-            "now" => BuiltinScalarFunction::Now,
-            "current_date" => BuiltinScalarFunction::CurrentDate,
-            "current_time" => BuiltinScalarFunction::CurrentTime,
-            "date_bin" => BuiltinScalarFunction::DateBin,
-            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
-            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
-            "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
-            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
-            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
-            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
-            "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
-
-            // hashing functions
-            "digest" => BuiltinScalarFunction::Digest,
-            "md5" => BuiltinScalarFunction::MD5,
-            "sha224" => BuiltinScalarFunction::SHA224,
-            "sha256" => BuiltinScalarFunction::SHA256,
-            "sha384" => BuiltinScalarFunction::SHA384,
-            "sha512" => BuiltinScalarFunction::SHA512,
-
-            // other functions
-            "struct" => BuiltinScalarFunction::Struct,
-            "arrow_typeof" => BuiltinScalarFunction::ArrowTypeof,
-
-            // array functions
-            "make_array" => BuiltinScalarFunction::MakeArray,
-
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {name}"
-                )))
+        for (func_name, func) in NAME_TO_FUNCTION.iter() {
+            if name == *func_name {
+                return Ok(func.clone());
             }
-        })
+        }
+
+        Err(DataFusionError::Plan(format!(
+            "There is no built-in function named {name}"
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    // Test for BuiltinScalarFunction's Display and from_str() implementations.
+    // For each variant in BuiltinScalarFunction, it converts the variant to a string
+    // and then back to a variant. The test asserts that the original variant and
+    // the reconstructed variant are the same.
+    fn test_display_and_from_str() {
+        for (_, func_original) in NAME_TO_FUNCTION.iter() {
+            let func_name = func_original.to_string();
+            let func_from_str = BuiltinScalarFunction::from_str(&func_name).unwrap();
+            assert_eq!(func_from_str, *func_original);
+        }
     }
 }
