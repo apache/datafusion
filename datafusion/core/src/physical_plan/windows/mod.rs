@@ -283,7 +283,7 @@ pub(crate) fn window_ordering_equivalence(
             }
         }
     }
-    builder.ordering_equivalence()
+    builder.build()
 }
 #[cfg(test)]
 mod tests {
