@@ -542,6 +542,8 @@ enum ScalarFunction {
   ArrayPrepend = 88;
   ArrayConcat = 89;
   ArrayFill = 90;
+  ArrayDims = 91;
+  ArrayLength = 92;
 }
 
 message ScalarFunctionNode {

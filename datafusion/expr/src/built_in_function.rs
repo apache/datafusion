@@ -108,6 +108,10 @@ pub enum BuiltinScalarFunction {
     ArrayConcat,
     /// array_fill
     ArrayFill,
+    /// array_length
+    ArrayLength,
+    /// array_dims
+    ArrayDims,
     /// array_ndims
     ArrayNdims,
 
@@ -270,6 +274,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
@@ -449,6 +455,8 @@ impl FromStr for BuiltinScalarFunction {
             "array_prepend" => BuiltinScalarFunction::ArrayPrepend,
             "array_concat" => BuiltinScalarFunction::ArrayConcat,
             "array_fill" => BuiltinScalarFunction::ArrayFill,
+            "array_length" => BuiltinScalarFunction::ArrayLength,
+            "array_dims" => BuiltinScalarFunction::ArrayDims,
             "array_ndims" => BuiltinScalarFunction::ArrayNdims,
 
             _ => {

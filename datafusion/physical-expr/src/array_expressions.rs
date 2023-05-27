@@ -429,20 +429,57 @@ pub fn array_fill(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(res)
 }
 
-/// Array_ndims SQL function
-pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let array = match &args[0] {
-        ColumnarValue::Array(array) => array.clone(),
+/// Array_length SQL function
+pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arr = match &args[0] {
         ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+        ColumnarValue::Array(arr) => arr.clone(),
     };
+    let mut element: u8 = 1;
+    if args.len() == 2 {
+        let scalar = match &args[1] {
+            ColumnarValue::Scalar(scalar) => scalar.clone(),
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Array_fill function requires positive integer scalar element"
+                        .to_string(),
+                ))
+            }
+        };
 
-    fn count_ndims(result: i64, array: ArrayRef) -> Result<i64> {
+        element = match scalar {
+            ScalarValue::Int8(Some(value)) => value as u8,
+            ScalarValue::Int16(Some(value)) => value as u8,
+            ScalarValue::Int32(Some(value)) => value as u8,
+            ScalarValue::Int64(Some(value)) => value as u8,
+            ScalarValue::UInt8(Some(value)) => value as u8,
+            ScalarValue::UInt16(Some(value)) => value as u8,
+            ScalarValue::UInt32(Some(value)) => value as u8,
+            ScalarValue::UInt64(Some(value)) => value as u8,
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Array_fill function requires positive integer scalar element"
+                        .to_string(),
+                ))
+            }
+        };
+
+        if element == 0 {
+            return Err(DataFusionError::Internal(
+                "Array_fill function requires positive integer scalar element"
+                    .to_string(),
+            ));
+        }
+    }
+
+    fn compute_array_length(arg: u8, array: ArrayRef, element: u8) -> Result<Option<u8>> {
         match array.data_type() {
             DataType::List(..) => {
                 let list_array = downcast_arg!(array, ListArray);
-                match list_array.is_empty() {
-                    true => Ok(result),
-                    false => count_ndims(result + 1, list_array.value(0)),
+                if arg == element + 1 {
+                    Ok(Some(list_array.len() as u8))
+                } else {
+                    compute_array_length(arg + 1, list_array.value(0), element)
                 }
             }
             DataType::Null
@@ -458,23 +495,112 @@ pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
-            | DataType::UInt64 => Ok(result),
+            | DataType::UInt64 => {
+                if arg == element + 1 {
+                    Ok(Some(array.len() as u8))
+                } else {
+                    Ok(None)
+                }
+            }
             data_type => Err(DataFusionError::NotImplemented(format!(
                 "Array is not implemented for type '{data_type:?}'."
             ))),
         }
     }
-    let result: i64 = 0;
-    Ok(ColumnarValue::Array(Arc::new(Int64Array::from(vec![
-        count_ndims(result, array)?,
+    let arg: u8 = 1;
+    Ok(ColumnarValue::Array(Arc::new(UInt8Array::from(vec![
+        compute_array_length(arg, arr, element.clone())?,
+    ]))))
+}
+
+/// Array_dims SQL function
+pub fn array_dims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arr = match &args[0] {
+        ColumnarValue::Array(arr) => arr.clone(),
+        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+    };
+
+    fn compute_array_dims(
+        arg: &mut Vec<ScalarValue>,
+        arr: ArrayRef,
+    ) -> Result<&mut Vec<ScalarValue>> {
+        match arr.data_type() {
+            DataType::List(..) => {
+                let list_array = downcast_arg!(arr, ListArray).value(0);
+                arg.push(ScalarValue::UInt8(Some(list_array.len() as u8)));
+                return compute_array_dims(arg, list_array);
+            }
+            DataType::Null
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Boolean
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => Ok(arg),
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array is not implemented for type '{data_type:?}'."
+            ))),
+        }
+    }
+
+    let list_field = Arc::new(Field::new("item", DataType::UInt8, true));
+    let mut arg: Vec<ScalarValue> = vec![];
+    Ok(ColumnarValue::Scalar(ScalarValue::List(
+        Some(compute_array_dims(&mut arg, arr)?.clone()),
+        list_field,
+    )))
+}
+
+/// Array_ndims SQL function
+pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arr = match &args[0] {
+        ColumnarValue::Array(arr) => arr.clone(),
+        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+    };
+
+    fn compute_array_ndims(arg: u8, arr: ArrayRef) -> Result<u8> {
+        match arr.data_type() {
+            DataType::List(..) => {
+                let list_array = downcast_arg!(arr, ListArray);
+                compute_array_ndims(arg + 1, list_array.value(0))
+            }
+            DataType::Null
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Boolean
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => Ok(arg),
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array is not implemented for type '{data_type:?}'."
+            ))),
+        }
+    }
+    let arg: u8 = 0;
+    Ok(ColumnarValue::Array(Arc::new(UInt8Array::from(vec![
+        compute_array_ndims(arg, arr)?,
     ]))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
-    use datafusion_common::cast::{as_int64_array, as_list_array};
+    use arrow::array::UInt8Array;
+    use datafusion_common::cast::{as_list_array, as_uint8_array};
     use datafusion_common::scalar::ScalarValue;
 
     #[test]
@@ -675,6 +801,161 @@ mod tests {
     }
 
     #[test]
+    fn test_array_length() {
+        let values_builder = Int64Builder::new();
+        let mut builder = ListBuilder::new(values_builder);
+        builder.values().append_value(1);
+        builder.append(true);
+        builder.values().append_value(2);
+        builder.append(true);
+        let list_array = ColumnarValue::Array(Arc::new(builder.finish().value(0)));
+
+        // array_length([1, 2]) = 2
+        let array = array_length(&[list_array.clone()])
+            .expect("failed to initialize function array_ndims")
+            .into_array(1);
+        let result =
+            as_uint8_array(&array).expect("failed to initialize function array_ndims");
+
+        assert_eq!(result, &UInt8Array::from(vec![1]));
+
+        // array_length([1, 2], 1) = 2
+        let array = array_length(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::UInt8(Some(1_u8))),
+        ])
+        .expect("failed to initialize function array_ndims")
+        .into_array(1);
+        let result =
+            as_uint8_array(&array).expect("failed to initialize function array_ndims");
+
+        assert_eq!(result, &UInt8Array::from(vec![1]));
+    }
+
+    #[test]
+    fn test_nested_array_length() {
+        let int64_values_builder = Int64Builder::new();
+        let list_values_builder = ListBuilder::new(int64_values_builder);
+
+        let mut builder = ListBuilder::new(list_values_builder);
+        builder.values().values().append_value(1);
+        builder.values().append(true);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.values().values().append_value(5);
+        builder.values().append(true);
+        builder.values().values().append_value(6);
+        builder.values().append(true);
+        builder.append(true);
+        let list_array = ColumnarValue::Array(Arc::new(builder.finish()));
+
+        // array_length([[1, 2, 3], [4, 5, 6]], 1) = 2
+        let array = array_length(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::UInt8(Some(1_u8))),
+        ])
+        .expect("failed to initialize function array_length")
+        .into_array(1);
+        let result =
+            as_uint8_array(&array).expect("failed to initialize function array_length");
+
+        assert_eq!(result, &UInt8Array::from(vec![1]));
+
+        // array_length([[1, 2, 3], [4, 5, 6]], 2) = 3
+        let array = array_length(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::UInt8(Some(2_u8))),
+        ])
+        .expect("failed to initialize function array_length")
+        .into_array(1);
+        let result =
+            as_uint8_array(&array).expect("failed to initialize function array_length");
+
+        assert_eq!(result, &UInt8Array::from(vec![3]));
+
+        // array_length([[1, 2, 3], [4, 5, 6]], 3) = NULL
+        let array = array_length(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::UInt8(Some(3_u8))),
+        ])
+        .expect("failed to initialize function array_length")
+        .into_array(1);
+        let result =
+            as_uint8_array(&array).expect("failed to initialize function array_length");
+
+        assert_eq!(result, &UInt8Array::from(vec![None]));
+    }
+
+    #[test]
+    fn test_array_dims() {
+        // array_dims([1, 2]) = [2]
+        let values_builder = Int64Builder::new();
+        let mut builder = ListBuilder::new(values_builder);
+        builder.values().append_value(1);
+        builder.append(true);
+        builder.values().append_value(2);
+        builder.append(true);
+        let list_array = builder.finish();
+
+        let array = array_dims(&[ColumnarValue::Array(Arc::new(list_array))])
+            .expect("failed to initialize function array_dims")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_dims");
+
+        assert_eq!(
+            &[2],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_array_dims() {
+        // array_dims([[1, 2], [3, 4]]) = [2, 2]
+        let int64_values_builder = Int64Builder::new();
+        let list_values_builder = ListBuilder::new(int64_values_builder);
+
+        let mut builder = ListBuilder::new(list_values_builder);
+        builder.values().values().append_value(1);
+        builder.values().append(true);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(3);
+        builder.values().append(true);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        let list_array = builder.finish();
+
+        let array = array_dims(&[ColumnarValue::Array(Arc::new(list_array))])
+            .expect("failed to initialize function array_dims")
+            .into_array(1);
+        let result =
+            as_list_array(&array).expect("failed to initialize function array_dims");
+
+        assert_eq!(
+            &[2, 1],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
     fn test_array_ndims() {
         // array_ndims([1, 2]) = 1
         let values_builder = Int64Builder::new();
@@ -689,9 +970,9 @@ mod tests {
             .expect("failed to initialize function array_ndims")
             .into_array(1);
         let result =
-            as_int64_array(&array).expect("failed to initialize function array_ndims");
+            as_uint8_array(&array).expect("failed to initialize function array_ndims");
 
-        assert_eq!(result, &Int64Array::from(vec![1]),);
+        assert_eq!(result, &UInt8Array::from(vec![1]));
     }
 
     #[test]
@@ -717,8 +998,8 @@ mod tests {
             .expect("failed to initialize function array_ndims")
             .into_array(1);
         let result =
-            as_int64_array(&array).expect("failed to initialize function array_ndims");
+            as_uint8_array(&array).expect("failed to initialize function array_ndims");
 
-        assert_eq!(result, &Int64Array::from(vec![2]),);
+        assert_eq!(result, &UInt8Array::from(vec![2]));
     }
 }

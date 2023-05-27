@@ -151,7 +151,9 @@ pub fn return_type(
             input_expr_types[0].clone(),
             true,
         )))),
-        BuiltinScalarFunction::ArrayNdims => Ok(DataType::Int64),
+        BuiltinScalarFunction::ArrayLength => Ok(DataType::UInt8),
+        BuiltinScalarFunction::ArrayDims => Ok(DataType::UInt8),
+        BuiltinScalarFunction::ArrayNdims => Ok(DataType::UInt8),
         BuiltinScalarFunction::Ascii => Ok(DataType::Int32),
         BuiltinScalarFunction::BitLength => {
             utf8_to_int_type(&input_expr_types[0], "bit_length")
@@ -360,6 +362,8 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::ArrayPrepend => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayConcat => Signature::variadic_any(fun.volatility()),
         BuiltinScalarFunction::ArrayFill => Signature::any(2, fun.volatility()),
+        BuiltinScalarFunction::ArrayLength => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayDims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::ArrayNdims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::Struct => Signature::variadic(
             struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),

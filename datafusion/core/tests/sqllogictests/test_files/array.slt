@@ -97,6 +97,42 @@ select array_concat(make_array([[1]]), make_array([[2]]));
 ----
 [[[1]], [[2]]]
 
+# array_length scalar function
+query III rowsort
+select array_length(make_array(1, 2, 3, 4, 5)), array_length(make_array(1, 2, 3)), array_length(make_array([1, 2], [3, 4], [5, 6]));
+----
+5 3 3
+
+# array_length scalar function #2
+query III rowsort
+select array_length(make_array(1, 2, 3, 4, 5), 1), array_length(make_array(1, 2, 3), 1), array_length(make_array([1, 2], [3, 4], [5, 6]), 1);
+----
+5 3 3
+
+# array_length scalar function #3
+query III rowsort
+select array_length(make_array(1, 2, 3, 4, 5), 2), array_length(make_array(1, 2, 3), 2), array_length(make_array([1, 2], [3, 4], [5, 6]), 2);
+----
+NULL NULL 2
+
+# array_length scalar function #4
+query IIII rowsort
+select array_length(array_fill(3, [3, 2, 5]), 1), array_length(array_fill(3, [3, 2, 5]), 2), array_length(array_fill(3, [3, 2, 5]), 3), array_length(array_fill(3, [3, 2, 5]), 4);
+----
+3 2 5 NULL
+
+# array_dims scalar function
+query III rowsort
+select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
+----
+[3] [2, 2] [1, 1, 1, 2, 1]
+
+# array_dims scalar function #2
+query II rowsort
+select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4]));
+----
+[1, 2, 3] [2, 5, 4]
+
 # array_ndims scalar function
 query III rowsort
 select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
@@ -104,7 +140,7 @@ select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4]))
 1 2 5
 
 # array_ndims scalar function #2
-query I rowsort
-select array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
+query II rowsort
+select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
 ----
-21
+3 21

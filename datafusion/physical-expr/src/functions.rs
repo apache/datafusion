@@ -390,6 +390,8 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
         BuiltinScalarFunction::ArrayConcat => Arc::new(array_expressions::array_concat),
         BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
+        BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
+        BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
         BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
 
         // string functions

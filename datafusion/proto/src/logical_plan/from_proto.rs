@@ -450,6 +450,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayFill => Self::ArrayFill,
+            ScalarFunction::ArrayLength => Self::ArrayLength,
+            ScalarFunction::ArrayDims => Self::ArrayDims,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
@@ -1162,7 +1164,7 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::ArrayPrepend => Ok(array_append(
+                ScalarFunction::ArrayPrepend => Ok(array_prepend(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
@@ -1176,6 +1178,13 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
+                ScalarFunction::ArrayLength => Ok(array_length(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayDims => {
+                    Ok(array_dims(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::ArrayNdims => {
                     Ok(array_ndims(parse_expr(&args[0], registry)?))
                 }

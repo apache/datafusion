@@ -534,6 +534,18 @@ scalar_expr!(
     "returns an array filled with copies of the given value, having dimensions of the lengths specified by the second argument."
 );
 scalar_expr!(
+    ArrayLength,
+    array_length,
+    array dimension,
+    "returns the length of the array dimension."
+);
+scalar_expr!(
+    ArrayDims,
+    array_dims,
+    array,
+    "returns the array's dimensions."
+);
+scalar_expr!(
     ArrayNdims,
     array_ndims,
     array,
@@ -904,6 +916,8 @@ mod test {
         test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayFill, array_fill, element, array);
+        test_scalar_expr!(ArrayLength, array_length, array, element);
+        test_unary_scalar_expr!(ArrayDims, array_dims);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
