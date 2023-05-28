@@ -279,6 +279,11 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn simple_scalar_function_abs() -> Result<()> {
+        roundtrip("SELECT ABS(a) FROM data").await
+    }
+
+    #[tokio::test]
     async fn case_without_base_expression() -> Result<()> {
         roundtrip(
             "SELECT (CASE WHEN a >= 0 THEN 'positive' ELSE 'negative' END) FROM data",
