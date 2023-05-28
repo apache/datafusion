@@ -350,14 +350,14 @@ impl TreeNodeRewriter for OrInListSimplifier {
                     if lhs.expr.try_into_col().is_ok()
                         && rhs.expr.try_into_col().is_ok()
                         && lhs.expr == rhs.expr
-                        && lhs.negated == false
-                        && rhs.negated == false
+                        && !lhs.negated
+                        && !rhs.negated
                     {
                         let mut list = vec![];
                         list.extend(lhs.list);
                         list.extend(rhs.list);
                         let merged_inlist = InList {
-                            expr: lhs.expr.clone(),
+                            expr: lhs.expr,
                             list,
                             negated: false,
                         };

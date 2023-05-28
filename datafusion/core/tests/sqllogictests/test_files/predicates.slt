@@ -249,6 +249,37 @@ SELECT * FROM test WHERE column1 IN ('foo', 'Bar', 'fazzz')
 foo
 fazzz
 
+
+# Test logical plan simplifies large OR chains
+
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz'
+----
+logical_plan
+Filter: test.column1 = Utf8("foo") OR test.column1 = Utf8("bar") OR test.column1 = Utf8("fazzz")
+--TableScan: test projection=[column1]
+
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz' OR column1 = 'barfoo'
+----
+logical_plan
+Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo")])
+--TableScan: test projection=[column1]
+
+query TT
+EXPLAIN SELECT * FROM test WHERE column1 = 'foo' OR column1 = 'bar' OR column1 = 'fazzz' OR column1 = 'barfoo' OR false OR column1 = 'foobar'
+----
+logical_plan
+Filter: test.column1 IN ([Utf8("foo"), Utf8("bar"), Utf8("fazzz"), Utf8("barfoo"), Utf8("foobar")])
+--TableScan: test projection=[column1]
+
+statement ok
+set datafusion.explain.logical_plan_only = false
+
+
 # async fn test_expect_all
 query IR
 SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT ALL SELECT int_col, double_col FROM alltypes_plain where int_col < 1
