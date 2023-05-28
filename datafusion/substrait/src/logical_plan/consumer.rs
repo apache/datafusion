@@ -782,17 +782,24 @@ pub async fn from_substrait_rex(
                 for arg in f.arguments.iter() {
                     match &arg.arg_type {
                         Some(ArgType::Value(e)) => {
-                            args.push(from_substrait_rex(e, input_schema, extensions).await?.as_ref().clone());
-                        }  
-                        e => return Err(DataFusionError::NotImplemented(format!(
-                            "Invalid arguments for scalar function: {e:?}"
-                        ))),            
+                            args.push(
+                                from_substrait_rex(e, input_schema, extensions)
+                                    .await?
+                                    .as_ref()
+                                    .clone(),
+                            );
+                        }
+                        e => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "Invalid arguments for scalar function: {e:?}"
+                            )))
+                        }
                     }
                 }
-                
+
                 Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
                     fun: fun?,
-                    args
+                    args,
                 })))
             }
         },
