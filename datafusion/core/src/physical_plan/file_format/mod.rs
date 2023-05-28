@@ -569,14 +569,13 @@ impl SchemaMapping {
         // Necessary to handle empty batches
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
-        let batch_schema: SchemaRef;
-        if cols.len() != self.table_schema.fields.len() {
+        let batch_schema: SchemaRef = if cols.len() != self.table_schema.fields.len() {
             let projection: Vec<usize> =
                 self.field_mappings.iter().map(|(idx, _)| *idx).collect();
-            batch_schema = Arc::new(self.table_schema.project(&projection)?);
+            Arc::new(self.table_schema.project(&projection)?)
         } else {
-            batch_schema = self.table_schema.clone();
-        }
+            self.table_schema.clone()
+        };
         let record_batch =
             RecordBatch::try_new_with_options(batch_schema, cols, &options)?;
         Ok(record_batch)

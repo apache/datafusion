@@ -793,7 +793,7 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::{ArrayRef, Float32Array, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::Schema;
     use arrow::record_batch::RecordBatch;
     use arrow::{
@@ -812,6 +812,7 @@ mod tests {
     use object_store::ObjectMeta;
     use std::fs::File;
     use std::io::Write;
+    use arrow_array::Date64Array;
     use tempfile::TempDir;
 
     struct RoundTripResult {
@@ -1463,7 +1464,12 @@ mod tests {
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
         let c4: ArrayRef =
-            Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0_f32), None]));
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                None,
+                Some(259200000),
+            ]));
+            // Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0_f32), None]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![
@@ -1487,7 +1493,8 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
         assert_contains!(read.unwrap_err().to_string(),
-                         "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
+            "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
+                         // "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
     }
 
     #[tokio::test]
