@@ -3041,6 +3041,17 @@ mod tests {
     }
 
     #[test]
+    fn simplify_large_or() {
+        let expr = (0..5)
+            .map(|i| col("c1").eq(lit(i)))
+            .fold(lit(false), |acc, e| acc.or(e));
+        assert_eq!(
+            simplify(expr),
+            in_list(col("c1"), (0..5).map(lit).collect(), false),
+        );
+    }
+
+    #[test]
     fn simplify_expr_bool_and() {
         // col & true is always col
         assert_eq!(simplify(col("c2").and(lit(true))), col("c2"),);
