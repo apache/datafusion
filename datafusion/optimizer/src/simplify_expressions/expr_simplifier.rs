@@ -344,12 +344,23 @@ impl TreeNodeRewriter for OrInListSimplifier {
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
             if *op == Operator::Or {
-                // TODO: Possible to make this more efficient?
                 let left = as_inlist(left);
                 let right = as_inlist(right);
-                if let (Some(mut left), Some(mut right)) = (left, right) {
-                    if mergeable_inlist(&left, &right) {
-                        let merged_inlist = merge_inlist(&mut left, &mut right);
+                if let (Some(lhs), Some(rhs)) = (left, right) {
+                    if lhs.expr.try_into_col().is_ok()
+                        && rhs.expr.try_into_col().is_ok()
+                        && lhs.expr == rhs.expr
+                        && lhs.negated == false
+                        && rhs.negated == false
+                    {
+                        let mut list = vec![];
+                        list.extend(lhs.list);
+                        list.extend(rhs.list);
+                        let merged_inlist = InList {
+                            expr: lhs.expr.clone(),
+                            list,
+                            negated: false,
+                        };
                         return Ok(Expr::InList(merged_inlist));
                     }
                 }
@@ -382,31 +393,6 @@ fn as_inlist(expr: &Expr) -> Option<InList> {
             }
         }
         _ => None,
-    }
-}
-
-/// Are two in-list expressions compatible for merging?
-///
-/// Only in-list expressions with the same column and negation status
-fn mergeable_inlist(a: &InList, b: &InList) -> bool {
-    a.expr.try_into_col().is_ok()
-        && b.expr.try_into_col().is_ok()
-        && a.expr == b.expr
-        && a.negated == b.negated
-}
-
-/// Merge two in-list expressions into a single in-list expression
-fn merge_inlist(a: &mut InList, b: &mut InList) -> InList {
-    assert_eq!(a.expr, b.expr);
-
-    let mut list = vec![];
-    list.append(&mut a.list);
-    list.append(&mut b.list);
-
-    InList {
-        expr: a.expr.clone(),
-        list,
-        negated: false,
     }
 }
 
@@ -3038,6 +3024,13 @@ mod tests {
             )),
             col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
+
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) ->
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
+        );
+        assert_eq!(simplify(expr.clone()), expr);
     }
 
     #[test]
