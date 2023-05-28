@@ -36,10 +36,11 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
-    abs, acos, acosh, array, array_append, array_concat, array_fill, array_ndims,
-    array_prepend, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim, cbrt, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh, date_bin,
-    date_part, date_trunc, degrees, digest, exp,
+    abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
+    array_length, array_ndims, array_position, array_positions, array_prepend,
+    array_remove, array_replace, array_to_string, ascii, asin, asinh, atan, atan2, atanh,
+    bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
+    concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees, digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -1175,6 +1176,28 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::ArrayFill => Ok(array_fill(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayPosition => Ok(array_position(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayPositions => Ok(array_positions(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayRemove => Ok(array_remove(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayReplace => Ok(array_replace(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayToString => Ok(array_to_string(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),

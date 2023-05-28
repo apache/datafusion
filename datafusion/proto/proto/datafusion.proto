@@ -544,6 +544,11 @@ enum ScalarFunction {
   ArrayFill = 90;
   ArrayDims = 91;
   ArrayLength = 92;
+  ArrayPosition = 93;
+  ArrayPositions = 94;
+  ArrayRemove = 95;
+  ArrayReplace = 96;
+  ArrayToString = 97;
 }
 
 message ScalarFunctionNode {

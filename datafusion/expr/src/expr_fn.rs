@@ -534,6 +534,36 @@ scalar_expr!(
     "returns an array filled with copies of the given value, having dimensions of the lengths specified by the second argument."
 );
 scalar_expr!(
+    ArrayPosition,
+    array_position,
+    array element index,
+    ""
+);
+scalar_expr!(
+    ArrayPositions,
+    array_positions,
+    array element,
+    ""
+);
+scalar_expr!(
+    ArrayRemove,
+    array_remove,
+    array element,
+    ""
+);
+scalar_expr!(
+    ArrayReplace,
+    array_replace,
+    array from to,
+    ""
+);
+scalar_expr!(
+    ArrayToString,
+    array_to_string,
+    array delimeter null_string,
+    ""
+);
+scalar_expr!(
     ArrayLength,
     array_length,
     array dimension,
@@ -916,6 +946,10 @@ mod test {
         test_scalar_expr!(ArrayAppend, array_append, array, element);
         test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayFill, array_fill, element, array);
+        test_scalar_expr!(ArrayPosition, array_position, array, element, index);
+        test_scalar_expr!(ArrayPositions, array_positions, array, element);
+        test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        tests_scalar_expr!(ArrayReplace, array_replace, array, element);
         test_scalar_expr!(ArrayLength, array_length, array, element);
         test_unary_scalar_expr!(ArrayDims, array_dims);
         test_unary_scalar_expr!(ArrayNdims, array_ndims);

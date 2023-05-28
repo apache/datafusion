@@ -108,6 +108,16 @@ pub enum BuiltinScalarFunction {
     ArrayConcat,
     /// array_fill
     ArrayFill,
+    /// array_position
+    ArrayPosition,
+    /// array_positions
+    ArrayPositions,
+    /// array_remove
+    ArrayRemove,
+    /// array_replace
+    ArrayReplace,
+    /// array_to_string
+    ArrayToString,
     /// array_length
     ArrayLength,
     /// array_dims
@@ -274,6 +284,11 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
@@ -455,6 +470,11 @@ impl FromStr for BuiltinScalarFunction {
             "array_prepend" => BuiltinScalarFunction::ArrayPrepend,
             "array_concat" => BuiltinScalarFunction::ArrayConcat,
             "array_fill" => BuiltinScalarFunction::ArrayFill,
+            "array_position" => BuiltinScalarFunction::ArrayPosition,
+            "array_positions" => BuiltinScalarFunction::ArrayPositions,
+            "array_remove" => BuiltinScalarFunction::ArrayRemove,
+            "array_replace" => BuiltinScalarFunction::ArrayReplace,
+            "array_to_string" => BuiltinScalarFunction::ArrayToString,
             "array_length" => BuiltinScalarFunction::ArrayLength,
             "array_dims" => BuiltinScalarFunction::ArrayDims,
             "array_ndims" => BuiltinScalarFunction::ArrayNdims,

@@ -151,6 +151,38 @@ pub fn return_type(
             input_expr_types[0].clone(),
             true,
         )))),
+        BuiltinScalarFunction::ArrayPosition => Ok(DataType::UInt8),
+        BuiltinScalarFunction::ArrayPositions => Ok(DataType::UInt8),
+        BuiltinScalarFunction::ArrayRemove => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept list as the first argument"
+            ))),
+        },
+        BuiltinScalarFunction::ArrayReplace => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept list as the first argument"
+            ))),
+        },
+        BuiltinScalarFunction::ArrayToString => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept list as the first argument"
+            ))),
+        },
         BuiltinScalarFunction::ArrayLength => Ok(DataType::UInt8),
         BuiltinScalarFunction::ArrayDims => Ok(DataType::UInt8),
         BuiltinScalarFunction::ArrayNdims => Ok(DataType::UInt8),
@@ -362,6 +394,11 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::ArrayPrepend => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayConcat => Signature::variadic_any(fun.volatility()),
         BuiltinScalarFunction::ArrayFill => Signature::any(2, fun.volatility()),
+        BuiltinScalarFunction::ArrayPosition => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayPositions => Signature::any(2, fun.volatility()),
+        BuiltinScalarFunction::ArrayRemove => Signature::any(2, fun.volatility()),
+        BuiltinScalarFunction::ArrayReplace => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayToString => Signature::variadic_any(fun.volatility()),
         BuiltinScalarFunction::ArrayLength => Signature::variadic_any(fun.volatility()),
         BuiltinScalarFunction::ArrayDims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::ArrayNdims => Signature::any(1, fun.volatility()),
