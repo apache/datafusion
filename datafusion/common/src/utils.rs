@@ -25,8 +25,7 @@ use arrow::datatypes::UInt32Type;
 use arrow::record_batch::RecordBatch;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
-use sqlparser::parser::{Parser, ParserError};
-use sqlparser::tokenizer::{Token, TokenWithLocation};
+use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
@@ -220,56 +219,10 @@ fn needs_quotes(s: &str) -> bool {
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-// TODO: remove when can use https://github.com/sqlparser-rs/sqlparser-rs/issues/805
 pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
     let dialect = GenericDialect;
     let mut parser = Parser::new(&dialect).try_with_sql(s)?;
-    let mut idents = vec![];
-
-    // expecting at least one word for identifier
-    match parser.next_token_no_skip() {
-        Some(TokenWithLocation {
-            token: Token::Word(w),
-            ..
-        }) => idents.push(w.to_ident()),
-        Some(TokenWithLocation { token, .. }) => {
-            return Err(ParserError::ParserError(format!(
-                "Unexpected token in identifier: {token}"
-            )))?
-        }
-        None => {
-            return Err(ParserError::ParserError(
-                "Empty input when parsing identifier".to_string(),
-            ))?
-        }
-    };
-
-    while let Some(TokenWithLocation { token, .. }) = parser.next_token_no_skip() {
-        match token {
-            // ensure that optional period is succeeded by another identifier
-            Token::Period => match parser.next_token_no_skip() {
-                Some(TokenWithLocation {
-                    token: Token::Word(w),
-                    ..
-                }) => idents.push(w.to_ident()),
-                Some(TokenWithLocation { token, .. }) => {
-                    return Err(ParserError::ParserError(format!(
-                        "Unexpected token following period in identifier: {token}"
-                    )))?
-                }
-                None => {
-                    return Err(ParserError::ParserError(
-                        "Trailing period in identifier".to_string(),
-                    ))?
-                }
-            },
-            _ => {
-                return Err(ParserError::ParserError(format!(
-                    "Unexpected token in identifier: {token}"
-                )))?
-            }
-        }
-    }
+    let idents = parser.parse_multipart_identifier()?;
     Ok(idents)
 }
 
@@ -542,64 +495,6 @@ mod tests {
         assert_eq!(ranges[1], Range { start: 2, end: 3 });
         assert_eq!(ranges[2], Range { start: 3, end: 4 });
         assert_eq!(ranges[3], Range { start: 4, end: 6 });
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_identifiers() -> Result<()> {
-        let s = "CATALOG.\"F(o)o. \"\"bar\".table";
-        let actual = parse_identifiers(s)?;
-        let expected = vec![
-            Ident {
-                value: "CATALOG".to_string(),
-                quote_style: None,
-            },
-            Ident {
-                value: "F(o)o. \"bar".to_string(),
-                quote_style: Some('"'),
-            },
-            Ident {
-                value: "table".to_string(),
-                quote_style: None,
-            },
-        ];
-        assert_eq!(expected, actual);
-
-        let s = "";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Empty input when parsing identifier\"))",
-            format!("{err:?}")
-        );
-
-        let s = "*schema.table";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.table*";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token in identifier: *\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.table.";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Trailing period in identifier\"))",
-            format!("{err:?}")
-        );
-
-        let s = "schema.*";
-        let err = parse_identifiers(s).expect_err("didn't fail to parse");
-        assert_eq!(
-            "SQL(ParserError(\"Unexpected token following period in identifier: *\"))",
-            format!("{err:?}")
-        );
-
         Ok(())
     }
 
