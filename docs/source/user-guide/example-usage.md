@@ -81,6 +81,27 @@ async fn main() -> datafusion::error::Result<()> {
 +---+--------+
 ```
 
+## Arrow Versions
+
+
+Many of DataFusion's public APIs use types from the
+[`arrow`](https://docs.rs/arrow/latest/arrow/) crate, so if you use
+`arrow` in your project, its version must match that used by
+DataFusion.
+
+The easiest way to ensure the versions match is to use the `arrow`
+exported by DataFusion, for example:
+
+```rust
+use datafusion::arrow::datatypes::Schema;
+```
+
+If the versions are mismatched, you may see errors such as
+
+```
+mismatched types [E0308] expected `Schema`, found `arrow_schema::Schema` Note: `arrow_schema::Schema` and `Schema` have similar names, but are actually distinct types Note: `arrow_schema::Schema` is defined in crate `arrow_schema` Note: `Schema` is defined in crate `arrow_schema` Note: perhaps two different versions of crate `arrow_schema` are being used? Note: associated function defined here
+```
+
 ## Identifiers and Capitalization
 
 Please be aware that all identifiers are effectively made lower-case in SQL, so if your csv file has capital letters (ex: `Name`) you must put your column name in double quotes or the examples won't work.
@@ -175,7 +196,7 @@ codegen-units = 1
 
 Then, in `main.rs.` update the memory allocator with the below after your imports:
 
-```rust,ignore
+```rust
 use datafusion::prelude::*;
 
 #[global_allocator]

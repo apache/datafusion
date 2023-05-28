@@ -35,7 +35,6 @@ https://arrow.apache.org/datafusion/ contains the project's documentation.
 
 The [example usage] section in the user guide and the [datafusion-examples] code in the crate contain information on using DataFusion.
 
-
 ## Contributing to DataFusion
 
 The [developer’s guide] contains information on how to contribute.
