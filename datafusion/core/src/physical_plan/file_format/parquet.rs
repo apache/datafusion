@@ -506,13 +506,13 @@ impl FileOpener for ParquetOpener {
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
 
-            let schema_mapping = schema_adapter
+            let (schema_mapping, adapted_projections) = schema_adapter
                 .map_schema_with_projection(builder.schema(), &projection)?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
                 builder.parquet_schema(),
-                projection.iter().cloned(),
+                adapted_projections.iter().cloned(),
             );
 
             // Filter pushdown: evaluate predicates during scan
@@ -890,7 +890,6 @@ mod tests {
                     .unwrap(),
                 ),
             };
-
             // If testing with page_index_predicate, write parquet
             // files with multiple pages
             let multi_page = page_index_predicate;
