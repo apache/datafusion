@@ -39,7 +39,6 @@ The [example usage] section in the user guide and the [datafusion-examples] code
 
 The [developer’s guide] contains information on how to contribute.
 
-
 [example usage]: https://arrow.apache.org/datafusion/user-guide/example-usage.html
 [datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
 [developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
