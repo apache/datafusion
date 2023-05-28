@@ -64,6 +64,11 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
 };
 
+enum ScalarFunctionType {
+    Builtin(BuiltinScalarFunction),
+    Op(Operator),
+}
+
 pub fn name_to_op(name: &str) -> Result<Operator> {
     match name {
         "equal" => Ok(Operator::Eq),
@@ -97,12 +102,24 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
     }
 }
 
-pub fn name_to_scalar_function(name: &str) -> Result<BuiltinScalarFunction> {
+fn name_to_scalar_function(name: &str) -> Result<BuiltinScalarFunction> {
     match name {
         "abs" => Ok(BuiltinScalarFunction::Abs),
+        "power" => Ok(BuiltinScalarFunction::Power),
+        "substr" => Ok(BuiltinScalarFunction::Substr),
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported function name: {name:?}"
         ))),
+    }
+}
+
+fn name_to_op_or_scalar_function(name: &str) -> Result<ScalarFunctionType> {
+    match name_to_op(name) {
+        Ok(op) => Ok(ScalarFunctionType::Op(op)),
+        Err(_) => match name_to_scalar_function(name) {
+            Ok(scalar_func) => Ok(ScalarFunctionType::Builtin(scalar_func)),
+            Err(e) => Err(e),
+        },
     }
 }
 
@@ -743,27 +760,47 @@ pub async fn from_substrait_rex(
             2 => match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
                 (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
                     let op = match extensions.get(&f.function_reference) {
-                        Some(fname) => name_to_op(fname),
+                        Some(fname) => name_to_op_or_scalar_function(fname),
                         None => Err(DataFusionError::NotImplemented(format!(
                             "Aggregated function not found: function reference = {:?}",
                             f.function_reference
                         ))),
                     };
-                    Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(
-                            from_substrait_rex(l, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone(),
-                        ),
-                        op: op?,
-                        right: Box::new(
-                            from_substrait_rex(r, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone(),
-                        ),
-                    })))
+                    match op {
+                        Ok(ScalarFunctionType::Op(op)) => {
+                            return Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(
+                                    from_substrait_rex(l, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ),
+                                op,
+                                right: Box::new(
+                                    from_substrait_rex(r, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ),
+                            })))
+                        }
+                        Ok(ScalarFunctionType::Builtin(fun)) => {
+                            Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
+                                fun,
+                                args: vec![
+                                    from_substrait_rex(l, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                    from_substrait_rex(r, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ],
+                            })))
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(
                     "Invalid arguments for binary expression: {l:?} and {r:?}"
