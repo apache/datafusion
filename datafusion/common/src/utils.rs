@@ -355,10 +355,10 @@ pub trait DataPtr {
     }
 }
 
-/// Currently, it's brittle to compare `Arc`s of dyn traits with `Arc::ptr_eq`
-/// due to this check including v-table equality. It may be possible to use
-/// `Arc::ptr_eq` directly if a fix to https://github.com/rust-lang/rust/issues/103763
-/// is stabilized.
+// Currently, it's brittle to compare `Arc`s of dyn traits with `Arc::ptr_eq`
+// due to this check including v-table equality. It may be possible to use
+// `Arc::ptr_eq` directly if a fix to https://github.com/rust-lang/rust/issues/103763
+// is stabilized.
 impl<T: ?Sized> DataPtr for Arc<T> {
     fn data_ptr(this: &Self) -> *const () {
         Arc::as_ptr(this) as *const ()
