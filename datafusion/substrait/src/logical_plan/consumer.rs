@@ -756,17 +756,17 @@ pub async fn from_substrait_rex(
             })))
         }
         Some(RexType::ScalarFunction(f)) => match f.arguments.len() {
-            // BinaryExpr
+            // BinaryExpr or ScalarFunction
             2 => match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
                 (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
-                    let op = match extensions.get(&f.function_reference) {
+                    let op_or_fun = match extensions.get(&f.function_reference) {
                         Some(fname) => name_to_op_or_scalar_function(fname),
                         None => Err(DataFusionError::NotImplemented(format!(
                             "Aggregated function not found: function reference = {:?}",
                             f.function_reference
                         ))),
                     };
-                    match op {
+                    match op_or_fun {
                         Ok(ScalarFunctionType::Op(op)) => {
                             return Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
                                 left: Box::new(
@@ -806,6 +806,7 @@ pub async fn from_substrait_rex(
                     "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
             },
+            // ScalarFunction
             _ => {
                 let fun = match extensions.get(&f.function_reference) {
                     Some(fname) => name_to_scalar_function(fname),
