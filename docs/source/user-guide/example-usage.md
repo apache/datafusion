@@ -83,7 +83,6 @@ async fn main() -> datafusion::error::Result<()> {
 
 ## Arrow Versions
 
-
 Many of DataFusion's public APIs use types from the
 [`arrow`](https://docs.rs/arrow/latest/arrow/) crate, so if you use
 `arrow` in your project, its version must match that used by
