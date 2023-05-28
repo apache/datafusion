@@ -31,10 +31,16 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 
 https://arrow.apache.org/datafusion/ contains the project's documentation.
 
-## Getting Started Using DataFusion
+## Using DataFusion
 
-Please see the [example usage](https://arrow.apache.org/datafusion/user-guide/example-usage.html) in the user guide and the [datafusion-examples](https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples) crate for more information on how to use DataFusion.
+The [example usage] section in the user guide and the [datafusion-examples] code in the crate contain information on using DataFusion.
 
-## Getting Started Contributing to DataFusion
 
-Please see the [developer’s guide](https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide) for more information on how to contribute.
+## Contributing to DataFusion
+
+The [developer’s guide] contains information on how to contribute.
+
+
+[example usage]: https://arrow.apache.org/datafusion/user-guide/example-usage.html
+[datafusion-examples]: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
+[developer’s guide]: https://arrow.apache.org/datafusion/contributor-guide/index.html#developer-s-guide
