@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                 opt.batch_size,
                 compression,
             )
-                .await
+            .await
         }
     }
 }
@@ -261,7 +261,7 @@ async fn register_tables(
                 opt.file_format.as_str(),
                 opt.partitions,
             )
-                .await?
+            .await?
         };
 
         if opt.mem_table {
@@ -533,8 +533,8 @@ mod tests {
     }
 
     fn get_tpch_data_path() -> Result<String> {
-        let path = std::env::var("TPCH_DATA")
-            .unwrap_or_else(|_| "benchmarks/data".to_string());
+        let path =
+            std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
         if !Path::new(&path).exists() {
             return Err(DataFusionError::Execution(format!(
                 "Benchmark data not found (set TPCH_DATA env var to override): {}",

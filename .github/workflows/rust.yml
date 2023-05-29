@@ -205,7 +205,7 @@ jobs:
           mv *.tbl ../datafusion/core/tests/sqllogictests/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
-          export TPCH_DATA=`$(realpath datafusion/core/tests/sqllogictests/test_files/tpch/data)`
+          export TPCH_DATA=`realpath datafusion/core/tests/sqllogictests/test_files/tpch/data`
           cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
           INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
       - name: Verify Working Directory Clean
