@@ -344,8 +344,8 @@ pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
             return Ok(ColumnarValue::Array(Arc::new(make_array(list))));
         }
-        data_type => Err(DataFusionError::NotImplemented(format!(
-            "Array is not implemented for type '{data_type:?}'."
+        _ => Err(DataFusionError::NotImplemented(format!(
+            "Array is not type '{data_type:?}'."
         ))),
     }
 }
@@ -491,10 +491,10 @@ pub fn array_position(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 )),
             };
 
-        if index <= 0 {
+        if index == 0 {
             index = 0;
         } else {
-            index = index - 1;
+            index -= 1;
         }
     }
 
@@ -513,11 +513,9 @@ pub fn array_position(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::UInt16 => position!(arr, element, index, UInt16Array),
             DataType::UInt32 => position!(arr, element, index, UInt32Array),
             DataType::UInt64 => position!(arr, element, index, UInt64Array),
-            data_type => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Array_position is not implemented for types '{data_type:?}'."
-                )))
-            }
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array_position is not implemented for types '{data_type:?}'."
+            ))),
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
@@ -554,7 +552,7 @@ pub fn array_positions(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         _ => {
             return Err(DataFusionError::Internal(
-                "Array_position function requires scalar element".to_string(),
+                "Array_positions function requires scalar element".to_string(),
             ))
         }
     };
@@ -574,11 +572,9 @@ pub fn array_positions(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::UInt16 => positions!(arr, element, UInt16Array),
             DataType::UInt32 => positions!(arr, element, UInt32Array),
             DataType::UInt64 => positions!(arr, element, UInt64Array),
-            data_type => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Array_positions is not implemented for types '{data_type:?}'."
-                )))
-            }
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array_positions is not implemented for types '{data_type:?}'."
+            ))),
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
@@ -704,7 +700,7 @@ pub fn array_replace(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         _ => {
             return Err(DataFusionError::Internal(
-                "Array_remove function requires scalar element".to_string(),
+                "array_replace function requires scalar element".to_string(),
             ))
         }
     };
@@ -713,14 +709,14 @@ pub fn array_replace(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         _ => {
             return Err(DataFusionError::Internal(
-                "Array_remove function requires scalar element".to_string(),
+                "array_replace function requires scalar element".to_string(),
             ))
         }
     };
 
     if from.data_type() != to.data_type() {
         return Err(DataFusionError::Internal(
-            "Array_remove function requires scalar element".to_string(),
+            "array_replace function requires scalar element".to_string(),
         ));
     }
 
@@ -743,7 +739,7 @@ pub fn array_replace(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 (DataType::UInt64, DataType::UInt64) => replace!(arr, from, to, UInt64Array, UInt64Builder),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Array_remove is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
+                        "Array_replace is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
                     )))
                 }
             }
@@ -786,7 +782,7 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(scalar) => scalar.clone(),
         _ => {
             return Err(DataFusionError::Internal(
-                "Array_remove function requires scalar element".to_string(),
+                "Array_to_string function requires scalar element".to_string(),
             ))
         }
     };
@@ -852,7 +848,7 @@ pub fn trim_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(scalar) => scalar.clone(),
         _ => {
             return Err(DataFusionError::Internal(
-                "Array_position function requires positive integer scalar element"
+                "Trim_array function requires positive integer scalar element"
                     .to_string(),
             ))
         }
@@ -869,7 +865,7 @@ pub fn trim_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ScalarValue::UInt64(Some(value)) => value as usize,
         _ => {
             return Err(DataFusionError::Internal(
-                "Array_position function requires positive integer scalar element"
+                "Trim_array function requires positive integer scalar element"
                     .to_string(),
             ))
         }
@@ -927,7 +923,7 @@ pub fn cardinality(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let mut arg: u64 = 0;
     Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(vec![
-        compute_cardinality(&mut arg, arr)?.clone(),
+        *compute_cardinality(&mut arg, arr)?,
     ]))))
 }
 
@@ -943,7 +939,7 @@ pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Scalar(scalar) => scalar.clone(),
             _ => {
                 return Err(DataFusionError::Internal(
-                    "Array_fill function requires positive integer scalar element"
+                    "Array_length function requires positive integer scalar element"
                         .to_string(),
                 ))
             }
@@ -954,13 +950,13 @@ pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ScalarValue::Int16(Some(value)) => value as u8,
             ScalarValue::Int32(Some(value)) => value as u8,
             ScalarValue::Int64(Some(value)) => value as u8,
-            ScalarValue::UInt8(Some(value)) => value as u8,
+            ScalarValue::UInt8(Some(value)) => value,
             ScalarValue::UInt16(Some(value)) => value as u8,
             ScalarValue::UInt32(Some(value)) => value as u8,
             ScalarValue::UInt64(Some(value)) => value as u8,
             _ => {
                 return Err(DataFusionError::Internal(
-                    "Array_fill function requires positive integer scalar element"
+                    "Array_length function requires positive integer scalar element"
                         .to_string(),
                 ))
             }
@@ -968,7 +964,7 @@ pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
         if element == 0 {
             return Err(DataFusionError::Internal(
-                "Array_fill function requires positive integer scalar element"
+                "Array_length function requires positive integer scalar element"
                     .to_string(),
             ));
         }

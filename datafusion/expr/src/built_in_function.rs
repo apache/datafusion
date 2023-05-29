@@ -99,20 +99,24 @@ pub enum BuiltinScalarFunction {
     Trunc,
 
     // array functions
-    /// construct an array from columns
-    MakeArray,
     /// array_append
     ArrayAppend,
-    /// array_prepend
-    ArrayPrepend,
     /// array_concat
     ArrayConcat,
+    /// array_dims
+    ArrayDims,
     /// array_fill
     ArrayFill,
+    /// array_length
+    ArrayLength,
+    /// array_ndims
+    ArrayNdims,
     /// array_position
     ArrayPosition,
     /// array_positions
     ArrayPositions,
+    /// array_prepend
+    ArrayPrepend,
     /// array_remove
     ArrayRemove,
     /// array_replace
@@ -121,14 +125,10 @@ pub enum BuiltinScalarFunction {
     ArrayToString,
     /// cardinality
     Cardinality,
+    /// construct an array from columns
+    MakeArray,
     /// trim_array
     TrimArray,
-    /// array_length
-    ArrayLength,
-    /// array_dims
-    ArrayDims,
-    /// array_ndims
-    ArrayNdims,
 
     // string functions
     /// ascii
@@ -343,21 +343,21 @@ lazy_static! {
         ("arrow_typeof", BuiltinScalarFunction::ArrowTypeof),
 
         // array functions
-        ("make_array", BuiltinScalarFunction::MakeArray),
         ("array_append", BuiltinScalarFunction::ArrayAppend),
-        ("array_prepend", BuiltinScalarFunction::ArrayPrepend),
         ("array_concat", BuiltinScalarFunction::ArrayConcat),
+        ("array_dims", BuiltinScalarFunction::ArrayDims),
         ("array_fill",  BuiltinScalarFunction::ArrayFill),
+        ("array_length", BuiltinScalarFunction::ArrayLength),
+        ("array_ndims", BuiltinScalarFunction::ArrayNdims),
         ("array_position", BuiltinScalarFunction::ArrayPosition),
         ("array_positions", BuiltinScalarFunction::ArrayPositions),
+        ("array_prepend", BuiltinScalarFunction::ArrayPrepend),
         ("array_remove", BuiltinScalarFunction::ArrayRemove),
         ("array_replace", BuiltinScalarFunction::ArrayReplace),
         ("array_to_string", BuiltinScalarFunction::ArrayToString),
         ("cardinality", BuiltinScalarFunction::Cardinality),
+        ("make_array", BuiltinScalarFunction::MakeArray),
         ("trim_array", BuiltinScalarFunction::TrimArray),
-        ("array_length", BuiltinScalarFunction::ArrayLength),
-        ("array_dims", BuiltinScalarFunction::ArrayDims),
-        ("array_ndims", BuiltinScalarFunction::ArrayNdims),
     ];
 }
 
@@ -412,21 +412,21 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tan => Volatility::Immutable,
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
             BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
             BuiltinScalarFunction::Cardinality => Volatility::Immutable,
+            BuiltinScalarFunction::MakeArray => Volatility::Immutable,
             BuiltinScalarFunction::TrimArray => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
-            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,

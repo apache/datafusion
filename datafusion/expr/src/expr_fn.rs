@@ -521,66 +521,24 @@ scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
 
 // array functions
-nary_scalar_expr!(
-    MakeArray,
-    array,
-    "returns an array of fixed size with each argument on it."
-);
 scalar_expr!(
     ArrayAppend,
     array_append,
     array element,
     "appends an element to the end of an array."
 );
-scalar_expr!(
-    ArrayPrepend,
-    array_prepend,
-    array element,
-    "prepends an element to the beginning of an array."
-);
 nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
+scalar_expr!(
+    ArrayDims,
+    array_dims,
+    array,
+    "returns an array of the array's dimensions."
+);
 scalar_expr!(
     ArrayFill,
     array_fill,
-    element dimension,
-    "returns an array filled with copies of the given value, having dimensions of the lengths specified by the second argument."
-);
-scalar_expr!(
-    ArrayPosition,
-    array_position,
-    array element index,
-    ""
-);
-scalar_expr!(
-    ArrayPositions,
-    array_positions,
-    array element,
-    ""
-);
-scalar_expr!(
-    ArrayRemove,
-    array_remove,
-    array element,
-    ""
-);
-scalar_expr!(
-    ArrayReplace,
-    array_replace,
-    array from to,
-    ""
-);
-scalar_expr!(
-    ArrayToString,
-    array_to_string,
-    array delimeter null_string,
-    ""
-);
-scalar_expr!(Cardinality, cardinality, array, "");
-scalar_expr!(
-    TrimArray,
-    trim_array,
-    array element,
-    ""
+    element array,
+    "returns an array filled with copies of the given value."
 );
 scalar_expr!(
     ArrayLength,
@@ -589,16 +547,63 @@ scalar_expr!(
     "returns the length of the array dimension."
 );
 scalar_expr!(
-    ArrayDims,
-    array_dims,
-    array,
-    "returns the array's dimensions."
-);
-scalar_expr!(
     ArrayNdims,
     array_ndims,
     array,
     "returns the number of dimensions of the array."
+);
+scalar_expr!(
+    ArrayPosition,
+    array_position,
+    array element index,
+    "searches for an element in the array, returns first occurrence."
+);
+scalar_expr!(
+    ArrayPositions,
+    array_positions,
+    array element,
+    "searches for an element in the array, returns all occurrences."
+);
+scalar_expr!(
+    ArrayPrepend,
+    array_prepend,
+    array element,
+    "prepends an element to the beginning of an array."
+);
+scalar_expr!(
+    ArrayRemove,
+    array_remove,
+    array element,
+    "removes all elements equal to the given value from the array."
+);
+scalar_expr!(
+    ArrayReplace,
+    array_replace,
+    array from to,
+    "replaces a specified element with another specified element."
+);
+scalar_expr!(
+    ArrayToString,
+    array_to_string,
+    array delimeter,
+    "converts each element to its text representation."
+);
+scalar_expr!(
+    Cardinality,
+    cardinality,
+    array,
+    "returns the total number of elements in the array."
+);
+nary_scalar_expr!(
+    MakeArray,
+    array,
+    "returns an Arrow array using the specified input expressions."
+);
+scalar_expr!(
+    TrimArray,
+    trim_array,
+    array n,
+    "removes the last n elements from the array."
 );
 
 // string functions
@@ -961,17 +966,20 @@ mod test {
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
-        test_nary_scalar_expr!(MakeArray, array, input);
         test_scalar_expr!(ArrayAppend, array_append, array, element);
-        test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
+        test_unary_scalar_expr!(ArrayDims, array_dims);
         test_scalar_expr!(ArrayFill, array_fill, element, array);
+        test_scalar_expr!(ArrayLength, array_length, array, dimension);
+        test_unary_scalar_expr!(ArrayNdims, array_ndims);
         test_scalar_expr!(ArrayPosition, array_position, array, element, index);
         test_scalar_expr!(ArrayPositions, array_positions, array, element);
+        test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
         test_scalar_expr!(ArrayRemove, array_remove, array, element);
-        tests_scalar_expr!(ArrayReplace, array_replace, array, element);
-        test_scalar_expr!(ArrayLength, array_length, array, element);
-        test_unary_scalar_expr!(ArrayDims, array_dims);
-        test_unary_scalar_expr!(ArrayNdims, array_ndims);
+        test_scalar_expr!(ArrayReplace, array_replace, array, element);
+        test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
+        test_unary_scalar_expr!(Cardinality, cardinality);
+        test_nary_scalar_expr!(MakeArray, array, input);
+        test_scalar_expr!(TrimArray, array, n);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
     }
