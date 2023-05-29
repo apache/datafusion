@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                 opt.batch_size,
                 compression,
             )
-            .await
+                .await
         }
     }
 }
@@ -261,7 +261,7 @@ async fn register_tables(
                 opt.file_format.as_str(),
                 opt.partitions,
             )
-            .await?
+                .await?
         };
 
         if opt.mem_table {
@@ -385,165 +385,162 @@ struct QueryResult {
 }
 
 #[cfg(test)]
+#[cfg(feature = "ci")]
+/// CI checks
 mod tests {
-    /// CI checks
-    #[cfg(test)]
-    #[cfg(feature = "ci")]
-    mod ci {
-        use std::path::Path;
+    use std::path::Path;
 
-        use super::*;
-        use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
+    use super::*;
+    use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
-        async fn serde_round_trip(query: usize) -> Result<()> {
-            let ctx = SessionContext::default();
-            let path = get_tpch_data_path()?;
-            let opt = DataFusionBenchmarkOpt {
-                query: Some(query),
-                debug: false,
-                iterations: 1,
-                partitions: 2,
-                batch_size: 8192,
-                path: PathBuf::from(path.to_string()),
-                file_format: "tbl".to_string(),
-                mem_table: false,
-                output_path: None,
-                disable_statistics: false,
-            };
-            register_tables(&opt, &ctx).await?;
-            let queries = get_query_sql(query)?;
-            for query in queries {
-                let plan = ctx.sql(&query).await?;
-                let plan = plan.into_optimized_plan()?;
-                let bytes = logical_plan_to_bytes(&plan)?;
-                let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
-                let plan_formatted = format!("{}", plan.display_indent());
-                let plan2_formatted = format!("{}", plan2.display_indent());
-                assert_eq!(plan_formatted, plan2_formatted);
-            }
-            Ok(())
+    async fn serde_round_trip(query: usize) -> Result<()> {
+        let ctx = SessionContext::default();
+        let path = get_tpch_data_path()?;
+        let opt = DataFusionBenchmarkOpt {
+            query: Some(query),
+            debug: false,
+            iterations: 1,
+            partitions: 2,
+            batch_size: 8192,
+            path: PathBuf::from(path.to_string()),
+            file_format: "tbl".to_string(),
+            mem_table: false,
+            output_path: None,
+            disable_statistics: false,
+        };
+        register_tables(&opt, &ctx).await?;
+        let queries = get_query_sql(query)?;
+        for query in queries {
+            let plan = ctx.sql(&query).await?;
+            let plan = plan.into_optimized_plan()?;
+            let bytes = logical_plan_to_bytes(&plan)?;
+            let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
+            let plan_formatted = format!("{}", plan.display_indent());
+            let plan2_formatted = format!("{}", plan2.display_indent());
+            assert_eq!(plan_formatted, plan2_formatted);
         }
+        Ok(())
+    }
 
-        #[tokio::test]
-        async fn serde_q1() -> Result<()> {
-            serde_round_trip(1).await
-        }
+    #[tokio::test]
+    async fn serde_q1() -> Result<()> {
+        serde_round_trip(1).await
+    }
 
-        #[tokio::test]
-        async fn serde_q2() -> Result<()> {
-            serde_round_trip(2).await
-        }
+    #[tokio::test]
+    async fn serde_q2() -> Result<()> {
+        serde_round_trip(2).await
+    }
 
-        #[tokio::test]
-        async fn serde_q3() -> Result<()> {
-            serde_round_trip(3).await
-        }
+    #[tokio::test]
+    async fn serde_q3() -> Result<()> {
+        serde_round_trip(3).await
+    }
 
-        #[tokio::test]
-        async fn serde_q4() -> Result<()> {
-            serde_round_trip(4).await
-        }
+    #[tokio::test]
+    async fn serde_q4() -> Result<()> {
+        serde_round_trip(4).await
+    }
 
-        #[tokio::test]
-        async fn serde_q5() -> Result<()> {
-            serde_round_trip(5).await
-        }
+    #[tokio::test]
+    async fn serde_q5() -> Result<()> {
+        serde_round_trip(5).await
+    }
 
-        #[tokio::test]
-        async fn serde_q6() -> Result<()> {
-            serde_round_trip(6).await
-        }
+    #[tokio::test]
+    async fn serde_q6() -> Result<()> {
+        serde_round_trip(6).await
+    }
 
-        #[tokio::test]
-        async fn serde_q7() -> Result<()> {
-            serde_round_trip(7).await
-        }
+    #[tokio::test]
+    async fn serde_q7() -> Result<()> {
+        serde_round_trip(7).await
+    }
 
-        #[tokio::test]
-        async fn serde_q8() -> Result<()> {
-            serde_round_trip(8).await
-        }
+    #[tokio::test]
+    async fn serde_q8() -> Result<()> {
+        serde_round_trip(8).await
+    }
 
-        #[tokio::test]
-        async fn serde_q9() -> Result<()> {
-            serde_round_trip(9).await
-        }
+    #[tokio::test]
+    async fn serde_q9() -> Result<()> {
+        serde_round_trip(9).await
+    }
 
-        #[tokio::test]
-        async fn serde_q10() -> Result<()> {
-            serde_round_trip(10).await
-        }
+    #[tokio::test]
+    async fn serde_q10() -> Result<()> {
+        serde_round_trip(10).await
+    }
 
-        #[tokio::test]
-        async fn serde_q11() -> Result<()> {
-            serde_round_trip(11).await
-        }
+    #[tokio::test]
+    async fn serde_q11() -> Result<()> {
+        serde_round_trip(11).await
+    }
 
-        #[tokio::test]
-        async fn serde_q12() -> Result<()> {
-            serde_round_trip(12).await
-        }
+    #[tokio::test]
+    async fn serde_q12() -> Result<()> {
+        serde_round_trip(12).await
+    }
 
-        #[tokio::test]
-        async fn serde_q13() -> Result<()> {
-            serde_round_trip(13).await
-        }
+    #[tokio::test]
+    async fn serde_q13() -> Result<()> {
+        serde_round_trip(13).await
+    }
 
-        #[tokio::test]
-        async fn serde_q14() -> Result<()> {
-            serde_round_trip(14).await
-        }
+    #[tokio::test]
+    async fn serde_q14() -> Result<()> {
+        serde_round_trip(14).await
+    }
 
-        #[tokio::test]
-        async fn serde_q15() -> Result<()> {
-            serde_round_trip(15).await
-        }
+    #[tokio::test]
+    async fn serde_q15() -> Result<()> {
+        serde_round_trip(15).await
+    }
 
-        #[tokio::test]
-        async fn serde_q16() -> Result<()> {
-            serde_round_trip(16).await
-        }
+    #[tokio::test]
+    async fn serde_q16() -> Result<()> {
+        serde_round_trip(16).await
+    }
 
-        #[tokio::test]
-        async fn serde_q17() -> Result<()> {
-            serde_round_trip(17).await
-        }
+    #[tokio::test]
+    async fn serde_q17() -> Result<()> {
+        serde_round_trip(17).await
+    }
 
-        #[tokio::test]
-        async fn serde_q18() -> Result<()> {
-            serde_round_trip(18).await
-        }
+    #[tokio::test]
+    async fn serde_q18() -> Result<()> {
+        serde_round_trip(18).await
+    }
 
-        #[tokio::test]
-        async fn serde_q19() -> Result<()> {
-            serde_round_trip(19).await
-        }
+    #[tokio::test]
+    async fn serde_q19() -> Result<()> {
+        serde_round_trip(19).await
+    }
 
-        #[tokio::test]
-        async fn serde_q20() -> Result<()> {
-            serde_round_trip(20).await
-        }
+    #[tokio::test]
+    async fn serde_q20() -> Result<()> {
+        serde_round_trip(20).await
+    }
 
-        #[tokio::test]
-        async fn serde_q21() -> Result<()> {
-            serde_round_trip(21).await
-        }
+    #[tokio::test]
+    async fn serde_q21() -> Result<()> {
+        serde_round_trip(21).await
+    }
 
-        #[tokio::test]
-        async fn serde_q22() -> Result<()> {
-            serde_round_trip(22).await
-        }
+    #[tokio::test]
+    async fn serde_q22() -> Result<()> {
+        serde_round_trip(22).await
+    }
 
-        fn get_tpch_data_path() -> Result<String> {
-            let path = std::env::var("TPCH_DATA")
-                .unwrap_or_else(|_| "benchmarks/data".to_string());
-            if !Path::new(&path).exists() {
-                return Err(DataFusionError::Execution(format!(
-                    "Benchmark data not found (set TPCH_DATA env var to override): {}",
-                    path
-                )));
-            }
-            Ok(path)
+    fn get_tpch_data_path() -> Result<String> {
+        let path = std::env::var("TPCH_DATA")
+            .unwrap_or_else(|_| "benchmarks/data".to_string());
+        if !Path::new(&path).exists() {
+            return Err(DataFusionError::Execution(format!(
+                "Benchmark data not found (set TPCH_DATA env var to override): {}",
+                path
+            )));
         }
+        Ok(path)
     }
 }
