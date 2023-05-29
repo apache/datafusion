@@ -1305,7 +1305,7 @@ mod tests {
         // array_position([1, 2, 3, 4], 3) = 3
         let list_array = return_array();
         let array = array_position(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ])
         .expect("failed to initialize function array_position")
@@ -1321,7 +1321,7 @@ mod tests {
         // array_positions([1, 2, 3, 4], 3) = [3]
         let list_array = return_array();
         let array = array_positions(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ])
         .expect("failed to initialize function array_position")
@@ -1346,7 +1346,7 @@ mod tests {
         // array_remove([1, 2, 3, 4], 3) = [1, 2, 4]
         let list_array = return_array();
         let arr = array_remove(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ])
         .expect("failed to initialize function array_remove")
@@ -1371,7 +1371,7 @@ mod tests {
         // array_replace([1, 2, 3, 4], 3, 4) = [1, 2, 4, 4]
         let list_array = return_array();
         let array = array_replace(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
             ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
         ])
@@ -1397,7 +1397,7 @@ mod tests {
         // array_to_string([1, 2, 3, 4], ',') = 1,2,3,4
         let list_array = return_array();
         let array = array_to_string(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(",")))),
         ])
         .expect("failed to initialize function array_to_string")
@@ -1414,7 +1414,7 @@ mod tests {
         // array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], '-') = 1-2-3-4-5-6-7-8
         let list_array = return_nested_array();
         let array = array_to_string(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("-")))),
         ])
         .expect("failed to initialize function array_to_string")
@@ -1431,7 +1431,7 @@ mod tests {
         // trim_array([1, 2, 3, 4], 1) = [1, 2, 3]
         let list_array = return_array();
         let arr = trim_array(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
         ])
         .expect("failed to initialize function trim_array")
@@ -1453,7 +1453,7 @@ mod tests {
         // trim_array([1, 2, 3, 4], 3) = [1]
         let list_array = return_array();
         let arr = trim_array(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
         ])
         .expect("failed to initialize function trim_array")
@@ -1478,7 +1478,7 @@ mod tests {
         // trim_array([[1, 2, 3, 4], [5, 6, 7, 8]], 1) = [[1, 2, 3, 4]]
         let list_array = return_nested_array();
         let arr = trim_array(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
         ])
         .expect("failed to initialize function trim_array")
@@ -1505,7 +1505,7 @@ mod tests {
     fn test_cardinality() {
         // cardinality([1, 2, 3, 4]) = 4
         let list_array = return_array();
-        let arr = cardinality(&[list_array.clone()])
+        let arr = cardinality(&[list_array])
             .expect("failed to initialize function cardinality")
             .into_array(1);
         let result =
@@ -1518,7 +1518,7 @@ mod tests {
     fn test_nested_cardinality() {
         // cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]) = 8
         let list_array = return_nested_array();
-        let arr = cardinality(&[list_array.clone()])
+        let arr = cardinality(&[list_array])
             .expect("failed to initialize function cardinality")
             .into_array(1);
         let result =
@@ -1541,7 +1541,7 @@ mod tests {
 
         // array_length([1, 2, 3, 4], 1) = 2
         let array = array_length(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::UInt8(Some(1_u8))),
         ])
         .expect("failed to initialize function array_ndims")
@@ -1582,7 +1582,7 @@ mod tests {
 
         // array_length([[1, 2, 3, 4], [5, 6, 7, 8]], 3) = NULL
         let array = array_length(&[
-            list_array.clone(),
+            list_array,
             ColumnarValue::Scalar(ScalarValue::UInt8(Some(3_u8))),
         ])
         .expect("failed to initialize function array_length")
@@ -1675,7 +1675,7 @@ mod tests {
         let result = array(&args)
             .expect("failed to initialize function array")
             .into_array(1);
-        return ColumnarValue::Array(result.clone());
+        ColumnarValue::Array(result.clone())
     }
 
     fn return_nested_array() -> ColumnarValue {
@@ -1703,6 +1703,6 @@ mod tests {
         let result = array(&args)
             .expect("failed to initialize function array")
             .into_array(1);
-        return ColumnarValue::Array(result.clone());
+        ColumnarValue::Array(result.clone())
     }
 }
