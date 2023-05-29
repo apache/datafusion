@@ -304,7 +304,7 @@ where
             ))),
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 Ok(Expr::ScalarFunction(ScalarFunction::new(
-                    fun.clone(),
+                    *fun,
                     args.iter()
                         .map(|e| clone_with_replacement(e, replacement_fn))
                         .collect::<Result<Vec<Expr>>>()?,
