@@ -841,6 +841,96 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res))))
 }
 
+/// Trim_array SQL function
+pub fn trim_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arr = match &args[0] {
+        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+        ColumnarValue::Array(arr) => arr.clone(),
+    };
+
+    let scalar = match &args[1] {
+        ColumnarValue::Scalar(scalar) => scalar.clone(),
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Array_position function requires positive integer scalar element"
+                    .to_string(),
+            ))
+        }
+    };
+
+    let n = match scalar {
+        ScalarValue::Int8(Some(value)) => value as usize,
+        ScalarValue::Int16(Some(value)) => value as usize,
+        ScalarValue::Int32(Some(value)) => value as usize,
+        ScalarValue::Int64(Some(value)) => value as usize,
+        ScalarValue::UInt8(Some(value)) => value as usize,
+        ScalarValue::UInt16(Some(value)) => value as usize,
+        ScalarValue::UInt32(Some(value)) => value as usize,
+        ScalarValue::UInt64(Some(value)) => value as usize,
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Array_position function requires positive integer scalar element"
+                    .to_string(),
+            ))
+        }
+    };
+
+    let list_array = downcast_arg!(arr, ListArray);
+    let values = list_array.value(0);
+    let res = values.slice(0, values.len() - n);
+
+    let mut scalars = vec![];
+    for i in 0..res.len() {
+        scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&res, i)?));
+    }
+    array(scalars.as_slice())
+}
+
+/// Cardinality SQL function
+pub fn cardinality(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let arr = match &args[0] {
+        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+        ColumnarValue::Array(arr) => arr.clone(),
+    };
+
+    fn compute_cardinality(arg: &mut u64, arr: ArrayRef) -> Result<&mut u64> {
+        match arr.data_type() {
+            DataType::List(..) => {
+                let list_array = downcast_arg!(arr, ListArray);
+                for i in 0..list_array.len() {
+                    compute_cardinality(arg, list_array.value(i))?;
+                }
+
+                Ok(arg)
+            }
+            DataType::Null
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Boolean
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => {
+                *arg += arr.len() as u64;
+                Ok(arg)
+            }
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array is not implemented for type '{data_type:?}'."
+            ))),
+        }
+    }
+    let mut arg: u64 = 0;
+    Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(vec![
+        compute_cardinality(&mut arg, arr)?.clone(),
+    ]))))
+}
+
 /// Array_length SQL function
 pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arr = match &args[0] {
@@ -921,7 +1011,7 @@ pub fn array_length(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let arg: u8 = 1;
     Ok(ColumnarValue::Array(Arc::new(UInt8Array::from(vec![
-        compute_array_length(arg, arr, element.clone())?,
+        compute_array_length(arg, arr, element)?,
     ]))))
 }
 
@@ -1013,7 +1103,7 @@ mod tests {
     use super::*;
     use arrow::array::UInt8Array;
     use datafusion_common::cast::{
-        as_generic_string_array, as_list_array, as_uint8_array,
+        as_generic_string_array, as_list_array, as_uint64_array, as_uint8_array,
     };
     use datafusion_common::scalar::ScalarValue;
 
@@ -1338,6 +1428,107 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!("1-2-3-4-5-6-7-8", result.value(0));
+    }
+
+    #[test]
+    fn test_trim_array() {
+        // trim_array([1, 2, 3, 4], 1) = [1, 2, 3]
+        let list_array = return_array();
+        let arr = trim_array(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ])
+        .expect("failed to initialize function trim_array")
+        .into_array(1);
+        let result =
+            as_list_array(&arr).expect("failed to initialize function trim_array");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[1, 2, 3],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+
+        // trim_array([1, 2, 3, 4], 3) = [1]
+        let list_array = return_array();
+        let arr = trim_array(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+        ])
+        .expect("failed to initialize function trim_array")
+        .into_array(1);
+        let result =
+            as_list_array(&arr).expect("failed to initialize function trim_array");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[1],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_nested_trim_array() {
+        // trim_array([[1, 2, 3, 4], [5, 6, 7, 8]], 1) = [[1, 2, 3, 4]]
+        let list_array = return_nested_array();
+        let arr = trim_array(&[
+            list_array.clone(),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+        ])
+        .expect("failed to initialize function trim_array")
+        .into_array(1);
+        let binding = as_list_array(&arr)
+            .expect("failed to initialize function trim_array")
+            .value(0);
+        let result =
+            as_list_array(&binding).expect("failed to initialize function trim_array");
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[1, 2, 3, 4],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        );
+    }
+
+    #[test]
+    fn test_cardinality() {
+        // cardinality([1, 2, 3, 4]) = 4
+        let list_array = return_array();
+        let arr = cardinality(&[list_array.clone()])
+            .expect("failed to initialize function cardinality")
+            .into_array(1);
+        let result =
+            as_uint64_array(&arr).expect("failed to initialize function cardinality");
+
+        assert_eq!(result, &UInt64Array::from(vec![4]));
+    }
+
+    #[test]
+    fn test_nested_cardinality() {
+        // cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]) = 8
+        let list_array = return_nested_array();
+        let arr = cardinality(&[list_array.clone()])
+            .expect("failed to initialize function cardinality")
+            .into_array(1);
+        let result =
+            as_uint64_array(&arr).expect("failed to initialize function cardinality");
+
+        assert_eq!(result, &UInt64Array::from(vec![8]));
     }
 
     #[test]

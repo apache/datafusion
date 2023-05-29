@@ -39,8 +39,9 @@ use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
     array_length, array_ndims, array_position, array_positions, array_prepend,
     array_remove, array_replace, array_to_string, ascii, asin, asinh, atan, atan2, atanh,
-    bit_length, btrim, cbrt, ceil, character_length, chr, coalesce, concat_expr,
-    concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees, digest, exp,
+    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
+    concat_expr, concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees,
+    digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -48,7 +49,8 @@ use datafusion_expr::{
     regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
     sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
     strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
-    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    to_timestamp_millis, to_timestamp_seconds, translate, trim, trim_array, trunc, upper,
+    uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetIndexedField, GroupingSet,
@@ -451,6 +453,8 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
             ScalarFunction::ArrayConcat => Self::ArrayConcat,
             ScalarFunction::ArrayFill => Self::ArrayFill,
+            ScalarFunction::Cardinality => Self::Cardinality,
+            ScalarFunction::TrimArray => Self::TrimArray,
             ScalarFunction::ArrayLength => Self::ArrayLength,
             ScalarFunction::ArrayDims => Self::ArrayDims,
             ScalarFunction::ArrayNdims => Self::ArrayNdims,
@@ -1198,6 +1202,13 @@ pub fn parse_expr(
                     parse_expr(&args[2], registry)?,
                 )),
                 ScalarFunction::ArrayToString => Ok(array_to_string(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Cardinality => {
+                    Ok(cardinality(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::TrimArray => Ok(trim_array(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),

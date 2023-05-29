@@ -549,6 +549,8 @@ enum ScalarFunction {
   ArrayRemove = 95;
   ArrayReplace = 96;
   ArrayToString = 97;
+  Cardinality = 98;
+  TrimArray = 99;
 }
 
 message ScalarFunctionNode {

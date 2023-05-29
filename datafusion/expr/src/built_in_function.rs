@@ -118,6 +118,10 @@ pub enum BuiltinScalarFunction {
     ArrayReplace,
     /// array_to_string
     ArrayToString,
+    /// cardinality
+    Cardinality,
+    /// trim_array
+    TrimArray,
     /// array_length
     ArrayLength,
     /// array_dims
@@ -289,6 +293,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
             BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
             BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
+            BuiltinScalarFunction::Cardinality => Volatility::Immutable,
+            BuiltinScalarFunction::TrimArray => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
@@ -475,6 +481,8 @@ impl FromStr for BuiltinScalarFunction {
             "array_remove" => BuiltinScalarFunction::ArrayRemove,
             "array_replace" => BuiltinScalarFunction::ArrayReplace,
             "array_to_string" => BuiltinScalarFunction::ArrayToString,
+            "cardinality" => BuiltinScalarFunction::Cardinality,
+            "trim_array" => BuiltinScalarFunction::TrimArray,
             "array_length" => BuiltinScalarFunction::ArrayLength,
             "array_dims" => BuiltinScalarFunction::ArrayDims,
             "array_ndims" => BuiltinScalarFunction::ArrayNdims,

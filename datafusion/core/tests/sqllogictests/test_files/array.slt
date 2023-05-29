@@ -133,6 +133,30 @@ select array_to_string([1, 1, 1], '1'), array_to_string([[1, 2], [3, 4], [5, 6]]
 ----
 11111 1+2+3+4+5+6 3/\3/\3/\3/\3/\3/\3/\3/\3/\3/\3/\3
 
+# cardinality scalar function
+query III
+select cardinality(make_array(1, 2, 3, 4, 5)), cardinality([1, 3, 5]), cardinality(make_array('h', 'e', 'l', 'l', 'o'));
+----
+5 3 5
+
+# cardinality scalar function #2
+query II
+select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3, array[3, 2, 3]));
+----
+6 18
+
+# trim_array scalar function
+query ???
+select trim_array(make_array(1, 2, 3, 4, 5), 2), trim_array(['h', 'e', 'l', 'l', 'o'], 3), trim_array([1.0, 2.0, 3.0], 2);
+----
+[1, 2, 3] [h, e] [1.0]
+
+# trim_array scalar function #2
+query ??
+select trim_array([[1, 2], [3, 4], [5, 6]], 2), trim_array(array_fill(4, [3, 4, 2]), 2);
+----
+[[1, 2]] [[[4, 4], [4, 4], [4, 4], [4, 4]]]
+
 # array_length scalar function
 query III rowsort
 select array_length(make_array(1, 2, 3, 4, 5)), array_length(make_array(1, 2, 3)), array_length(make_array([1, 2], [3, 4], [5, 6]));

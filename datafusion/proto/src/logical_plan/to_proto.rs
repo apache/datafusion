@@ -1308,6 +1308,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
             BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
             BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::Cardinality => Self::Cardinality,
+            BuiltinScalarFunction::TrimArray => Self::TrimArray,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
             BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
             BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,

@@ -401,6 +401,8 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayToString => {
             Arc::new(array_expressions::array_to_string)
         }
+        BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
+        BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
         BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
         BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
         BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),

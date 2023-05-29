@@ -183,6 +183,17 @@ pub fn return_type(
                 "The {fun} function can only accept list as the first argument"
             ))),
         },
+        BuiltinScalarFunction::Cardinality => Ok(DataType::UInt64),
+        BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept list as the first argument"
+            ))),
+        },
         BuiltinScalarFunction::ArrayLength => Ok(DataType::UInt8),
         BuiltinScalarFunction::ArrayDims => Ok(DataType::UInt8),
         BuiltinScalarFunction::ArrayNdims => Ok(DataType::UInt8),
@@ -399,6 +410,8 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
         BuiltinScalarFunction::ArrayRemove => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayReplace => Signature::variadic_any(fun.volatility()),
         BuiltinScalarFunction::ArrayToString => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::Cardinality => Signature::any(1, fun.volatility()),
+        BuiltinScalarFunction::TrimArray => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayLength => Signature::variadic_any(fun.volatility()),
         BuiltinScalarFunction::ArrayDims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::ArrayNdims => Signature::any(1, fun.volatility()),

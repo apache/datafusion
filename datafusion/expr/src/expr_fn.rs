@@ -563,6 +563,13 @@ scalar_expr!(
     array delimeter null_string,
     ""
 );
+scalar_expr!(Cardinality, cardinality, array, "");
+scalar_expr!(
+    TrimArray,
+    trim_array,
+    array element,
+    ""
+);
 scalar_expr!(
     ArrayLength,
     array_length,
