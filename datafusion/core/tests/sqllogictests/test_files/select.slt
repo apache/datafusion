@@ -298,6 +298,34 @@ select column1 is not distinct from column2 from t;
 false
 
 
+# Binary Expression for Binary
+statement ok
+CREATE TABLE binary_t as select arrow_cast('Bar', 'Binary') as column1, arrow_cast('B%', 'Binary') as column2;
+
+query B
+select column1 is distinct from column2 from binary_t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from binary_t;
+----
+false
+
+# Binary Expression for LargeBinary
+statement ok
+CREATE TABLE large_binary_t as select arrow_cast('Bar', 'LargeBinary') as column1, arrow_cast('B%', 'LargeBinary') as column2;
+
+query B
+select column1 is distinct from column2 from large_binary_t;
+----
+true
+
+query B
+select column1 is not distinct from column2 from large_binary_t;
+----
+false
+
 # select all
 # these two queries should return the same result
 query R
@@ -448,11 +476,11 @@ EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM select_between_data
 ----
 logical_plan
 Projection: select_between_data.c1 >= Int64(2) AND select_between_data.c1 <= Int64(3) AS select_between_data.c1 BETWEEN Int64(2) AND Int64(3)
-  TableScan: select_between_data projection=[c1]
+--TableScan: select_between_data projection=[c1]
 physical_plan
 ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as select_between_data.c1 BETWEEN Int64(2) AND Int64(3)]
-  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-    MemoryExec: partitions=1, partition_sizes=[1]
+--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----MemoryExec: partitions=1, partition_sizes=[1]
 
 
 # TODO: query_get_indexed_field
@@ -714,11 +742,11 @@ EXPLAIN SELECT a FROM annotated_data_finite2
 ----
 logical_plan
 Limit: skip=0, fetch=5
-  Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
-    TableScan: annotated_data_finite2 projection=[a]
+--Sort: annotated_data_finite2.a ASC NULLS LAST, fetch=5
+----TableScan: annotated_data_finite2 projection=[a]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
-  CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], has_header=true
 
 query I
 SELECT a FROM annotated_data_finite2

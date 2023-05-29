@@ -19,6 +19,7 @@
 
 use futures::StreamExt;
 use std::any::Any;
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -30,11 +31,11 @@ use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::common;
 use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::memory::MemoryWriteExec;
 use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
 /// Type alias for partition data
@@ -164,7 +165,8 @@ impl TableProvider for MemTable {
         )?))
     }
 
-    /// Inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
+    /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
+    ///
     /// The [`ExecutionPlan`] must have the same schema as this [`MemTable`].
     ///
     /// # Arguments
@@ -174,7 +176,7 @@ impl TableProvider for MemTable {
     ///
     /// # Returns
     ///
-    /// * A `Result` indicating success or failure.
+    /// * A plan that returns the number of rows written.
     async fn insert_into(
         &self,
         _state: &SessionState,
@@ -187,27 +189,61 @@ impl TableProvider for MemTable {
                 "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
+        let sink = Arc::new(MemSink::new(self.batches.clone()));
+        Ok(Arc::new(InsertExec::new(input, sink)))
+    }
+}
 
-        if self.batches.is_empty() {
-            return Err(DataFusionError::Plan(
-                "The table must have partitions.".to_string(),
-            ));
+/// Implements for writing to a [`MemTable`]
+struct MemSink {
+    /// Target locations for writing data
+    batches: Vec<PartitionData>,
+}
+
+impl Debug for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemSink")
+            .field("num_partitions", &self.batches.len())
+            .finish()
+    }
+}
+
+impl Display for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let partition_count = self.batches.len();
+        write!(f, "MemoryTable (partitions={partition_count})")
+    }
+}
+
+impl MemSink {
+    fn new(batches: Vec<PartitionData>) -> Self {
+        Self { batches }
+    }
+}
+
+#[async_trait]
+impl DataSink for MemSink {
+    async fn write_all(&self, mut data: SendableRecordBatchStream) -> Result<u64> {
+        let num_partitions = self.batches.len();
+
+        // buffer up the data round robin style into num_partitions
+
+        let mut new_batches = vec![vec![]; num_partitions];
+        let mut i = 0;
+        let mut row_count = 0;
+        while let Some(batch) = data.next().await.transpose()? {
+            row_count += batch.num_rows();
+            new_batches[i].push(batch);
+            i = (i + 1) % num_partitions;
         }
 
-        let input = if self.batches.len() > 1 {
-            Arc::new(RepartitionExec::try_new(
-                input,
-                Partitioning::RoundRobinBatch(self.batches.len()),
-            )?)
-        } else {
-            input
-        };
+        // write the outputs into the batches
+        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+            // Append all the new batches in one go to minimize locking overhead
+            target.write().await.append(&mut batches);
+        }
 
-        Ok(Arc::new(MemoryWriteExec::try_new(
-            input,
-            self.batches.clone(),
-            self.schema.clone(),
-        )?))
+        Ok(row_count as u64)
     }
 }
 
@@ -218,8 +254,8 @@ mod tests {
     use crate::from_slice::FromSlice;
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{AsArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow::error::ArrowError;
     use datafusion_expr::LogicalPlanBuilder;
     use futures::StreamExt;
@@ -457,6 +493,11 @@ mod tests {
         initial_data: Vec<Vec<RecordBatch>>,
         inserted_data: Vec<Vec<RecordBatch>>,
     ) -> Result<Vec<Vec<RecordBatch>>> {
+        let expected_count: u64 = inserted_data
+            .iter()
+            .flat_map(|batches| batches.iter().map(|batch| batch.num_rows() as u64))
+            .sum();
+
         // Create a new session context
         let session_ctx = SessionContext::new();
         // Create and register the initial table with the provided schema and data
@@ -480,8 +521,8 @@ mod tests {
 
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Ensure the result is empty after the insert operation
-        assert!(res.is_empty());
+        assert_eq!(extract_count(res), expected_count);
+
         // Read the data from the initial table and store it in a vector of partitions
         let mut partitions = vec![];
         for partition in initial_table.batches.iter() {
@@ -489,6 +530,34 @@ mod tests {
             partitions.push(part);
         }
         Ok(partitions)
+    }
+
+    /// Returns the value of results. For example, returns 6 given the follwing
+    ///
+    /// ```text
+    /// +-------+,
+    /// | count |,
+    /// +-------+,
+    /// | 6     |,
+    /// +-------+,
+    /// ```
+    fn extract_count(res: Vec<RecordBatch>) -> u64 {
+        assert_eq!(res.len(), 1, "expected one batch, got {}", res.len());
+        let batch = &res[0];
+        assert_eq!(
+            batch.num_columns(),
+            1,
+            "expected 1 column, got {}",
+            batch.num_columns()
+        );
+        let col = batch.column(0).as_primitive::<UInt64Type>();
+        assert_eq!(col.len(), 1, "expected 1 row, got {}", col.len());
+        let val = col
+            .iter()
+            .next()
+            .expect("had value")
+            .expect("expected non null");
+        val
     }
 
     // Test inserting a single batch of data into a single partition

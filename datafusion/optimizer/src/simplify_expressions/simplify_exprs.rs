@@ -167,6 +167,7 @@ mod tests {
             Field::new("b", DataType::Boolean, false),
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
+            Field::new("e", DataType::UInt32, true),
         ]);
         table_scan(Some("test"), &schema, None)
             .expect("creating scan")
@@ -418,7 +419,7 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -558,7 +559,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
@@ -623,9 +624,9 @@ mod tests {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_null().not())?
+            .filter(col("e").is_null().not())?
             .build()?;
-        let expected = "Filter: test.d IS NOT NULL\
+        let expected = "Filter: test.e IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -636,9 +637,9 @@ mod tests {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_not_null().not())?
+            .filter(col("e").is_not_null().not())?
             .build()?;
-        let expected = "Filter: test.d IS NULL\
+        let expected = "Filter: test.e IS NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -846,6 +847,32 @@ mod tests {
         // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
         let expected =
             "TableScan: test, unsupported_filters=[g = f AS g = power(f,Float64(1))]";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_is_not_null() -> Result<()> {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_not_null())?
+            .build()?;
+        let expected = "Filter: Boolean(true)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_is_null() -> Result<()> {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_null())?
+            .build()?;
+        let expected = "Filter: Boolean(false)\
+        \n  TableScan: test";
+
         assert_optimized_plan_eq(&plan, expected)
     }
 }

@@ -25,7 +25,7 @@ use datafusion_expr::{
     WindowFunction,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr,
+    Expr as SQLExpr, Function as SQLFunction, FunctionArg, FunctionArgExpr, WindowType,
 };
 use std::str::FromStr;
 
@@ -53,18 +53,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
+        // If function is a window function (it has an OVER clause),
+        // it shouldn't have ordering requirement as function argument
+        // required ordering should be defined in OVER clause.
+        if !function.order_by.is_empty() && function.over.is_some() {
+            return Err(DataFusionError::Plan(
+                "Aggregate ORDER BY is not implemented for window functions".to_string(),
+            ));
+        }
+
         // then, window function
-        if let Some(window) = function.over.take() {
+        if let Some(WindowType::WindowSpec(window)) = function.over.take() {
             let partition_by = window
                 .partition_by
                 .into_iter()
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
-            let order_by = window
-                .order_by
-                .into_iter()
-                .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-                .collect::<Result<Vec<_>>>()?;
+            let order_by =
+                self.order_by_to_sort_expr(&window.order_by, schema, planner_context)?;
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -110,10 +116,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         if let Ok(fun) = AggregateFunction::from_str(&name) {
             let distinct = function.distinct;
+            let order_by =
+                self.order_by_to_sort_expr(&function.order_by, schema, planner_context)?;
+            let order_by = (!order_by.is_empty()).then_some(order_by);
             let (fun, args) =
                 self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
             return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun, args, distinct, None,
+                fun, args, distinct, None, order_by,
             )));
         };
 
@@ -128,7 +137,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
             let args =
                 self.function_args_to_expr(function.args, schema, planner_context)?;
-            return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(fm, args, None)));
+            return Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                fm, args, None, None,
+            )));
         }
 
         // Special case arrow_cast (as its type is dependent on its argument value)

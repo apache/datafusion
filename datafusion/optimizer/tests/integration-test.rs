@@ -120,10 +120,11 @@ fn semi_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  LeftSemi Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+                    \n  LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32\
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
-                    \n    SubqueryAlias: t2\
-                    \n      TableScan: test projection=[col_int32, col_uint32]";
+                    \n    SubqueryAlias: __correlated_sq_1\
+                    \n      SubqueryAlias: t2\
+                    \n        TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -136,25 +137,26 @@ fn anti_join_with_join_filter() -> Result<()> {
                AND test.col_uint32 != t2.col_uint32)";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-    \n  LeftAnti Join: test.col_int32 = t2.col_int32 Filter: test.col_uint32 != t2.col_uint32\
+    \n  LeftAnti Join: test.col_int32 = __correlated_sq_1.col_int32 Filter: test.col_uint32 != __correlated_sq_1.col_uint32\
     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
-    \n    SubqueryAlias: t2\
-    \n      TableScan: test projection=[col_int32, col_uint32]";
+    \n    SubqueryAlias: __correlated_sq_1\
+    \n      SubqueryAlias: t2\
+    \n        TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
 #[test]
 fn where_exists_distinct() -> Result<()> {
-    // regression test for https://github.com/apache/arrow-datafusion/issues/3724
     let sql = "SELECT col_int32 FROM test WHERE EXISTS (\
                SELECT DISTINCT col_int32 FROM test t2 WHERE test.col_int32 = t2.col_int32)";
     let plan = test_sql(sql)?;
-    let expected = "LeftSemi Join: test.col_int32 = t2.col_int32\
+    let expected = "LeftSemi Join: test.col_int32 = __correlated_sq_1.col_int32\
     \n  TableScan: test projection=[col_int32]\
-    \n  Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
-    \n    SubqueryAlias: t2\
-    \n      TableScan: test projection=[col_int32]";
+    \n  SubqueryAlias: __correlated_sq_1\
+    \n    Aggregate: groupBy=[[t2.col_int32]], aggr=[[]]\
+    \n      SubqueryAlias: t2\
+    \n        TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -223,7 +225,7 @@ fn concat_ws_literals() -> Result<()> {
         FROM test";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: concatwithseparator(Utf8(\"-\"), Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
+        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())

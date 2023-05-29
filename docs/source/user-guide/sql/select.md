@@ -189,6 +189,15 @@ Example:
 SELECT a, b, MAX(c) FROM table GROUP BY a, b
 ```
 
+Some aggregation functions accept optional ordering requirement, such as `ARRAY_AGG`. If a requirement is given,
+aggregation is calculated in the order of the requirement.
+
+Example:
+
+```sql
+SELECT a, b, ARRAY_AGG(c, ORDER BY d) FROM table GROUP BY a, b
+```
+
 ## HAVING clause
 
 Example:

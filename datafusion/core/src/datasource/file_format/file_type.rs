@@ -38,6 +38,7 @@ use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
 
+use crate::datasource::file_format::arrow::DEFAULT_ARROW_EXTENSION;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
@@ -211,6 +212,8 @@ impl FileCompressionType {
 /// Readable file type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileType {
+    /// Apache Arrow file
+    ARROW,
     /// Apache Avro file
     AVRO,
     /// Apache Parquet file
@@ -224,6 +227,7 @@ pub enum FileType {
 impl GetExt for FileType {
     fn get_ext(&self) -> String {
         match self {
+            FileType::ARROW => DEFAULT_ARROW_EXTENSION.to_owned(),
             FileType::AVRO => DEFAULT_AVRO_EXTENSION.to_owned(),
             FileType::PARQUET => DEFAULT_PARQUET_EXTENSION.to_owned(),
             FileType::CSV => DEFAULT_CSV_EXTENSION.to_owned(),
@@ -238,6 +242,7 @@ impl FromStr for FileType {
     fn from_str(s: &str) -> Result<Self> {
         let s = s.to_uppercase();
         match s.as_str() {
+            "ARROW" => Ok(FileType::ARROW),
             "AVRO" => Ok(FileType::AVRO),
             "PARQUET" => Ok(FileType::PARQUET),
             "CSV" => Ok(FileType::CSV),
@@ -256,7 +261,7 @@ impl FileType {
 
         match self {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::PARQUET | FileType::AVRO => match c.variant {
+            FileType::PARQUET | FileType::AVRO | FileType::ARROW => match c.variant {
                 UNCOMPRESSED => Ok(ext),
                 _ => Err(DataFusionError::Internal(
                     "FileCompressionType can be specified for CSV/JSON FileType.".into(),

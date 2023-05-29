@@ -46,7 +46,7 @@ macro_rules! batches_to_json {
         let mut bytes = vec![];
         {
             let mut writer = $WRITER::new(&mut bytes);
-            writer.write_batches($batches)?;
+            $batches.iter().try_for_each(|batch| writer.write(batch))?;
             writer.finish()?;
         }
         String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?

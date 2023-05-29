@@ -518,6 +518,11 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Max => Self::Max,
             protobuf::AggregateFunction::Sum => Self::Sum,
             protobuf::AggregateFunction::Avg => Self::Avg,
+            protobuf::AggregateFunction::BitAnd => Self::BitAnd,
+            protobuf::AggregateFunction::BitOr => Self::BitOr,
+            protobuf::AggregateFunction::BitXor => Self::BitXor,
+            protobuf::AggregateFunction::BoolAnd => Self::BoolAnd,
+            protobuf::AggregateFunction::BoolOr => Self::BoolOr,
             protobuf::AggregateFunction::Count => Self::Count,
             protobuf::AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
@@ -537,6 +542,8 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ApproxMedian => Self::ApproxMedian,
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::Median => Self::Median,
+            protobuf::AggregateFunction::FirstValueAgg => Self::FirstValue,
+            protobuf::AggregateFunction::LastValueAgg => Self::LastValue,
         }
     }
 }
@@ -998,6 +1005,7 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, _>>()?,
                 expr.distinct,
                 parse_optional_expr(expr.filter.as_deref(), registry)?.map(Box::new),
+                parse_vec_expr(&expr.order_by, registry)?,
             )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1455,6 +1463,7 @@ pub fn parse_expr(
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
                 parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
+                parse_vec_expr(&pb.order_by, registry)?,
             )))
         }
 
@@ -1542,6 +1551,20 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
             "Unsupported binary operator '{other:?}'"
         ))),
     }
+}
+
+fn parse_vec_expr(
+    p: &[protobuf::LogicalExprNode],
+    registry: &dyn FunctionRegistry,
+) -> Result<Option<Vec<Expr>>, Error> {
+    let res = p
+        .iter()
+        .map(|elem| {
+            parse_expr(elem, registry).map_err(|e| DataFusionError::Plan(e.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Convert empty vector to None.
+    Ok((!res.is_empty()).then_some(res))
 }
 
 fn parse_optional_expr(

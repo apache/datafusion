@@ -268,7 +268,7 @@ pub async fn plan_to_json(
         let stream = plan.execute(i, task_ctx.clone())?;
         let handle: JoinHandle<Result<()>> = task::spawn(async move {
             stream
-                .map(|batch| writer.write(batch?))
+                .map(|batch| writer.write(&batch?))
                 .try_collect()
                 .await
                 .map_err(DataFusionError::from)

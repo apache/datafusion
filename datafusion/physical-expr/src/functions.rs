@@ -33,7 +33,7 @@
 use crate::execution_props::ExecutionProps;
 use crate::{
     array_expressions, conditional_expressions, datetime_expressions,
-    expressions::{cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS},
+    expressions::{cast_column, nullif_func},
     math_expressions, string_expressions, struct_expressions, PhysicalExpr,
     ScalarFunctionExpr,
 };
@@ -76,7 +76,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            None,
                         )
                     }
                 }
@@ -95,7 +95,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Millisecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            None,
                         )
                     }
                 }
@@ -114,7 +114,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Microsecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            None,
                         )
                     }
                 }
@@ -133,7 +133,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Second, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            None,
                         )
                     }
                 }
@@ -151,7 +151,7 @@ pub fn create_physical_expr(
                     cast_column(
                         &col_values[0],
                         &DataType::Timestamp(TimeUnit::Second, None),
-                        &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        None,
                     )
                 },
                 other => {
@@ -2772,11 +2772,10 @@ mod tests {
                         "Builtin scalar function {fun} does not support empty arguments"
                     )));
                 }
-                Err(DataFusionError::Internal(err)) => {
-                    if err
-                        != format!(
-                        "Builtin scalar function {fun} does not support empty arguments"
-                    ) {
+                Err(DataFusionError::Plan(err)) => {
+                    if !err
+                        .contains("No function matches the given name and argument types")
+                    {
                         return Err(DataFusionError::Internal(format!(
                             "Builtin scalar function {fun} didn't got the right error message with empty arguments")));
                     }

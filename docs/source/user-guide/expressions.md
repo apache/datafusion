@@ -239,6 +239,11 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | approx_median(expr)                                               | Calculates an approximation of the median for `expr`.                                   |
 | approx_percentile_cont(expr, percentile)                          | Calculates an approximation of the specified `percentile` for `expr`.                   |
 | approx_percentile_cont_with_weight(expr, weight_expr, percentile) | Calculates an approximation of the specified `percentile` for `expr` and `weight_expr`. |
+| bit_and(expr)                                                     | Computes the bitwise AND of all non-null input values for `expr`.                       |
+| bit_or(expr)                                                      | Computes the bitwise OR of all non-null input values for `expr`.                        |
+| bit_xor(expr)                                                     | Computes the bitwise exclusive OR of all non-null input values for `expr`.              |
+| bool_and(expr)                                                    | Returns true if all non-null input values (`expr`) are true, otherwise false.           |
+| bool_or(expr)                                                     | Returns true if any non-null input value (`expr`) is true, otherwise false.             |
 | count(expr)                                                       | Returns the number of rows for `expr`.                                                  |
 | count_distinct                                                    | Creates an expression to represent the count(distinct) aggregate function               |
 | cube(exprs)                                                       | Creates a grouping set for all combination of `exprs`                                   |

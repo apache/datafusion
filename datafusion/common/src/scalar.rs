@@ -36,7 +36,7 @@ use arrow::compute::nullif;
 use arrow::datatypes::{FieldRef, Fields, SchemaBuilder};
 use arrow::{
     array::*,
-    compute::kernels::cast::{cast, cast_with_options, CastOptions},
+    compute::kernels::cast::{cast_with_options, CastOptions},
     datatypes::{
         ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
@@ -650,6 +650,21 @@ macro_rules! primitive_right {
             "Can not divide an uninitialized value to a non-floating point value",
         )))
     };
+    ($TERM:expr, &, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, |, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, ^, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, &&, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
+    ($TERM:expr, ||, $SCALAR:ident) => {
+        Ok(ScalarValue::$SCALAR(Some($TERM)))
+    };
 }
 
 macro_rules! unsigned_subtraction_error {
@@ -754,6 +769,74 @@ macro_rules! impl_op {
                 tz_rhs.as_deref(),
             ),
             _ => impl_op_arithmetic!($LHS, $RHS, -)
+        }
+    };
+    ($LHS:expr, $RHS:expr, &) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, &)
+    };
+    ($LHS:expr, $RHS:expr, |) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, |)
+    };
+    ($LHS:expr, $RHS:expr, ^) => {
+        impl_bit_op_arithmetic!($LHS, $RHS, ^)
+    };
+    ($LHS:expr, $RHS:expr, &&) => {
+        impl_bool_op_arithmetic!($LHS, $RHS, &&)
+    };
+    ($LHS:expr, $RHS:expr, ||) => {
+        impl_bool_op_arithmetic!($LHS, $RHS, ||)
+    };
+}
+
+macro_rules! impl_bit_op_arithmetic {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
+        match ($LHS, $RHS) {
+            (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
+                primitive_op!(lhs, rhs, UInt64, $OPERATION)
+            }
+            (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
+                primitive_op!(lhs, rhs, Int64, $OPERATION)
+            }
+            (ScalarValue::UInt32(lhs), ScalarValue::UInt32(rhs)) => {
+                primitive_op!(lhs, rhs, UInt32, $OPERATION)
+            }
+            (ScalarValue::Int32(lhs), ScalarValue::Int32(rhs)) => {
+                primitive_op!(lhs, rhs, Int32, $OPERATION)
+            }
+            (ScalarValue::UInt16(lhs), ScalarValue::UInt16(rhs)) => {
+                primitive_op!(lhs, rhs, UInt16, $OPERATION)
+            }
+            (ScalarValue::Int16(lhs), ScalarValue::Int16(rhs)) => {
+                primitive_op!(lhs, rhs, Int16, $OPERATION)
+            }
+            (ScalarValue::UInt8(lhs), ScalarValue::UInt8(rhs)) => {
+                primitive_op!(lhs, rhs, UInt8, $OPERATION)
+            }
+            (ScalarValue::Int8(lhs), ScalarValue::Int8(rhs)) => {
+                primitive_op!(lhs, rhs, Int8, $OPERATION)
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
+        }
+    };
+}
+
+macro_rules! impl_bool_op_arithmetic {
+    ($LHS:expr, $RHS:expr, $OPERATION:tt) => {
+        match ($LHS, $RHS) {
+            (ScalarValue::Boolean(lhs), ScalarValue::Boolean(rhs)) => {
+                primitive_op!(lhs, rhs, Boolean, $OPERATION)
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "Operator {} is not implemented for types {:?} and {:?}",
+                stringify!($OPERATION),
+                $LHS,
+                $RHS
+            ))),
         }
     };
 }
@@ -1677,17 +1760,17 @@ macro_rules! build_array_from_option {
             None => new_null_array(&DataType::$DATA_TYPE($ENUM), $SIZE),
         }
     }};
-    ($DATA_TYPE:ident, $ENUM:expr, $ENUM2:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
+}
+
+macro_rules! build_timestamp_array_from_option {
+    ($TIME_UNIT:expr, $TZ:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {
         match $EXPR {
             Some(value) => {
-                let array: ArrayRef = Arc::new($ARRAY_TYPE::from_value(*value, $SIZE));
-                // Need to call cast to cast to final data type with timezone/extra param
-                cast(&array, &DataType::$DATA_TYPE($ENUM, $ENUM2))
-                    .expect("cannot do temporal cast")
+                Arc::new($ARRAY_TYPE::from_value(*value, $SIZE).with_timezone_opt($TZ))
             }
-            None => new_null_array(&DataType::$DATA_TYPE($ENUM, $ENUM2), $SIZE),
+            None => new_null_array(&DataType::Timestamp($TIME_UNIT, $TZ), $SIZE),
         }
-    }};
+    };
 }
 
 macro_rules! eq_array_primitive {
@@ -1963,6 +2046,31 @@ impl ScalarValue {
     pub fn sub_checked<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
         let rhs = other.borrow();
         impl_checked_op!(self, rhs, checked_sub, -)
+    }
+
+    pub fn and<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, &&)
+    }
+
+    pub fn or<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, ||)
+    }
+
+    pub fn bitand<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, &)
+    }
+
+    pub fn bitor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, |)
+    }
+
+    pub fn bitxor<T: Borrow<ScalarValue>>(&self, other: T) -> Result<ScalarValue> {
+        let rhs = other.borrow();
+        impl_op!(self, rhs, ^)
     }
 
     pub fn is_unsigned(&self) -> bool {
@@ -2610,39 +2718,43 @@ impl ScalarValue {
             ScalarValue::UInt64(e) => {
                 build_array_from_option!(UInt64, UInt64Array, e, size)
             }
-            ScalarValue::TimestampSecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Second,
-                tz_opt.clone(),
-                TimestampSecondArray,
-                e,
-                size
-            ),
-            ScalarValue::TimestampMillisecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Millisecond,
-                tz_opt.clone(),
-                TimestampMillisecondArray,
-                e,
-                size
-            ),
+            ScalarValue::TimestampSecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Second,
+                    tz_opt.clone(),
+                    TimestampSecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::TimestampMillisecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Millisecond,
+                    tz_opt.clone(),
+                    TimestampMillisecondArray,
+                    e,
+                    size
+                )
+            }
 
-            ScalarValue::TimestampMicrosecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Microsecond,
-                tz_opt.clone(),
-                TimestampMicrosecondArray,
-                e,
-                size
-            ),
-            ScalarValue::TimestampNanosecond(e, tz_opt) => build_array_from_option!(
-                Timestamp,
-                TimeUnit::Nanosecond,
-                tz_opt.clone(),
-                TimestampNanosecondArray,
-                e,
-                size
-            ),
+            ScalarValue::TimestampMicrosecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Microsecond,
+                    tz_opt.clone(),
+                    TimestampMicrosecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::TimestampNanosecond(e, tz_opt) => {
+                build_timestamp_array_from_option!(
+                    TimeUnit::Nanosecond,
+                    tz_opt.clone(),
+                    TimestampNanosecondArray,
+                    e,
+                    size
+                )
+            }
             ScalarValue::Utf8(e) => match e {
                 Some(value) => {
                     Arc::new(StringArray::from_iter_values(repeat(value).take(size)))
@@ -3020,7 +3132,10 @@ impl ScalarValue {
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
         let value = ScalarValue::Utf8(Some(value));
-        let cast_options = CastOptions { safe: false };
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: Default::default(),
+        };
         let cast_arr = cast_with_options(&value.to_array(), target_type, &cast_options)?;
         ScalarValue::try_from_array(&cast_arr, 0)
     }

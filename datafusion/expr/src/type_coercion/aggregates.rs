@@ -27,6 +27,31 @@ use super::functions::can_coerce_from;
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 
+pub static SIGNED_INTEGERS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+];
+
+pub static UNSIGNED_INTEGERS: &[DataType] = &[
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+
+pub static INTEGERS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+
 pub static NUMERICS: &[DataType] = &[
     DataType::Int8,
     DataType::Int16,
@@ -91,6 +116,30 @@ pub fn coerce_types(
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval
             if !is_avg_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::BitAnd
+        | AggregateFunction::BitOr
+        | AggregateFunction::BitXor => {
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            // smallint, int, bigint, real, double precision, decimal, or interval.
+            if !is_bit_and_or_xor_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            // smallint, int, bigint, real, double precision, decimal, or interval.
+            if !is_bool_and_or_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
@@ -215,7 +264,9 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median => Ok(input_types.to_vec()),
+        AggregateFunction::Median
+        | AggregateFunction::FirstValue
+        | AggregateFunction::LastValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
     }
 }
@@ -298,12 +349,8 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
 /// function return type of a sum
 pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-            Ok(DataType::Int64)
-        }
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            Ok(DataType::UInt64)
-        }
+        arg_type if SIGNED_INTEGERS.contains(arg_type) => Ok(DataType::Int64),
+        arg_type if UNSIGNED_INTEGERS.contains(arg_type) => Ok(DataType::UInt64),
         // In the https://www.postgresql.org/docs/current/functions-aggregate.html doc,
         // the result type of floating-point is FLOAT64 with the double precision.
         DataType::Float64 | DataType::Float32 => Ok(DataType::Float64),
@@ -402,6 +449,14 @@ pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
             "AVG does not support {other:?}"
         ))),
     }
+}
+
+pub fn is_bit_and_or_xor_support_arg_type(arg_type: &DataType) -> bool {
+    NUMERICS.contains(arg_type)
+}
+
+pub fn is_bool_and_or_support_arg_type(arg_type: &DataType) -> bool {
+    matches!(arg_type, DataType::Boolean)
 }
 
 pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {

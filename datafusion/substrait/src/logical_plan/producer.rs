@@ -21,7 +21,7 @@ use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
     logical_expr::{WindowFrame, WindowFrameBound},
-    prelude::JoinType,
+    prelude::{JoinType, SessionContext},
     scalar::ScalarValue,
 };
 
@@ -31,6 +31,7 @@ use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort, WindowFunction};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
+use prost_types::Any as ProtoAny;
 use substrait::{
     proto::{
         aggregate_function::AggregationInvocation,
@@ -56,9 +57,10 @@ use substrait::{
         read_rel::{NamedTable, ReadType},
         rel::RelType,
         sort_field::{SortDirection, SortKind},
-        AggregateFunction, AggregateRel, AggregationPhase, Expression, FetchRel,
-        FilterRel, FunctionArgument, JoinRel, NamedStruct, Plan, PlanRel, ProjectRel,
-        ReadRel, Rel, RelRoot, SortField, SortRel,
+        AggregateFunction, AggregateRel, AggregationPhase, Expression, ExtensionLeafRel,
+        ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
+        JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot,
+        SortField, SortRel,
     },
     version,
 };
@@ -71,7 +73,7 @@ use crate::variation_const::{
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
-pub fn to_substrait_plan(plan: &LogicalPlan) -> Result<Box<Plan>> {
+pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box<Plan>> {
     // Parse relation nodes
     let mut extension_info: (
         Vec<extensions::SimpleExtensionDeclaration>,
@@ -81,7 +83,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan) -> Result<Box<Plan>> {
     // Note: Only 1 relation tree is currently supported
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*to_substrait_rel(plan, &mut extension_info)?),
+            input: Some(*to_substrait_rel(plan, ctx, &mut extension_info)?),
             names: plan.schema().field_names(),
         })),
     }];
@@ -102,6 +104,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan) -> Result<Box<Plan>> {
 /// Convert DataFusion LogicalPlan to Substrait Rel
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
+    ctx: &SessionContext,
     extension_info: &mut (
         Vec<extensions::SimpleExtensionDeclaration>,
         HashMap<String, u32>,
@@ -156,14 +159,14 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
                     common: None,
-                    input: Some(to_substrait_rel(p.input.as_ref(), extension_info)?),
+                    input: Some(to_substrait_rel(p.input.as_ref(), ctx, extension_info)?),
                     expressions,
                     advanced_extension: None,
                 }))),
             }))
         }
         LogicalPlan::Filter(filter) => {
-            let input = to_substrait_rel(filter.input.as_ref(), extension_info)?;
+            let input = to_substrait_rel(filter.input.as_ref(), ctx, extension_info)?;
             let filter_expr = to_substrait_rex(
                 &filter.predicate,
                 filter.input.schema(),
@@ -179,7 +182,7 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Limit(limit) => {
-            let input = to_substrait_rel(limit.input.as_ref(), extension_info)?;
+            let input = to_substrait_rel(limit.input.as_ref(), ctx, extension_info)?;
             let limit_fetch = limit.fetch.unwrap_or(0);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
@@ -192,7 +195,7 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Sort(sort) => {
-            let input = to_substrait_rel(sort.input.as_ref(), extension_info)?;
+            let input = to_substrait_rel(sort.input.as_ref(), ctx, extension_info)?;
             let sort_fields = sort
                 .expr
                 .iter()
@@ -208,7 +211,7 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Aggregate(agg) => {
-            let input = to_substrait_rel(agg.input.as_ref(), extension_info)?;
+            let input = to_substrait_rel(agg.input.as_ref(), ctx, extension_info)?;
             // Translate aggregate expression to Substrait's groupings (repeated repeated Expression)
             let grouping = agg
                 .group_expr
@@ -235,7 +238,7 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Distinct(distinct) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
-            let input = to_substrait_rel(distinct.input.as_ref(), extension_info)?;
+            let input = to_substrait_rel(distinct.input.as_ref(), ctx, extension_info)?;
             // Get grouping keys from the input relation's number of output fields
             let grouping = (0..distinct.input.schema().fields().len())
                 .map(substrait_field_ref)
@@ -254,8 +257,8 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Join(join) => {
-            let left = to_substrait_rel(join.left.as_ref(), extension_info)?;
-            let right = to_substrait_rel(join.right.as_ref(), extension_info)?;
+            let left = to_substrait_rel(join.left.as_ref(), ctx, extension_info)?;
+            let right = to_substrait_rel(join.right.as_ref(), ctx, extension_info)?;
             let join_type = to_substrait_jointype(join.join_type);
             // we only support basic joins so return an error for anything not yet supported
             if join.filter.is_some() {
@@ -319,10 +322,10 @@ pub fn to_substrait_rel(
         LogicalPlan::SubqueryAlias(alias) => {
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
-            to_substrait_rel(alias.input.as_ref(), extension_info)
+            to_substrait_rel(alias.input.as_ref(), ctx, extension_info)
         }
         LogicalPlan::Window(window) => {
-            let input = to_substrait_rel(window.input.as_ref(), extension_info)?;
+            let input = to_substrait_rel(window.input.as_ref(), ctx, extension_info)?;
             // If the input is a Project relation, we can just append the WindowFunction expressions
             // before returning
             // Otherwise, wrap the input in a Project relation before appending the WindowFunction
@@ -355,6 +358,41 @@ pub fn to_substrait_rel(
             project_rel.expressions.extend(window_exprs);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(project_rel)),
+            }))
+        }
+        LogicalPlan::Extension(extension_plan) => {
+            let extension_bytes = ctx
+                .state()
+                .serializer_registry()
+                .serialize_logical_plan(extension_plan.node.as_ref())?;
+            let detail = ProtoAny {
+                type_url: extension_plan.node.name().to_string(),
+                value: extension_bytes,
+            };
+            let mut inputs_rel = extension_plan
+                .node
+                .inputs()
+                .into_iter()
+                .map(|plan| to_substrait_rel(plan, ctx, extension_info))
+                .collect::<Result<Vec<_>>>()?;
+            let rel_type = match inputs_rel.len() {
+                0 => RelType::ExtensionLeaf(ExtensionLeafRel {
+                    common: None,
+                    detail: Some(detail),
+                }),
+                1 => RelType::ExtensionSingle(Box::new(ExtensionSingleRel {
+                    common: None,
+                    detail: Some(detail),
+                    input: Some(inputs_rel.pop().unwrap()),
+                })),
+                _ => RelType::ExtensionMulti(ExtensionMultiRel {
+                    common: None,
+                    detail: Some(detail),
+                    inputs: inputs_rel.into_iter().map(|r| *r).collect(),
+                }),
+            };
+            Ok(Box::new(Rel {
+                rel_type: Some(rel_type),
             }))
         }
         _ => Err(DataFusionError::NotImplemented(format!(
@@ -415,7 +453,8 @@ pub fn to_substrait_agg_measure(
     ),
 ) -> Result<Measure> {
     match expr {
-        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter }) => {
+        // TODO: Once substrait supports order by, add handling for it.
+        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter, order_by: _order_by }) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, extension_info)?)) });

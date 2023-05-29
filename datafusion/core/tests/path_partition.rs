@@ -18,6 +18,7 @@
 //! Test queries on partitioned datasets
 
 use arrow::datatypes::DataType;
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
@@ -39,8 +40,8 @@ use datafusion::{
     test_util::{self, arrow_test_data, parquet_test_data},
 };
 use datafusion_common::ScalarValue;
+use futures::stream;
 use futures::stream::BoxStream;
-use futures::{stream, StreamExt};
 use object_store::{
     path::Path, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
 };
@@ -594,7 +595,7 @@ async fn register_partitioned_alltypes_parquet(
 /// An object store implem that is mirrors a given file to multiple paths.
 pub struct MirroringObjectStore {
     /// The `(path,size)` of the files that "exist" in the store
-    files: Vec<String>,
+    files: Vec<Path>,
     /// The file that will be read at all path
     mirrored_file: String,
     /// Size of the mirrored file
@@ -611,7 +612,7 @@ impl MirroringObjectStore {
     pub fn new_arc(mirrored_file: String, paths: &[&str]) -> Arc<dyn ObjectStore> {
         let metadata = std::fs::metadata(&mirrored_file).expect("Local file metadata");
         Arc::new(Self {
-            files: paths.iter().map(|&f| f.to_owned()).collect(),
+            files: paths.iter().map(|f| Path::parse(f).unwrap()).collect(),
             mirrored_file,
             file_size: metadata.len(),
         })
@@ -640,7 +641,7 @@ impl ObjectStore for MirroringObjectStore {
     }
 
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        self.files.iter().find(|x| *x == location.as_ref()).unwrap();
+        self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let file = File::open(&path).unwrap();
         Ok(GetResult::File(file, path))
@@ -651,7 +652,7 @@ impl ObjectStore for MirroringObjectStore {
         location: &Path,
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
-        self.files.iter().find(|x| *x == location.as_ref()).unwrap();
+        self.files.iter().find(|x| *x == location).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
         let mut file = File::open(path).unwrap();
         file.seek(SeekFrom::Start(range.start as u64)).unwrap();
@@ -665,7 +666,7 @@ impl ObjectStore for MirroringObjectStore {
     }
 
     async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        self.files.iter().find(|x| *x == location.as_ref()).unwrap();
+        self.files.iter().find(|x| *x == location).unwrap();
         Ok(ObjectMeta {
             location: location.clone(),
             last_modified: Utc.timestamp_nanos(0),
@@ -681,30 +682,64 @@ impl ObjectStore for MirroringObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>> {
-        let prefix = prefix.map(|p| p.as_ref()).unwrap_or("").to_string();
-        let size = self.file_size as usize;
-        Ok(Box::pin(
-            stream::iter(
-                self.files
-                    .clone()
-                    .into_iter()
-                    .filter(move |f| f.starts_with(&prefix)),
-            )
-            .map(move |f| {
-                Ok(ObjectMeta {
-                    location: Path::parse(f)?,
-                    last_modified: Utc.timestamp_nanos(0),
-                    size,
+        let prefix = prefix.cloned().unwrap_or_default();
+        Ok(Box::pin(stream::iter(self.files.iter().filter_map(
+            move |location| {
+                // Don't return for exact prefix match
+                let filter = location
+                    .prefix_match(&prefix)
+                    .map(|mut x| x.next().is_some())
+                    .unwrap_or(false);
+
+                filter.then(|| {
+                    Ok(ObjectMeta {
+                        location: location.clone(),
+                        last_modified: Utc.timestamp_nanos(0),
+                        size: self.file_size as usize,
+                    })
                 })
-            }),
-        ))
+            },
+        ))))
     }
 
     async fn list_with_delimiter(
         &self,
-        _prefix: Option<&Path>,
+        prefix: Option<&Path>,
     ) -> object_store::Result<ListResult> {
-        unimplemented!()
+        let root = Path::default();
+        let prefix = prefix.unwrap_or(&root);
+
+        let mut common_prefixes = BTreeSet::new();
+        let mut objects = vec![];
+
+        for k in &self.files {
+            let mut parts = match k.prefix_match(prefix) {
+                Some(parts) => parts,
+                None => continue,
+            };
+
+            // Pop first element
+            let common_prefix = match parts.next() {
+                Some(p) => p,
+                // Should only return children of the prefix
+                None => continue,
+            };
+
+            if parts.next().is_some() {
+                common_prefixes.insert(prefix.child(common_prefix));
+            } else {
+                let object = ObjectMeta {
+                    location: k.clone(),
+                    last_modified: Utc.timestamp_nanos(0),
+                    size: self.file_size as usize,
+                };
+                objects.push(object);
+            }
+        }
+        Ok(ListResult {
+            common_prefixes: common_prefixes.into_iter().collect(),
+            objects,
+        })
     }
 
     async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {

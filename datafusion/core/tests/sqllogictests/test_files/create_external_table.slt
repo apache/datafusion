@@ -99,3 +99,7 @@ CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEAD ROW LOCATION 'foo.csv';
 # Missing `anything` in WITH clause
 statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: LOCATION"\)
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';
+
+# Unrecognized random clause
+statement error DataFusion error: SQL error: ParserError\("Unexpected token FOOBAR"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV FOOBAR BARBAR BARFOO LOCATION 'foo.csv';

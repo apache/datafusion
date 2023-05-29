@@ -16,8 +16,8 @@
 // under the License.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{BinaryExpr, Expr, Like, Operator};
-use regex_syntax::hir::{Hir, HirKind, Literal};
+use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
+use regex_syntax::hir::{Hir, HirKind, Literal, Look};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
 const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
@@ -95,6 +95,15 @@ impl OperatorMode {
             Expr::Like(like)
         }
     }
+
+    fn expr_matches_literal(&self, left: Box<Expr>, right: Box<Expr>) -> Expr {
+        let op = if self.not {
+            Operator::NotEq
+        } else {
+            Operator::Eq
+        };
+        Expr::BinaryExpr(BinaryExpr { left, op, right })
+    }
 }
 
 fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
@@ -130,8 +139,47 @@ fn is_safe_for_like(c: char) -> bool {
     (c != '%') && (c != '_')
 }
 
+/// returns true if the elements in a `Concat` pattern are:
+/// - `[Look::Start, Look::End]`
+/// - `[Look::Start, Literal(_), Look::End]`
+fn is_anchored_literal(v: &[Hir]) -> bool {
+    match v.len() {
+        2..=3 => (),
+        _ => return false,
+    };
+
+    let first_last = (
+        v.first().expect("length checked"),
+        v.last().expect("length checked"),
+    );
+    if !matches!(first_last,
+    (s, e) if s.kind() == &HirKind::Look(Look::Start)
+        && e.kind() == &HirKind::Look(Look::End)
+         )
+    {
+        return false;
+    }
+
+    v.iter()
+        .skip(1)
+        .take(v.len() - 2)
+        .all(|h| matches!(h.kind(), HirKind::Literal(_)))
+}
+
+/// extracts a string literal expression assuming that [`is_anchored_literal`]
+/// returned true.
+fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
+    match v.len() {
+        2 => Some(lit("")),
+        3 => {
+            let HirKind::Literal(l) = v[1].kind() else { return None };
+            str_from_literal(l).map(lit)
+        }
+        _ => None,
+    }
+}
+
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
-    println!("Considering hir kind: mode {mode:?} hir: {hir:?}");
     match hir.kind() {
         HirKind::Empty => {
             return Some(mode.expr(Box::new(left.clone()), "%".to_owned()));
@@ -139,6 +187,12 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
         HirKind::Literal(l) => {
             let s = str_from_literal(l)?;
             return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
+        }
+        HirKind::Concat(inner) if is_anchored_literal(inner) => {
+            let right = anchored_literal_to_expr(inner)?;
+            return Some(
+                mode.expr_matches_literal(Box::new(left.clone()), Box::new(right)),
+            );
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = collect_concat_to_like_string(inner) {

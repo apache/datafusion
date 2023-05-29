@@ -184,6 +184,7 @@ message CreateExternalTableNode {
   string definition = 9;
   string file_compression_type = 10;
   repeated LogicalExprNode order_exprs = 13;
+  bool unbounded = 14;
   map<string, string> options = 11;
 }
 
@@ -578,6 +579,15 @@ enum AggregateFunction {
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
   MEDIAN = 18;
+  BIT_AND = 19;
+  BIT_OR = 20;
+  BIT_XOR = 21;
+  BOOL_AND = 22;
+  BOOL_OR = 23;
+  // When a function with the same name exists among built-in window functions,
+  // we append "_AGG" to obey name scoping rules.
+  FIRST_VALUE_AGG = 24;
+  LAST_VALUE_AGG = 25;
 }
 
 message AggregateExprNode {
@@ -585,12 +595,14 @@ message AggregateExprNode {
   repeated LogicalExprNode expr = 2;
   bool distinct = 3;
   LogicalExprNode filter = 4;
+  repeated LogicalExprNode order_by = 5;
 }
 
 message AggregateUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
   LogicalExprNode filter = 3;
+  repeated LogicalExprNode order_by = 4;
 }
 
 message ScalarUDFExprNode {
@@ -1293,6 +1305,10 @@ message MaybeFilter {
   PhysicalExprNode expr = 1;
 }
 
+message MaybePhysicalSortExprs {
+  repeated PhysicalSortExprNode sort_expr = 1;
+}
+
 message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
@@ -1305,6 +1321,7 @@ message AggregateExecNode {
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
+  repeated MaybePhysicalSortExprs order_by_expr = 11;
 }
 
 message GlobalLimitExecNode {

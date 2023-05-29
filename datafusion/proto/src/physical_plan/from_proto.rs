@@ -36,7 +36,7 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
-        NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
+        NegativeExpr, NotExpr, TryCastExpr,
     },
     functions, Partitioning,
 };
@@ -58,6 +58,31 @@ use datafusion::physical_plan::sorts::sort::SortOptions;
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
         Column::new(&c.name, c.index as usize)
+    }
+}
+
+/// Parses a physical sort expression from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with physical sort expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function' names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///                    when performing type coercion.
+pub fn parse_physical_sort_expr(
+    proto: &protobuf::PhysicalSortExprNode,
+    registry: &dyn FunctionRegistry,
+    input_schema: &Schema,
+) -> Result<PhysicalSortExpr> {
+    if let Some(expr) = &proto.expr {
+        let expr = parse_physical_expr(expr.as_ref(), registry, input_schema)?;
+        let options = SortOptions {
+            descending: !proto.asc,
+            nulls_first: proto.nulls_first,
+        };
+        Ok(PhysicalSortExpr { expr, options })
+    } else {
+        Err(proto_error("Unexpected empty physical expression"))
     }
 }
 
@@ -212,7 +237,7 @@ pub fn parse_physical_expr(
                 input_schema,
             )?,
             convert_required!(e.arrow_type)?,
-            DEFAULT_DATAFUSION_CAST_OPTIONS,
+            None,
         )),
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(

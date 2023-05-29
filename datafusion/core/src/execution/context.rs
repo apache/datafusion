@@ -31,9 +31,10 @@ use crate::{
         optimizer::PhysicalOptimizerRule,
     },
 };
+use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan,
+    DescribeTable, StringifiedPlan, UserDefinedLogicalNode,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -69,7 +70,11 @@ use crate::logical_expr::{
     LogicalPlanBuilder, SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::OptimizerRule;
-use datafusion_sql::{planner::ParserOptions, ResolvedTableReference, TableReference};
+use datafusion_sql::{
+    parser::{CopyToSource, CopyToStatement},
+    planner::ParserOptions,
+    ResolvedTableReference, TableReference,
+};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
@@ -114,6 +119,7 @@ use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 // backwards compatibility
+use crate::execution::options::ArrowReadOptions;
 use crate::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
@@ -123,7 +129,7 @@ use super::options::{
 };
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
-/// This allows methods such [`SessionContext::read_csv`] and `[`SessionContext::read_avro`]
+/// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]
 /// to take either a single file or multiple files.
 pub trait DataFilePaths {
     /// Parse to a vector of [`ListingTableUrl`] URLs.
@@ -771,8 +777,8 @@ impl SessionContext {
     /// Note in SQL queries, function names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
-    /// `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    /// - `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
+    /// - `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
     pub fn register_udf(&self, f: ScalarUDF) {
         self.state
             .write()
@@ -785,8 +791,8 @@ impl SessionContext {
     /// Note in SQL queries, aggregate names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
-    /// `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
+    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
+    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
     pub fn register_udaf(&self, f: AggregateUDF) {
         self.state
             .write()
@@ -840,6 +846,20 @@ impl SessionContext {
         &self,
         table_paths: P,
         options: NdJsonReadOptions<'_>,
+    ) -> Result<DataFrame> {
+        self._read_type(table_paths, options).await
+    }
+
+    /// Creates a [`DataFrame`] for reading an Arrow data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
+    ///
+    /// For an example, see [`read_csv`](Self::read_csv)
+    pub async fn read_arrow<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        options: ArrowReadOptions<'_>,
     ) -> Result<DataFrame> {
         self._read_type(table_paths, options).await
     }
@@ -918,7 +938,7 @@ impl SessionContext {
         ))
     }
 
-    /// Registers a [`ListingTable]` that can assemble multiple files
+    /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
     ///
@@ -1020,6 +1040,27 @@ impl SessionContext {
         name: &str,
         table_path: &str,
         options: AvroReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options = options.to_listing_options(&self.copied_config());
+
+        self.register_listing_table(
+            name,
+            table_path,
+            listing_options,
+            options.schema.map(|s| Arc::new(s.to_owned())),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Registers an Arrow file as a table that can be referenced from
+    /// SQL statements executed against this context.
+    pub async fn register_arrow(
+        &self,
+        name: &str,
+        table_path: &str,
+        options: ArrowReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options.to_listing_options(&self.copied_config());
 
@@ -1302,6 +1343,8 @@ pub struct SessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Deserializer registry for extensions.
+    serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
     config: SessionConfig,
     /// Execution properties
@@ -1360,6 +1403,7 @@ impl SessionState {
         table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("ARROW".into(), Arc::new(ListingTableFactory::new()));
 
         if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
@@ -1443,6 +1487,7 @@ impl SessionState {
             catalog_list,
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
+            serializer_registry: Arc::new(EmptySerializerRegistry),
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
@@ -1603,6 +1648,15 @@ impl SessionState {
         self
     }
 
+    /// Replace the extension [`SerializerRegistry`]
+    pub fn with_serializer_registry(
+        mut self,
+        registry: Arc<dyn SerializerRegistry>,
+    ) -> Self {
+        self.serializer_registry = registry;
+        self
+    }
+
     /// Get the table factories
     pub fn table_factories(&self) -> &HashMap<String, Arc<dyn TableProviderFactory>> {
         &self.table_factories
@@ -1649,45 +1703,58 @@ impl SessionState {
         // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
+        struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
+
+        impl<'a> RelationVisitor<'a> {
+            /// Record that `relation` was used in this statement
+            fn insert(&mut self, relation: &ObjectName) {
+                self.0.get_or_insert_with(relation, |_| relation.clone());
+            }
+        }
+
+        impl<'a> Visitor for RelationVisitor<'a> {
+            type Break = ();
+
+            fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
+                self.insert(relation);
+                ControlFlow::Continue(())
+            }
+
+            fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
+                if let Statement::ShowCreate {
+                    obj_type: ShowCreateObject::Table | ShowCreateObject::View,
+                    obj_name,
+                } = statement
+                {
+                    self.insert(obj_name)
+                }
+                ControlFlow::Continue(())
+            }
+        }
+
+        let mut visitor = RelationVisitor(&mut relations);
         match statement {
             DFStatement::Statement(s) => {
-                struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
-
-                impl<'a> Visitor for RelationVisitor<'a> {
-                    type Break = ();
-
-                    fn pre_visit_relation(
-                        &mut self,
-                        relation: &ObjectName,
-                    ) -> ControlFlow<()> {
-                        self.0.get_or_insert_with(relation, |_| relation.clone());
-                        ControlFlow::Continue(())
-                    }
-
-                    fn pre_visit_statement(
-                        &mut self,
-                        statement: &Statement,
-                    ) -> ControlFlow<()> {
-                        if let Statement::ShowCreate {
-                            obj_type: ShowCreateObject::Table | ShowCreateObject::View,
-                            obj_name,
-                        } = statement
-                        {
-                            self.0.get_or_insert_with(obj_name, |_| obj_name.clone());
-                        }
-                        ControlFlow::Continue(())
-                    }
-                }
-                let mut visitor = RelationVisitor(&mut relations);
                 let _ = s.as_ref().visit(&mut visitor);
             }
             DFStatement::CreateExternalTable(table) => {
-                relations.insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+                visitor
+                    .0
+                    .insert(ObjectName(vec![Ident::from(table.name.as_str())]));
             }
-            DFStatement::DescribeTableStmt(table) => {
-                relations
-                    .get_or_insert_with(&table.table_name, |_| table.table_name.clone());
-            }
+            DFStatement::DescribeTableStmt(table) => visitor.insert(&table.table_name),
+            DFStatement::CopyTo(CopyToStatement {
+                source,
+                target: _,
+                options: _,
+            }) => match source {
+                CopyToSource::Relation(table_name) => {
+                    visitor.insert(table_name);
+                }
+                CopyToSource::Query(query) => {
+                    query.visit(&mut visitor);
+                }
+            },
         }
 
         // Always include information_schema if available
@@ -1890,6 +1957,11 @@ impl SessionState {
         &self.aggregate_functions
     }
 
+    /// Return [SerializerRegistry] for extensions
+    pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
+        self.serializer_registry.clone()
+    }
+
     /// Return version of the cargo package that produced this query
     pub fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
@@ -2018,6 +2090,32 @@ fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
                 "Unsupported SQL dialect: {dialect_name}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi."
             )))
         }
+    }
+}
+
+/// Default implementation of [SerializerRegistry] that throws unimplemented error
+/// for all requests.
+pub struct EmptySerializerRegistry;
+
+impl SerializerRegistry for EmptySerializerRegistry {
+    fn serialize_logical_plan(
+        &self,
+        node: &dyn UserDefinedLogicalNode,
+    ) -> Result<Vec<u8>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Serializing user defined logical plan node `{}` is not supported",
+            node.name()
+        )))
+    }
+
+    fn deserialize_logical_plan(
+        &self,
+        name: &str,
+        _bytes: &[u8],
+    ) -> Result<Arc<dyn UserDefinedLogicalNode>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Deserializing user defined logical plan node `{name}` is not supported"
+        )))
     }
 }
 

@@ -2867,6 +2867,7 @@ mod tests {
                 PhysicalGroupBy::default(),
                 vec![],
                 vec![],
+                vec![],
                 input,
                 schema,
             )

@@ -33,7 +33,7 @@ list to help you get started.
 
 # Developer's guide
 
-## Pull Requests
+## Pull Request Overview
 
 We welcome pull requests (PRs) from anyone from the community.
 
@@ -76,7 +76,7 @@ On most platforms this can be installed from your system's package manager
 
 ```
 $ apt install -y protobuf-compiler
-$ dnf install -y protobuf-compiler
+$ dnf install -y protobuf-devel
 $ pacman -S protobuf
 $ brew install protobuf
 ```
@@ -115,42 +115,41 @@ or run them all at once:
 
 - [dev/rust_lint.sh](../../../dev/rust_lint.sh)
 
-### Test Organization
+## Testing
 
-Tests are very important to ensure that improvemens or fixes are not accidentally broken during subsequent refactorings.
+Tests are critical to ensure that DataFusion is working properly and
+is not accidentally broken during refactorings. All new features
+should have test coverage.
 
 DataFusion has several levels of tests in its [Test
 Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
-and tries to follow rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+and tries to follow the Rust standard [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
 
-This section highlights the most important test modules that exist
+### Unit tests
 
-#### Unit tests
+Tests for code in an individual module are defined in the same source file with a `test` module, following Rust convention.
 
-Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention.
+### sqllogictests Tests
 
-#### Rust Integration Tests
+DataFusion's SQL implementation is tested using [sqllogictest](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests) which are run like any other Rust test using `cargo test --test sqllogictests`.
+
+`sqllogictests` tests may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via `cargo test --test sqllogictests -- --complete`.
+
+Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability. While we are still in the process of [migrating some old sql_integration tests](https://github.com/apache/arrow-datafusion/issues/6195), all new tests should be written using sqllogictests if possible.
+
+### Rust Integration Tests
 
 There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests) directory.
 
-You can run these tests individually using a command such as
+You can run these tests individually using `cargo` as normal command such as
 
 ```shell
-cargo test -p datafusion --test sql_integration
+cargo test -p datafusion --test dataframe
 ```
 
-One very important test is the [sql_integration](https://github.com/apache/arrow-datafusion/blob/main/datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
+## Benchmarks
 
-#### sqllogictests Tests
-
-The [sqllogictests](https://github.com/apache/arrow-datafusion/tree/main/datafusion/core/tests/sqllogictests) also validate DataFusion SQL against an assortment of data setups.
-
-Data Driven tests have many benefits including being easier to write and maintain. We are in the process of [migrating sql_integration tests](https://github.com/apache/arrow-datafusion/issues/4460) and encourage
-you to add new tests using sqllogictests if possible.
-
-### Benchmarks
-
-#### Criterion Benchmarks
+### Criterion Benchmarks
 
 [Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.
 
@@ -164,7 +163,7 @@ A full list of benchmarks can be found [here](https://github.com/apache/arrow-da
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
 
-#### Parquet SQL Benchmarks
+### Parquet SQL Benchmarks
 
 The parquet SQL benchmarks can be run with
 
@@ -178,7 +177,7 @@ If the environment variable `PARQUET_FILE` is set, the benchmark will run querie
 
 The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
 
-#### Upstream Benchmark Suites
+### Upstream Benchmark Suites
 
 Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](https://github.com/apache/arrow-datafusion/tree/main/benchmarks).
 

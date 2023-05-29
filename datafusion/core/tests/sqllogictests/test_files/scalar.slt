@@ -1209,3 +1209,23 @@ NULL NULL NULL NULL 8 15.625
 
 statement ok
 drop table test
+
+# error message for wrong function signature (Variadic: arbitrary number of args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'concat\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tconcat\(Utf8, ..\)
+SELECT concat();
+
+# error message for wrong function signature (Uniform: t args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+SELECT nullif(1);
+
+# error message for wrong function signature (Exact: exact number of args of an exact type)
+statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
+SELECT pi(3.14);
+
+# error message for wrong function signature (Any: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
+SELECT arrow_typeof(1, 1);
+
+# error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
+SELECT power(1, 2, 3);

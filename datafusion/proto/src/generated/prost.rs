@@ -293,6 +293,8 @@ pub struct CreateExternalTableNode {
     pub file_compression_type: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "13")]
     pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bool, tag = "14")]
+    pub unbounded: bool,
     #[prost(map = "string, string", tag = "11")]
     pub options: ::std::collections::HashMap<
         ::prost::alloc::string::String,
@@ -692,6 +694,8 @@ pub struct AggregateExprNode {
     pub distinct: bool,
     #[prost(message, optional, boxed, tag = "4")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "5")]
+    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -702,6 +706,8 @@ pub struct AggregateUdfExprNode {
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, optional, boxed, tag = "3")]
     pub filter: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "4")]
+    pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1820,6 +1826,12 @@ pub struct MaybeFilter {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MaybePhysicalSortExprs {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
     #[prost(message, repeated, tag = "1")]
     pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
@@ -1842,6 +1854,8 @@ pub struct AggregateExecNode {
     pub groups: ::prost::alloc::vec::Vec<bool>,
     #[prost(message, repeated, tag = "10")]
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
+    #[prost(message, repeated, tag = "11")]
+    pub order_by_expr: ::prost::alloc::vec::Vec<MaybePhysicalSortExprs>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2396,6 +2410,15 @@ pub enum AggregateFunction {
     ApproxPercentileContWithWeight = 16,
     Grouping = 17,
     Median = 18,
+    BitAnd = 19,
+    BitOr = 20,
+    BitXor = 21,
+    BoolAnd = 22,
+    BoolOr = 23,
+    /// When a function with the same name exists among built-in window functions,
+    /// we append "_AGG" to obey name scoping rules.
+    FirstValueAgg = 24,
+    LastValueAgg = 25,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2425,6 +2448,13 @@ impl AggregateFunction {
             }
             AggregateFunction::Grouping => "GROUPING",
             AggregateFunction::Median => "MEDIAN",
+            AggregateFunction::BitAnd => "BIT_AND",
+            AggregateFunction::BitOr => "BIT_OR",
+            AggregateFunction::BitXor => "BIT_XOR",
+            AggregateFunction::BoolAnd => "BOOL_AND",
+            AggregateFunction::BoolOr => "BOOL_OR",
+            AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
+            AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2451,6 +2481,13 @@ impl AggregateFunction {
             }
             "GROUPING" => Some(Self::Grouping),
             "MEDIAN" => Some(Self::Median),
+            "BIT_AND" => Some(Self::BitAnd),
+            "BIT_OR" => Some(Self::BitOr),
+            "BIT_XOR" => Some(Self::BitXor),
+            "BOOL_AND" => Some(Self::BoolAnd),
+            "BOOL_OR" => Some(Self::BoolOr),
+            "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
+            "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
             _ => None,
         }
     }

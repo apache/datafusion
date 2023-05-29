@@ -119,6 +119,7 @@ impl std::fmt::Display for ObjectStoreUrl {
 ///
 /// <!-- is in a different crate so normal rustdoc links don't work -->
 /// [`ListingTableUrl`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTableUrl.html
+/// [`ObjectStore`]: object_store::ObjectStore
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(

@@ -461,7 +461,7 @@ jobs:
       - name: Run tests
         run: |
           cd datafusion
-          cargo test --lib --tests --features=force_hash_collisions
+          cargo test --lib --tests --features=force_hash_collisions,avro
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting

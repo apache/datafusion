@@ -31,10 +31,13 @@ pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
 pub(crate) mod average;
+pub(crate) mod bit_and_or_xor;
+pub(crate) mod bool_and_or;
 pub(crate) mod correlation;
 pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
+pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
 #[macro_use]

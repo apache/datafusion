@@ -145,6 +145,7 @@ impl ListingSchemaProvider {
                             definition: None,
                             file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
                             order_exprs: vec![],
+                            unbounded: false,
                             options: Default::default(),
                         },
                     )

@@ -225,7 +225,8 @@ impl ExprSchemable for Expr {
             | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. } => Ok(true),
+            | Expr::AggregateUDF { .. }
+            | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -234,8 +235,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. }
-            | Expr::Placeholder(_) => Ok(true),
+            | Expr::Exists { .. } => Ok(false),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
@@ -355,7 +355,14 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::Column;
+    use datafusion_common::{Column, ScalarValue};
+
+    macro_rules! test_is_expr_nullable {
+        ($EXPR_TYPE:ident) => {{
+            let expr = lit(ScalarValue::Null).$EXPR_TYPE();
+            assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        }};
+    }
 
     #[test]
     fn expr_schema_nullability() {
@@ -364,6 +371,15 @@ mod tests {
         assert!(expr
             .nullable(&MockExprSchema::new().with_nullable(true))
             .unwrap());
+
+        test_is_expr_nullable!(is_null);
+        test_is_expr_nullable!(is_not_null);
+        test_is_expr_nullable!(is_true);
+        test_is_expr_nullable!(is_not_true);
+        test_is_expr_nullable!(is_false);
+        test_is_expr_nullable!(is_not_false);
+        test_is_expr_nullable!(is_unknown);
+        test_is_expr_nullable!(is_not_unknown);
     }
 
     #[test]

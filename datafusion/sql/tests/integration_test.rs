@@ -1495,8 +1495,8 @@ fn select_count_column() {
 #[test]
 fn select_approx_median() {
     let sql = "SELECT approx_median(age) FROM person";
-    let expected = "Projection: APPROXMEDIAN(person.age)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXMEDIAN(person.age)]]\
+    let expected = "Projection: APPROX_MEDIAN(person.age)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROX_MEDIAN(person.age)]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -1964,7 +1964,7 @@ fn union_with_different_column_names() {
     let expected = "Union\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
-            \n  Projection: orders.customer_id\
+            \n  Projection: orders.customer_id AS order_id\
             \n    TableScan: orders";
     quick_test(sql, expected);
 }
@@ -2064,7 +2064,7 @@ fn union_with_binary_expr_and_cast() {
         \n      SubqueryAlias: x\
         \n        Projection: Int64(1) AS a\
         \n          EmptyRelation\
-        \n  Projection: Float64(2.1) + x.a\
+        \n  Projection: Float64(2.1) + x.a AS Float64(0) + x.a\
         \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
         \n      SubqueryAlias: x\
         \n        Projection: Int64(1) AS a\
@@ -2427,8 +2427,8 @@ fn approx_median_window() {
     let sql =
         "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
     let expected = "\
-        Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        Projection: orders.order_id, APPROX_MEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[APPROX_MEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
     quick_test(sql, expected);
 }
@@ -2479,7 +2479,7 @@ fn select_groupby_orderby() {
     // expect that this is not an ambiguous reference
     let expected =
         "Sort: birth_date ASC NULLS LAST\
-         \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n  Projection: AVG(person.age) AS value, date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
          \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
          \n      TableScan: person";
     quick_test(sql, expected);

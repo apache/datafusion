@@ -41,7 +41,7 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 #######
 
 # https://github.com/apache/arrow-datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "APPROXDISTINCT\(aggregate_test_100\.c9\)"
+statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "APPROX_DISTINCT\(aggregate_test_100\.c9\)"
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
@@ -80,6 +80,24 @@ query R
 SELECT avg(c12) FROM aggregate_test_100
 ----
 0.508972509913
+
+# csv_query_bit_and
+query IIIII
+SELECT bit_and(c5), bit_and(c6), bit_and(c7), bit_and(c8), bit_and(c9) FROM aggregate_test_100
+----
+0 0 0 0 0
+
+# csv_query_bit_or
+query IIIII
+SELECT bit_or(c5), bit_or(c6), bit_or(c7), bit_or(c8), bit_or(c9) FROM aggregate_test_100
+----
+-1 -1 255 65535 4294967295
+
+# csv_query_bit_xor
+query IIIII
+SELECT bit_xor(c5), bit_xor(c6), bit_xor(c7), bit_xor(c8), bit_xor(c9) FROM aggregate_test_100
+----
+1632751011 5960911605712039654 148 54789 169634700
 
 # csv_query_covariance_1
 query R
@@ -1372,6 +1390,27 @@ SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
 NULL 1
 NULL 2
 
+# bit_and should be null
+query II
+SELECT bit_and(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
+# bit_or should be null
+query II
+SELECT bit_or(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
+# bit_xor should be null
+query II
+SELECT bit_xor(column1), column2 from the_nulls group by column2 order by column2;
+----
+NULL 1
+NULL 2
+
 # min should be null
 query II
 SELECT min(column1), column2 from the_nulls group by column2 order by column2;
@@ -1405,6 +1444,63 @@ as values
  ('2011-12-13T11:13:10.12345', 'Row 1'),
  (null, 'Row 2'),
  ('2021-01-01T05:11:10.432', 'Row 3');
+
+statement ok
+create table bit_aggregate_functions (
+  c1 SMALLINT NOT NULL,
+  c2 SMALLINT NOT NULL,
+  c3 SMALLINT,
+)
+as values
+  (5, 10, 11),
+  (33, 11, null),
+  (9, 12, null);
+
+# query_bit_and
+query III
+SELECT bit_and(c1), bit_and(c2), bit_and(c3) FROM bit_aggregate_functions
+----
+1 8 11
+
+# query_bit_or
+query III
+SELECT bit_or(c1), bit_or(c2), bit_or(c3) FROM bit_aggregate_functions
+----
+45 15 11
+
+# query_bit_xor
+query III
+SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3) FROM bit_aggregate_functions
+----
+45 13 11
+
+statement ok
+create table bool_aggregate_functions (
+  c1 boolean not null,
+  c2 boolean not null,
+  c3 boolean not null,
+  c4 boolean not null,
+  c5 boolean,
+  c6 boolean,
+  c7 boolean,
+  c8 boolean,
+)
+as values
+  (true, true, false, false, true, true, null, null),
+  (true, false, true, false, false, null, false, null),
+  (true, true, false, false, null, true, false, null);
+
+# query_bool_and
+query BBBBBBBB
+SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), bool_and(c6), bool_and(c7), bool_and(c8) FROM bool_aggregate_functions
+----
+true false false false false true false NULL
+
+# query_bool_or
+query BBBBBBBB
+SELECT bool_or(c1), bool_or(c2), bool_or(c3), bool_or(c4), bool_or(c5), bool_or(c6), bool_or(c7), bool_or(c8) FROM bool_aggregate_functions
+----
+true true true false true true false NULL
 
 statement ok
 create table t as
@@ -1742,3 +1838,33 @@ select max(x_dict) from value_dict group by x_dict % 2 order by max(x_dict);
 ----
 4
 5
+
+# bool aggregtion
+statement ok
+CREATE TABLE value_bool(x boolean, g int) AS VALUES (NULL, 0), (false, 0), (true, 0), (false, 1), (true, 2), (NULL, 3);
+
+query B
+select min(x) from value_bool;
+----
+false
+
+query B
+select max(x) from value_bool;
+----
+true
+
+query B
+select min(x) from value_bool group by g order by g;
+----
+false
+false
+true
+NULL
+
+query B
+select max(x) from value_bool group by g order by g;
+----
+true
+false
+true
+NULL

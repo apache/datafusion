@@ -27,7 +27,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
 use crate::physical_plan::{
@@ -158,9 +158,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )));
         }
 
-        let tracking_metrics =
-            MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
-
         let input_partitions = self.input.output_partitioning().partition_count();
         trace!(
             "Number of input partitions of  SortPreservingMergeExec::execute: {}",
@@ -193,7 +190,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     receivers,
                     schema,
                     &self.expr,
-                    tracking_metrics,
+                    BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
                 )?;
 
@@ -813,14 +810,12 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
         let merge_stream = streaming_merge(
             streams,
             batches.schema(),
             sort.as_slice(),
-            tracking_metrics,
+            BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
         )
         .unwrap();
