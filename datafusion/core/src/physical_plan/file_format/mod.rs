@@ -38,7 +38,7 @@ use arrow::{
 };
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
@@ -120,9 +120,6 @@ pub fn get_scan_files(
     })?;
     Ok(collector)
 }
-
-/// Specifies a lexicographical ordering that describes a schema.
-pub(crate) type LexOrdering = Vec<PhysicalSortExpr>;
 
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.

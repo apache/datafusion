@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use datafusion_common::ToDFSchema;
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
-use datafusion_physical_expr::{create_physical_expr, PhysicalSortExpr};
+use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -44,7 +44,7 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
-use crate::physical_plan::file_format::{FileScanConfig, LexOrdering};
+use crate::physical_plan::file_format::FileScanConfig;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,

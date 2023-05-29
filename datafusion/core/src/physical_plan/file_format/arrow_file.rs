@@ -18,7 +18,7 @@
 //! Execution plan for reading Arrow files
 use crate::error::Result;
 use crate::physical_plan::file_format::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, LexOrdering,
+    FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -28,7 +28,9 @@ use crate::physical_plan::{
 use arrow_schema::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortExpr};
+use datafusion_physical_expr::{
+    LexOrdering, OrderingEquivalenceProperties, PhysicalSortExpr,
+};
 use futures::StreamExt;
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;

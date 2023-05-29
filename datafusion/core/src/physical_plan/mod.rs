@@ -645,7 +645,7 @@ impl Distribution {
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, LexOrdering,
 };
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
@@ -720,7 +720,6 @@ pub mod windows;
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;
-use crate::physical_plan::file_format::LexOrdering;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{

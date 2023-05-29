@@ -38,7 +38,7 @@ use crate::{
     physical_plan::{
         common::AbortOnDropSingle,
         expressions::PhysicalSortExpr,
-        file_format::{FileMeta, FileScanConfig, LexOrdering, SchemaAdapter},
+        file_format::{FileMeta, FileScanConfig, SchemaAdapter},
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
@@ -47,7 +47,9 @@ use crate::{
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{
+    LexOrdering, OrderingEquivalenceProperties, PhysicalExpr,
+};
 
 use bytes::Bytes;
 use futures::future::BoxFuture;

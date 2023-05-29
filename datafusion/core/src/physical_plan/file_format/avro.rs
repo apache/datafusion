@@ -19,7 +19,6 @@
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::LexOrdering;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
@@ -27,7 +26,7 @@ use crate::physical_plan::{
 };
 
 use arrow::datatypes::SchemaRef;
-use datafusion_physical_expr::OrderingEquivalenceProperties;
+use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use std::any::Any;
 use std::sync::Arc;
