@@ -102,25 +102,18 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
     }
 }
 
-fn name_to_scalar_function(name: &str) -> Result<BuiltinScalarFunction> {
-    match name {
-        "abs" => Ok(BuiltinScalarFunction::Abs),
-        "power" => Ok(BuiltinScalarFunction::Power),
-        "substr" => Ok(BuiltinScalarFunction::Substr),
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported function name: {name:?}"
-        ))),
-    }
-}
-
 fn name_to_op_or_scalar_function(name: &str) -> Result<ScalarFunctionType> {
-    match name_to_op(name) {
-        Ok(op) => Ok(ScalarFunctionType::Op(op)),
-        Err(_) => match name_to_scalar_function(name) {
-            Ok(scalar_func) => Ok(ScalarFunctionType::Builtin(scalar_func)),
-            Err(e) => Err(e),
-        },
+    if let Ok(op) = name_to_op(name) {
+        return Ok(ScalarFunctionType::Op(op));
     }
+
+    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
+        return Ok(ScalarFunctionType::Builtin(fun));
+    }
+
+    Err(DataFusionError::NotImplemented(format!(
+        "Unsupported function name: {name:?}"
+    )))
 }
 
 /// Convert Substrait Plan to DataFusion DataFrame
@@ -809,7 +802,7 @@ pub async fn from_substrait_rex(
             // ScalarFunction
             _ => {
                 let fun = match extensions.get(&f.function_reference) {
-                    Some(fname) => name_to_scalar_function(fname),
+                    Some(fname) => BuiltinScalarFunction::from_str(fname),
                     None => Err(DataFusionError::NotImplemented(format!(
                         "Aggregated function not found: function reference = {:?}",
                         f.function_reference
