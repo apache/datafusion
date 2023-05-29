@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::expressions::{BinaryExpr, Column};
-use crate::{normalize_expr_with_equivalence_properties, PhysicalExpr, PhysicalSortExpr};
+use crate::{
+    normalize_expr_with_equivalence_properties, LexOrdering, PhysicalExpr,
+    PhysicalSortExpr,
+};
 
 use arrow::datatypes::SchemaRef;
 
@@ -216,7 +219,7 @@ impl<T: PartialEq + Clone> EquivalentClass<T> {
 
     pub fn remove(&mut self, col: &T) -> bool {
         let removed = remove_from_vec(&mut self.others, col);
-        // If the the removed entry is head, shit other such that first entry becomes head in others.
+        // If we are removing the head, shift others so that its first entry becomes the new head.
         if !removed && *col == self.head {
             let one_col = self.others.first().cloned();
             if let Some(col) = one_col {
@@ -243,9 +246,6 @@ impl<T: PartialEq + Clone> EquivalentClass<T> {
         self.len() == 0
     }
 }
-
-// `LexOrdering` is type alias for lexicographical ordering definition `Vec<PhysicalSortExpr>`
-type LexOrdering = Vec<PhysicalSortExpr>;
 
 /// `LexOrdering` stores the lexicographical ordering for a schema.
 /// OrderingEquivalentClass keeps track of different alternative orderings than can
