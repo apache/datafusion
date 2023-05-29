@@ -41,8 +41,8 @@ use datafusion_physical_expr::{
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map, reverse_order_bys,
     utils::{convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy_concrete},
-    AggregateExpr, OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
+    PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::any::Any;
 use std::collections::HashMap;
@@ -57,12 +57,6 @@ pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 use datafusion_physical_expr::utils::ordering_satisfy_requirement;
-
-/// Type alias for the lexicographical ordering requirement.
-type LexOrderingReq = Vec<PhysicalSortRequirement>;
-
-/// Type alias for the lexicographical ordering.
-type LexOrdering = Vec<PhysicalSortExpr>;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

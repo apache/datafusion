@@ -213,3 +213,9 @@ fn to_str(options: &SortOptions) -> &str {
         (false, false) => "ASC NULLS LAST",
     }
 }
+
+///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
+pub type LexOrdering = Vec<PhysicalSortExpr>;
+
+///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
+pub type LexOrderingReq = Vec<PhysicalSortRequirement>;
