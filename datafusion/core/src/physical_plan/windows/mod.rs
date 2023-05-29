@@ -47,14 +47,14 @@ mod window_agg_exec;
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
+use datafusion_physical_expr::equivalence::OrderingEquivalenceBuilder;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 use datafusion_physical_expr::{
-    normalize_expr_with_equivalence_properties, OrderedColumn,
-    OrderingEquivalenceProperties, PhysicalSortRequirement,
+    OrderedColumn, OrderingEquivalenceProperties, PhysicalSortRequirement,
 };
 pub use window_agg_exec::WindowAggExec;
 
@@ -254,30 +254,10 @@ pub(crate) fn window_ordering_equivalence(
 ) -> OrderingEquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.ordering_equivalence_properties()`.
-    let mut result = OrderingEquivalenceProperties::new(schema.clone());
-    result.extend(
-        input
-            .ordering_equivalence_properties()
-            .classes()
-            .iter()
-            .cloned(),
-    );
-    let mut normalized_out_ordering = vec![];
-    for item in input.output_ordering().unwrap_or(&[]) {
-        // To account for ordering equivalences, first normalize the expression:
-        let normalized = normalize_expr_with_equivalence_properties(
-            item.expr.clone(),
-            input.equivalence_properties().classes(),
-        );
-        // Currently we only support, ordering equivalences for `Column` expressions.
-        // TODO: Add support for ordering equivalence for all `PhysicalExpr`s
-        if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
-            normalized_out_ordering
-                .push(OrderedColumn::new(column.clone(), item.options));
-        } else {
-            break;
-        }
-    }
+    let mut builder = OrderingEquivalenceBuilder::new(schema.clone())
+        .with_equivalences(input.equivalence_properties())
+        .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
+        .extend(input.ordering_equivalence_properties());
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
@@ -289,25 +269,21 @@ pub(crate) fn window_ordering_equivalence(
                 .as_any()
                 .is::<RowNumber>()
             {
-                // If there is an existing ordering, add new ordering as an equivalence:
-                if !normalized_out_ordering.is_empty() {
-                    if let Some((idx, field)) =
-                        schema.column_with_name(expr.field().unwrap().name())
-                    {
-                        let column = Column::new(field.name(), idx);
-                        let options = SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        }; // ASC, NULLS LAST
-                        let rhs = OrderedColumn::new(column, options);
-                        result
-                            .add_equal_conditions((&normalized_out_ordering, &vec![rhs]));
-                    }
+                if let Some((idx, field)) =
+                    schema.column_with_name(expr.field().unwrap().name())
+                {
+                    let column = Column::new(field.name(), idx);
+                    let options = SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    }; // ASC, NULLS LAST
+                    let rhs = OrderedColumn::new(column, options);
+                    builder.add_equal_conditions(vec![rhs]);
                 }
             }
         }
     }
-    result
+    builder.build()
 }
 #[cfg(test)]
 mod tests {

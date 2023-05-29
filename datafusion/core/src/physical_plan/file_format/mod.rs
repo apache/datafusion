@@ -240,9 +240,9 @@ impl FileScanConfig {
 
 impl Debug for FileScanConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "object_store_url={:?}", self.object_store_url)?;
+        write!(f, "object_store_url={:?}, ", self.object_store_url)?;
 
-        write!(f, "statistics={:?}", self.statistics)?;
+        write!(f, "statistics={:?}, ", self.statistics)?;
 
         Display::fmt(self, f)
     }

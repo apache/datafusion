@@ -55,6 +55,7 @@ mod utils;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -388,6 +389,16 @@ fn get_finest_requirement<
     Ok(result)
 }
 
+/// Checks whether the given aggregate expression is order-sensitive.
+/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
+/// However, a `FirstAgg` depends on the input ordering (if the order changes,
+/// the first value in the list would change).
+fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
+    aggr_expr.as_any().is::<FirstValue>()
+        || aggr_expr.as_any().is::<LastValue>()
+        || aggr_expr.as_any().is::<ArrayAgg>()
+}
+
 impl AggregateExec {
     /// Create a new hash aggregate execution plan
     pub fn try_new(
@@ -395,7 +406,7 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
+        mut order_by_expr: Vec<Option<Vec<PhysicalSortExpr>>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
@@ -413,6 +424,18 @@ impl AggregateExec {
         // In other modes, all groups are collapsed, therefore their input schema
         // can not contain expressions in the requirement.
         if mode == AggregateMode::Partial || mode == AggregateMode::Single {
+            order_by_expr = aggr_expr
+                .iter()
+                .zip(order_by_expr.into_iter())
+                .map(|(aggr_expr, fn_reqs)| {
+                    // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
+                    if is_order_sensitive(aggr_expr) {
+                        fn_reqs
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
             let requirement = get_finest_requirement(
                 &order_by_expr,
                 || input.equivalence_properties(),

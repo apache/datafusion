@@ -1212,7 +1212,7 @@ mod test {
 
             let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
             let expected =
-                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+                "Projection: concat_ws(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 

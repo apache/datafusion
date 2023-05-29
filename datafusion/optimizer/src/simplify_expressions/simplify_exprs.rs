@@ -419,7 +419,7 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -559,7 +559,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
