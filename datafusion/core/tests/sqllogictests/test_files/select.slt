@@ -759,7 +759,24 @@ SELECT a FROM annotated_data_finite2
 0
 0
 
-# below query should emit all the columns except a
+# below query should emit all the columns except a and b
+# when only single column is excluded, we can either use
+# `EXCLUDE <col_name>` of `EXCLUDE(<col_name>)` syntax
+query III
+SELECT * EXCLUDE(b) FROM (
+  SELECT * EXCLUDE a
+    FROM annotated_data_finite2
+    ORDER BY c
+    LIMIT 5
+  )
+----
+1 0 0
+1 1 2
+1 2 0
+1 3 0
+1 4 1
+
+# below query should emit all the columns except a and b
 query III
 SELECT * EXCLUDE(a, b) FROM annotated_data_finite2
         ORDER BY c
@@ -772,7 +789,7 @@ SELECT * EXCLUDE(a, b) FROM annotated_data_finite2
 1 4 1
 
 # when wildcard is prepended with table name, exclude should still work
-# below query should emit all the columns except a
+# below query should emit all the columns except a and b
 query III
 SELECT annotated_data_finite2.* EXCLUDE(a, b) FROM annotated_data_finite2
         ORDER BY c
