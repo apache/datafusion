@@ -471,7 +471,7 @@ fn calc_required_input_ordering(
         if let Some(aggregator_reverse_reqs) = aggregator_reverse_reqs {
             vec![(false, aggregator_reqs), (true, aggregator_reverse_reqs)]
         } else {
-            vec![(true, aggregator_reqs)]
+            vec![(false, aggregator_reqs)]
         };
     for (is_reverse, aggregator_requirement) in aggregator_requirements.into_iter() {
         if let Some(AggregationOrdering {
