@@ -449,7 +449,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
 
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction 
+        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
         write!(f, "{}", FUNCTION_TO_NAME.get(self).unwrap())
     }
 }
