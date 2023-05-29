@@ -820,7 +820,7 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::{as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{Result, ScalarValue};
 
     /// $FUNC function to test
