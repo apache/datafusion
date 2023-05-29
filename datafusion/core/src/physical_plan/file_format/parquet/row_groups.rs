@@ -263,8 +263,8 @@ mod tests {
     };
     use std::sync::Arc;
 
-    struct PrimitiveTypeField<'a> {
-        name: &'a str,
+    struct PrimitiveTypeField {
+        name: &'static str,
         physical_ty: PhysicalType,
         logical_ty: Option<LogicalType>,
         precision: Option<i32>,
@@ -272,7 +272,7 @@ mod tests {
         byte_len: Option<i32>,
     }
 
-    impl<'a> PrimitiveTypeField<'a> {
+    impl PrimitiveTypeField {
         fn new(name: &'static str, physical_ty: PhysicalType) -> Self {
             Self {
                 name,
