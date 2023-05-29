@@ -751,6 +751,175 @@ mod tests {
 
         experiment(timestamp_scalar, interval_scalar)?;
 
+        // More test with all matchings of timestamps and intervals
+        let timestamp_scalar = ScalarValue::TimestampSecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_opt(23, 59, 59)
+                    .unwrap()
+                    .timestamp(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_ym(0, 1);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampSecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_opt(23, 59, 59)
+                    .unwrap()
+                    .timestamp(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_dt(10, 100000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampSecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_opt(23, 59, 59)
+                    .unwrap()
+                    .timestamp(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_mdn(13, 32, 123456);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampMillisecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_milli_opt(23, 59, 59, 909)
+                    .unwrap()
+                    .timestamp_millis(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_ym(0, 1);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampMillisecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_milli_opt(23, 59, 59, 909)
+                    .unwrap()
+                    .timestamp_millis(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_dt(10, 100000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampMillisecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_milli_opt(23, 59, 59, 909)
+                    .unwrap()
+                    .timestamp_millis(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_mdn(13, 32, 123456);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampMicrosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_micro_opt(23, 59, 59, 987654)
+                    .unwrap()
+                    .timestamp_micros(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_ym(0, 1);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampMicrosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_micro_opt(23, 59, 59, 987654)
+                    .unwrap()
+                    .timestamp_micros(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_dt(10, 100000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampMicrosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_micro_opt(23, 59, 59, 987654)
+                    .unwrap()
+                    .timestamp_micros(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_mdn(13, 32, 123456);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampNanosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_nano_opt(23, 59, 59, 999999999)
+                    .unwrap()
+                    .timestamp_nanos(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_ym(0, 1);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampNanosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_nano_opt(23, 59, 59, 999999999)
+                    .unwrap()
+                    .timestamp_nanos(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_dt(10, 100000);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
+        let timestamp_scalar = ScalarValue::TimestampNanosecond(
+            Some(
+                NaiveDate::from_ymd_opt(2000, 12, 31)
+                    .unwrap()
+                    .and_hms_nano_opt(23, 59, 59, 999999999)
+                    .unwrap()
+                    .timestamp_nanos(),
+            ),
+            None,
+        );
+        let interval_scalar = ScalarValue::new_interval_mdn(13, 32, 123456);
+
+        experiment(timestamp_scalar, interval_scalar)?;
+
         Ok(())
     }
 }

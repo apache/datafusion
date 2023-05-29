@@ -1398,7 +1398,7 @@ where
 {
     Ok(match scalar {
         ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
+        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i, sign),
         ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
         other => Err(DataFusionError::Execution(format!(
             "DateIntervalExpr does not support non-interval type {other:?}"
@@ -1415,7 +1415,7 @@ where
     D: Datelike + Add<Duration, Output = D>,
 {
     Ok(match INTERVAL_MODE {
-        YM_MODE => shift_months(prior, interval as i32 * sign),
+        YM_MODE => shift_months(prior, interval as i32, sign),
         DT_MODE => add_day_time(prior, interval as i64, sign),
         MDN_MODE => add_m_d_nano(prior, interval, sign),
         _ => {
@@ -1435,7 +1435,7 @@ where
     let months = months * sign;
     let days = days * sign;
     let nanos = nanos * sign as i64;
-    let a = shift_months(prior, months);
+    let a = shift_months(prior, months, 1);
     let b = a.add(Duration::days(days as i64));
     b.add(Duration::nanoseconds(nanos))
 }
