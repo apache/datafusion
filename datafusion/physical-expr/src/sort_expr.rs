@@ -214,5 +214,5 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-// `LexOrdering` is type alias for lexicographical ordering definition `Vec<PhysicalSortExpr>`
+/// `LexOrdering` is a type alias for lexicographical ordering definition `Vec<PhysicalSortExpr>`
 pub type LexOrdering = Vec<PhysicalSortExpr>;
