@@ -19,8 +19,8 @@ use async_recursion::async_recursion;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{DFField, DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{
-    aggregate_function, window_function::find_df_window_func, BinaryExpr, Case, Expr,
-    LogicalPlan, Operator,
+    aggregate_function, window_function::find_df_window_func, BinaryExpr,
+    BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
 use datafusion::logical_expr::{build_join_schema, Extension, LogicalPlanBuilder};
 use datafusion::logical_expr::{expr, Cast, WindowFrameBound, WindowFrameUnits};
@@ -64,6 +64,11 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
 };
 
+enum ScalarFunctionType {
+    Builtin(BuiltinScalarFunction),
+    Op(Operator),
+}
+
 pub fn name_to_op(name: &str) -> Result<Operator> {
     match name {
         "equal" => Ok(Operator::Eq),
@@ -95,6 +100,20 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
             "Unsupported function name: {name:?}"
         ))),
     }
+}
+
+fn name_to_op_or_scalar_function(name: &str) -> Result<ScalarFunctionType> {
+    if let Ok(op) = name_to_op(name) {
+        return Ok(ScalarFunctionType::Op(op));
+    }
+
+    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
+        return Ok(ScalarFunctionType::Builtin(fun));
+    }
+
+    Err(DataFusionError::NotImplemented(format!(
+        "Unsupported function name: {name:?}"
+    )))
 }
 
 /// Convert Substrait Plan to DataFusion DataFrame
@@ -727,38 +746,92 @@ pub async fn from_substrait_rex(
                 else_expr,
             })))
         }
-        Some(RexType::ScalarFunction(f)) => {
-            assert!(f.arguments.len() == 2);
-            let op = match extensions.get(&f.function_reference) {
-                Some(fname) => name_to_op(fname),
-                None => Err(DataFusionError::NotImplemented(format!(
-                    "Aggregated function not found: function reference = {:?}",
-                    f.function_reference
-                ))),
-            };
-            match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
+        Some(RexType::ScalarFunction(f)) => match f.arguments.len() {
+            // BinaryExpr or ScalarFunction
+            2 => match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
                 (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
-                    Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(
-                            from_substrait_rex(l, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone(),
-                        ),
-                        op: op?,
-                        right: Box::new(
-                            from_substrait_rex(r, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone(),
-                        ),
-                    })))
+                    let op_or_fun = match extensions.get(&f.function_reference) {
+                        Some(fname) => name_to_op_or_scalar_function(fname),
+                        None => Err(DataFusionError::NotImplemented(format!(
+                            "Aggregated function not found: function reference = {:?}",
+                            f.function_reference
+                        ))),
+                    };
+                    match op_or_fun {
+                        Ok(ScalarFunctionType::Op(op)) => {
+                            return Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(
+                                    from_substrait_rex(l, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ),
+                                op,
+                                right: Box::new(
+                                    from_substrait_rex(r, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ),
+                            })))
+                        }
+                        Ok(ScalarFunctionType::Builtin(fun)) => {
+                            Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
+                                fun,
+                                args: vec![
+                                    from_substrait_rex(l, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                    from_substrait_rex(r, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ],
+                            })))
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(
                     "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
+            },
+            // ScalarFunction
+            _ => {
+                let fun = match extensions.get(&f.function_reference) {
+                    Some(fname) => BuiltinScalarFunction::from_str(fname),
+                    None => Err(DataFusionError::NotImplemented(format!(
+                        "Aggregated function not found: function reference = {:?}",
+                        f.function_reference
+                    ))),
+                };
+
+                let mut args: Vec<Expr> = vec![];
+                for arg in f.arguments.iter() {
+                    match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            args.push(
+                                from_substrait_rex(e, input_schema, extensions)
+                                    .await?
+                                    .as_ref()
+                                    .clone(),
+                            );
+                        }
+                        e => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "Invalid arguments for scalar function: {e:?}"
+                            )))
+                        }
+                    }
+                }
+
+                Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
+                    fun: fun?,
+                    args,
+                })))
             }
-        }
+        },
         Some(RexType::Literal(lit)) => {
             let scalar_value = from_substrait_literal(lit)?;
             Ok(Arc::new(Expr::Literal(scalar_value)))
