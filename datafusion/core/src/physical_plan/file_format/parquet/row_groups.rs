@@ -264,6 +264,48 @@ mod tests {
     use std::ops::Rem;
     use std::sync::Arc;
 
+    struct PrimitiveTypeField {
+        name: &'static str,
+        physical_ty: PhysicalType,
+        logical_ty: Option<LogicalType>,
+        precision: Option<i32>,
+        scale: Option<i32>,
+        byte_len: Option<i32>,
+    }
+
+    impl PrimitiveTypeField {
+        fn new(name: &'static str, physical_ty: PhysicalType) -> Self {
+            Self {
+                name,
+                physical_ty,
+                logical_ty: None,
+                precision: None,
+                scale: None,
+                byte_len: None,
+            }
+        }
+
+        fn with_logical_type(mut self, logical_type: LogicalType) -> Self {
+            self.logical_ty = Some(logical_type);
+            self
+        }
+
+        fn with_precision(mut self, precision: i32) -> Self {
+            self.precision = Some(precision);
+            self
+        }
+
+        fn with_scale(mut self, scale: i32) -> Self {
+            self.scale = Some(scale);
+            self
+        }
+
+        fn with_byte_len(mut self, byte_len: i32) -> Self {
+            self.byte_len = Some(byte_len);
+            self
+        }
+    }
+
     #[test]
     fn row_group_pruning_predicate_simple_expr() {
         use datafusion_expr::{col, lit};
@@ -273,14 +315,9 @@ mod tests {
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            None,
-            None,
-            None,
-            None,
-        )]);
+
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
+        let schema_descr = get_test_schema_descr(vec![field]);
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             vec![ParquetStatistics::int32(Some(1), Some(10), None, 0, false)],
@@ -307,14 +344,8 @@ mod tests {
         let pruning_predicate =
             PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
 
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            None,
-            None,
-            None,
-            None,
-        )]);
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32);
+        let schema_descr = get_test_schema_descr(vec![field]);
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
             vec![ParquetStatistics::int32(None, None, None, 0, false)],
@@ -346,8 +377,8 @@ mod tests {
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
 
         let schema_descr = get_test_schema_descr(vec![
-            ("c1", PhysicalType::INT32, None, None, None, None),
-            ("c2", PhysicalType::INT32, None, None, None, None),
+            PrimitiveTypeField::new("c1", PhysicalType::INT32),
+            PrimitiveTypeField::new("c2", PhysicalType::INT32),
         ]);
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
@@ -389,8 +420,8 @@ mod tests {
 
     fn gen_row_group_meta_data_for_pruning_predicate() -> Vec<RowGroupMetaData> {
         let schema_descr = get_test_schema_descr(vec![
-            ("c1", PhysicalType::INT32, None, None, None, None),
-            ("c2", PhysicalType::BOOLEAN, None, None, None, None),
+            PrimitiveTypeField::new("c1", PhysicalType::INT32),
+            PrimitiveTypeField::new("c2", PhysicalType::BOOLEAN),
         ]);
         let rgm1 = get_row_group_meta_data(
             &schema_descr,
@@ -466,17 +497,14 @@ mod tests {
         // The type of scalar value if decimal(9,2), don't need to do cast
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 2), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            Some(LogicalType::Decimal {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
+            .with_logical_type(LogicalType::Decimal {
                 scale: 2,
                 precision: 9,
-            }),
-            Some(9),
-            Some(2),
-            None,
-        )]);
+            })
+            .with_scale(2)
+            .with_precision(9);
+        let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
@@ -522,17 +550,15 @@ mod tests {
         // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 0), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            Some(LogicalType::Decimal {
+
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT32)
+            .with_logical_type(LogicalType::Decimal {
                 scale: 0,
                 precision: 9,
-            }),
-            Some(9),
-            Some(0),
-            None,
-        )]);
+            })
+            .with_scale(0)
+            .with_precision(9);
+        let schema_descr = get_test_schema_descr(vec![field]);
         let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
             lit(ScalarValue::Decimal128(Some(500), 5, 2)),
             Decimal128(11, 2),
@@ -584,17 +610,14 @@ mod tests {
         // INT64: c1 < 5, the c1 is decimal(18,2)
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT64,
-            Some(LogicalType::Decimal {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::INT64)
+            .with_logical_type(LogicalType::Decimal {
                 scale: 2,
                 precision: 18,
-            }),
-            Some(18),
-            Some(2),
-            None,
-        )]);
+            })
+            .with_scale(2)
+            .with_precision(18);
+        let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate =
@@ -635,17 +658,15 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::FIXED_LEN_BYTE_ARRAY,
-            Some(LogicalType::Decimal {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_logical_type(LogicalType::Decimal {
                 scale: 2,
                 precision: 18,
-            }),
-            Some(18),
-            Some(2),
-            Some(16),
-        )]);
+            })
+            .with_scale(2)
+            .with_precision(18)
+            .with_byte_len(16);
+        let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
         let left = cast(col("c1"), DataType::Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
@@ -707,17 +728,15 @@ mod tests {
         // the type of parquet is decimal(18,2)
         let schema =
             Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::BYTE_ARRAY,
-            Some(LogicalType::Decimal {
+        let field = PrimitiveTypeField::new("c1", PhysicalType::BYTE_ARRAY)
+            .with_logical_type(LogicalType::Decimal {
                 scale: 2,
                 precision: 18,
-            }),
-            Some(18),
-            Some(2),
-            Some(16),
-        )]);
+            })
+            .with_scale(2)
+            .with_precision(18)
+            .with_byte_len(16);
+        let schema_descr = get_test_schema_descr(vec![field]);
         // cast the type of c1 to decimal(28,3)
         let left = cast(col("c1"), DataType::Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
@@ -786,46 +805,25 @@ mod tests {
             .unwrap()
     }
 
-    #[allow(clippy::type_complexity)]
-    fn get_test_schema_descr(
-        fields: Vec<(
-            &str,
-            PhysicalType,
-            Option<LogicalType>,
-            Option<i32>, // precision
-            Option<i32>, // scale
-            Option<i32>, // length of bytes
-        )>,
-    ) -> SchemaDescPtr {
+    fn get_test_schema_descr(fields: Vec<PrimitiveTypeField>) -> SchemaDescPtr {
         use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
         let mut schema_fields = fields
             .iter()
-            .map(|(n, t, logical, precision, scale, length)| {
-                let mut builder = SchemaType::primitive_type_builder(n, *t);
+            .map(|field| {
+                let mut builder =
+                    SchemaType::primitive_type_builder(field.name, field.physical_ty);
                 // add logical type for the parquet field
-                match logical {
-                    None => {}
-                    Some(logical_type) => {
-                        builder = builder.with_logical_type(Some(logical_type.clone()));
-                    }
-                };
-                match precision {
-                    None => {}
-                    Some(v) => {
-                        builder = builder.with_precision(*v);
-                    }
-                };
-                match scale {
-                    None => {}
-                    Some(v) => {
-                        builder = builder.with_scale(*v);
-                    }
+                if let Some(logical_type) = &field.logical_ty {
+                    builder = builder.with_logical_type(Some(logical_type.clone()));
                 }
-                match length {
-                    None => {}
-                    Some(v) => {
-                        builder = builder.with_length(*v);
-                    }
+                if let Some(precision) = field.precision {
+                    builder = builder.with_precision(precision);
+                }
+                if let Some(scale) = field.scale {
+                    builder = builder.with_scale(scale);
+                }
+                if let Some(byte_len) = field.byte_len {
+                    builder = builder.with_length(byte_len);
                 }
                 Arc::new(builder.build().unwrap())
             })

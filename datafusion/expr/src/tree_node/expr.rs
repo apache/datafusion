@@ -363,7 +363,6 @@ impl TreeNode for Expr {
     }
 }
 
-#[allow(clippy::boxed_local)]
 fn transform_boxed<F>(boxed_expr: Box<Expr>, transform: &mut F) -> Result<Box<Expr>>
 where
     F: FnMut(Expr) -> Result<Expr>,

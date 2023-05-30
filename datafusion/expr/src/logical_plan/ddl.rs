@@ -199,7 +199,6 @@ pub struct CreateExternalTable {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
