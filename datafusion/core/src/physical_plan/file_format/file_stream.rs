@@ -273,7 +273,7 @@ impl<F: FileOpener> FileStream<F> {
 
     /// Specify the behavior when an error occurs opening or scanning a file
     ///
-    /// If `OnError::Skip` the stream will skip files which encounter and error and continue
+    /// If `OnError::Skip` the stream will skip files which encounter an error and continue
     /// If `OnError:Fail` (default) the stream will fail and stop processing when an error occurs
     pub fn with_on_error(mut self, on_error: OnError) -> Self {
         self.on_error = on_error;
