@@ -375,7 +375,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ));
                 }
                 // do not expand from outer schema
-                expand_wildcard(plan.schema().as_ref(), plan, options.opt_exclude)
+                expand_wildcard(plan.schema().as_ref(), plan, Some(options))
             }
             SelectItem::QualifiedWildcard(ref object_name, options) => {
                 Self::check_wildcard_options(&options)?;
@@ -384,7 +384,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expand_qualified_wildcard(
                     &qualifier,
                     plan.schema().as_ref(),
-                    options.opt_exclude,
+                    Some(options),
                 )
             }
         }
@@ -394,14 +394,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let WildcardAdditionalOptions {
             // opt_exclude is handled
             opt_exclude: _opt_exclude,
-            opt_except,
+            opt_except: _opt_except,
             opt_rename,
             opt_replace,
         } = options;
 
-        if opt_except.is_some() || opt_rename.is_some() || opt_replace.is_some() {
+        if opt_rename.is_some() || opt_replace.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with EXCEPT, RENAME or REPLACE not supported ".to_string(),
+                "wildcard * with RENAME or REPLACE not supported ".to_string(),
             ))
         } else {
             Ok(())
