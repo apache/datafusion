@@ -166,7 +166,7 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
 }
 
 /// returns true if the elements in a `Concat` pattern are:
-/// - `[Look::Start, Capture(Alternation), Look::End]`
+/// - `[Look::Start, Capture(Alternation(Literals...)), Look::End]`
 fn is_anchored_capture(v: &[Hir]) -> bool {
     if 3 != v.len() {
         return false;
@@ -212,7 +212,7 @@ fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
     }
 }
 
-fn anchored_alternation_to_expr(v: &[Hir]) -> Option<Vec<Expr>> {
+fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
     if 3 != v.len() {
         return None;
     }
@@ -220,22 +220,22 @@ fn anchored_alternation_to_expr(v: &[Hir]) -> Option<Vec<Expr>> {
     if let HirKind::Capture(cap, ..) = v[1].kind() {
         let Capture { sub, .. } = cap;
         if let HirKind::Alternation(alters) = sub.kind() {
-            let literals: Vec<_> = alters
-                .iter()
-                .map(|l| {
-                    if let HirKind::Literal(l) = l.kind() {
-                        str_from_literal(l).map(lit)
-                    } else {
-                        None
+            let mut literals = Vec::with_capacity(alters.len());
+            for hir in alters {
+                let mut is_safe = false;
+                if let HirKind::Literal(l) = hir.kind() {
+                    if let Some(safe_literal) = str_from_literal(l).map(lit) {
+                        literals.push(safe_literal);
+                        is_safe = true;
                     }
-                })
-                .collect();
+                }
 
-            if literals.iter().any(|l| l.is_none()) {
-                return None;
-            };
+                if !is_safe {
+                    return None;
+                }
+            }
 
-            return Some(literals.into_iter().map(|v| v.unwrap()).collect());
+            return Some(literals);
         }
     }
 
@@ -252,14 +252,13 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
             return Some(mode.expr(Box::new(left.clone()), format!("%{s}%")));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {
-            let right = anchored_literal_to_expr(inner)?;
-            return Some(
-                mode.expr_matches_literal(Box::new(left.clone()), Box::new(right)),
-            );
+            return anchored_literal_to_expr(inner).map(|right| {
+                mode.expr_matches_literal(Box::new(left.clone()), Box::new(right))
+            });
         }
         HirKind::Concat(inner) if is_anchored_capture(inner) => {
-            let right = anchored_alternation_to_expr(inner)?;
-            return Some(left.clone().in_list(right, false));
+            return anchored_alternation_to_exprs(inner)
+                .map(|right| left.clone().in_list(right, mode.not));
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = collect_concat_to_like_string(inner) {
