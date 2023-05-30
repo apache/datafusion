@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::parser::{
-    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt,
+    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt, LexOrdering,
     Statement as DFStatement,
 };
 use crate::planner::{
@@ -44,9 +44,9 @@ use datafusion_expr::{
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
+    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint,
+    TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
 use datafusion_expr::expr::Placeholder;
@@ -578,7 +578,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn build_order_by(
         &self,
-        order_exprs: Vec<Vec<OrderByExpr>>,
+        order_exprs: Vec<LexOrdering>,
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Vec<datafusion_expr::Expr>>> {

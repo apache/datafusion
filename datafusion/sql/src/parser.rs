@@ -117,7 +117,7 @@ impl fmt::Display for CopyToSource {
 }
 
 /// This type defines a lexicographical ordering.
-type LexOrdering = Vec<OrderByExpr>;
+pub(crate) type LexOrdering = Vec<OrderByExpr>;
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 ///
@@ -588,7 +588,7 @@ impl<'a> DFParser<'a> {
             delimiter: Option<char>,
             file_compression_type: Option<CompressionTypeVariant>,
             table_partition_cols: Option<Vec<String>>,
-            order_exprs: Vec<Vec<OrderByExpr>>,
+            order_exprs: Vec<LexOrdering>,
             options: Option<HashMap<String, String>>,
         }
         let mut builder = Builder::default();
