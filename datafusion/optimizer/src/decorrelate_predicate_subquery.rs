@@ -223,6 +223,9 @@ fn build_join(
         in_predicate_opt: in_predicate_opt.clone(),
         exists_sub_query: in_predicate_opt.is_none(),
         can_pull_up: true,
+        need_collect_count_expr_map: false,
+        collected_count_expr_map: Default::default(),
+        expr_check_map: Default::default(),
     };
     let new_plan = subquery.clone().rewrite(&mut pull_up)?;
     if !pull_up.can_pull_up {

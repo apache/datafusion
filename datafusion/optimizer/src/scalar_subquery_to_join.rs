@@ -17,13 +17,17 @@
 
 use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
-use crate::utils::{conjunction, replace_qualified_name, PullUpCorrelatedExpr};
+use crate::utils::{
+    conjunction, replace_qualified_name, ExprCheckMap, PullUpCorrelatedExpr,
+};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
+};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
-use std::collections::BTreeSet;
+use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -66,7 +70,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let (subqueries, expr) =
+                let (subqueries, mut rewrite_expr) =
                     self.extract_subquery_exprs(&filter.predicate, self.alias.clone())?;
 
                 if subqueries.is_empty() {
@@ -77,27 +81,62 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
-                    if let Some(optimized_subquery) =
-                        build_join(&subquery, &cur_input, &alias)?
+                    if let Some((optimized_subquery, expr_check_map)) =
+                        build_join(&subquery, &cur_input, &alias, true)?
                     {
+                        if !expr_check_map.is_empty() {
+                            rewrite_expr =
+                                rewrite_expr.clone().transform_up(&|expr| {
+                                    if let Expr::Column(col) = &expr {
+                                        if let Some((expr1, expr2)) =
+                                            expr_check_map.get(&col.name)
+                                        {
+                                            let new_expr = Expr::Case(expr::Case {
+                                                expr: None,
+                                                when_then_expr: vec![(
+                                                    Box::new(Expr::IsNull(Box::new(
+                                                        Expr::Column(
+                                                            Column::new_unqualified(
+                                                                "__always_true",
+                                                            ),
+                                                        ),
+                                                    ))),
+                                                    Box::new(expr2.clone()),
+                                                )],
+                                                else_expr: Some(Box::new(expr1.clone())),
+                                            });
+                                            Ok(Transformed::Yes(new_expr))
+                                        } else {
+                                            Ok(Transformed::No(expr))
+                                        }
+                                    } else {
+                                        Ok(Transformed::No(expr))
+                                    }
+                                })?;
+                        }
                         cur_input = optimized_subquery;
                     } else {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(None);
                     }
                 }
-                let new_plan =
-                    LogicalPlanBuilder::from(cur_input).filter(expr)?.build()?;
+                let new_plan = LogicalPlanBuilder::from(cur_input)
+                    .filter(rewrite_expr)?
+                    .build()?;
                 Ok(Some(new_plan))
             }
             LogicalPlan::Projection(projection) => {
                 let mut all_subqueryies = vec![];
-                let mut rewrite_exprs = vec![];
+                let mut expr_to_rewrite_expr_map = HashMap::new();
+                let mut subquery_to_expr_map = HashMap::new();
                 for expr in projection.expr.iter() {
-                    let (subqueries, expr) =
+                    let (subqueries, rewrite_exprs) =
                         self.extract_subquery_exprs(expr, self.alias.clone())?;
+                    for (subquery, _) in &subqueries {
+                        subquery_to_expr_map.insert(subquery.clone(), expr.clone());
+                    }
                     all_subqueryies.extend(subqueries);
-                    rewrite_exprs.push(expr);
+                    expr_to_rewrite_expr_map.insert(expr, rewrite_exprs);
                 }
                 if all_subqueryies.is_empty() {
                     // regular projection, no subquery exists clause here
@@ -106,17 +145,62 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueryies {
-                    if let Some(optimized_subquery) =
-                        build_join(&subquery, &cur_input, &alias)?
+                    if let Some((optimized_subquery, expr_check_map)) =
+                        build_join(&subquery, &cur_input, &alias, true)?
                     {
                         cur_input = optimized_subquery;
+                        if !expr_check_map.is_empty() {
+                            if let Some(expr) = subquery_to_expr_map.get(&subquery) {
+                                if let Some(rewrite_expr) =
+                                    expr_to_rewrite_expr_map.get(expr)
+                                {
+                                    let new_expr = rewrite_expr.clone().transform_up(&|expr| {
+                                        if let Expr::Column(col) = &expr {
+                                            if let Some((expr1, expr2)) = expr_check_map.get(&col.name)
+                                            {
+                                                let new_expr = Expr::Case(expr::Case {
+                                                    expr: None,
+                                                    when_then_expr: vec![(
+                                                        Box::new(Expr::IsNull(Box::new(
+                                                            Expr::Column(Column::new_unqualified("__always_true")),
+                                                        ))),
+                                                        Box::new(expr2.clone()),
+                                                    )],
+                                                    else_expr: Some(Box::new(expr1.clone())),
+                                                });
+                                                Ok(Transformed::Yes(new_expr))
+                                            } else {
+                                                Ok(Transformed::No(expr))
+                                            }
+                                        } else {
+                                            Ok(Transformed::No(expr))
+                                        }
+
+                                    })?;
+                                    expr_to_rewrite_expr_map.insert(expr, new_expr);
+                                }
+                            }
+                        }
                     } else {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(None);
                     }
                 }
+
+                let mut proj_exprs = vec![];
+                for expr in projection.expr.iter() {
+                    let old_expr_name = expr.display_name()?;
+                    let new_expr = expr_to_rewrite_expr_map.get(expr).unwrap();
+                    let new_expr_name = new_expr.display_name()?;
+                    if new_expr_name != old_expr_name {
+                        proj_exprs
+                            .push(Expr::Alias(Box::new(new_expr.clone()), old_expr_name))
+                    } else {
+                        proj_exprs.push(new_expr.clone());
+                    }
+                }
                 let new_plan = LogicalPlanBuilder::from(cur_input)
-                    .project(rewrite_exprs)?
+                    .project(proj_exprs)?
                     .build()?;
                 Ok(Some(new_plan))
             }
@@ -205,7 +289,7 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
 ///
 /// ```text
 /// select c.id from customers c
-/// cross join (select avg(total) as val from orders) a
+/// left join (select avg(total) as val from orders) a
 /// where c.balance > a.val
 /// ```
 ///
@@ -219,7 +303,8 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-) -> Result<Option<LogicalPlan>> {
+    need_collect_count_expr_map: bool,
+) -> Result<Option<(LogicalPlan, ExprCheckMap)>> {
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr {
         join_filters: vec![],
@@ -227,6 +312,9 @@ fn build_join(
         in_predicate_opt: None,
         exists_sub_query: false,
         can_pull_up: true,
+        need_collect_count_expr_map,
+        collected_count_expr_map: Default::default(),
+        expr_check_map: Default::default(),
     };
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?;
     if !pull_up.can_pull_up {
@@ -236,6 +324,7 @@ fn build_join(
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(subquery_alias.to_string())?
         .build()?;
+
     let mut all_correlated_cols = BTreeSet::new();
     pull_up
         .correlated_subquery_cols_map
@@ -257,9 +346,14 @@ fn build_join(
                 schema: _,
             }) => sub_query_alias,
             _ => {
-                // if not correlated, group down to 1 row and cross join on that (preserving row count)
+                // if not correlated, group down to 1 row and left join on that (preserving row count)
                 LogicalPlanBuilder::from(filter_input.clone())
-                    .cross_join(sub_query_alias)?
+                    .join(
+                        sub_query_alias,
+                        JoinType::Left,
+                        (Vec::<Column>::new(), Vec::<Column>::new()),
+                        None,
+                    )?
                     .build()?
             }
         }
@@ -274,7 +368,7 @@ fn build_join(
             )?
             .build()?
     };
-    Ok(Some(new_plan))
+    Ok(Some((new_plan, pull_up.expr_check_map.clone())))
 }
 
 #[cfg(test)]
@@ -455,7 +549,7 @@ mod tests {
         // it will optimize, but fail for the same reason the unoptimized query would
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
         \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
@@ -487,7 +581,7 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
         \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
@@ -837,7 +931,7 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey < __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
         \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
@@ -868,7 +962,7 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey = __scalar_sq_1.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MAX(orders.o_custkey):Int64;N]\
         \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n      SubqueryAlias: __scalar_sq_1 [MAX(orders.o_custkey):Int64;N]\
         \n        Projection: MAX(orders.o_custkey) [MAX(orders.o_custkey):Int64;N]\
@@ -969,8 +1063,8 @@ mod tests {
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
         \n  Filter: customer.c_custkey BETWEEN __scalar_sq_1.MIN(orders.o_custkey) AND __scalar_sq_2.MAX(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, MAX(orders.o_custkey):Int64;N]\
-        \n    CrossJoin: [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, MAX(orders.o_custkey):Int64;N]\
-        \n      CrossJoin: [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N]\
+        \n    Left Join:  [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N, MAX(orders.o_custkey):Int64;N]\
+        \n      Left Join:  [c_custkey:Int64, c_name:Utf8, MIN(orders.o_custkey):Int64;N]\
         \n        TableScan: customer [c_custkey:Int64, c_name:Utf8]\
         \n        SubqueryAlias: __scalar_sq_1 [MIN(orders.o_custkey):Int64;N]\
         \n          Projection: MIN(orders.o_custkey) [MIN(orders.o_custkey):Int64;N]\

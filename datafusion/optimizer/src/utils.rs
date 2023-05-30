@@ -17,9 +17,12 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use crate::simplify_expressions::{ExprSimplifier, SimplifyContext};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
-use datafusion_common::{plan_err, Column, DFSchemaRef};
+use datafusion_common::tree_node::{
+    RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
+};
+use datafusion_common::{plan_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{
@@ -30,8 +33,9 @@ use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
-    EmptyRelation, Expr, Operator,
+    AggregateFunction, EmptyRelation, Expr, Operator,
 };
+use datafusion_physical_expr::execution_props::ExecutionProps;
 use log::{debug, trace};
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
@@ -393,14 +397,21 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 /// It adds the inner reference columns to the 'Projection' or 'Aggregate' of the subquery if they are missing, so that they can be evaluated by the parent operator as the join condition.
 pub struct PullUpCorrelatedExpr {
     pub join_filters: Vec<Expr>,
-    // map of the plan and its holding correlated columns
+    // mapping from the plan to its holding correlated columns
     pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
     // indicate whether it is Exists(Not Exists) SubQuery
     pub exists_sub_query: bool,
     // indicate whether the correlated expressions can pull up or not
     pub can_pull_up: bool,
+    // indicate whether the subquery need to collect count expr mapping
+    pub need_collect_count_expr_map: bool,
+    // mapping from expr name to the pair of agg expr and its evaluation result on empty record batch
+    pub collected_count_expr_map: HashMap<String, (Expr, Expr)>,
+    pub expr_check_map: ExprCheckMap,
 }
+
+pub type ExprCheckMap = HashMap<String, (Expr, Expr)>;
 
 impl TreeNodeRewriter for PullUpCorrelatedExpr {
     type N = LogicalPlan;
@@ -430,7 +441,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
             }
             _ if plan.expressions().iter().any(|expr| expr.contains_outer()) => {
-                // the unsupported cases, the plan expressions contain out reference columns(like window expressions or agg expressions)
+                // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
                 self.can_pull_up = false;
                 Ok(RewriteRecursion::Stop)
             }
@@ -476,8 +487,48 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
                 // add missing columns to Projection
-                let missing_exprs =
+                let mut missing_exprs =
                     self.collect_missing_exprs(&projection.expr, &local_correlated_cols)?;
+                if !self.collected_count_expr_map.is_empty() {
+                    let head_expr = missing_exprs.get(0);
+                    if let Some(expr) = head_expr {
+                        let result_expr = expr.clone().transform_up(&|expr| {
+                            if let Expr::Column(Column { name, .. }) = &expr {
+                                if let Some((_, result_expr)) =
+                                    self.collected_count_expr_map.get(name)
+                                {
+                                    Ok(Transformed::Yes(result_expr.clone()))
+                                } else {
+                                    Ok(Transformed::No(expr))
+                                }
+                            } else {
+                                Ok(Transformed::No(expr))
+                            }
+                        })?;
+                        let scalar_expr = match expr {
+                            Expr::Alias(_, alias) => (
+                                alias.to_string(),
+                                Expr::Column(Column::new_unqualified(alias)),
+                            ),
+                            Expr::Column(Column { relation: _, name }) => {
+                                (name.to_string(), expr.clone())
+                            }
+                            _ => {
+                                let scalar_column = expr.display_name()?;
+                                (
+                                    scalar_column.clone(),
+                                    Expr::Column(Column::new_unqualified(scalar_column)),
+                                )
+                            }
+                        };
+                        self.expr_check_map
+                            .insert(scalar_expr.0, (scalar_expr.1, result_expr));
+                        missing_exprs.push(Expr::Column(Column::new_unqualified(
+                            "__always_true".to_string(),
+                        )));
+                    }
+                }
+
                 let new_plan = LogicalPlanBuilder::from((*projection.input).clone())
                     .project(missing_exprs)?
                     .build()?;
@@ -493,10 +544,37 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
                 // add missing columns to Aggregation's group expression
-                let missing_exprs = self.collect_missing_exprs(
+                let mut missing_exprs = self.collect_missing_exprs(
                     &aggregate.group_expr,
                     &local_correlated_cols,
                 )?;
+
+                if self.need_collect_count_expr_map && aggregate.group_expr.is_empty() {
+                    let agg_result_exprs = agg_exprs_eva_result_on_empty_batch(
+                        &aggregate.aggr_expr,
+                        subquery_schema,
+                    )?;
+                    if !missing_exprs.is_empty() {
+                        let scalar_agg = !agg_result_exprs.values().any(|result_expr| {
+                            matches!(result_expr, Expr::Literal(ScalarValue::Null))
+                        });
+                        if scalar_agg {
+                            let internal_always_true_col = Expr::Alias(
+                                Box::new(Expr::Literal(ScalarValue::Boolean(Some(true)))),
+                                "__always_true".to_string(),
+                            );
+                            missing_exprs.push(internal_always_true_col);
+                            for (agg_expr, result_expr_on_empty) in agg_result_exprs {
+                                let agg_expr_name = agg_expr.display_name()?;
+                                self.collected_count_expr_map.insert(
+                                    agg_expr_name,
+                                    (agg_expr, result_expr_on_empty),
+                                );
+                            }
+                        }
+                    }
+                }
+
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
                     .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
                     .build()?;
@@ -616,6 +694,40 @@ fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: &Expr) -> Vec<Expr
             }
         })
         .collect::<Vec<_>>()
+}
+
+fn agg_exprs_eva_result_on_empty_batch(
+    agg_expr: &[Expr],
+    schema: DFSchemaRef,
+) -> Result<HashMap<Expr, Expr>> {
+    let mut result_expr_map = HashMap::new();
+    for e in agg_expr.iter() {
+        let new_expr = e.clone().transform_up(&|expr| {
+            let new_expr = match expr {
+                Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
+                    fun,
+                    ..
+                }) => {
+                    if matches!(fun, AggregateFunction::Count) {
+                        Transformed::Yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                    } else {
+                        Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                    }
+                }
+                Expr::AggregateUDF(_) => {
+                    Transformed::Yes(Expr::Literal(ScalarValue::Null))
+                }
+                _ => Transformed::No(expr),
+            };
+            Ok(new_expr)
+        })?;
+
+        let props = ExecutionProps::new();
+        let info = SimplifyContext::new(&props).with_schema(schema.clone());
+        let simplifier = ExprSimplifier::new(info);
+        result_expr_map.insert(e.clone(), simplifier.simplify(new_expr)?);
+    }
+    Ok(result_expr_map)
 }
 
 #[cfg(test)]
