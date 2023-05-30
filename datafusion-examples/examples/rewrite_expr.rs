@@ -35,7 +35,8 @@ use std::sync::Arc;
 pub fn main() -> Result<()> {
     // produce a logical plan using the datafusion-sql crate
     let dialect = PostgreSqlDialect {};
-    let sql = "SELECT * FROM person WHERE age BETWEEN 21 AND 32";
+    // let sql = "SELECT * FROM person WHERE age BETWEEN 21 AND 32";
+    let sql = "select * from person where name ~ '1|2';";
     let statements = Parser::parse_sql(&dialect, sql)?;
 
     // produce a logical plan using the datafusion-sql crate
@@ -136,8 +137,10 @@ impl OptimizerRule for MyOptimizerRule {
     ) -> Result<Option<LogicalPlan>> {
         // recurse down and optimize children first
         let optimized_plan = utils::optimize_children(self, plan, config)?;
+        dbg!(&optimized_plan);
         match optimized_plan {
             Some(LogicalPlan::Filter(filter)) => {
+                dbg!(&filter.predicate);
                 let predicate = my_rewrite(filter.predicate.clone())?;
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
@@ -147,6 +150,7 @@ impl OptimizerRule for MyOptimizerRule {
             Some(optimized_plan) => Ok(Some(optimized_plan)),
             None => match plan {
                 LogicalPlan::Filter(filter) => {
+                    println!("{:?}", filter.predicate);
                     let predicate = my_rewrite(filter.predicate.clone())?;
                     Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate,

@@ -52,6 +52,7 @@ impl OptimizerRule for SimplifyExpressions {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        println!("try_optimize: {:?}",plan);
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
         Ok(Some(Self::optimize_internal(plan, &execution_props)?))
@@ -63,6 +64,7 @@ impl SimplifyExpressions {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
+        println!("now plan: {:?}", plan);
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(plan.inputs()))
         } else if let LogicalPlan::TableScan(_) = plan {
@@ -91,8 +93,9 @@ impl SimplifyExpressions {
                 let name = &e.display_name();
 
                 // Apply the actual simplification logic
+                dbg!(&e);
                 let new_e = simplifier.simplify(e)?;
-
+                dbg!(&new_e);
                 let new_name = &new_e.display_name();
 
                 if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
@@ -193,7 +196,7 @@ mod tests {
             .project(vec![col("a")])?
             .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
-
+        println!("{:?}", plan);
         assert_optimized_plan_eq(
             &plan,
             "\
