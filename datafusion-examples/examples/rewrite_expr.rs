@@ -35,8 +35,7 @@ use std::sync::Arc;
 pub fn main() -> Result<()> {
     // produce a logical plan using the datafusion-sql crate
     let dialect = PostgreSqlDialect {};
-    // let sql = "SELECT * FROM person WHERE age BETWEEN 21 AND 32";
-    let sql = "select * from person where name ~ '1|2';";
+    let sql = "SELECT * FROM person WHERE age BETWEEN 21 AND 32";
     let statements = Parser::parse_sql(&dialect, sql)?;
 
     // produce a logical plan using the datafusion-sql crate
