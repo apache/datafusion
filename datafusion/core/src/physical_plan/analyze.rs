@@ -28,10 +28,12 @@ use crate::{
     },
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt, TryFutureExt};
+use tokio::task::JoinSet;
 
 use super::expressions::PhysicalSortExpr;
-use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
+use super::stream::RecordBatchStreamAdapter;
+use super::{Distribution, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
@@ -73,7 +75,7 @@ impl ExecutionPlan for AnalyzeExec {
 
     /// Specifies we want the input as a single stream
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
@@ -121,96 +123,102 @@ impl ExecutionPlan for AnalyzeExec {
             )));
         }
 
-        // should be ensured by `SinglePartition`  above
-        let input_partitions = self.input.output_partitioning().partition_count();
-        if input_partitions != 1 {
-            return Err(DataFusionError::Internal(format!(
-                "AnalyzeExec invalid number of input partitions. Expected 1, got {input_partitions}"
-            )));
+        // Gather futures that will run each input partition using a
+        // JoinSet to cancel outstanding futures on drop
+        let mut set = JoinSet::new();
+        let num_input_partitions = self.input.output_partitioning().partition_count();
+
+        for input_partition in 0..num_input_partitions {
+            let input_stream = self.input.execute(input_partition, context.clone());
+
+            set.spawn(async move {
+                let mut total_rows = 0;
+                let mut input_stream = input_stream?;
+                while let Some(batch) = input_stream.next().await {
+                    let batch = batch?;
+                    total_rows += batch.num_rows();
+                }
+                Ok(total_rows)
+            });
         }
 
-        let (tx, rx) = tokio::sync::mpsc::channel(input_partitions);
+        // Turn the tasks in the JoinSet into a stream of
+        // Result<usize> representing the counts of each output
+        // partition.
+        let counts_stream = futures::stream::unfold(set, |mut set| async {
+            let next = set.join_next().await?; // returns Some when empty
+                                               // translate join errors (aka task panic's) into ExecutionErrors
+            let next = match next {
+                Ok(res) => res,
+                Err(e) => Err(DataFusionError::Execution(format!(
+                    "Join error in AnalyzeExec: {e}"
+                ))),
+            };
+            Some((next, set))
+        });
 
+        let start = Instant::now();
         let captured_input = self.input.clone();
-        let mut input_stream = captured_input.execute(0, context)?;
         let captured_schema = self.schema.clone();
         let verbose = self.verbose;
 
-        // Task reads batches the input and when complete produce a
-        // RecordBatch with a report that is written to `tx` when done
-        let join_handle = tokio::task::spawn(async move {
-            let start = Instant::now();
-            let mut total_rows = 0;
+        // future that gathers the input counts into an overall output
+        // count, and makes an output batch
+        let output = counts_stream
+            // combine results from all input stream into a total count
+            .fold(Ok(0), |total_rows: Result<usize>, input_rows| async move {
+                Ok(total_rows? + input_rows?)
+            })
+            // convert the total to a RecordBatch
+            .map(move |total_rows| {
+                let total_rows = total_rows?;
+                let end = Instant::now();
 
-            // Note the code below ignores errors sending on tx. An
-            // error sending means the plan is being torn down and
-            // nothing is left that will handle the error (aka no one
-            // will hear us scream)
-            while let Some(b) = input_stream.next().await {
-                match b {
-                    Ok(batch) => {
-                        total_rows += batch.num_rows();
-                    }
-                    b @ Err(_) => {
-                        // try and pass on errors from input
-                        if tx.send(b).await.is_err() {
-                            // receiver hung up, stop executing (no
-                            // one will look at any further results we
-                            // send)
-                            return;
-                        }
-                    }
-                }
-            }
-            let end = Instant::now();
+                let mut type_builder = StringBuilder::with_capacity(1, 1024);
+                let mut plan_builder = StringBuilder::with_capacity(1, 1024);
 
-            let mut type_builder = StringBuilder::with_capacity(1, 1024);
-            let mut plan_builder = StringBuilder::with_capacity(1, 1024);
-
-            // TODO use some sort of enum rather than strings?
-            type_builder.append_value("Plan with Metrics");
-
-            let annotated_plan =
-                DisplayableExecutionPlan::with_metrics(captured_input.as_ref())
-                    .indent()
-                    .to_string();
-            plan_builder.append_value(annotated_plan);
-
-            // Verbose output
-            // TODO make this more sophisticated
-            if verbose {
-                type_builder.append_value("Plan with Full Metrics");
+                // TODO use some sort of enum rather than strings?
+                type_builder.append_value("Plan with Metrics");
 
                 let annotated_plan =
-                    DisplayableExecutionPlan::with_full_metrics(captured_input.as_ref())
+                    DisplayableExecutionPlan::with_metrics(captured_input.as_ref())
                         .indent()
                         .to_string();
                 plan_builder.append_value(annotated_plan);
 
-                type_builder.append_value("Output Rows");
-                plan_builder.append_value(total_rows.to_string());
+                // Verbose output
+                // TODO make this more sophisticated
+                if verbose {
+                    type_builder.append_value("Plan with Full Metrics");
 
-                type_builder.append_value("Duration");
-                plan_builder.append_value(format!("{:?}", end - start));
-            }
+                    let annotated_plan = DisplayableExecutionPlan::with_full_metrics(
+                        captured_input.as_ref(),
+                    )
+                    .indent()
+                    .to_string();
+                    plan_builder.append_value(annotated_plan);
 
-            let maybe_batch = RecordBatch::try_new(
-                captured_schema,
-                vec![
-                    Arc::new(type_builder.finish()),
-                    Arc::new(plan_builder.finish()),
-                ],
-            )
-            .map_err(Into::into);
-            // again ignore error
-            tx.send(maybe_batch).await.ok();
-        });
+                    type_builder.append_value("Output Rows");
+                    plan_builder.append_value(total_rows.to_string());
 
-        Ok(RecordBatchReceiverStream::create(
-            &self.schema,
-            rx,
-            join_handle,
-        ))
+                    type_builder.append_value("Duration");
+                    plan_builder.append_value(format!("{:?}", end - start));
+                }
+
+                RecordBatch::try_new(
+                    captured_schema,
+                    vec![
+                        Arc::new(type_builder.finish()),
+                        Arc::new(plan_builder.finish()),
+                    ],
+                )
+            })
+            .map_err(DataFusionError::from);
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            futures::stream::once(output),
+        )))
     }
 
     fn fmt_as(
