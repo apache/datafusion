@@ -189,7 +189,7 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// Order expressions supplied by user
-    pub order_exprs: Vec<Expr>,
+    pub order_exprs: Vec<Vec<Expr>>,
     /// File compression type (GZIP, BZIP2, XZ, ZSTD)
     pub file_compression_type: CompressionTypeVariant,
     /// Whether the table is an infinite streams

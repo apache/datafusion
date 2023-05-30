@@ -19,6 +19,7 @@
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -26,14 +27,15 @@ use crate::physical_plan::file_format::file_stream::{
 use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
+
+use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use bytes::{Buf, Bytes};
-
-use crate::physical_plan::common::AbortOnDropSingle;
-use arrow::json::ReaderBuilder;
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -52,7 +54,7 @@ pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
@@ -101,7 +103,16 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -427,7 +438,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -503,7 +514,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -549,7 +560,7 @@ mod tests {
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -600,7 +611,7 @@ mod tests {
                 projection: Some(vec![3, 0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
