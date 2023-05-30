@@ -41,13 +41,21 @@ use crate::physical_plan::file_format::{
     FileMeta, FileScanConfig, PartitionColumnProjector,
 };
 use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, Time,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 use crate::physical_plan::RecordBatchStream;
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type FileOpenFuture =
     BoxFuture<'static, Result<BoxStream<'static, Result<RecordBatch, ArrowError>>>>;
+
+/// Describes the behavior of the `FileStream` if file opening or scanning fails
+pub enum OnError {
+    /// Continue scanning, ignoring the failed file
+    Fail,
+    /// Fail the entire stream and return the underlying
+    Skip,
+}
 
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a
 /// stream of [`RecordBatch`]
@@ -81,6 +89,8 @@ pub struct FileStream<F: FileOpener> {
     file_stream_metrics: FileStreamMetrics,
     /// runtime baseline metrics
     baseline_metrics: BaselineMetrics,
+    /// Describes the behavior of the `FileStream` if file opening or scanning fails
+    on_error: OnError,
 }
 
 /// Represents the state of the next `FileOpenFuture`. Since we need to poll
@@ -173,6 +183,16 @@ struct FileStreamMetrics {
     ///
     /// Time spent waiting for the FileStream's input.
     pub time_processing: StartableTime,
+    /// Count of errors opening file.
+    ///
+    /// If using `OnError::Skip` this will provide a count of the number of files
+    /// which were skipped and will not be included in the scan results.
+    pub file_open_errors: Count,
+    /// Count of errors scanning file
+    ///
+    /// If using `OnError::Skip` this will provide a count of the number of files
+    /// which were skipped and will not be included in the scan results.
+    pub file_scan_errors: Count,
 }
 
 impl FileStreamMetrics {
@@ -201,11 +221,19 @@ impl FileStreamMetrics {
             start: None,
         };
 
+        let file_open_errors =
+            MetricBuilder::new(metrics).counter("file_open_errors", partition);
+
+        let file_scan_errors =
+            MetricBuilder::new(metrics).counter("file_scan_errors", partition);
+
         Self {
             time_opening,
             time_scanning_until_data,
             time_scanning_total,
             time_processing,
+            file_open_errors,
+            file_scan_errors,
         }
     }
 }
@@ -239,7 +267,17 @@ impl<F: FileOpener> FileStream<F> {
             state: FileStreamState::Idle,
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),
             baseline_metrics: BaselineMetrics::new(metrics, partition),
+            on_error: OnError::Fail,
         })
+    }
+
+    /// Specify the behavior when an error occurs opening or scanning a file
+    ///
+    /// If `OnError::Skip` the stream will skip files which encounter and error and continue
+    /// If `OnError:Fail` (default) the stream will fail and stop processing when an error occurs
+    pub fn with_on_error(mut self, on_error: OnError) -> Self {
+        self.on_error = on_error;
+        self
     }
 
     /// Begin opening the next file in parallel while decoding the current file in FileStream.
@@ -320,8 +358,17 @@ impl<F: FileOpener> FileStream<F> {
                         }
                     }
                     Err(e) => {
-                        self.state = FileStreamState::Error;
-                        return Poll::Ready(Some(Err(e)));
+                        self.file_stream_metrics.file_open_errors.add(1);
+                        match self.on_error {
+                            OnError::Skip => {
+                                self.file_stream_metrics.time_opening.stop();
+                                self.state = FileStreamState::Idle
+                            }
+                            OnError::Fail => {
+                                self.state = FileStreamState::Error;
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        }
                     }
                 },
                 FileStreamState::Scan {
@@ -338,15 +385,13 @@ impl<F: FileOpener> FileStream<F> {
                         }
                     }
                     match ready!(reader.poll_next_unpin(cx)) {
-                        Some(result) => {
+                        Some(Ok(batch)) => {
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
-                            let result = result
-                                .and_then(|b| {
-                                    self.pc_projector
-                                        .project(b, partition_values)
-                                        .map_err(|e| ArrowError::ExternalError(e.into()))
-                                })
+                            let result = self
+                                .pc_projector
+                                .project(batch, partition_values)
+                                .map_err(|e| ArrowError::ExternalError(e.into()))
                                 .map(|batch| match &mut self.remain {
                                     Some(remain) => {
                                         if *remain > batch.num_rows() {
@@ -363,10 +408,48 @@ impl<F: FileOpener> FileStream<F> {
                                 });
 
                             if result.is_err() {
+                                // If the partition value projection fails, this is not governed by
+                                // the `OnError` behavior
                                 self.state = FileStreamState::Error
                             }
                             self.file_stream_metrics.time_scanning_total.start();
                             return Poll::Ready(Some(result.map_err(Into::into)));
+                        }
+                        Some(Err(err)) => {
+                            self.file_stream_metrics.file_scan_errors.add(1);
+                            self.file_stream_metrics.time_scanning_until_data.stop();
+                            self.file_stream_metrics.time_scanning_total.stop();
+
+                            match self.on_error {
+                                // If `OnError::Skip` we skip the file as soon as we hit the first error
+                                OnError::Skip => match mem::take(next) {
+                                    Some((future, partition_values)) => {
+                                        self.file_stream_metrics.time_opening.start();
+
+                                        match future {
+                                            NextOpen::Pending(future) => {
+                                                self.state = FileStreamState::Open {
+                                                    future,
+                                                    partition_values,
+                                                }
+                                            }
+                                            NextOpen::Ready(reader) => {
+                                                self.state = FileStreamState::Open {
+                                                    future: Box::pin(std::future::ready(
+                                                        reader,
+                                                    )),
+                                                    partition_values,
+                                                }
+                                            }
+                                        }
+                                    }
+                                    None => return Poll::Ready(None),
+                                },
+                                OnError::Fail => {
+                                    self.state = FileStreamState::Error;
+                                    return Poll::Ready(Some(Err(err.into())));
+                                }
+                            }
                         }
                         None => {
                             self.file_stream_metrics.time_scanning_until_data.stop();
@@ -428,7 +511,9 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::DataFusionError;
     use futures::StreamExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -482,6 +567,256 @@ mod tests {
             .map(|b| b.expect("No error expected in stream"))
             .collect::<Vec<_>>()
             .await
+    }
+
+    /// Test `FileOpener` which will simulate errors during file opening or scanning
+    struct TestOpenerWithErrors {
+        /// Index in stream of files which should throw an error while opening
+        error_opening_idx: Vec<usize>,
+        /// Index in stream of files which should throw an error while scanning
+        error_scanning_idx: Vec<usize>,
+        /// Index of last file in stream
+        current_idx: AtomicUsize,
+        /// `RecordBatch` to return
+        records: Vec<RecordBatch>,
+    }
+
+    impl FileOpener for TestOpenerWithErrors {
+        fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
+            let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
+
+            if self.error_opening_idx.contains(&idx) {
+                Ok(futures::future::ready(Err(DataFusionError::Internal(
+                    "error opening".to_owned(),
+                )))
+                .boxed())
+            } else if self.error_scanning_idx.contains(&idx) {
+                let error = futures::future::ready(Err(ArrowError::IoError(
+                    "error scanning".to_owned(),
+                )));
+                let stream = futures::stream::once(error).boxed();
+                Ok(futures::future::ready(Ok(stream)).boxed())
+            } else {
+                let iterator = self.records.clone().into_iter().map(Ok);
+                let stream = futures::stream::iter(iterator).boxed();
+                Ok(futures::future::ready(Ok(stream)).boxed())
+            }
+        }
+    }
+
+    /// helper that creates a stream of files and simulates errors during opening and/or scanning
+    async fn create_and_collect_with_errors(
+        on_error: OnError,
+        num_files: usize,
+        scan_errors: Vec<usize>,
+        open_errors: Vec<usize>,
+        limit: Option<usize>,
+    ) -> Result<Vec<RecordBatch>> {
+        let records = vec![make_partition(3), make_partition(2)];
+        let file_schema = records[0].schema();
+
+        let reader = TestOpenerWithErrors {
+            error_opening_idx: open_errors,
+            error_scanning_idx: scan_errors,
+            current_idx: Default::default(),
+            records,
+        };
+
+        let ctx = SessionContext::new();
+        let mock_files: Vec<(String, u64)> = (0..num_files)
+            .map(|idx| (format!("mock_file{idx}"), 10_u64))
+            .collect();
+
+        let mock_files_ref: Vec<(&str, u64)> = mock_files
+            .iter()
+            .map(|(name, size)| (name.as_str(), *size))
+            .collect();
+
+        register_test_store(&ctx, &mock_files_ref);
+
+        let file_group = mock_files
+            .into_iter()
+            .map(|(name, size)| PartitionedFile::new(name, size))
+            .collect();
+
+        let config = FileScanConfig {
+            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema,
+            file_groups: vec![file_group],
+            statistics: Default::default(),
+            projection: None,
+            limit,
+            table_partition_cols: vec![],
+            output_ordering: None,
+            infinite_source: false,
+        };
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let file_stream = FileStream::new(&config, 0, reader, &metrics_set)
+            .unwrap()
+            .with_on_error(on_error);
+
+        file_stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()
+    }
+
+    #[tokio::test]
+    async fn on_error_opening() -> Result<()> {
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 2, vec![], vec![0], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "+---+",
+            "| i |",
+            "+---+",
+            "| 0 |",
+            "| 1 |",
+            "| 2 |",
+            "| 0 |",
+            "| 1 |",
+            "+---+",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 2, vec![], vec![1], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "+---+",
+            "| i |",
+            "+---+",
+            "| 0 |",
+            "| 1 |",
+            "| 2 |",
+            "| 0 |",
+            "| 1 |",
+            "+---+",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 2, vec![], vec![0, 1], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "++",
+            "++",
+        ], &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn on_error_scanning() -> Result<()> {
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 2, vec![0], vec![], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "+---+",
+            "| i |",
+            "+---+",
+            "| 0 |",
+            "| 1 |",
+            "| 2 |",
+            "| 0 |",
+            "| 1 |",
+            "+---+",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 2, vec![1], vec![], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "+---+",
+            "| i |",
+            "+---+",
+            "| 0 |",
+            "| 1 |",
+            "| 2 |",
+            "| 0 |",
+            "| 1 |",
+            "+---+",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 2, vec![0, 1], vec![], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "++",
+            "++",
+        ], &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn on_error_mixed() -> Result<()> {
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 3, vec![0], vec![1], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "+---+",
+            "| i |",
+            "+---+",
+            "| 0 |",
+            "| 1 |",
+            "| 2 |",
+            "| 0 |",
+            "| 1 |",
+            "+---+",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 3, vec![1], vec![0], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "+---+",
+            "| i |",
+            "+---+",
+            "| 0 |",
+            "| 1 |",
+            "| 2 |",
+            "| 0 |",
+            "| 1 |",
+            "+---+",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 3, vec![0, 1], vec![2], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "++",
+            "++",
+        ], &batches);
+
+        let batches =
+            create_and_collect_with_errors(OnError::Skip, 3, vec![1], vec![0, 2], None)
+                .await?;
+
+        #[rustfmt::skip]
+        crate::assert_batches_eq!(&[
+            "++",
+            "++",
+        ], &batches);
+
+        Ok(())
     }
 
     #[tokio::test]
