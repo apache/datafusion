@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 #[cfg(target_family = "windows")]
 use std::thread;
@@ -39,7 +40,7 @@ const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 
 #[cfg(target_family = "windows")]
 pub fn main() {
-    // Tests from `tpch.slt` fail with stackoverflow with the default stack size.
+    // Tests from `tpch/tpch.slt` fail with stackoverflow with the default stack size.
     thread::Builder::new()
         .stack_size(2 * 1024 * 1024) // 2 MB
         .spawn(move || {
@@ -126,7 +127,7 @@ async fn run_test_file(test_file: TestFile) -> Result<()> {
     info!("Running with DataFusion runner: {}", path.display());
     let Some(test_ctx) = context_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
-        return Ok(())
+        return Ok(());
     };
     let ctx = test_ctx.session_ctx().clone();
     let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, relative_path));
@@ -166,7 +167,7 @@ async fn run_complete_file(test_file: TestFile) -> Result<()> {
 
     let Some(test_ctx) = context_for_test_file(&relative_path).await else {
         info!("Skipping: {}", path.display());
-        return Ok(())
+        return Ok(());
     };
     let ctx = test_ctx.session_ctx().clone();
     let mut runner =
@@ -208,6 +209,18 @@ impl TestFile {
             relative_path,
         }
     }
+
+    fn is_slt_file(&self) -> bool {
+        self.path.extension() == Some(OsStr::new("slt"))
+    }
+
+    fn check_tpch(&self, options: &Options) -> bool {
+        if !self.relative_path.starts_with("tpch") {
+            return true;
+        }
+
+        options.include_tpch
+    }
 }
 
 fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile> + 'a> {
@@ -215,6 +228,8 @@ fn read_test_files<'a>(options: &'a Options) -> Box<dyn Iterator<Item = TestFile
         read_dir_recursive(TEST_DIRECTORY)
             .map(TestFile::new)
             .filter(|f| options.check_test_file(&f.relative_path))
+            .filter(|f| f.is_slt_file())
+            .filter(|f| f.check_tpch(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path())),
     )
 }
@@ -325,6 +340,9 @@ struct Options {
 
     /// Run Postgres compatibility tests with Postgres runner
     postgres_runner: bool,
+
+    /// Include tpch files
+    include_tpch: bool,
 }
 
 impl Options {
@@ -333,6 +351,7 @@ impl Options {
 
         let complete_mode = args.iter().any(|a| a == "--complete");
         let postgres_runner = std::env::var("PG_COMPAT").map_or(false, |_| true);
+        let include_tpch = std::env::var("INCLUDE_TPCH").map_or(false, |_| true);
 
         // treat args after the first as filters to run (substring matching)
         let filters = if !args.is_empty() {
@@ -349,6 +368,7 @@ impl Options {
             filters,
             complete_mode,
             postgres_runner,
+            include_tpch,
         }
     }
 
