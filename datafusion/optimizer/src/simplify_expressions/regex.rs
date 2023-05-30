@@ -236,10 +236,14 @@ fn anchored_alternation_to_exprs(v: &[Hir]) -> Option<Vec<Expr>> {
             }
 
             return Some(literals);
+        } else if let HirKind::Literal(l) = sub.kind() {
+            if let Some(safe_literal) = str_from_literal(l).map(lit) {
+                return Some(vec![safe_literal]);
+            }
+            return None;
         }
     }
-
-    return None;
+    None
 }
 
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {

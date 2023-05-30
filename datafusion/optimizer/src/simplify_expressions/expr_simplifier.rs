@@ -2458,6 +2458,20 @@ mod tests {
                 .not_eq(lit("bar"))
                 .and(col("c1").not_eq(lit("foo"))),
         );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo)$")),
+            col("c1").eq(lit("foo")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz)$")),
+            col("c1")
+                .eq(lit("baz"))
+                .or(col("c1").eq(lit("bar")))
+                .or(col("c1").eq(lit("foo"))),
+        );
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
         assert_no_change(regex_match(col("c1"), lit("^")));
