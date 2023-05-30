@@ -219,10 +219,11 @@ lazy_static! {
     };
 
     /// Maps `BuiltinScalarFunction` --> canonical sql function
+    /// First alias in the array is used to display function names
     static ref FUNCTION_TO_NAME: HashMap<BuiltinScalarFunction, &'static str> = {
         let mut map: HashMap<BuiltinScalarFunction, &'static str> = HashMap::new();
         BuiltinScalarFunction::iter().for_each(|func| {
-            map.insert(func, aliases(&func).iter().next().unwrap_or(&"NO_ALIAS"));
+            map.insert(func, aliases(&func).first().unwrap_or(&"NO_ALIAS"));
         });
         map
     };
