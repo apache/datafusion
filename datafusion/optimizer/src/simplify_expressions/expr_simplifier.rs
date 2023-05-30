@@ -437,12 +437,12 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                     list.into_iter().skip(1).fold(
                         (*expr.clone()).not_eq(first_val),
                         |acc, y| {
-                            // Note that `A and B and C and D` is a left-heavy tree structure
+                            // Note that `A and B and C and D` is a left-deep tree structure
                             // as such we want to maintain this structure as much as possible
                             // to avoid reordering the expression during each optimization
                             // pass.
                             //
-                            // Left-heavy tree structure for `A and B and C and D`:
+                            // Left-deep tree structure for `A and B and C and D`:
                             // ```
                             //        &
                             //       / \
@@ -453,7 +453,7 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                             //  A   B
                             // ```
                             //
-                            // The code below maintain the left-heavy tree structure.
+                            // The code below maintain the left-deep tree structure.
                             acc.and((*expr.clone()).not_eq(y))
                         },
                     )
