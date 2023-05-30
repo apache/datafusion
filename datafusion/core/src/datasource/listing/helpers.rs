@@ -416,6 +416,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+
     use futures::StreamExt;
 
     use crate::logical_expr::{case, col, lit};

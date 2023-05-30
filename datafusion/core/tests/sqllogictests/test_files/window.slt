@@ -2007,16 +2007,16 @@ query TT
 EXPLAIN SELECT ARRAY_AGG(c13) as array_agg1 FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1)
 ----
 logical_plan
-Projection: ARRAYAGG(aggregate_test_100.c13) AS array_agg1
---Aggregate: groupBy=[[]], aggr=[[ARRAYAGG(aggregate_test_100.c13)]]
+Projection: ARRAY_AGG(aggregate_test_100.c13) AS array_agg1
+--Aggregate: groupBy=[[]], aggr=[[ARRAY_AGG(aggregate_test_100.c13)]]
 ----Limit: skip=0, fetch=1
 ------Sort: aggregate_test_100.c13 ASC NULLS LAST, fetch=1
 --------TableScan: aggregate_test_100 projection=[c13]
 physical_plan
-ProjectionExec: expr=[ARRAYAGG(aggregate_test_100.c13)@0 as array_agg1]
---AggregateExec: mode=Final, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]
+ProjectionExec: expr=[ARRAY_AGG(aggregate_test_100.c13)@0 as array_agg1]
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
 ----CoalescePartitionsExec
-------AggregateExec: mode=Partial, gby=[], aggr=[ARRAYAGG(aggregate_test_100.c13)]
+------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(aggregate_test_100.c13)]
 --------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------GlobalLimitExec: skip=0, fetch=1
 ------------SortExec: fetch=1, expr=[c13@0 ASC NULLS LAST]
@@ -3017,9 +3017,135 @@ SELECT a, b, c,
 0 0 3 11 96 11 2 10 36 10 36 11 5 11 9
 0 0 4 9 72 9 NULL 14 45 14 45 9 4 9 9
 
+#fn aggregate order by with window frame
+# In window expressions, aggregate functions should not have an ordering requirement, such requirements
+# should be defined in the window frame. Therefore, the query below should generate an error. Note that
+# PostgreSQL also behaves this way.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+SELECT SUM(b ORDER BY a ASC) OVER() as sum1
+       FROM annotated_data_infinite2
+
+# Even if, requirement of window clause and aggregate function match;
+# we should raise an error, when an ordering requirement is given to aggregate functions in window clauses.
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_c
+       FROM annotated_data_infinite2
 
 statement ok
 drop table annotated_data_finite2
 
 statement ok
 drop table annotated_data_infinite2
+
+# window3 spec is not used in window functions.
+# The query should still work.
+query RR
+SELECT
+  MAX(c12) OVER window1,
+  MIN(c12) OVER window2 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12),
+  window2 AS (PARTITION BY C11),
+  window3 AS (ORDER BY C1)
+  ORDER BY C3
+  LIMIT 5
+----
+0.970671228336 0.970671228336
+0.850672105305 0.850672105305
+0.152498292972 0.152498292972
+0.369363046006 0.369363046006
+0.56535284223 0.56535284223
+
+query TT
+EXPLAIN SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window2 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12),
+  window2 AS (PARTITION BY C11),
+  window3 AS (ORDER BY C1)
+  ORDER BY C3
+  LIMIT 5
+----
+logical_plan
+Projection: min1, max1
+--Limit: skip=0, fetch=5
+----Sort: aggregate_test_100.c3 ASC NULLS LAST, fetch=5
+------Projection: MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS min1, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max1, aggregate_test_100.c3
+--------WindowAggr: windowExpr=[[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------Projection: aggregate_test_100.c3, aggregate_test_100.c12, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+------------WindowAggr: windowExpr=[[MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+--------------TableScan: aggregate_test_100 projection=[c3, c11, c12]
+physical_plan
+ProjectionExec: expr=[min1@0 as min1, max1@1 as max1]
+--GlobalLimitExec: skip=0, fetch=5
+----SortExec: fetch=5, expr=[c3@2 ASC NULLS LAST]
+------ProjectionExec: expr=[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as min1, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as max1, c3@0 as c3]
+--------BoundedWindowAggExec: wdw=[MAX(aggregate_test_100.c12): Ok(Field { name: "MAX(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Float64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----------SortExec: expr=[c12@1 ASC NULLS LAST]
+------------ProjectionExec: expr=[c3@0 as c3, c12@2 as c12, MIN(aggregate_test_100.c12) PARTITION BY [aggregate_test_100.c11] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@3 as MIN(aggregate_test_100.c12)]
+--------------WindowAggExec: wdw=[MIN(aggregate_test_100.c12): Ok(Field { name: "MIN(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]
+----------------SortExec: expr=[c11@1 ASC NULLS LAST]
+------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c11, c12], has_header=true
+
+# window1 spec is used multiple times under different aggregations.
+# The query should still work.
+query RR
+SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window1 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12)
+  ORDER BY C3
+  LIMIT 5
+----
+0.970671228336 0.014793053078
+0.850672105305 0.014793053078
+0.152498292972 0.014793053078
+0.369363046006 0.014793053078
+0.56535284223 0.014793053078
+
+query TT
+EXPLAIN SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window1 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12)
+  ORDER BY C3
+  LIMIT 5
+----
+logical_plan
+Projection: min1, max1
+--Limit: skip=0, fetch=5
+----Sort: aggregate_test_100.c3 ASC NULLS LAST, fetch=5
+------Projection: MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS min1, MIN(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS max1, aggregate_test_100.c3
+--------WindowAggr: windowExpr=[[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, MIN(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+----------TableScan: aggregate_test_100 projection=[c3, c12]
+physical_plan
+ProjectionExec: expr=[min1@0 as min1, max1@1 as max1]
+--GlobalLimitExec: skip=0, fetch=5
+----SortExec: fetch=5, expr=[c3@2 ASC NULLS LAST]
+------ProjectionExec: expr=[MAX(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as min1, MIN(aggregate_test_100.c12) ORDER BY [aggregate_test_100.c12 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as max1, c3@0 as c3]
+--------BoundedWindowAggExec: wdw=[MAX(aggregate_test_100.c12): Ok(Field { name: "MAX(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Float64(NULL)), end_bound: CurrentRow }, MIN(aggregate_test_100.c12): Ok(Field { name: "MIN(aggregate_test_100.c12)", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Float64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----------SortExec: expr=[c12@1 ASC NULLS LAST]
+------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3, c12], has_header=true
+
+# window2 spec is not defined
+statement error DataFusion error: Error during planning: The window window2 is not defined!
+SELECT
+  MAX(c12) OVER window1 as min1,
+  MIN(c12) OVER window2 as max1
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12)
+  ORDER BY C3
+  LIMIT 5
+
+# window1 spec is defined multiple times
+statement error DataFusion error: Error during planning: The window window1 is defined multiple times!
+SELECT
+  MAX(c12) OVER window1 as min1,
+  FROM aggregate_test_100
+  WINDOW window1 AS (ORDER BY C12),
+  window1 AS (ORDER BY C3)
+  ORDER BY C3
+  LIMIT 5

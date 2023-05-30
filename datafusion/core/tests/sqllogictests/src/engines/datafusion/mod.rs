@@ -24,6 +24,7 @@ use self::error::{DFSqlLogicTestError, Result};
 use async_trait::async_trait;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
+use log::info;
 use sqllogictest::DBOutput;
 
 mod error;
@@ -47,13 +48,12 @@ impl sqllogictest::AsyncDB for DataFusion {
     type ColumnType = DFColumnType;
 
     async fn run(&mut self, sql: &str) -> Result<DFOutput> {
-        println!(
+        info!(
             "[{}] Running query: \"{}\"",
             self.relative_path.display(),
             sql
         );
-        let result = run_query(&self.ctx, sql).await?;
-        Ok(result)
+        run_query(&self.ctx, sql).await
     }
 
     /// Engine name of current database.

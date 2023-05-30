@@ -1133,16 +1133,18 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            alias @ Expr::Alias { .. }
-                if &alias.display_name().unwrap() != schema.field(i).name() =>
-            {
-                alias.unalias().alias(schema.field(i).name())
+            Expr::Alias(_, ref name) if name != schema.field(i).name() => {
+                e.unalias().alias(schema.field(i).name())
             }
-            ignore_alias @ Expr::Alias { .. } => ignore_alias,
-            ignore_col @ Expr::Column { .. } => ignore_col,
-            expr => expr.alias(schema.field(i).name()),
+            Expr::Column(Column {
+                relation: _,
+                ref name,
+            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Alias { .. } | Expr::Column { .. } => e,
+            _ => e.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
+
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         alias_expr, input, schema,
     )?))

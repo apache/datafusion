@@ -16,14 +16,25 @@
 // under the License.
 
 use crate::expressions::Column;
+use crate::{
+    normalize_expr_with_equivalence_properties, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
+use datafusion_common::DataFusionError;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::sync::Arc;
 
-/// Equivalence Properties is a vec of EquivalentClass.
+/// Represents a collection of [`EquivalentClass`] (equivalences
+/// between columns in relations)
+///
+/// This is used to represent both:
+///
+/// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
+/// 2. Ordering (like `A ASC = B ASC`), when `T` = [`OrderedColumn`]
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties<T = Column> {
     classes: Vec<EquivalentClass<T>>,
@@ -38,6 +49,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         }
     }
 
+    /// return the set of equivalences
     pub fn classes(&self) -> &[EquivalentClass<T>] {
         &self.classes
     }
@@ -46,6 +58,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         self.schema.clone()
     }
 
+    /// Add the [`EquivalentClass`] from `iter` to this list
     pub fn extend<I: IntoIterator<Item = EquivalentClass<T>>>(&mut self, iter: I) {
         for ec in iter {
             self.classes.push(ec)
@@ -117,7 +130,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
 /// where both `a ASC` and `b DESC` can describe the table ordering. With
 /// `OrderingEquivalenceProperties`, we can keep track of these equivalences
 /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-pub type OrderingEquivalenceProperties = EquivalenceProperties<OrderedColumn>;
+pub type OrderingEquivalenceProperties = EquivalenceProperties<Vec<OrderedColumn>>;
 
 /// EquivalentClass is a set of [`Column`]s or [`OrderedColumn`]s that are known
 /// to have the same value in all tuples in a relation. `EquivalentClass<Column>`
@@ -185,7 +198,9 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     }
 }
 
-/// This object represents a [`Column`] with a definite ordering.
+/// This object represents a [`Column`] with a definite ordering, for
+/// example `A ASC` and is used to represent equivalent orderings in
+/// the optimizer.
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct OrderedColumn {
     pub col: Column,
@@ -198,37 +213,154 @@ impl OrderedColumn {
     }
 }
 
-trait ColumnAccessor {
-    fn column(&self) -> &Column;
-}
-
-impl ColumnAccessor for Column {
-    fn column(&self) -> &Column {
-        self
+impl From<OrderedColumn> for PhysicalSortExpr {
+    fn from(value: OrderedColumn) -> Self {
+        PhysicalSortExpr {
+            expr: Arc::new(value.col) as _,
+            options: value.options,
+        }
     }
 }
 
-impl ColumnAccessor for OrderedColumn {
-    fn column(&self) -> &Column {
-        &self.col
+impl TryFrom<PhysicalSortExpr> for OrderedColumn {
+    type Error = DataFusionError;
+
+    fn try_from(value: PhysicalSortExpr) -> Result<Self, Self::Error> {
+        if let Some(col) = value.expr.as_any().downcast_ref::<Column>() {
+            Ok(OrderedColumn {
+                col: col.clone(),
+                options: value.options,
+            })
+        } else {
+            Err(DataFusionError::NotImplemented(
+                "Only Column PhysicalSortExpr's can be downcasted to OrderedColumn yet"
+                    .to_string(),
+            ))
+        }
     }
 }
 
-pub type OrderingEquivalentClass = EquivalentClass<OrderedColumn>;
+impl From<OrderedColumn> for PhysicalSortRequirement {
+    fn from(value: OrderedColumn) -> Self {
+        PhysicalSortRequirement {
+            expr: Arc::new(value.col) as _,
+            options: Some(value.options),
+        }
+    }
+}
+
+/// `Vec<OrderedColumn>` stores the lexicographical ordering for a schema.
+/// OrderingEquivalentClass keeps track of different alternative orderings than can
+/// describe the schema.
+/// For instance, for the table below
+/// |a|b|c|d|
+/// |1|4|3|1|
+/// |2|3|3|2|
+/// |3|1|2|2|
+/// |3|2|1|3|
+/// both `vec![a ASC, b ASC]` and `vec![c DESC, d ASC]` describe the ordering of the table.
+/// For this case, we say that `vec![a ASC, b ASC]`, and `vec![c DESC, d ASC]` are ordering equivalent.
+pub type OrderingEquivalentClass = EquivalentClass<Vec<OrderedColumn>>;
 
 impl OrderingEquivalentClass {
-    /// Finds the matching column inside the `OrderingEquivalentClass`.
-    fn get_matching_column(&self, column: &Column) -> Option<OrderedColumn> {
-        if self.head.col.eq(column) {
-            Some(self.head.clone())
-        } else {
-            for item in &self.others {
-                if item.col.eq(column) {
-                    return Some(item.clone());
+    /// This function extends ordering equivalences with alias information.
+    /// For instance, assume column a and b are aliases,
+    /// and column (a ASC), (c DESC) are ordering equivalent. We append (b ASC) to ordering equivalence,
+    /// since b is alias of colum a. After this function (a ASC), (c DESC), (b ASC) would be ordering equivalent.
+    fn update_with_aliases(&mut self, columns_map: &HashMap<Column, Vec<Column>>) {
+        for (column, columns) in columns_map {
+            let mut to_insert = vec![];
+            for ordering in std::iter::once(&self.head).chain(self.others.iter()) {
+                for (idx, item) in ordering.iter().enumerate() {
+                    if item.col.eq(column) {
+                        for col in columns {
+                            let mut normalized = self.head.clone();
+                            // Change the corresponding entry in the head with the alias column:
+                            let entry = &mut normalized[idx];
+                            (entry.col, entry.options) = (col.clone(), item.options);
+                            to_insert.push(normalized);
+                        }
+                    }
                 }
             }
-            None
+            for items in to_insert {
+                self.insert(items);
+            }
         }
+    }
+}
+
+/// This is a builder object facilitating incremental construction
+/// for ordering equivalences.
+pub struct OrderingEquivalenceBuilder {
+    eq_properties: EquivalenceProperties,
+    ordering_eq_properties: OrderingEquivalenceProperties,
+    existing_ordering: Vec<PhysicalSortExpr>,
+}
+
+impl OrderingEquivalenceBuilder {
+    pub fn new(schema: SchemaRef) -> Self {
+        let eq_properties = EquivalenceProperties::new(schema.clone());
+        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema);
+        Self {
+            eq_properties,
+            ordering_eq_properties,
+            existing_ordering: vec![],
+        }
+    }
+
+    pub fn extend(
+        mut self,
+        new_ordering_eq_properties: OrderingEquivalenceProperties,
+    ) -> Self {
+        self.ordering_eq_properties
+            .extend(new_ordering_eq_properties.classes().iter().cloned());
+        self
+    }
+
+    pub fn with_existing_ordering(
+        mut self,
+        existing_ordering: Option<Vec<PhysicalSortExpr>>,
+    ) -> Self {
+        if let Some(existing_ordering) = existing_ordering {
+            self.existing_ordering = existing_ordering;
+        }
+        self
+    }
+
+    pub fn with_equivalences(mut self, new_eq_properties: EquivalenceProperties) -> Self {
+        self.eq_properties = new_eq_properties;
+        self
+    }
+
+    pub fn add_equal_conditions(&mut self, new_equivalent_ordering: Vec<OrderedColumn>) {
+        let mut normalized_out_ordering = vec![];
+        for item in &self.existing_ordering {
+            // To account for ordering equivalences, first normalize the expression:
+            let normalized = normalize_expr_with_equivalence_properties(
+                item.expr.clone(),
+                self.eq_properties.classes(),
+            );
+            // Currently we only support ordering equivalences for `Column` expressions.
+            // TODO: Add support for ordering equivalence for all `PhysicalExpr`s.
+            if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
+                normalized_out_ordering
+                    .push(OrderedColumn::new(column.clone(), item.options));
+            } else {
+                break;
+            }
+        }
+        // If there is an existing ordering, add new ordering as an equivalence:
+        if !normalized_out_ordering.is_empty() {
+            self.ordering_eq_properties.add_equal_conditions((
+                &normalized_out_ordering,
+                &new_equivalent_ordering,
+            ));
+        }
+    }
+
+    pub fn build(self) -> OrderingEquivalenceProperties {
+        self.ordering_eq_properties
     }
 }
 
@@ -242,10 +374,10 @@ pub fn project_equivalence_properties(
     alias_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut EquivalenceProperties,
 ) {
-    let mut ec_classes = input_eq.classes().to_vec();
+    let mut eq_classes = input_eq.classes().to_vec();
     for (column, columns) in alias_map {
         let mut find_match = false;
-        for class in ec_classes.iter_mut() {
+        for class in eq_classes.iter_mut() {
             if class.contains(column) {
                 for col in columns {
                     class.insert(col.clone());
@@ -255,12 +387,29 @@ pub fn project_equivalence_properties(
             }
         }
         if !find_match {
-            ec_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
+            eq_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
         }
     }
 
-    prune_columns_to_remove(output_eq, &mut ec_classes);
-    output_eq.extend(ec_classes);
+    // Prune columns that are no longer in the schema from equivalences.
+    let schema = output_eq.schema();
+    let fields = schema.fields();
+    for class in eq_classes.iter_mut() {
+        let columns_to_remove = class
+            .iter()
+            .filter(|column| {
+                let idx = column.index();
+                idx >= fields.len() || fields[idx].name() != column.name()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for column in columns_to_remove {
+            class.remove(&column);
+        }
+    }
+    eq_classes.retain(|props| props.len() > 1);
+
+    output_eq.extend(eq_classes);
 }
 
 /// This function applies the given projection to the given ordering
@@ -275,39 +424,22 @@ pub fn project_ordering_equivalence_properties(
     columns_map: &HashMap<Column, Vec<Column>>,
     output_eq: &mut OrderingEquivalenceProperties,
 ) {
-    let mut ec_classes = input_eq.classes().to_vec();
-    for (column, columns) in columns_map {
-        for class in ec_classes.iter_mut() {
-            if let Some(OrderedColumn { options, .. }) = class.get_matching_column(column)
-            {
-                for col in columns {
-                    class.insert(OrderedColumn {
-                        col: col.clone(),
-                        options,
-                    });
-                }
-                break;
-            }
-        }
+    let mut eq_classes = input_eq.classes().to_vec();
+    for class in eq_classes.iter_mut() {
+        class.update_with_aliases(columns_map);
     }
 
-    prune_columns_to_remove(output_eq, &mut ec_classes);
-    output_eq.extend(ec_classes);
-}
-
-fn prune_columns_to_remove<T: Eq + Hash + Clone + ColumnAccessor>(
-    eq_properties: &EquivalenceProperties<T>,
-    eq_classes: &mut Vec<EquivalentClass<T>>,
-) {
-    let schema = eq_properties.schema();
+    // Prune columns that no longer is in the schema from from the OrderingEquivalenceProperties.
+    let schema = output_eq.schema();
     let fields = schema.fields();
     for class in eq_classes.iter_mut() {
         let columns_to_remove = class
             .iter()
-            .filter(|elem| {
-                let column = elem.column();
-                let idx = column.index();
-                idx >= fields.len() || fields[idx].name() != column.name()
+            .filter(|columns| {
+                columns.iter().any(|column| {
+                    let idx = column.col.index();
+                    idx >= fields.len() || fields[idx].name() != column.col.name()
+                })
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -316,6 +448,8 @@ fn prune_columns_to_remove<T: Eq + Hash + Clone + ColumnAccessor>(
         }
     }
     eq_classes.retain(|props| props.len() > 1);
+
+    output_eq.extend(eq_classes);
 }
 
 #[cfg(test)]
