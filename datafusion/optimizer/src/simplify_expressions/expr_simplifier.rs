@@ -2401,7 +2401,11 @@ mod tests {
         let expected = concat(&[col("c0"), lit("hello rust"), col("c1")]);
         assert_eq!(simplify(expr), expected)
     }
-
+    #[test]
+    fn test_my_simplify_regex() {
+        assert_no_change(regex_match(col("c1"), lit("^(foo|bar)$")));
+        // assert_no_change(regex_match(col("c1"), lit("^$")));
+    }
     #[test]
     fn test_simplify_regex() {
         // malformed regex
