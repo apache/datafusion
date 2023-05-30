@@ -2113,8 +2113,7 @@ statement ok
 set datafusion.execution.target_partitions = 1;
 
 query TT
-EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount ASC)
- AS amounts
+EXPLAIN SELECT country, (ARRAY_AGG(amount ORDER BY amount ASC)) AS amounts
   FROM sales_global
   GROUP BY country
 ----
