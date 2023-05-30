@@ -309,6 +309,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#arrow-versions">
+   Arrow Versions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#identifiers-and-capitalization">
    Identifiers and Capitalization
   </a>
@@ -450,6 +455,27 @@
 +---+--------+
 </pre></div>
 </div>
+</section>
+<section id="arrow-versions">
+<h2>Arrow Versions<a class="headerlink" href="#arrow-versions" title="Permalink to this heading">¶</a></h2>
+<p>Many of DataFusion’s public APIs use types from the
+<a class="reference external" href="https://docs.rs/arrow/latest/arrow/"><code class="docutils literal notranslate"><span class="pre">arrow</span></code></a> and <a class="reference external" href="https://docs.rs/parquet/latest/parquet/"><code class="docutils literal notranslate"><span class="pre">parquet</span></code></a> crates, so if you use
+<code class="docutils literal notranslate"><span class="pre">arrow</span></code> in your project, the <code class="docutils literal notranslate"><span class="pre">arrow</span></code> version must match that used by
+DataFusion. You can check the required version on <a class="reference external" href="https://crates.io/crates/datafusion">DataFusion’s
+crates.io</a> page.</p>
+<p>The easiest way to ensure the versions match is to use the <code class="docutils literal notranslate"><span class="pre">arrow</span></code>
+exported by DataFusion, for example:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">datatypes</span>::<span class="n">Schema</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>For example, <a class="reference external" href="https://crates.io/crates/datafusion/25.0.0/dependencies">DataFusion <code class="docutils literal notranslate"><span class="pre">25.0.0</span></code> dependencies</a> require <code class="docutils literal notranslate"><span class="pre">arrow</span></code>
+<code class="docutils literal notranslate"><span class="pre">39.0.0</span></code>. If instead you used <code class="docutils literal notranslate"><span class="pre">arrow</span></code> <code class="docutils literal notranslate"><span class="pre">40.0.0</span></code> in your project you may
+see errors such as:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>mismatched types [E0308] expected `Schema`, found `arrow_schema::Schema` Note: `arrow_schema::Schema` and `Schema` have similar names, but are actually distinct types Note: `arrow_schema::Schema` is defined in crate `arrow_schema` Note: `Schema` is defined in crate `arrow_schema` Note: perhaps two different versions of crate `arrow_schema` are being used? Note: associated function defined here
+</pre></div>
+</div>
+<p>Or calling <code class="docutils literal notranslate"><span class="pre">downcast_ref</span></code> on an <code class="docutils literal notranslate"><span class="pre">ArrayRef</span></code> may return <code class="docutils literal notranslate"><span class="pre">None</span></code>
+unexpectedly.</p>
 </section>
 <section id="identifiers-and-capitalization">
 <h2>Identifiers and Capitalization<a class="headerlink" href="#identifiers-and-capitalization" title="Permalink to this heading">¶</a></h2>
