@@ -1497,19 +1497,22 @@ pub struct Analyze {
 }
 
 /// Extension operator defined outside of DataFusion
-#[allow(clippy::derived_hash_with_manual_eq)] // see impl PartialEq for explanation
+// TODO(clippy): This clippy `allow` should be removed if
+// the manual `PartialEq` is removed in favor of a derive.
+// (see `PartialEq` the impl for details.)
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
     pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
+// `PartialEq` cannot be derived for types containing `Arc<dyn Trait>`.
+// This manual implementation should be removed if
+// https://github.com/rust-lang/rust/issues/39128 is fixed.
 impl PartialEq for Extension {
-    #[allow(clippy::op_ref)] // clippy false positive
     fn eq(&self, other: &Self) -> bool {
-        // must be manually derived due to a bug in #[derive(PartialEq)]
-        // https://github.com/rust-lang/rust/issues/39128
-        &self.node == &other.node
+        self.node.eq(&other.node)
     }
 }
 
@@ -1771,7 +1774,6 @@ impl Display for PlanType {
 
 /// Represents some sort of execution plan, in String form
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
     pub plan_type: PlanType,

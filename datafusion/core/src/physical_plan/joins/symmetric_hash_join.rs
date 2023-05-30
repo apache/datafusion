@@ -1596,7 +1596,7 @@ mod tests {
             assert_eq!((i, first_line), (i, second_line));
         }
     }
-    #[allow(clippy::too_many_arguments)]
+
     async fn partitioned_sym_join_with_filter(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -1647,7 +1647,7 @@ mod tests {
 
         Ok(batches)
     }
-    #[allow(clippy::too_many_arguments)]
+
     async fn partitioned_hash_join_with_filter(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
