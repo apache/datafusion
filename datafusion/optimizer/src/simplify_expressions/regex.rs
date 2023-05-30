@@ -16,10 +16,8 @@
 // under the License.
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator, or};
-use regex_syntax::hir::{Hir, HirKind, Literal, Look, Capture};
-
-use crate::utils::disjunction;
+use datafusion_expr::{lit, BinaryExpr, Expr, Like, Operator};
+use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
 const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
@@ -35,7 +33,6 @@ pub fn simplify_regex_expr(
         match regex_syntax::Parser::new().parse(pattern) {
             Ok(hir) => {
                 let kind = hir.kind();
-                println!("{:?}", kind);
                 if let HirKind::Alternation(alts) = kind {
                     if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION {
                         if let Some(expr) = lower_alt(&mode, &left, alts) {
@@ -171,10 +168,9 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
 /// returns true if the elements in a `Concat` pattern are:
 /// - `[Look::Start, Capture(Alternation), Look::End]`
 fn is_anchored_capture(v: &[Hir]) -> bool {
-    match v.len() {
-        2..=3 => (),
-        _ => return false,
-    };
+    if 3 != v.len() {
+        return false;
+    }
 
     let first_last = (
         v.first().expect("length checked"),
@@ -188,10 +184,19 @@ fn is_anchored_capture(v: &[Hir]) -> bool {
         return false;
     }
 
-    v.iter()
-        .skip(1)
-        .take(v.len() - 2)
-        .all(|h| matches!(h.kind(), HirKind::Capture(_)))
+    if let HirKind::Capture(cap, ..) = v[1].kind() {
+        let Capture { sub, .. } = cap;
+        if let HirKind::Alternation(alters) = sub.kind() {
+            let has_non_literal = alters
+                .iter()
+                .any(|v| !matches!(v.kind(), &HirKind::Literal(_)));
+            if has_non_literal {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 /// extracts a string literal expression assuming that [`is_anchored_literal`]
@@ -207,39 +212,34 @@ fn anchored_literal_to_expr(v: &[Hir]) -> Option<Expr> {
     }
 }
 
-fn anchored_alternation_to_expr(v: &[Hir]) -> Option<Expr> {
-    match v.len() {
-        2 => Some(lit("")),
-        3 => {
-            println!("{:?}", v);
-            if let HirKind::Capture(cap,..) = v[1].kind(){
-                if let Capture { sub,.. } = cap {
-                    if let HirKind::Alternation(alters) = sub.kind() {
-                        let literals : Vec<_> = alters.iter().map(|l| if let HirKind::Literal(l) = l.kind(){
-                            str_from_literal(l).map(lit)
-                        } else {
-                            None
-                        }).collect();
-
-                        if literals.iter().any(|l| l.is_none()) {
-                            return None;
-                        };
-
-                        return disjunction(literals.into_iter().map(|v|v.unwrap()));
-                        
-
-                    } else {
-                        return None;
-                    }
-                };
-
-                return None;
-            }else {
-                return None;
-            }
-        }
-        _ => None,
+fn anchored_alternation_to_expr(v: &[Hir]) -> Option<Vec<Expr>> {
+    if 3 != v.len() {
+        return None;
     }
+
+    if let HirKind::Capture(cap, ..) = v[1].kind() {
+        let Capture { sub, .. } = cap;
+        if let HirKind::Alternation(alters) = sub.kind() {
+            let literals: Vec<_> = alters
+                .iter()
+                .map(|l| {
+                    if let HirKind::Literal(l) = l.kind() {
+                        str_from_literal(l).map(lit)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if literals.iter().any(|l| l.is_none()) {
+                return None;
+            };
+
+            return Some(literals.into_iter().map(|v| v.unwrap()).collect());
+        }
+    }
+
+    return None;
 }
 
 fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
@@ -259,9 +259,7 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
         }
         HirKind::Concat(inner) if is_anchored_capture(inner) => {
             let right = anchored_alternation_to_expr(inner)?;
-            return Some(
-                mode.expr_matches_literal(Box::new(left.clone()), Box::new(right)),
-            );
+            return Some(left.clone().in_list(right, false));
         }
         HirKind::Concat(inner) => {
             if let Some(pattern) = collect_concat_to_like_string(inner) {
@@ -270,9 +268,7 @@ fn lower_simple(mode: &OperatorMode, left: &Expr, hir: &Hir) -> Option<Expr> {
         }
         _ => {}
     }
-
-
-            left.in_list(right, false);    None
+    None
 }
 
 fn lower_alt(mode: &OperatorMode, left: &Expr, alts: &[Hir]) -> Option<Expr> {
