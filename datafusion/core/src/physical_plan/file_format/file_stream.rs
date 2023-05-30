@@ -51,10 +51,16 @@ pub type FileOpenFuture =
 
 /// Describes the behavior of the `FileStream` if file opening or scanning fails
 pub enum OnError {
-    /// Continue scanning, ignoring the failed file
+    /// Fail the entire stream and return the underlying error
     Fail,
-    /// Fail the entire stream and return the underlying
+    /// Continue scanning, ignoring the failed file
     Skip,
+}
+
+impl Default for OnError {
+    fn default() -> Self {
+        Self::Fail
+    }
 }
 
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a
@@ -511,9 +517,11 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::Schema;
     use datafusion_common::DataFusionError;
     use futures::StreamExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     use super::*;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -524,53 +532,9 @@ mod tests {
         test::{make_partition, object_store::register_test_store},
     };
 
-    struct TestOpener {
-        records: Vec<RecordBatch>,
-    }
-
-    impl FileOpener for TestOpener {
-        fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
-            let iterator = self.records.clone().into_iter().map(Ok);
-            let stream = futures::stream::iter(iterator).boxed();
-            Ok(futures::future::ready(Ok(stream)).boxed())
-        }
-    }
-
-    /// helper that creates a stream of 2 files with the same pair of batches in each ([0,1,2] and [0,1])
-    async fn create_and_collect(limit: Option<usize>) -> Vec<RecordBatch> {
-        let records = vec![make_partition(3), make_partition(2)];
-        let file_schema = records[0].schema();
-
-        let reader = TestOpener { records };
-
-        let ctx = SessionContext::new();
-        register_test_store(&ctx, &[("mock_file1", 10), ("mock_file2", 20)]);
-
-        let config = FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema,
-            file_groups: vec![vec![
-                PartitionedFile::new("mock_file1".to_owned(), 10),
-                PartitionedFile::new("mock_file2".to_owned(), 20),
-            ]],
-            statistics: Default::default(),
-            projection: None,
-            limit,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-            infinite_source: false,
-        };
-        let metrics_set = ExecutionPlanMetricsSet::new();
-        let file_stream = FileStream::new(&config, 0, reader, &metrics_set).unwrap();
-
-        file_stream
-            .map(|b| b.expect("No error expected in stream"))
-            .collect::<Vec<_>>()
-            .await
-    }
-
     /// Test `FileOpener` which will simulate errors during file opening or scanning
-    struct TestOpenerWithErrors {
+    #[derive(Default)]
+    struct TestOpener {
         /// Index in stream of files which should throw an error while opening
         error_opening_idx: Vec<usize>,
         /// Index in stream of files which should throw an error while scanning
@@ -581,7 +545,7 @@ mod tests {
         records: Vec<RecordBatch>,
     }
 
-    impl FileOpener for TestOpenerWithErrors {
+    impl FileOpener for TestOpener {
         fn open(&self, _file_meta: FileMeta) -> Result<FileOpenFuture> {
             let idx = self.current_idx.fetch_add(1, Ordering::SeqCst);
 
@@ -604,69 +568,134 @@ mod tests {
         }
     }
 
-    /// helper that creates a stream of files and simulates errors during opening and/or scanning
-    async fn create_and_collect_with_errors(
-        on_error: OnError,
+    #[derive(Default)]
+    struct FileStreamTest {
+        /// Number of files in the stream
         num_files: usize,
-        scan_errors: Vec<usize>,
-        open_errors: Vec<usize>,
+        /// Global limit of records emitted by the stream
         limit: Option<usize>,
-    ) -> Result<Vec<RecordBatch>> {
-        let records = vec![make_partition(3), make_partition(2)];
-        let file_schema = records[0].schema();
+        /// Error-handling behavior of the stream
+        on_error: OnError,
+        /// Mock `FileOpener`
+        opener: TestOpener,
+    }
 
-        let reader = TestOpenerWithErrors {
-            error_opening_idx: open_errors,
-            error_scanning_idx: scan_errors,
-            current_idx: Default::default(),
-            records,
-        };
+    impl FileStreamTest {
+        pub fn new() -> Self {
+            Self::default()
+        }
 
-        let ctx = SessionContext::new();
-        let mock_files: Vec<(String, u64)> = (0..num_files)
-            .map(|idx| (format!("mock_file{idx}"), 10_u64))
-            .collect();
+        /// Specify the number of files in the stream
+        pub fn with_num_files(mut self, num_files: usize) -> Self {
+            self.num_files = num_files;
+            self
+        }
 
-        let mock_files_ref: Vec<(&str, u64)> = mock_files
-            .iter()
-            .map(|(name, size)| (name.as_str(), *size))
-            .collect();
+        /// Specify the limit
+        pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+            self.limit = limit;
+            self
+        }
 
-        register_test_store(&ctx, &mock_files_ref);
+        /// Specify the index of files in the stream which should
+        /// throw an error when opening
+        pub fn with_open_errors(mut self, idx: Vec<usize>) -> Self {
+            self.opener.error_opening_idx = idx;
+            self
+        }
 
-        let file_group = mock_files
-            .into_iter()
-            .map(|(name, size)| PartitionedFile::new(name, size))
-            .collect();
+        /// Specify the index of files in the stream which should
+        /// throw an error when scanning
+        pub fn with_scan_errors(mut self, idx: Vec<usize>) -> Self {
+            self.opener.error_scanning_idx = idx;
+            self
+        }
 
-        let config = FileScanConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_schema,
-            file_groups: vec![file_group],
-            statistics: Default::default(),
-            projection: None,
-            limit,
-            table_partition_cols: vec![],
-            output_ordering: None,
-            infinite_source: false,
-        };
-        let metrics_set = ExecutionPlanMetricsSet::new();
-        let file_stream = FileStream::new(&config, 0, reader, &metrics_set)
-            .unwrap()
-            .with_on_error(on_error);
+        /// Specify the behavior of the stream when an error occurs
+        pub fn with_on_error(mut self, on_error: OnError) -> Self {
+            self.on_error = on_error;
+            self
+        }
 
-        file_stream
-            .collect::<Vec<_>>()
+        /// Specify the record batches that should be returned from each
+        /// file that is successfully scanned
+        pub fn with_records(mut self, records: Vec<RecordBatch>) -> Self {
+            self.opener.records = records;
+            self
+        }
+
+        /// Collect the results of the `FileStream`
+        pub async fn result(self) -> Result<Vec<RecordBatch>> {
+            let file_schema = self
+                .opener
+                .records
+                .first()
+                .map(|batch| batch.schema())
+                .unwrap_or_else(|| Arc::new(Schema::empty()));
+
+            let ctx = SessionContext::new();
+            let mock_files: Vec<(String, u64)> = (0..self.num_files)
+                .map(|idx| (format!("mock_file{idx}"), 10_u64))
+                .collect();
+
+            let mock_files_ref: Vec<(&str, u64)> = mock_files
+                .iter()
+                .map(|(name, size)| (name.as_str(), *size))
+                .collect();
+
+            register_test_store(&ctx, &mock_files_ref);
+
+            let file_group = mock_files
+                .into_iter()
+                .map(|(name, size)| PartitionedFile::new(name, size))
+                .collect();
+
+            let on_error = self.on_error;
+
+            let config = FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema,
+                file_groups: vec![file_group],
+                statistics: Default::default(),
+                projection: None,
+                limit: self.limit,
+                table_partition_cols: vec![],
+                output_ordering: vec![],
+                infinite_source: false,
+            };
+            let metrics_set = ExecutionPlanMetricsSet::new();
+            let file_stream = FileStream::new(&config, 0, self.opener, &metrics_set)
+                .unwrap()
+                .with_on_error(on_error);
+
+            file_stream
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()
+        }
+    }
+
+    /// helper that creates a stream of 2 files with the same pair of batches in each ([0,1,2] and [0,1])
+    async fn create_and_collect(limit: Option<usize>) -> Vec<RecordBatch> {
+        FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_limit(limit)
+            .result()
             .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()
+            .expect("error executing stream")
     }
 
     #[tokio::test]
     async fn on_error_opening() -> Result<()> {
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 2, vec![], vec![0], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![0])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -681,9 +710,13 @@ mod tests {
             "+---+",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 2, vec![], vec![1], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -698,9 +731,13 @@ mod tests {
             "+---+",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 2, vec![], vec![0, 1], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![0, 1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -713,9 +750,13 @@ mod tests {
 
     #[tokio::test]
     async fn on_error_scanning() -> Result<()> {
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 2, vec![0], vec![], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Skip)
+            .with_scan_errors(vec![0])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -730,9 +771,13 @@ mod tests {
             "+---+",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 2, vec![1], vec![], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Skip)
+            .with_scan_errors(vec![1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -747,9 +792,13 @@ mod tests {
             "+---+",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 2, vec![0, 1], vec![], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Skip)
+            .with_scan_errors(vec![0, 1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -762,9 +811,14 @@ mod tests {
 
     #[tokio::test]
     async fn on_error_mixed() -> Result<()> {
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 3, vec![0], vec![1], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![1])
+            .with_scan_errors(vec![0])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -779,9 +833,14 @@ mod tests {
             "+---+",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 3, vec![1], vec![0], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![0])
+            .with_scan_errors(vec![1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -796,9 +855,14 @@ mod tests {
             "+---+",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 3, vec![0, 1], vec![2], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![2])
+            .with_scan_errors(vec![0, 1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
@@ -806,9 +870,14 @@ mod tests {
             "++",
         ], &batches);
 
-        let batches =
-            create_and_collect_with_errors(OnError::Skip, 3, vec![1], vec![0, 2], None)
-                .await?;
+        let batches = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(3)
+            .with_on_error(OnError::Skip)
+            .with_open_errors(vec![0, 2])
+            .with_scan_errors(vec![1])
+            .result()
+            .await?;
 
         #[rustfmt::skip]
         crate::assert_batches_eq!(&[
