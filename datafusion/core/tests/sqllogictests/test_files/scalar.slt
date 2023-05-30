@@ -673,6 +673,14 @@ NULL
 NULL
 4
 
+# issue: https://github.com/apache/arrow-datafusion/issues/6376
+query I
+select case when a = 0 then 123 end from (values(1), (0), (null)) as t(a);
+----
+NULL
+123
+NULL
+
 # csv_query_sum_cast() {
 
 statement ok
