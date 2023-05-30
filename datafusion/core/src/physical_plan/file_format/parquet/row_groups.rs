@@ -261,6 +261,7 @@ mod tests {
         file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
         schema::types::SchemaDescPtr,
     };
+    use std::ops::Rem;
     use std::sync::Arc;
 
     struct PrimitiveTypeField {
@@ -371,9 +372,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]));
-        let expr = col("c1")
-            .gt(lit(15))
-            .and(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = col("c1").gt(lit(15)).and(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
 
@@ -407,9 +406,7 @@ mod tests {
 
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
-        let expr = col("c1")
-            .gt(lit(15))
-            .or(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = col("c1").gt(lit(15)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
         let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
 
