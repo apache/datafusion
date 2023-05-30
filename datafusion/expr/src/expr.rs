@@ -32,7 +32,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::ops::Not;
 use std::sync::Arc;
 
 /// `Expr` is a central struct of DataFusion's query API, and
@@ -740,44 +739,6 @@ impl Expr {
         binary_expr(self, Operator::Or, other)
     }
 
-    /// Return `self & other`
-    pub fn bitwise_and(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::BitwiseAnd, other)
-    }
-
-    /// Return `self | other`
-    pub fn bitwise_or(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::BitwiseOr, other)
-    }
-
-    /// Return `self ^ other`
-    pub fn bitwise_xor(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::BitwiseXor, other)
-    }
-
-    /// Return `self >> other`
-    pub fn bitwise_shift_right(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::BitwiseShiftRight, other)
-    }
-
-    /// Return `self << other`
-    pub fn bitwise_shift_left(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::BitwiseShiftLeft, other)
-    }
-
-    /// Return `!self`
-    // TODO(clippy): May be solved by https://github.com/apache/arrow-datafusion/issues/6437
-    #[allow(clippy::should_implement_trait)]
-    pub fn not(self) -> Expr {
-        !self
-    }
-
-    /// Calculate the modulus of two expressions.
-    /// Return `self % other`
-    pub fn modulus(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::Modulo, other)
-    }
-
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
         Expr::Like(Like::new(false, Box::new(self), Box::new(other), None))
@@ -905,34 +866,6 @@ impl Expr {
     /// Return true when the expression contains out reference(correlated) expressions.
     pub fn contains_outer(&self) -> bool {
         !find_out_reference_exprs(self).is_empty()
-    }
-}
-
-impl Not for Expr {
-    type Output = Self;
-
-    fn not(self) -> Self::Output {
-        match self {
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
-            _ => Expr::Not(Box::new(self)),
-        }
     }
 }
 
@@ -1545,11 +1478,6 @@ mod test {
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.display_name()?);
         Ok(())
-    }
-
-    #[test]
-    fn test_not() {
-        assert_eq!(lit(1).not(), !lit(1));
     }
 
     #[test]
