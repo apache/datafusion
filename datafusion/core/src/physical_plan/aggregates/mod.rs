@@ -466,10 +466,19 @@ fn calc_required_input_ordering(
     aggregation_ordering: &Option<AggregationOrdering>,
 ) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = vec![];
+    // Boolean shows that whether `required_input_ordering` stored comes from
+    // `aggregator_reqs` or `aggregator_reverse_reqs`
+    let mut reverse_req = false;
     // If reverse aggregator is None, there is no way to run aggregators in reverse mode. Hence ignore it during analysis
     let aggregator_requirements =
         if let Some(aggregator_reverse_reqs) = aggregator_reverse_reqs {
-            vec![(false, aggregator_reqs), (true, aggregator_reverse_reqs)]
+            // If existing ordering doesn't satisfy requirement, we should do calculations
+            // on naive requirement (by convention, otherwise the final plan will be unintuitive),
+            // even if reverse ordering is possible.
+            // Hence, while iterating consider naive requirement last, by this way
+            // we prioritize naive requirement over reverse requirement, when
+            // reverse requirement is not helpful with removing SortExec from the plan.
+            vec![(true, aggregator_reverse_reqs), (false, aggregator_reqs)]
         } else {
             vec![(false, aggregator_reqs)]
         };
@@ -503,6 +512,8 @@ fn calc_required_input_ordering(
         } else {
             required_input_ordering = aggregator_requirement;
         }
+        // keep track of from which direction required_input_ordering is constructed
+        reverse_req = is_reverse;
         // If all of the order-sensitive aggregate functions are reversible (such as all of the order-sensitive aggregators are
         // either FIRST_VALUE or LAST_VALUE). We can run aggregate expressions both in the direction of naive required ordering
         // (e.g finest requirement that satisfy each aggregate function requirement) and in its reversed (opposite) direction.
@@ -516,27 +527,28 @@ fn calc_required_input_ordering(
             || input.equivalence_properties(),
             || input.ordering_equivalence_properties(),
         ) {
-            // If existing ordering satisfies the reverse requirement, we should reverse
-            // each `aggr_expr` to be able to correctly calculate their result in reverse order.
-            if is_reverse {
-                aggr_expr
-                    .iter_mut()
-                    .map(|elem| {
-                        if is_order_sensitive(elem) {
-                            if let Some(reverse) = elem.reverse_expr() {
-                                *elem = reverse;
-                            } else {
-                                return Err(DataFusionError::Execution(
-                                    "Aggregate expression should have a reverse expression".to_string(),
-                                ));
-                            }
-                        }
-                        Ok(())
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-            }
             break;
         }
+    }
+    // If `required_input_ordering` is constructed using reverse requirement, we should reverse
+    // each `aggr_expr` to be able to correctly calculate their result in reverse order.
+    if reverse_req {
+        aggr_expr
+            .iter_mut()
+            .map(|elem| {
+                if is_order_sensitive(elem) {
+                    if let Some(reverse) = elem.reverse_expr() {
+                        *elem = reverse;
+                    } else {
+                        return Err(DataFusionError::Execution(
+                            "Aggregate expression should have a reverse expression"
+                                .to_string(),
+                        ));
+                    }
+                }
+                Ok(())
+            })
+            .collect::<Result<Vec<_>>>()?;
     }
     Ok((!required_input_ordering.is_empty()).then_some(required_input_ordering))
 }
