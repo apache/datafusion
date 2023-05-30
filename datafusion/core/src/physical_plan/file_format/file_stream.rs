@@ -749,6 +749,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn on_error_scanning_fail() -> Result<()> {
+        let result = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Fail)
+            .with_scan_errors(vec![1])
+            .result()
+            .await;
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn on_error_opening_fail() -> Result<()> {
+        let result = FileStreamTest::new()
+            .with_records(vec![make_partition(3), make_partition(2)])
+            .with_num_files(2)
+            .with_on_error(OnError::Fail)
+            .with_open_errors(vec![1])
+            .result()
+            .await;
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn on_error_scanning() -> Result<()> {
         let batches = FileStreamTest::new()
             .with_records(vec![make_partition(3), make_partition(2)])
