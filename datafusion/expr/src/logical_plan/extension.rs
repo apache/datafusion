@@ -84,6 +84,12 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// of self.inputs and self.exprs.
     ///
     /// So, `self.from_template(exprs, ..).expressions() == exprs
+    //
+    // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
+    // like `with_template`, or `with_exprs_and_inputs`.
+    //
+    // Also, I think `ExtensionPlanNode` has been renamed to `UserDefinedLogicalNode`
+    // but the doc comments have not been updated.
     #[allow(clippy::wrong_self_convention)]
     fn from_template(
         &self,
@@ -228,6 +234,12 @@ pub trait UserDefinedLogicalNodeCore:
     /// of self.inputs and self.exprs.
     ///
     /// So, `self.from_template(exprs, ..).expressions() == exprs
+    //
+    // TODO(clippy): This should probably be renamed to use a `with_*` prefix. Something
+    // like `with_template`, or `with_exprs_and_inputs`.
+    //
+    // Also, I think `ExtensionPlanNode` has been renamed to `UserDefinedLogicalNode`
+    // but the doc comments have not been updated.
     #[allow(clippy::wrong_self_convention)]
     fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self;
 }

@@ -511,7 +511,6 @@ impl From<DFSchema> for SchemaRef {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for DFSchema {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.fields.hash(state);
@@ -525,25 +524,21 @@ where
     Self: Sized,
 {
     /// Attempt to create a DSSchema
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema>;
 
     /// Attempt to create a DSSchemaRef
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema_ref(self) -> Result<DFSchemaRef> {
         Ok(Arc::new(self.to_dfschema()?))
     }
 }
 
 impl ToDFSchema for Schema {
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         DFSchema::try_from(self)
     }
 }
 
 impl ToDFSchema for SchemaRef {
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         // Attempt to use the Schema directly if there are no other
         // references, otherwise clone

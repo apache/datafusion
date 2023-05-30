@@ -17,6 +17,9 @@
 
 //! DataFusion data sources
 
+// TODO(clippy): Having a `datasource::datasource` module path is unclear and ambiguous.
+// The child module should probably be renamed to something that more accurately
+// describes its content. Something along the lines of `provider`, or `providers`.
 #![allow(clippy::module_inception)]
 pub mod datasource;
 pub mod default_table_source;

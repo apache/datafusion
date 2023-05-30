@@ -766,6 +766,7 @@ impl Expr {
     }
 
     /// Return `!self`
+    // TODO(clippy): May be solved by https://github.com/apache/arrow-datafusion/issues/6437
     #[allow(clippy::should_implement_trait)]
     pub fn not(self) -> Expr {
         !self
@@ -817,13 +818,11 @@ impl Expr {
     }
 
     /// Return `IsNull(Box(self))
-    #[allow(clippy::wrong_self_convention)]
     pub fn is_null(self) -> Expr {
         Expr::IsNull(Box::new(self))
     }
 
     /// Return `IsNotNull(Box(self))
-    #[allow(clippy::wrong_self_convention)]
     pub fn is_not_null(self) -> Expr {
         Expr::IsNotNull(Box::new(self))
     }
