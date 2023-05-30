@@ -17,7 +17,9 @@
 
 //! Expression simplification API
 
+use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
+
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
@@ -31,7 +33,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarVa
 use datafusion_expr::expr::{InList, InSubquery, ScalarFunction};
 use datafusion_expr::{
     and, expr, lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Like,
-    Operator, Volatility,
+    Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -324,75 +326,6 @@ impl<'a> ConstEvaluator<'a> {
             }
             ColumnarValue::Scalar(s) => Ok(s),
         }
-    }
-}
-
-/// Combine multiple OR expressions into a single IN list expression if possible
-///
-/// i.e. `a = 1 OR a = 2 OR a = 3` -> `a IN (1, 2, 3)`
-struct OrInListSimplifier {}
-
-impl OrInListSimplifier {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl TreeNodeRewriter for OrInListSimplifier {
-    type N = Expr;
-
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = &expr {
-            if *op == Operator::Or {
-                let left = as_inlist(left);
-                let right = as_inlist(right);
-                if let (Some(lhs), Some(rhs)) = (left, right) {
-                    if lhs.expr.try_into_col().is_ok()
-                        && rhs.expr.try_into_col().is_ok()
-                        && lhs.expr == rhs.expr
-                        && !lhs.negated
-                        && !rhs.negated
-                    {
-                        let mut list = vec![];
-                        list.extend(lhs.list);
-                        list.extend(rhs.list);
-                        let merged_inlist = InList {
-                            expr: lhs.expr,
-                            list,
-                            negated: false,
-                        };
-                        return Ok(Expr::InList(merged_inlist));
-                    }
-                }
-            }
-        }
-
-        Ok(expr)
-    }
-}
-
-/// Try to convert an expression to an in-list expression
-fn as_inlist(expr: &Expr) -> Option<InList> {
-    match expr {
-        Expr::InList(inlist) => Some(inlist.clone()),
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
-            let unboxed_left = *left.clone();
-            let unboxed_right = *right.clone();
-            match (&unboxed_left, &unboxed_right) {
-                (Expr::Column(_), Expr::Literal(_)) => Some(InList {
-                    expr: left.clone(),
-                    list: vec![unboxed_right],
-                    negated: false,
-                }),
-                (Expr::Literal(_), Expr::Column(_)) => Some(InList {
-                    expr: right.clone(),
-                    list: vec![unboxed_left],
-                    negated: false,
-                }),
-                _ => None,
-            }
-        }
-        _ => None,
     }
 }
 
