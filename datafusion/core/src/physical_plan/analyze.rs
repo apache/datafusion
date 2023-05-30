@@ -73,23 +73,18 @@ impl ExecutionPlan for AnalyzeExec {
         vec![self.input.clone()]
     }
 
-    /// Specifies we want the input as a single stream
+    /// AnalyzeExec is handled specially so this value is ignored
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        vec![]
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
-    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
-        if children[0] {
-            Err(DataFusionError::Plan(
-                "Analyze Error: Analysis is not supported for unbounded inputs"
-                    .to_string(),
-            ))
-        } else {
-            Ok(false)
-        }
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Err(DataFusionError::Internal(
+            "Optimization not supported for ANALYZE".to_string(),
+        ))
     }
 
     /// Get the output partitioning of this plan
