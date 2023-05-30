@@ -92,6 +92,7 @@ impl SimplifyExpressions {
 
                 // Apply the actual simplification logic
                 let new_e = simplifier.simplify(e)?;
+
                 let new_name = &new_e.display_name();
 
                 if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
@@ -192,6 +193,7 @@ mod tests {
             .project(vec![col("a")])?
             .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
+
         assert_optimized_plan_eq(
             &plan,
             "\
