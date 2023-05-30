@@ -136,10 +136,8 @@ impl OptimizerRule for MyOptimizerRule {
     ) -> Result<Option<LogicalPlan>> {
         // recurse down and optimize children first
         let optimized_plan = utils::optimize_children(self, plan, config)?;
-        dbg!(&optimized_plan);
         match optimized_plan {
             Some(LogicalPlan::Filter(filter)) => {
-                dbg!(&filter.predicate);
                 let predicate = my_rewrite(filter.predicate.clone())?;
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
@@ -149,7 +147,6 @@ impl OptimizerRule for MyOptimizerRule {
             Some(optimized_plan) => Ok(Some(optimized_plan)),
             None => match plan {
                 LogicalPlan::Filter(filter) => {
-                    println!("{:?}", filter.predicate);
                     let predicate = my_rewrite(filter.predicate.clone())?;
                     Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate,
