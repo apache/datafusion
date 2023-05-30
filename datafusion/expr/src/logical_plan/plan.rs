@@ -403,6 +403,7 @@ impl LogicalPlan {
         Ok(using_columns)
     }
 
+    /// returns the first output expression of this `LogicalPlan` node.
     pub fn head_output_expr(&self) -> Result<Option<Expr>> {
         match self {
             LogicalPlan::Projection(projection) => {
@@ -415,10 +416,12 @@ impl LogicalPlan {
                     Ok(Some(agg.group_expr.as_slice()[0].clone()))
                 }
             }
-            LogicalPlan::Filter(filter) => filter.input.head_output_expr(),
-            LogicalPlan::Distinct(distinct) => distinct.input.head_output_expr(),
-            LogicalPlan::Sort(sort) => sort.input.head_output_expr(),
-            LogicalPlan::Limit(limit) => limit.input.head_output_expr(),
+            LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
             LogicalPlan::Join(Join {
                 left,
                 right,
@@ -442,8 +445,6 @@ impl LogicalPlan {
                     cross.left.head_output_expr()
                 }
             }
-            LogicalPlan::Repartition(repartition) => repartition.input.head_output_expr(),
-            LogicalPlan::Window(window) => window.input.head_output_expr(),
             LogicalPlan::Union(union) => Ok(Some(Expr::Column(
                 union.schema.fields()[0].qualified_column(),
             ))),
