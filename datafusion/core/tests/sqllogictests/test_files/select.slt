@@ -759,64 +759,68 @@ SELECT a FROM annotated_data_finite2
 0
 0
 
+# create a table to test SELECT * EXCLUDE, SELECT * EXCEPT syntax
+statement ok
+CREATE TABLE table1 (
+  a int,
+  b int,
+  c int,
+  d int
+) as values
+  (1, 10, 100, 1000),
+  (2, 20, 200, 2000);
+
 # Below query should emit all the columns except a and b
 # The syntax is as follows: `SELECT * EXCLUDE(<col_name>, ...)`
 # when only single column is excluded, we can either use
 # `EXCLUDE <col_name>` or `EXCLUDE(<col_name>)` syntax
-query III
+query II
 SELECT * EXCLUDE(b) FROM (
   SELECT * EXCLUDE a
-    FROM annotated_data_finite2
+    FROM table1
     ORDER BY c
     LIMIT 5
   )
 ----
-1 0 0
-1 1 2
-1 2 0
-1 3 0
-1 4 1
+100 1000
+200 2000
 
 # Below query should emit all the columns except a and b
 # To exclude some columns, we can use except clause also,
 # the behavior is similar to EXCLUDE clause.
 # The syntax is as follows: `SELECT * EXCEPT(<col_name>, ...)`
-query III
+query II
 SELECT * EXCEPT(a, b)
-  FROM annotated_data_finite2
-  ORDER BY c
-  LIMIT 5
+FROM table1
+ORDER BY c
+LIMIT 5
 ----
-1 0 0
-1 1 2
-1 2 0
-1 3 0
-1 4 1
+100 1000
+200 2000
 
 # below query should emit all the columns except a and b
-query III
-SELECT * EXCLUDE(a, b) FROM annotated_data_finite2
-        ORDER BY c
-        LIMIT 5
+query II
+SELECT * EXCLUDE(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
 ----
-1 0 0
-1 1 2
-1 2 0
-1 3 0
-1 4 1
+100 1000
+200 2000
 
 # when wildcard is prepended with table name, exclude should still work
 # below query should emit all the columns except a and b
-query III
-SELECT annotated_data_finite2.* EXCLUDE(a, b) FROM annotated_data_finite2
-        ORDER BY c
-        LIMIT 5
+query II
+SELECT table1.* EXCLUDE(a, b)
+FROM table1
+ORDER BY c
+LIMIT 5
 ----
-1 0 0
-1 1 2
-1 2 0
-1 3 0
-1 4 1
+100 1000
+200 2000
 
 statement ok
 drop table annotated_data_finite2;
+
+statement ok
+drop table t;
