@@ -129,6 +129,12 @@ pub struct ParquetFormat {}
 pub struct AvroFormat {}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LogicalExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub logical_expr_nodes: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListingTableScanNode {
     #[prost(message, optional, tag = "14")]
     pub table_name: ::core::option::Option<OwnedTableReference>,
@@ -149,7 +155,7 @@ pub struct ListingTableScanNode {
     #[prost(uint32, tag = "9")]
     pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
-    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(oneof = "listing_table_scan_node::FileFormatType", tags = "10, 11, 12")]
     pub file_format_type: ::core::option::Option<
         listing_table_scan_node::FileFormatType,
@@ -292,7 +298,7 @@ pub struct CreateExternalTableNode {
     #[prost(string, tag = "10")]
     pub file_compression_type: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "13")]
-    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    pub order_exprs: ::prost::alloc::vec::Vec<LogicalExprNodeCollection>,
     #[prost(bool, tag = "14")]
     pub unbounded: bool,
     #[prost(map = "string, string", tag = "11")]
@@ -1688,6 +1694,12 @@ pub struct ScanLimit {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalSortExprNodeCollection {
+    #[prost(message, repeated, tag = "1")]
+    pub physical_sort_expr_nodes: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileScanExecConf {
     #[prost(message, repeated, tag = "1")]
     pub file_groups: ::prost::alloc::vec::Vec<FileGroup>,
@@ -1704,7 +1716,7 @@ pub struct FileScanExecConf {
     #[prost(string, tag = "8")]
     pub object_store_url: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "9")]
-    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNodeCollection>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

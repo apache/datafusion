@@ -986,7 +986,7 @@ mod test {
     }
 
     #[test]
-    fn binary_op_date32_add_interval() -> Result<()> {
+    fn binary_op_date32_op_interval() -> Result<()> {
         //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
             + lit(ScalarValue::IntervalDayTime(Some(386547056640)));

@@ -250,6 +250,30 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the coalescence of small batches into larger batches
+    pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
+        self.options.execution.coalesce_batches = enabled;
+        self
+    }
+
+    /// Returns true if record batches will be examined between each operator
+    /// and small batches will be coalesced into larger batches.
+    pub fn coalesce_batches(&self) -> bool {
+        self.options.execution.coalesce_batches
+    }
+
+    /// Enables or disables the round robin repartition for increasing parallelism
+    pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
+        self.options.optimizer.enable_round_robin_repartition = enabled;
+        self
+    }
+
+    /// Returns true if the physical plan optimizer will try to
+    /// add round robin repartition to increase parallelism to leverage more CPU cores.
+    pub fn round_robin_repartition(&self) -> bool {
+        self.options.optimizer.enable_round_robin_repartition
+    }
+
     /// Convert configuration options to name-value pairs with values
     /// converted to strings.
     ///

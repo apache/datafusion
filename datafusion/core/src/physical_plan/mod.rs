@@ -29,6 +29,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 
+use datafusion_common::utils::DataPtr;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
@@ -270,9 +271,6 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
-/// Allow the vtable address comparisons for ExecutionPlan Trait Objects，it is harmless even
-/// in the case of 'false-native'.
-#[allow(clippy::vtable_address_comparisons)]
 pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
@@ -286,7 +284,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
         Ok(Transformed::Yes(plan.with_new_children(children)?))
     } else {
@@ -578,6 +576,27 @@ impl PartialEq for Partitioning {
     }
 }
 
+/// Retrieves the ordering equivalence properties for a given schema and output ordering.
+pub fn ordering_equivalence_properties_helper(
+    schema: SchemaRef,
+    eq_orderings: &[LexOrdering],
+) -> OrderingEquivalenceProperties {
+    let mut oep = OrderingEquivalenceProperties::new(schema);
+    let first_ordering = if let Some(first) = eq_orderings.first() {
+        first
+    } else {
+        // Return an empty OrderingEquivalenceProperties:
+        return oep;
+    };
+    // First entry among eq_orderings is the head, skip it:
+    for ordering in eq_orderings.iter().skip(1) {
+        if !ordering.is_empty() {
+            oep.add_equal_conditions((first_ordering, ordering))
+        }
+    }
+    oep
+}
+
 /// Distribution schemes
 #[derive(Debug, Clone)]
 pub enum Distribution {
@@ -608,7 +627,7 @@ impl Distribution {
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, LexOrdering,
 };
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
