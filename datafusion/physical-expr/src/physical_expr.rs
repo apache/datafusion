@@ -205,8 +205,8 @@ impl ExprBoundaries {
         ));
         Self {
             interval: Interval::new(
-                IntervalBound::new(min_value, true),
-                IntervalBound::new(max_value, true),
+                IntervalBound::new(min_value, false),
+                IntervalBound::new(max_value, false),
             ),
             distinct_count,
             selectivity,
@@ -219,11 +219,11 @@ impl ExprBoundaries {
             interval: Interval::new(
                 IntervalBound::new(
                     column.min_value.clone().unwrap_or(ScalarValue::Null),
-                    true,
+                    false,
                 ),
                 IntervalBound::new(
                     column.max_value.clone().unwrap_or(ScalarValue::Null),
-                    true,
+                    false,
                 ),
             ),
             distinct_count: column.distinct_count,

@@ -304,7 +304,15 @@ mod test {
                     Some(15),
                 )),
             ),
-            ("b", 1, None),
+            (
+                "b",
+                1,
+                Some(ExprBoundaries::new(
+                    ScalarValue::Null,
+                    ScalarValue::Null,
+                    None,
+                )),
+            ),
             (
                 "c",
                 2,
