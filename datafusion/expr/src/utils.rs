@@ -335,9 +335,19 @@ fn get_excluded_columns(
             ExcludeSelectItem::Multiple(idents_inner) => idents.extend(idents_inner),
         }
     }
+    // Excluded columns should be unique
+    let n_elem = idents.len();
+    let unique_idents = idents.into_iter().collect::<HashSet<_>>();
+    // if HashSet size, and vector length are different, this means that some of the excluded columns
+    // are not unique. In this case return error.
+    if n_elem != unique_idents.len() {
+        return Err(DataFusionError::Plan(
+            "EXCLUDE or EXCEPT contains duplicate column names".to_string(),
+        ));
+    }
 
     let mut result = vec![];
-    for ident in idents {
+    for ident in unique_idents.into_iter() {
         let col_name = ident.value.as_str();
         let field = if let Some(qualifier) = qualifier {
             schema.field_with_qualified_name(qualifier, col_name)?
