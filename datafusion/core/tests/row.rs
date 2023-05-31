@@ -87,7 +87,7 @@ async fn get_exec(
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
