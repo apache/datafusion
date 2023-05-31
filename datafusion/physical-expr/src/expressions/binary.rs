@@ -860,8 +860,8 @@ fn analyze_expr_scalar_comparison(
     right: ScalarValue,
 ) -> AnalysisContext {
     let left_bounds = analysis_expect!(context, left.analyze(context.clone()).boundaries);
-    let left_min = left_bounds.min_value;
-    let left_max = left_bounds.max_value;
+    let left_min = left_bounds.min_val();
+    let left_max = left_bounds.max_val();
 
     // Direct selectivity is applicable when we can determine that this comparison will
     // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
@@ -4587,8 +4587,8 @@ mod tests {
                 assert_eq!(boundaries.reduce(), Some(ScalarValue::Boolean(Some(false))));
             } else {
                 // Otherwise, it should be [false, true] (since we don't know anything for sure)
-                assert_eq!(boundaries.min_value, ScalarValue::Boolean(Some(false)));
-                assert_eq!(boundaries.max_value, ScalarValue::Boolean(Some(true)));
+                assert_eq!(boundaries.min_val(), ScalarValue::Boolean(Some(false)));
+                assert_eq!(boundaries.max_val(), ScalarValue::Boolean(Some(true)));
             }
 
             // For getting the updated boundaries, we can simply analyze the LHS
@@ -4597,8 +4597,8 @@ mod tests {
                 .analyze(analysis_ctx)
                 .boundaries
                 .expect("this case should not return None");
-            assert_eq!(left_boundaries.min_value, ScalarValue::Int64(Some(exp_min)));
-            assert_eq!(left_boundaries.max_value, ScalarValue::Int64(Some(exp_max)));
+            assert_eq!(left_boundaries.min_val(), ScalarValue::Int64(Some(exp_min)));
+            assert_eq!(left_boundaries.max_val(), ScalarValue::Int64(Some(exp_max)));
         }
         Ok(())
     }
@@ -4668,8 +4668,8 @@ mod tests {
                 assert_eq!(boundaries.reduce(), Some(ScalarValue::from(false)));
             } else {
                 // Otherwise, it should be [false, true] (since we don't know anything for sure)
-                assert_eq!(boundaries.min_value, ScalarValue::from(false));
-                assert_eq!(boundaries.max_value, ScalarValue::from(true));
+                assert_eq!(boundaries.min_val(), ScalarValue::from(false));
+                assert_eq!(boundaries.max_val(), ScalarValue::from(true));
             }
 
             let left_boundaries = left
@@ -4677,11 +4677,11 @@ mod tests {
                 .boundaries
                 .expect("this case should not return None");
             assert_eq!(
-                left_boundaries.min_value,
+                left_boundaries.min_val(),
                 ScalarValue::Float64(Some(exp_min))
             );
             assert_eq!(
-                left_boundaries.max_value,
+                left_boundaries.max_val(),
                 ScalarValue::Float64(Some(exp_max))
             );
         }

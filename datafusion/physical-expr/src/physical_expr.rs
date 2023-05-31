@@ -31,7 +31,7 @@ use std::fmt::{Debug, Display};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
-use crate::intervals::Interval;
+use crate::intervals::{Interval, IntervalBound};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -172,10 +172,8 @@ impl AnalysisContext {
 /// if it were to be an expression, if it were to be evaluated.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
-    /// Minimum value this expression's result can have.
-    pub min_value: ScalarValue,
-    /// Maximum value this expression's result can have.
-    pub max_value: ScalarValue,
+    /// Minimum and Maximum values this expression's result can have.
+    pub interval: Interval,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Option<usize>,
     /// The estimated percantage of rows that this expression would select, if
@@ -206,8 +204,10 @@ impl ExprBoundaries {
             Some(Ordering::Greater)
         ));
         Self {
-            min_value,
-            max_value,
+            interval: Interval::new(
+                IntervalBound::new(min_value, true),
+                IntervalBound::new(max_value, true),
+            ),
             distinct_count,
             selectivity,
         }
@@ -216,8 +216,16 @@ impl ExprBoundaries {
     /// Create a new `ExprBoundaries` from a column level statistics.
     pub fn from_column(column: &ColumnStatistics) -> Option<Self> {
         Some(Self {
-            min_value: column.min_value.clone()?,
-            max_value: column.max_value.clone()?,
+            interval: Interval::new(
+                IntervalBound::new(
+                    column.min_value.clone().unwrap_or(ScalarValue::Null),
+                    true,
+                ),
+                IntervalBound::new(
+                    column.max_value.clone().unwrap_or(ScalarValue::Null),
+                    true,
+                ),
+            ),
             distinct_count: column.distinct_count,
             selectivity: None,
         })
@@ -226,11 +234,19 @@ impl ExprBoundaries {
     /// Try to reduce the boundaries into a single scalar value, if possible.
     pub fn reduce(&self) -> Option<ScalarValue> {
         // TODO: should we check distinct_count is `Some(1) | None`?
-        if self.min_value == self.max_value {
-            Some(self.min_value.clone())
+        if self.min_val() == self.max_val() {
+            Some(self.min_val())
         } else {
             None
         }
+    }
+
+    pub fn min_val(&self) -> ScalarValue {
+        self.interval.lower.value.clone()
+    }
+
+    pub fn max_val(&self) -> ScalarValue {
+        self.interval.upper.value.clone()
     }
 }
 

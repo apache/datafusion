@@ -193,8 +193,8 @@ impl ExecutionPlan for FilterExec {
                     .iter()
                     .map(|boundary| match boundary {
                         Some(boundary) => ColumnStatistics {
-                            min_value: Some(boundary.min_value.clone()),
-                            max_value: Some(boundary.max_value.clone()),
+                            min_value: Some(boundary.min_val()),
+                            max_value: Some(boundary.max_val()),
                             ..Default::default()
                         },
                         None => ColumnStatistics::default(),
