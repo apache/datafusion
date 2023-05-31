@@ -29,10 +29,9 @@ use crate::{
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
-use tokio::task::JoinSet;
 
 use super::expressions::PhysicalSortExpr;
-use super::stream::RecordBatchStreamAdapter;
+use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use super::{Distribution, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
 
@@ -121,23 +120,15 @@ impl ExecutionPlan for AnalyzeExec {
         // Gather futures that will run each input partition in
         // parallel (on a separate tokio task) using a JoinSet to
         // cancel outstanding futures on drop
-        let mut set = JoinSet::new();
         let num_input_partitions = self.input.output_partitioning().partition_count();
+        let mut builder =
+            RecordBatchReceiverStream::builder(self.schema(), num_input_partitions);
 
         for input_partition in 0..num_input_partitions {
-            let input_stream = self.input.execute(input_partition, context.clone());
-
-            set.spawn(async move {
-                let mut total_rows = 0;
-                let mut input_stream = input_stream?;
-                while let Some(batch) = input_stream.next().await {
-                    let batch = batch?;
-                    total_rows += batch.num_rows();
-                }
-                Ok(total_rows) as Result<usize>
-            });
+            builder.run_input(self.input.clone(), input_partition, context.clone());
         }
 
+        // Create future that computes thefinal output
         let start = Instant::now();
         let captured_input = self.input.clone();
         let captured_schema = self.schema.clone();
@@ -146,18 +137,12 @@ impl ExecutionPlan for AnalyzeExec {
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
         // record batch
+        let mut input_stream = builder.build();
         let output = async move {
             let mut total_rows = 0;
-            while let Some(res) = set.join_next().await {
-                // translate join errors (aka task panic's) into ExecutionErrors
-                match res {
-                    Ok(row_count) => total_rows += row_count?,
-                    Err(e) => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Join error in AnalyzeExec: {e}"
-                        )))
-                    }
-                }
+            while let Some(batch) = input_stream.next().await {
+                let batch = batch?;
+                total_rows += batch.num_rows();
             }
 
             let duration = Instant::now() - start;

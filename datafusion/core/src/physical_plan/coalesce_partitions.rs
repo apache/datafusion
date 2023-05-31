@@ -19,20 +19,14 @@
 //! into a single partition
 
 use std::any::Any;
-use std::panic;
 use std::sync::Arc;
-use std::task::Poll;
-
-use futures::{Future, Stream};
-use tokio::sync::mpsc;
 
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use tokio::task::JoinSet;
 
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{RecordBatchStream, Statistics};
+use super::stream::{ObservedStream, RecordBatchReceiverStream};
+use super::Statistics;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
@@ -40,7 +34,6 @@ use crate::physical_plan::{
 
 use super::SendableRecordBatchStream;
 use crate::execution::context::TaskContext;
-use crate::physical_plan::common::spawn_execution;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -138,28 +131,17 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // use a stream that allows each sender to put in at
                 // least one result in an attempt to maximize
                 // parallelism.
-                let (sender, receiver) =
-                    mpsc::channel::<Result<RecordBatch>>(input_partitions);
+                let mut builder =
+                    RecordBatchReceiverStream::builder(self.schema(), input_partitions);
 
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
-                let mut tasks = JoinSet::new();
                 for part_i in 0..input_partitions {
-                    spawn_execution(
-                        &mut tasks,
-                        self.input.clone(),
-                        sender.clone(),
-                        part_i,
-                        context.clone(),
-                    );
+                    builder.run_input(self.input.clone(), part_i, context.clone());
                 }
 
-                Ok(Box::pin(MergeStream {
-                    input: receiver,
-                    schema: self.schema(),
-                    baseline_metrics,
-                    tasks,
-                }))
+                let stream = builder.build();
+                Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)))
             }
         }
     }
@@ -185,53 +167,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 }
 
-struct MergeStream {
-    schema: SchemaRef,
-    input: mpsc::Receiver<Result<RecordBatch>>,
-    baseline_metrics: BaselineMetrics,
-    tasks: JoinSet<()>,
-}
-
-impl Stream for MergeStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = self.input.poll_recv(cx);
-
-        // If the input stream is done, wait for all tasks to finish and return
-        // the failure if any.
-        if let Poll::Ready(None) = poll {
-            let fut = self.tasks.join_next();
-            tokio::pin!(fut);
-
-            match fut.poll(cx) {
-                Poll::Ready(task_poll) => {
-                    if let Some(Err(e)) = task_poll {
-                        if e.is_panic() {
-                            panic::resume_unwind(e.into_panic());
-                        }
-                        return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            format!("{e:?}"),
-                        ))));
-                    }
-                }
-                Poll::Pending => {}
-            }
-        }
-
-        self.baseline_metrics.record_poll(poll)
-    }
-}
-
-impl RecordBatchStream for MergeStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -242,7 +177,7 @@ mod tests {
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PanickingExec,
+        assert_strong_count_converges_to_zero, BlockingExec, PanicingExec,
     };
     use crate::test::{self, assert_is_pending};
 
@@ -304,7 +239,7 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
-        let panicking_exec = Arc::new(PanickingExec::new(Arc::clone(&schema), 2));
+        let panicking_exec = Arc::new(PanicingExec::new(Arc::clone(&schema), 2));
         let coalesce_partitions_exec =
             Arc::new(CoalescePartitionsExec::new(panicking_exec));
 

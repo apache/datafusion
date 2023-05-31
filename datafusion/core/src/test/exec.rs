@@ -179,12 +179,13 @@ impl ExecutionPlan for MockExec {
             })
             .collect();
 
-        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
 
         // task simply sends data in order but in a separate
         // thread (to ensure the batches are not available without the
         // DelayedStream yielding).
-        let join_handle = tokio::task::spawn(async move {
+        let tx = builder.tx();
+        builder.spawn(async move {
             for batch in data {
                 println!("Sending batch via delayed stream");
                 if let Err(e) = tx.send(batch).await {
@@ -194,11 +195,7 @@ impl ExecutionPlan for MockExec {
         });
 
         // returned stream simply reads off the rx stream
-        Ok(RecordBatchReceiverStream::create(
-            &self.schema,
-            rx,
-            join_handle,
-        ))
+        Ok(builder.build())
     }
 
     fn fmt_as(
@@ -307,12 +304,13 @@ impl ExecutionPlan for BarrierExec {
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
-        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
         let b = self.barrier.clone();
-        let join_handle = tokio::task::spawn(async move {
+        let tx = builder.tx();
+        builder.spawn(async move {
             println!("Partition {partition} waiting on barrier");
             b.wait().await;
             for batch in data {
@@ -324,11 +322,7 @@ impl ExecutionPlan for BarrierExec {
         });
 
         // returned stream simply reads off the rx stream
-        Ok(RecordBatchReceiverStream::create(
-            &self.schema,
-            rx,
-            join_handle,
-        ))
+        Ok(builder.build())
     }
 
     fn fmt_as(
@@ -648,25 +642,33 @@ pub async fn assert_strong_count_converges_to_zero<T>(refs: Weak<T>) {
 ///
 /// This is useful to test panic handling of certain execution plans.
 #[derive(Debug)]
-pub struct PanickingExec {
+pub struct PanicingExec {
     /// Schema that is mocked by this plan.
     schema: SchemaRef,
 
-    /// Number of output partitions.
-    n_partitions: usize,
+    /// Number of output partitions. Each partition will produce this
+    /// many empty output record batches prior to panicing
+    batches_until_panics: Vec<usize>,
 }
 
-impl PanickingExec {
-    /// Create new [`PanickingExec`] with a give schema and number of partitions.
+impl PanicingExec {
+    /// Create new [`PanickingExec`] with a give schema and number of
+    /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
         Self {
             schema,
-            n_partitions,
+            batches_until_panics: vec![0; n_partitions],
         }
+    }
+
+    /// Set the number of batches prior to panic for a partition
+    pub fn with_partition_panic(mut self, partition: usize, count: usize) -> Self {
+        self.batches_until_panics[partition] = count;
+        self
     }
 }
 
-impl ExecutionPlan for PanickingExec {
+impl ExecutionPlan for PanicingExec {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -681,7 +683,8 @@ impl ExecutionPlan for PanickingExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(self.n_partitions)
+        let num_partitions = self.batches_until_panics.len();
+        Partitioning::UnknownPartitioning(num_partitions)
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -700,11 +703,14 @@ impl ExecutionPlan for PanickingExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(PanickingStream {
+        Ok(Box::pin(PanicingStream {
+            partition,
+            batches_until_panic: self.batches_until_panics[partition],
             schema: Arc::clone(&self.schema),
+            ready: false,
         }))
     }
 
@@ -725,25 +731,44 @@ impl ExecutionPlan for PanickingExec {
     }
 }
 
-/// A [`RecordBatchStream`] that panics on first poll.
+/// A [`RecordBatchStream`] that yields every other batch and panics after `batches_until_panic` batches have been produced
 #[derive(Debug)]
-pub struct PanickingStream {
+struct PanicingStream {
+    /// Which partition was this
+    partition: usize,
+    /// How may batches will be produced until panic
+    batches_until_panic: usize,
     /// Schema mocked by this stream.
     schema: SchemaRef,
+    /// Should we return ready ?
+    ready: bool,
 }
 
-impl Stream for PanickingStream {
+impl Stream for PanicingStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        panic!("PanickingStream did panic")
+        if self.batches_until_panic > 0 {
+            if self.ready {
+                self.batches_until_panic -= 1;
+                self.ready = false;
+                let batch = RecordBatch::new_empty(self.schema.clone());
+                return Poll::Ready(Some(Ok(batch)));
+            } else {
+                self.ready = true;
+                // get called again
+                cx.waker().clone().wake();
+                return Poll::Pending;
+            }
+        }
+        panic!("PanickingStream did panic: {}", self.partition)
     }
 }
 
-impl RecordBatchStream for PanickingStream {
+impl RecordBatchStream for PanicingStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
