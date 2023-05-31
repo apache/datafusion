@@ -28,7 +28,7 @@ use crate::{
     },
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::StreamExt;
 use tokio::task::JoinSet;
 
 use super::expressions::PhysicalSortExpr;
@@ -118,8 +118,9 @@ impl ExecutionPlan for AnalyzeExec {
             )));
         }
 
-        // Gather futures that will run each input partition using a
-        // JoinSet to cancel outstanding futures on drop
+        // Gather futures that will run each input partition in
+        // parallel (on a separate tokio task) using a JoinSet to
+        // cancel outstanding futures on drop
         let mut set = JoinSet::new();
         let num_input_partitions = self.input.output_partitioning().partition_count();
 
@@ -133,82 +134,41 @@ impl ExecutionPlan for AnalyzeExec {
                     let batch = batch?;
                     total_rows += batch.num_rows();
                 }
-                Ok(total_rows)
+                Ok(total_rows) as Result<usize>
             });
         }
-
-        // Turn the tasks in the JoinSet into a stream of
-        // Result<usize> representing the counts of each output
-        // partition.
-        let counts_stream = futures::stream::unfold(set, |mut set| async {
-            let next = set.join_next().await?; // returns Some when empty
-                                               // translate join errors (aka task panic's) into ExecutionErrors
-            let next = match next {
-                Ok(res) => res,
-                Err(e) => Err(DataFusionError::Execution(format!(
-                    "Join error in AnalyzeExec: {e}"
-                ))),
-            };
-            Some((next, set))
-        });
 
         let start = Instant::now();
         let captured_input = self.input.clone();
         let captured_schema = self.schema.clone();
         let verbose = self.verbose;
 
-        // future that gathers the input counts into an overall output
-        // count, and makes an output batch
-        let output = counts_stream
-            // combine results from all input stream into a total count
-            .fold(Ok(0), |total_rows: Result<usize>, input_rows| async move {
-                Ok(total_rows? + input_rows?)
-            })
-            // convert the total to a RecordBatch
-            .map(move |total_rows| {
-                let total_rows = total_rows?;
-                let end = Instant::now();
-
-                let mut type_builder = StringBuilder::with_capacity(1, 1024);
-                let mut plan_builder = StringBuilder::with_capacity(1, 1024);
-
-                // TODO use some sort of enum rather than strings?
-                type_builder.append_value("Plan with Metrics");
-
-                let annotated_plan =
-                    DisplayableExecutionPlan::with_metrics(captured_input.as_ref())
-                        .indent()
-                        .to_string();
-                plan_builder.append_value(annotated_plan);
-
-                // Verbose output
-                // TODO make this more sophisticated
-                if verbose {
-                    type_builder.append_value("Plan with Full Metrics");
-
-                    let annotated_plan = DisplayableExecutionPlan::with_full_metrics(
-                        captured_input.as_ref(),
-                    )
-                    .indent()
-                    .to_string();
-                    plan_builder.append_value(annotated_plan);
-
-                    type_builder.append_value("Output Rows");
-                    plan_builder.append_value(total_rows.to_string());
-
-                    type_builder.append_value("Duration");
-                    plan_builder.append_value(format!("{:?}", end - start));
+        // future that gathers the results from all the tasks in the
+        // JoinSet that computes the overall row count and final
+        // record batch
+        let output = async move {
+            let mut total_rows = 0;
+            while let Some(res) = set.join_next().await {
+                // translate join errors (aka task panic's) into ExecutionErrors
+                match res {
+                    Ok(row_count) => total_rows += row_count?,
+                    Err(e) => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Join error in AnalyzeExec: {e}"
+                        )))
+                    }
                 }
+            }
 
-                RecordBatch::try_new(
-                    captured_schema,
-                    vec![
-                        Arc::new(type_builder.finish()),
-                        Arc::new(plan_builder.finish()),
-                    ],
-                )
-            })
-            .map_err(DataFusionError::from);
+            let duration = Instant::now() - start;
+            create_output_batch(
+                verbose,
+                total_rows,
+                duration,
+                captured_input,
+                captured_schema,
+            )
+        };
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema.clone(),
@@ -232,6 +192,52 @@ impl ExecutionPlan for AnalyzeExec {
         // Statistics an an ANALYZE plan are not relevant
         Statistics::default()
     }
+}
+
+/// Creates the ouput of AnalyzeExec as a RecordBatch
+fn create_output_batch(
+    verbose: bool,
+    total_rows: usize,
+    duration: std::time::Duration,
+    input: Arc<dyn ExecutionPlan>,
+    schema: SchemaRef,
+) -> Result<RecordBatch> {
+    let mut type_builder = StringBuilder::with_capacity(1, 1024);
+    let mut plan_builder = StringBuilder::with_capacity(1, 1024);
+
+    // TODO use some sort of enum rather than strings?
+    type_builder.append_value("Plan with Metrics");
+
+    let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
+        .indent()
+        .to_string();
+    plan_builder.append_value(annotated_plan);
+
+    // Verbose output
+    // TODO make this more sophisticated
+    if verbose {
+        type_builder.append_value("Plan with Full Metrics");
+
+        let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
+            .indent()
+            .to_string();
+        plan_builder.append_value(annotated_plan);
+
+        type_builder.append_value("Output Rows");
+        plan_builder.append_value(total_rows.to_string());
+
+        type_builder.append_value("Duration");
+        plan_builder.append_value(format!("{:?}", duration));
+    }
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(type_builder.finish()),
+            Arc::new(plan_builder.finish()),
+        ],
+    )
+    .map_err(DataFusionError::from)
 }
 
 #[cfg(test)]
