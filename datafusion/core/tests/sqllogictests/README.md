@@ -139,10 +139,12 @@ docker run \
   postgres
 ```
 
-#### Runtests: Tpch tests
+#### Running Tests: `tpch`
 
-Test files in `tpch` directory runs against tpch data, which requires generating before running. You can use following
-command to generate tpch data (Assume that you are in the repository root)
+Test files in `tpch` directory runs against the `TPCH` data set (SF =
+0.1), which must be generated before running. You can use following
+command to generate tpch data, assuming you are in the repository
+root:
 
 ```shell
 docker run -it \
