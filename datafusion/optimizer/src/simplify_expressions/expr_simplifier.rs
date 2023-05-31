@@ -2448,6 +2448,8 @@ mod tests {
             regex_not_match(col("c1"), lit("^foo$")),
             col("c1").not_eq(lit("foo")),
         );
+
+        // regular expressions that match exact captured literals
         assert_change(
             regex_match(col("c1"), lit("^(foo|bar)$")),
             col("c1").eq(lit("bar")).or(col("c1").eq(lit("foo"))),
@@ -2466,9 +2468,10 @@ mod tests {
             regex_match(col("c1"), lit("^(foo|bar|baz)$")),
             col("c1")
                 .eq(lit("baz"))
-                .or(col("c1").eq(lit("bar")))
-                .or(col("c1").eq(lit("foo"))),
+                .or((col("c1").eq(lit("bar"))).or(col("c1").eq(lit("foo")))),
         );
+
+        // regular expressions that mismatch captured literals
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
         assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
