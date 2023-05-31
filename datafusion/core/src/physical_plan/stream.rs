@@ -28,6 +28,7 @@ use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -36,9 +37,13 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 
 /// Builder for [`RecordBatchReceiverStream`] that propagates errors
 /// and panic's correctly.
+///
+/// [`RecordBatchReceiverStream`] can be used when there are one or
+/// more tasks spawned which produce RecordBatches and send them to a
+/// single `Receiver`.
 pub struct RecordBatchReceiverStreamBuilder {
-    tx: tokio::sync::mpsc::Sender<Result<RecordBatch>>,
-    rx: tokio::sync::mpsc::Receiver<Result<RecordBatch>>,
+    tx: Sender<Result<RecordBatch>>,
+    rx: Receiver<Result<RecordBatch>>,
     schema: SchemaRef,
     join_set: JoinSet<()>,
 }
@@ -57,7 +62,7 @@ impl RecordBatchReceiverStreamBuilder {
     }
 
     /// Get a handle for sending [`RecordBatch`]es to the output
-    pub fn tx(&self) -> tokio::sync::mpsc::Sender<Result<RecordBatch>> {
+    pub fn tx(&self) -> Sender<Result<RecordBatch>> {
         self.tx.clone()
     }
 
@@ -170,8 +175,8 @@ impl RecordBatchReceiverStreamBuilder {
 }
 
 /// Adapter for a tokio [`ReceiverStream`] that implements the
-/// [`SendableRecordBatchStream`] interface.  Use
-/// [`RecordBatchReceiverStreamBuilder`] to construct one.
+/// [`SendableRecordBatchStream`] interface and propagates panics and
+/// errors.  Use [`Self::builder`] to construct one.
 pub struct RecordBatchReceiverStream {
     schema: SchemaRef,
     inner: BoxStream<'static, Result<RecordBatch>>,
