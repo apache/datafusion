@@ -687,11 +687,29 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=";
+    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
     assert_not_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
+async fn csv_explain_analyze_order_by() {
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
+    let sql = "EXPLAIN ANALYZE SELECT c1 FROM aggregate_test_100 order by c1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // Ensure that the ordering is not optimized away from the plan
+    // https://github.com/apache/arrow-datafusion/issues/6379
+    let needle =
+        "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
+    assert_contains!(&formatted, needle);
 }
 
 #[tokio::test]
