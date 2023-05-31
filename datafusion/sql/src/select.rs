@@ -31,8 +31,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Expr, Filter, GroupingSet, LogicalPlan,
-    LogicalPlanBuilder, Partitioning,
+    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 
 use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
@@ -240,21 +239,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        if let Some(select_into) = select.into {
-            Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                CreateMemoryTable {
-                    name: self.object_name_to_table_reference(select_into.name)?,
-                    // SELECT INTO statement does not copy constraints such as primary key
-                    primary_key: Vec::new(),
-                    input: Arc::new(plan),
-                    // These are not applicable with SELECT INTO
-                    if_not_exists: false,
-                    or_replace: false,
-                },
-            )))
-        } else {
-            Ok(plan)
-        }
+        Ok(plan)
     }
 
     fn plan_selection(

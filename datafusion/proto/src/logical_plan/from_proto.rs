@@ -529,6 +529,8 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ApproxMedian => Self::ApproxMedian,
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::Median => Self::Median,
+            protobuf::AggregateFunction::FirstValueAgg => Self::FirstValue,
+            protobuf::AggregateFunction::LastValueAgg => Self::LastValue,
         }
     }
 }

@@ -37,6 +37,7 @@ pub(crate) mod correlation;
 pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
+pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
 #[macro_use]

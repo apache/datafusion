@@ -986,7 +986,7 @@ mod test {
     }
 
     #[test]
-    fn binary_op_date32_add_interval() -> Result<()> {
+    fn binary_op_date32_op_interval() -> Result<()> {
         //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
             + lit(ScalarValue::IntervalDayTime(Some(386547056640)));
@@ -1212,7 +1212,7 @@ mod test {
 
             let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
             let expected =
-                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+                "Projection: concat_ws(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 
