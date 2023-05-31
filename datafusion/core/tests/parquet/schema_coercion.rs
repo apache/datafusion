@@ -75,7 +75,7 @@ async fn multi_parquet_coercion() {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         },
         None,
