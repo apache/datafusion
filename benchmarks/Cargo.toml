@@ -48,6 +48,4 @@ test-utils = { path = "../test-utils/", version = "0.1.0" }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 
 [dev-dependencies]
-console = "0.15"
 datafusion-proto = { path = "../datafusion/proto", version = "25.0.0" }
-similar = { version = "2.2.1", features = ["inline"] }
