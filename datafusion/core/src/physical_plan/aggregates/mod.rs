@@ -22,9 +22,7 @@ use crate::physical_plan::aggregates::{
     bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
     row_hash::GroupedHashAggregateStream,
 };
-use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
-};
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     SendableRecordBatchStream, Statistics,
@@ -698,52 +696,21 @@ impl AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
-        let batch_size = context.session_config().batch_size();
-        let scalar_update_factor = context.session_config().agg_scalar_update_factor();
-        let input = self.input.execute(partition, Arc::clone(&context))?;
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
-                self.mode,
-                self.schema.clone(),
-                self.aggr_expr.clone(),
-                self.filter_expr.clone(),
-                input,
-                baseline_metrics,
-                context,
-                partition,
+                self, context, partition,
             )?))
         } else if let Some(aggregation_ordering) = &self.aggregation_ordering {
+            let aggregation_ordering = aggregation_ordering.clone();
             Ok(StreamType::BoundedAggregate(BoundedAggregateStream::new(
-                self.mode,
-                self.schema.clone(),
-                self.group_by.clone(),
-                self.aggr_expr.clone(),
-                self.filter_expr.clone(),
-                input,
-                baseline_metrics,
-                batch_size,
-                scalar_update_factor,
+                self,
                 context,
                 partition,
-                aggregation_ordering.clone(),
+                aggregation_ordering,
             )?))
         } else {
             Ok(StreamType::GroupedHashAggregateStream(
-                GroupedHashAggregateStream::new(
-                    self.mode,
-                    self.schema.clone(),
-                    self.group_by.clone(),
-                    self.aggr_expr.clone(),
-                    self.filter_expr.clone(),
-                    input,
-                    baseline_metrics,
-                    batch_size,
-                    scalar_update_factor,
-                    context,
-                    partition,
-                )?,
+                GroupedHashAggregateStream::new(self, context, partition)?,
             ))
         }
     }

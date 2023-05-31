@@ -1940,6 +1940,61 @@ WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
 LOCATION 'tests/data/window_2.csv';
 
+# Create a table with 2 ordered columns.
+# In the next step, we will expect to observe the removed sort execs.
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH HEADER ROW
+WITH ORDER (a ASC, b ASC)
+WITH ORDER (c ASC)
+LOCATION 'tests/data/window_2.csv';
+
+# Expected a sort exec for b DESC
+query TT
+EXPLAIN SELECT a FROM multiple_ordered_table ORDER BY b DESC;
+----
+logical_plan
+Projection: multiple_ordered_table.a
+--Sort: multiple_ordered_table.b DESC NULLS FIRST
+----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan
+ProjectionExec: expr=[a@0 as a]
+--SortExec: expr=[b@1 DESC]
+----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
+# Final plan shouldn't have SortExec c ASC,
+# because table already satisfies this ordering.
+query TT
+EXPLAIN SELECT a FROM multiple_ordered_table ORDER BY c ASC;
+----
+logical_plan
+Projection: multiple_ordered_table.a
+--Sort: multiple_ordered_table.c ASC NULLS LAST
+----TableScan: multiple_ordered_table projection=[a, c]
+physical_plan
+ProjectionExec: expr=[a@0 as a]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, c], output_ordering=[a@0 ASC NULLS LAST], has_header=true
+
+# Final plan shouldn't have SortExec a ASC, b ASC,
+# because table already satisfies this ordering.
+query TT
+EXPLAIN SELECT a FROM multiple_ordered_table ORDER BY a ASC, b ASC;
+----
+logical_plan
+Projection: multiple_ordered_table.a
+--Sort: multiple_ordered_table.a ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan
+ProjectionExec: expr=[a@0 as a]
+--CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], has_header=true
+
 # test_window_agg_sort
 statement ok
 set datafusion.execution.target_partitions = 1;
