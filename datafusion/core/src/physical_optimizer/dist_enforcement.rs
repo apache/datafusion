@@ -1000,11 +1000,11 @@ mod tests {
     }
 
     fn parquet_exec() -> Arc<ParquetExec> {
-        parquet_exec_with_sort(None)
+        parquet_exec_with_sort(vec![])
     }
 
     fn parquet_exec_with_sort(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
@@ -1025,7 +1025,7 @@ mod tests {
 
     // Created a sorted parquet exec with multiple files
     fn parquet_exec_multiple_sorted(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
@@ -2133,7 +2133,7 @@ mod tests {
         }];
 
         // Scan some sorted parquet files
-        let exec = parquet_exec_multiple_sorted(Some(sort_key.clone()));
+        let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
 
         // CoalesceBatchesExec to mimic behavior after a filter
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
