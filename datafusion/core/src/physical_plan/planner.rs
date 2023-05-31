@@ -1192,11 +1192,9 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
                     ))
                 }
-                LogicalPlan::Analyze(a) => {
-                    let input = self.create_initial_plan(&a.input, session_state).await?;
-                    let schema = SchemaRef::new((*a.schema).clone().into());
-                    Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
-                }
+                LogicalPlan::Analyze(_) => Err(DataFusionError::Internal(
+                    "Unsupported logical plan: Analyze must be root of the plan".to_string(),
+                )),
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
@@ -1851,6 +1849,10 @@ impl DefaultPhysicalPlanner {
                 stringified_plans,
                 e.verbose,
             ))))
+        } else if let LogicalPlan::Analyze(a) = logical_plan {
+            let input = self.create_physical_plan(&a.input, session_state).await?;
+            let schema = SchemaRef::new((*a.schema).clone().into());
+            Ok(Some(Arc::new(AnalyzeExec::new(a.verbose, input, schema))))
         } else {
             Ok(None)
         }
