@@ -830,10 +830,13 @@ SELECT * EXCEPT(e)
 FROM table1
 
 # EXCEPT, or EXCLUDE can only be used after wildcard *
-# hence below query should give error
-statement error DataFusion error: Error during planning: Invalid function 'except'
-SELECT a, b, EXCEPT(a)
+# below query should give 4 columns, a1, b1, b, c, d
+query IIIII
+SELECT a as a1, b as b1, * EXCEPT(a)
 FROM table1
+----
+1 10 10 100 1000
+2 20 20 200 2000
 
 # EXCEPT, or EXCLUDE shouldn't contain duplicate column names
 statement error DataFusion error: Error during planning: EXCLUDE or EXCEPT contains duplicate column names
