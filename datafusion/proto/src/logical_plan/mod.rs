@@ -42,7 +42,11 @@ use datafusion_common::{
     context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
     Result,
 };
+<<<<<<< Updated upstream
 use datafusion_expr::logical_plan::DdlStatement;
+=======
+use datafusion_expr::DropView;
+>>>>>>> Stashed changes
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -769,6 +773,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .prepare(prepare.name.clone(), data_types)?
                     .build()
             }
+            LogicalPlanType::DropView(dropview) => {
+                Ok(datafusion_expr::LogicalPlan::DropView(DropView {
+                    name: from_owned_table_reference(dropview.name.as_ref(), "DropView")?,
+                    if_exists: dropview.if_exists,
+                    schema: Arc::new(convert_required!(dropview.schema)?),
+                }))
+            }
         }
     }
 
@@ -1385,6 +1396,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
+<<<<<<< Updated upstream
             LogicalPlan::Ddl(DdlStatement::DropView(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropView",
             )),
@@ -1393,6 +1405,23 @@ impl AsLogicalPlan for LogicalPlanNode {
             )),
             LogicalPlan::Statement(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Statement",
+=======
+            LogicalPlan::DropView(DropView {
+                name,
+                if_exists,
+                schema,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::DropView(
+                    protobuf::DropViewNode {
+                        name: Some(name.clone().into()),
+                        if_exists: *if_exists,
+                        schema: Some(schema.try_into()?),
+                    },
+                )),
+            }),
+            LogicalPlan::SetVariable(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for SetVariable",
+>>>>>>> Stashed changes
             )),
             LogicalPlan::Dml(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Dml",
