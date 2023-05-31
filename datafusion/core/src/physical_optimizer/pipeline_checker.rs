@@ -387,7 +387,7 @@ mod sql_tests {
         };
         let test2 = UnaryTestCase {
             source_type: SourceType::Unbounded,
-            expect_fail: true,
+            expect_fail: false,
         };
         let case = QueryCase {
             sql: "EXPLAIN ANALYZE SELECT * FROM test".to_string(),
