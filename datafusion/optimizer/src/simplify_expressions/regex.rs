@@ -169,8 +169,10 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
 /// - `[Look::Start, Capture(Alternation(Literals...)), Look::End]`
 fn is_anchored_capture(v: &[Hir]) -> bool {
     if v.len() != 3
-        || !matches!((v.first().unwrap().kind(), v.last().unwrap().kind()),
-                 (&HirKind::Look(Look::Start), &HirKind::Look(Look::End)))
+        || !matches!(
+            (v.first().unwrap().kind(), v.last().unwrap().kind()),
+            (&HirKind::Look(Look::Start), &HirKind::Look(Look::End))
+        )
     {
         return false;
     }
