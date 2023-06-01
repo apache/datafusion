@@ -22,14 +22,14 @@ use std::task::Poll;
 use arrow::record_batch::RecordBatch;
 
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
-use crate::error::Result;
+use datafusion_common::Result;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
 ///
 /// Example:
 /// ```
-/// use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+/// use datafusion_execution::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 /// let metrics = ExecutionPlanMetricsSet::new();
 ///
 /// let partition = 2;

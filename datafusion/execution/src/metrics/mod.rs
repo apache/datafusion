@@ -43,7 +43,7 @@ pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-///  use datafusion::physical_plan::metrics::*;
+///  use datafusion_execution::metrics::*;
 ///
 ///  let metrics = ExecutionPlanMetricsSet::new();
 ///  assert!(metrics.clone_inner().output_rows().is_none());

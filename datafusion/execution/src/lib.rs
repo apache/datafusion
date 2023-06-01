@@ -20,6 +20,7 @@
 pub mod config;
 pub mod disk_manager;
 pub mod memory_pool;
+pub mod metrics;
 pub mod object_store;
 mod plan;
 pub mod registry;

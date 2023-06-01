@@ -25,7 +25,7 @@ use datafusion_physical_expr::{
 };
 use std::{any::Any, fmt::Debug, sync::Arc};
 
-use crate::{stream::SendableRecordBatchStream, TaskContext};
+use crate::{metrics::MetricsSet, stream::SendableRecordBatchStream, TaskContext};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
 #[derive(Debug, Clone, Copy)]
