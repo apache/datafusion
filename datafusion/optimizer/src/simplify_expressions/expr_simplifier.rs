@@ -2496,7 +2496,8 @@ mod tests {
         );
         assert_change(
             regex_match(col("c1"), lit("^(foo|bar|baz)$")),
-            ((col("c1").eq(lit("foo"))).or(col("c1").eq(lit("bar")))).or(col("c1").eq(lit("baz"))),
+            ((col("c1").eq(lit("foo"))).or(col("c1").eq(lit("bar"))))
+                .or(col("c1").eq(lit("baz"))),
         );
         assert_change(
             regex_match(col("c1"), lit("^(foo|bar|baz|qux)$")),
