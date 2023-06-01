@@ -17,6 +17,8 @@
 
 //! This module implements a rule that simplifies OR expressions into IN list expressions
 
+use std::borrow::Cow;
+
 use datafusion_common::tree_node::TreeNodeRewriter;
 use datafusion_common::Result;
 use datafusion_expr::expr::InList;
@@ -48,6 +50,8 @@ impl TreeNodeRewriter for OrInListSimplifier {
                         && !lhs.negated
                         && !rhs.negated
                     {
+                        let lhs = lhs.into_owned();
+                        let rhs = rhs.into_owned();
                         let mut list = vec![];
                         list.extend(lhs.list);
                         list.extend(rhs.list);
@@ -67,23 +71,21 @@ impl TreeNodeRewriter for OrInListSimplifier {
 }
 
 /// Try to convert an expression to an in-list expression
-fn as_inlist(expr: &Expr) -> Option<InList> {
+fn as_inlist(expr: &Expr) -> Option<Cow<InList>> {
     match expr {
-        Expr::InList(inlist) => Some(inlist.clone()),
+        Expr::InList(inlist) => Some(Cow::Borrowed(inlist)),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
-            let unboxed_left = *left.clone();
-            let unboxed_right = *right.clone();
-            match (&unboxed_left, &unboxed_right) {
-                (Expr::Column(_), Expr::Literal(_)) => Some(InList {
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(_), Expr::Literal(_)) => Some(Cow::Owned(InList {
                     expr: left.clone(),
-                    list: vec![unboxed_right],
+                    list: vec![*right.clone()],
                     negated: false,
-                }),
-                (Expr::Literal(_), Expr::Column(_)) => Some(InList {
+                })),
+                (Expr::Literal(_), Expr::Column(_)) => Some(Cow::Owned(InList {
                     expr: right.clone(),
-                    list: vec![unboxed_left],
+                    list: vec![*left.clone()],
                     negated: false,
-                }),
+                })),
                 _ => None,
             }
         }
