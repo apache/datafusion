@@ -45,6 +45,9 @@ pub enum DisplayFormatType {
 /// [`ExecutionPlan`] can be displayed in a simplified form using the
 /// return value from [`displayable`] in addition to the (normally
 /// quite verbose) `Debug` output.
+///
+/// [`RecordBatch`]: arrow::record_batch::RecordBatch
+/// [`displayable`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/fn.displayable.html
 pub trait ExecutionPlan: Debug + Send + Sync {
     /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -167,6 +170,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// resolved) for all available partitions, the set of metrics
     /// should be complete. If this function is called prior to
     /// `execute()` new metrics may appear in subsequent calls.
+    ///
+    /// [`Metric`]: crate::metrics::Metric
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }
