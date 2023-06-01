@@ -2257,10 +2257,9 @@ mod tests {
         let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
             .await
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid function \'my_func\'"
-        );
+        assert!(err
+            .to_string()
+            .contains("Error during planning: Invalid function \'my_func\'"));
 
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
@@ -2304,10 +2303,9 @@ mod tests {
         let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
             .await
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid function \'my_avg\'"
-        );
+        assert!(err
+            .to_string()
+            .contains("Error during planning: Invalid function \'my_avg\'"));
 
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;

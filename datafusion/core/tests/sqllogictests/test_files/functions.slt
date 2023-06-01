@@ -418,3 +418,43 @@ SELECT length(c1) FROM test
 
 statement ok
 drop table test
+
+#
+# Testing error message for wrong function name
+#
+
+statement ok
+CREATE TABLE test(
+  v1 Int,
+  v2 Int
+) as VALUES
+(1, 10),
+(2, 20),
+(3, 30);
+
+# Scalar function
+statement error Did you mean 'arrow_typeof'?
+SELECT arrowtypeof(v1) from test;
+
+# Scalar function
+statement error Did you mean 'to_timestamp_seconds'?
+SELECT to_TIMESTAMPS_second(v2) from test;
+
+# Aggregate function
+statement error Did you mean 'COUNT'?
+SELECT counter(*) from test;
+
+# Aggregate function
+statement error Did you mean 'STDDEV'?
+SELECT STDEV(v1) from test;
+
+# Window function
+statement error Did you mean 'SUM'?
+SELECT v1, v2, SUMM(v2) OVER(ORDER BY v1) from test;
+
+# Window function
+statement error Did you mean 'ROW_NUMBER'?
+SELECT v1, v2, ROWNUMBER() OVER(ORDER BY v1) from test;
+
+statement ok
+drop table test
