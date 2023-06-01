@@ -415,6 +415,7 @@ impl Debug for CsvSink {
         f.debug_struct("CsvSink")
             .field("has_header", &self.has_header)
             .field("delimiter", &self.delimiter)
+            .field("file_compression_type", &self.file_compression_type)
             .finish()
     }
 }
