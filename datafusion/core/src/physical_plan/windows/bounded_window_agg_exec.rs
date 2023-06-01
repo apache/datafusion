@@ -21,7 +21,7 @@
 //! infinite inputs.
 
 use crate::error::Result;
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,

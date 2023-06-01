@@ -29,7 +29,7 @@ use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatc
 use log::trace;
 
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 
 /// Explain execution plan operator. This operator contains the string

@@ -29,7 +29,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;

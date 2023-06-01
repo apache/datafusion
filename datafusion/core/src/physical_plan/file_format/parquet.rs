@@ -786,7 +786,7 @@ mod tests {
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
-    use crate::execution::options::CsvReadOptions;
+    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::physical_plan::displayable;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;

@@ -17,7 +17,7 @@
 
 //! Execution plan for reading line-delimited Avro files
 use crate::error::Result;
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{

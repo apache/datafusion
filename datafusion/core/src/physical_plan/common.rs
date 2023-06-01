@@ -19,7 +19,7 @@
 
 use super::SendableRecordBatchStream;
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::execution::memory_pool::MemoryReservation;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};

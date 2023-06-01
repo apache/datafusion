@@ -24,7 +24,7 @@ use arrow::datatypes::SchemaRef;
 use log::{debug, trace};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,

@@ -41,7 +41,7 @@ use datafusion_physical_expr::{split_conjunction, AnalysisContext};
 
 use log::trace;
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to

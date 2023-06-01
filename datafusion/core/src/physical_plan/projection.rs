@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::error::Result;
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr,

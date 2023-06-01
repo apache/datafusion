@@ -29,9 +29,9 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::utils::{
     aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
     read_as_batch, slice_and_maybe_filter, ExecutionState, GroupState,

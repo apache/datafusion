@@ -30,7 +30,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use datafusion_common::DataFusionError;
 use futures::Stream;
 

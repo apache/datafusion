@@ -17,7 +17,7 @@
 
 //! Aggregates functionalities
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::aggregates::{
     bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
     row_hash::GroupedHashAggregateStream,
@@ -1047,8 +1047,9 @@ fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
-    use crate::execution::context::{SessionConfig, TaskContext};
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use super::*;
+    use crate::execution::context::{SessionConfig};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
         get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,

@@ -40,8 +40,8 @@ use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
 use crate::error::Result;
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -1396,7 +1396,7 @@ mod tests {
 
     use crate::common::assert_contains;
     use crate::error::Result;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::logical_expr::JoinType;
     use crate::physical_plan::expressions::Column;
     use crate::physical_plan::joins::utils::JoinOn;

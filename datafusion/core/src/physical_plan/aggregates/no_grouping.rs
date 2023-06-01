@@ -17,7 +17,7 @@
 
 //! Aggregate without grouping columns
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
     AggregateMode,
@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::filter::batch_filter;
 use futures::stream::{Stream, StreamExt};
 

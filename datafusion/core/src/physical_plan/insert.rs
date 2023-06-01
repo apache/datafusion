@@ -34,7 +34,7 @@ use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::Distribution;
 use datafusion_common::DataFusionError;

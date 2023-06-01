@@ -20,11 +20,9 @@
 //! but spills to disk if needed.
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryReservation,
-};
-use crate::execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{human_readable_size, MemoryConsumer, MemoryReservation};
+use datafusion_execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, spawn_buffered, IPCWriter};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -648,7 +646,7 @@ impl ExecutionPlan for SortExec {
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::execution::runtime_env::RuntimeConfig;
+    use datafusion_execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::collect;
     use crate::physical_plan::expressions::col;

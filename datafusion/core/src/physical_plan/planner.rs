@@ -1928,9 +1928,9 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 mod tests {
     use super::*;
     use crate::datasource::MemTable;
-    use crate::execution::context::TaskContext;
-    use crate::execution::options::CsvReadOptions;
-    use crate::execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::TaskContext;
+    use crate::datasource::file_format::options::CsvReadOptions;
+    use datafusion_execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,

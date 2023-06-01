@@ -40,7 +40,7 @@ use super::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use crate::physical_plan::common::get_meet_of_orderings;
 use crate::{
     error::Result,
