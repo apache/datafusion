@@ -961,7 +961,6 @@ async fn uncorrelated_scalar_subquery_with_limit0() -> Result<()> {
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
 
-    // not de-correlated
     let expected = vec![
         "Projection: t1.t1_id, __scalar_sq_1.t2_id AS t2_id [t1_id:UInt32;N, t2_id:UInt32;N]",
         "  Left Join:  [t1_id:UInt32;N, t2_id:UInt32;N]",

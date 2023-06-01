@@ -262,26 +262,40 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
                 self.correlated_subquery_cols_map
                     .insert(plan.clone(), new_correlated_cols);
+                if let Some(input_map) =
+                    self.collected_count_expr_map.get(alias.input.deref())
+                {
+                    self.collected_count_expr_map
+                        .insert(plan.clone(), input_map.clone());
+                }
                 Ok(plan)
             }
             LogicalPlan::Limit(limit) => {
+                let input_expr_map = self
+                    .collected_count_expr_map
+                    .get(limit.input.deref())
+                    .cloned();
                 // handling the limit clause in the subquery
-                match (self.exists_sub_query, self.join_filters.is_empty()) {
-                    // un-correlated exist subquery, keep the limit
-                    (true, true) => Ok(plan),
+                let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
+                {
                     // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
                     (true, false) => {
                         if limit.fetch.filter(|limit_row| *limit_row == 0).is_some() {
-                            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                            LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
                                 schema: limit.input.schema().clone(),
-                            }))
+                            })
                         } else {
-                            LogicalPlanBuilder::from((*limit.input).clone()).build()
+                            LogicalPlanBuilder::from((*limit.input).clone()).build()?
                         }
                     }
-                    _ => Ok(plan),
+                    _ => plan,
+                };
+                if let Some(input_map) = input_expr_map {
+                    self.collected_count_expr_map
+                        .insert(new_plan.clone(), input_map);
                 }
+                Ok(new_plan)
             }
             _ => Ok(plan),
         }
