@@ -24,6 +24,7 @@ use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::{BTreeSet, HashMap};
@@ -221,18 +222,10 @@ impl TreeNodeRewriter for ExtractScalarSubQuery {
                     )),
                     Ok,
                 )?;
-                match scalar_expr {
-                    Expr::Alias(_, alias) => {
-                        Ok(Expr::Column(Column::new(Some(subqry_alias), alias)))
-                    }
-                    Expr::Column(Column { relation: _, name }) => {
-                        Ok(Expr::Column(Column::new(Some(subqry_alias), name)))
-                    }
-                    _ => {
-                        let scalar_column = scalar_expr.display_name()?;
-                        Ok(Expr::Column(Column::new(Some(subqry_alias), scalar_column)))
-                    }
-                }
+                Ok(Expr::Column(create_col_from_scalar_expr(
+                    &scalar_expr,
+                    subqry_alias,
+                )?))
             }
             _ => Ok(expr),
         }

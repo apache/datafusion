@@ -23,7 +23,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
-use datafusion_expr::expr_rewriter::unnormalize_col;
+use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::{
     exists, in_subquery, not_exists, not_in_subquery, BinaryExpr, Expr, Filter,
@@ -256,8 +256,7 @@ fn build_join(
                 right,
             })),
         ) => {
-            let right_expr_name = format!("{:?}", unnormalize_col(right.deref().clone()));
-            let right_col = Column::new(Some(subquery_alias), right_expr_name);
+            let right_col = create_col_from_scalar_expr(right.deref(), subquery_alias)?;
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
             Some(in_predicate.and(join_filter))
         }
@@ -270,8 +269,7 @@ fn build_join(
                 right,
             })),
         ) => {
-            let right_expr_name = format!("{:?}", unnormalize_col(right.deref().clone()));
-            let right_col = Column::new(Some(subquery_alias), right_expr_name);
+            let right_col = create_col_from_scalar_expr(right.deref(), subquery_alias)?;
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
             Some(in_predicate)
         }
@@ -887,10 +885,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey + Int32(1) AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n  LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.orders.o_custkey + Int32(1) AND customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
         \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n    SubqueryAlias: __correlated_sq_1 [o_custkey + Int32(1):Int64, orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
-        \n      Projection: orders.o_custkey + Int32(1) AS o_custkey + Int32(1), orders.o_custkey + Int32(1), orders.o_custkey [o_custkey + Int32(1):Int64, orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
+        \n    SubqueryAlias: __correlated_sq_1 [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
+        \n      Projection: orders.o_custkey + Int32(1), orders.o_custkey [orders.o_custkey + Int32(1):Int64, o_custkey:Int64]\
         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq_display_indent(
@@ -1098,10 +1096,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n    SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, sq.c * UInt32(2):UInt32]\
-        \n      Projection: sq.c * UInt32(2) AS c * UInt32(2), sq.c * UInt32(2) [c * UInt32(2):UInt32, sq.c * UInt32(2):UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32]\
+        \n      Projection: sq.c * UInt32(2) [sq.c * UInt32(2):UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq_display_indent(
@@ -1132,10 +1130,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a = __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n    SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, sq.c * UInt32(2):UInt32, a:UInt32]\
-        \n      Projection: sq.c * UInt32(2) AS c * UInt32(2), sq.c * UInt32(2), sq.a [c * UInt32(2):UInt32, sq.c * UInt32(2):UInt32, a:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32]\
+        \n      Projection: sq.c * UInt32(2), sq.a [sq.c * UInt32(2):UInt32, a:UInt32]\
         \n        Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]\
         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -1168,10 +1166,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq.c * UInt32(2) AND test.a + test.b = __correlated_sq_1.a + __correlated_sq_1.b [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n    SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
-        \n      Projection: sq.c * UInt32(2) AS c * UInt32(2), sq.c * UInt32(2), sq.a, sq.b [c * UInt32(2):UInt32, sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
+        \n      Projection: sq.c * UInt32(2), sq.a, sq.b [sq.c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
         \n        Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]\
         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
@@ -1211,14 +1209,14 @@ mod tests {
 
         let expected = "Projection: test.b [b:UInt32]\
         \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
-        \n    LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]\
-        \n      LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n    LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.sq2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n      LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.sq1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
         \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n        SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, sq1.c * UInt32(2):UInt32, a:UInt32]\
-        \n          Projection: sq1.c * UInt32(2) AS c * UInt32(2), sq1.c * UInt32(2), sq1.a [c * UInt32(2):UInt32, sq1.c * UInt32(2):UInt32, a:UInt32]\
+        \n        SubqueryAlias: __correlated_sq_1 [sq1.c * UInt32(2):UInt32, a:UInt32]\
+        \n          Projection: sq1.c * UInt32(2), sq1.a [sq1.c * UInt32(2):UInt32, a:UInt32]\
         \n            TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
-        \n      SubqueryAlias: __correlated_sq_2 [c * UInt32(2):UInt32, sq2.c * UInt32(2):UInt32, a:UInt32]\
-        \n        Projection: sq2.c * UInt32(2) AS c * UInt32(2), sq2.c * UInt32(2), sq2.a [c * UInt32(2):UInt32, sq2.c * UInt32(2):UInt32, a:UInt32]\
+        \n      SubqueryAlias: __correlated_sq_2 [sq2.c * UInt32(2):UInt32, a:UInt32]\
+        \n        Projection: sq2.c * UInt32(2), sq2.a [sq2.c * UInt32(2):UInt32, a:UInt32]\
         \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq_display_indent(

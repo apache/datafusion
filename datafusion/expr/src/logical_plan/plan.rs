@@ -17,7 +17,7 @@
 
 use crate::expr::InSubquery;
 use crate::expr::{Exists, Placeholder};
-use crate::expr_rewriter::unnormalize_col;
+use crate::expr_rewriter::create_col_from_scalar_expr;
 ///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -453,13 +453,14 @@ impl LogicalPlan {
             ))),
             LogicalPlan::SubqueryAlias(subquery_alias) => {
                 let expr_opt = subquery_alias.input.head_output_expr()?;
-                Ok(expr_opt.map(|expr| {
-                    let col_name = format!("{:?}", unnormalize_col(expr));
-                    Expr::Column(Column::new(
-                        Some(subquery_alias.alias.clone()),
-                        col_name,
-                    ))
-                }))
+                expr_opt
+                    .map(|expr| {
+                        Ok(Expr::Column(create_col_from_scalar_expr(
+                            &expr,
+                            subquery_alias.alias.to_string(),
+                        )?))
+                    })
+                    .map_or(Ok(None), |v| v.map(Some))
             }
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)

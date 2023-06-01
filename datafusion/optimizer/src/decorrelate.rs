@@ -24,10 +24,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchemaRef, DataFusionError, ScalarValue};
-use datafusion_expr::expr_rewriter::unnormalize_col;
-use datafusion_expr::{
-    expr, BinaryExpr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
-};
+use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
@@ -309,23 +306,6 @@ impl PullUpCorrelatedExpr {
         correlated_subquery_cols: &BTreeSet<Column>,
     ) -> Result<Vec<Expr>> {
         let mut missing_exprs = vec![];
-        if let Some(Expr::BinaryExpr(BinaryExpr {
-            left: _,
-            op: Operator::Eq,
-            right,
-        })) = &self.in_predicate_opt
-        {
-            if !matches!(right.deref(), Expr::Column(_))
-                && !matches!(right.deref(), Expr::Literal(_))
-                && !matches!(right.deref(), Expr::Alias(_, _))
-            {
-                let alias_expr = right
-                    .deref()
-                    .clone()
-                    .alias(format!("{:?}", unnormalize_col(right.deref().clone())));
-                missing_exprs.push(alias_expr)
-            }
-        }
         for expr in exprs {
             if !missing_exprs.contains(expr) {
                 missing_exprs.push(expr.clone())
@@ -346,7 +326,6 @@ impl PullUpCorrelatedExpr {
                 }
             }
         }
-
         Ok(missing_exprs)
     }
 }
