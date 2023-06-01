@@ -495,7 +495,7 @@ mod tests {
             projection: None,
             limit,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         };
         let metrics_set = ExecutionPlanMetricsSet::new();

@@ -17,14 +17,17 @@
 
 //! Execution plan for reading line-delimited Avro files
 use crate::error::Result;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-};
-use arrow::datatypes::SchemaRef;
-
 use crate::execution::context::TaskContext;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::physical_plan::{
+    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
+};
+
+use arrow::datatypes::SchemaRef;
+use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,7 +40,7 @@ pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -80,7 +83,16 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -265,7 +277,7 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -337,7 +349,7 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -409,7 +421,7 @@ mod tests {
             statistics: Statistics::default(),
             limit: None,
             table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);

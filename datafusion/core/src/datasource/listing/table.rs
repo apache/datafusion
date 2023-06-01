@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use datafusion_common::ToDFSchema;
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
-use datafusion_physical_expr::{create_physical_expr, PhysicalSortExpr};
+use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -44,15 +44,12 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
-use crate::physical_plan::file_format::FileSinkConfig;
+use crate::physical_plan::file_format::{FileScanConfig, FileSinkConfig};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
-    physical_plan::{
-        empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
-        Statistics,
-    },
+    physical_plan::{empty::EmptyExec, project_schema, ExecutionPlan, Statistics},
 };
 
 use super::PartitionedFile;
@@ -223,7 +220,7 @@ pub struct ListingOptions {
     /// Group files to avoid that the number of partitions exceeds
     /// this limit
     pub target_partitions: usize,
-    /// Optional pre-known sort order. Must be `SortExpr`s.
+    /// Optional pre-known sort order(s). Must be `SortExpr`s.
     ///
     /// DataFusion may take advantage of this ordering to omit sorts
     /// or use more efficient algorithms. Currently sortedness must be
@@ -232,7 +229,12 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
-    pub file_sort_order: Option<Vec<Expr>>,
+    /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
+    ///       where each ordering consists of an individual lexicographic
+    ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
+    ///       multiple equivalent orderings, the outer `Vec` will have a
+    ///       single element.
+    pub file_sort_order: Vec<Vec<Expr>>,
     /// Infinite source means that the input is not guaranteed to end.
     /// Currently, CSV, JSON, and AVRO formats are supported.
     /// In order to support infinite inputs, DataFusion may adjust query
@@ -254,7 +256,7 @@ impl ListingOptions {
             table_partition_cols: vec![],
             collect_stat: true,
             target_partitions: 1,
-            file_sort_order: None,
+            file_sort_order: vec![],
             infinite_source: false,
         }
     }
@@ -408,9 +410,9 @@ impl ListingOptions {
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
-    ///  let file_sort_order = Some(vec![
+    ///  let file_sort_order = vec![vec![
     ///    col("a").sort(true, true)
-    ///  ]);
+    ///  ]];
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -419,7 +421,7 @@ impl ListingOptions {
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -613,16 +615,12 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Option<Vec<PhysicalSortExpr>>> {
-        let file_sort_order =
-            if let Some(file_sort_order) = self.options.file_sort_order.as_ref() {
-                file_sort_order
-            } else {
-                return Ok(None);
-            };
+    fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
+        let mut all_sort_orders = vec![];
 
-        // convert each expr to a physical sort expr
-        let sort_exprs = file_sort_order
+        for exprs in &self.options.file_sort_order {
+            // Construct PhsyicalSortExpr objects from Expr objects:
+            let sort_exprs = exprs
             .iter()
             .map(|expr| {
                 if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
@@ -638,7 +636,7 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Only support single column references in output_ordering, got {expr:?}")
+                            format!("Expected single column references in output_ordering, got {expr:?}")
                         ))
                     }
                 } else {
@@ -648,8 +646,9 @@ impl ListingTable {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-
-        Ok(Some(sort_exprs))
+            all_sort_orders.push(sort_exprs);
+        }
+        Ok(all_sort_orders)
     }
 }
 
@@ -1021,40 +1020,38 @@ mod tests {
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (None, Ok(None)),
-            // empty list
-            (Some(vec![]), Ok(Some(vec![]))),
+            (vec![], Ok(vec![])),
             // not a sort expr
             (
-                Some(vec![col("string_col")]),
+                vec![vec![col("string_col")]],
                 Err("Expected Expr::Sort in output_ordering, but got string_col"),
             ),
             // sort expr, but non column
             (
-                Some(vec![
+                vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
-                ]),
-                Err("Only support single column references in output_ordering, got int_col + Int32(1)"),
+                ]],
+                Err("Expected single column references in output_ordering, got int_col + Int32(1)"),
             ),
             // ok with one column
             (
-                Some(vec![col("string_col").sort(true, false)]),
-                Ok(Some(vec![PhysicalSortExpr {
+                vec![vec![col("string_col").sort(true, false)]],
+                Ok(vec![vec![PhysicalSortExpr {
                     expr: physical_col("string_col", &schema).unwrap(),
                     options: SortOptions {
                         descending: false,
                         nulls_first: false,
                     },
-                }]))
+                }]])
 
             ),
             // ok with two columns, different options
             (
-                Some(vec![
+                vec![vec![
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
-                ]),
-                Ok(Some(vec![
+                ]],
+                Ok(vec![vec![
                     PhysicalSortExpr {
                         expr: physical_col("string_col", &schema).unwrap(),
                         options: SortOptions {
@@ -1069,7 +1066,7 @@ mod tests {
                             nulls_first: true,
                         },
                     },
-                ]))
+                ]])
 
             ),
 
