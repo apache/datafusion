@@ -920,7 +920,7 @@ drop table temp
 
 
 #fn window_frame_ranges_unbounded_preceding_err
-statement error DataFusion error: Error during planning: Invalid window frame: end bound cannot be unbounded preceding
+statement error DataFusion error: Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING
 SELECT
 SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING),
 COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING)
@@ -1036,7 +1036,7 @@ LIMIT 10
 #fn window_frame_groups_without_order_by
 # Try executing an erroneous query (the ORDER BY clause is missing in the
 # window frame):
-statement error Error during planning: GROUPS mode requires an ORDER BY clause
+statement error Error during planning: GROUPS requires an ORDER BY clause
 SELECT
     SUM(c4) OVER(PARTITION BY c2 GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
     FROM aggregate_test_100
@@ -1061,7 +1061,7 @@ SELECT
  COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
  FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: GROUPS mode requires an ORDER BY clause
+statement error DataFusion error: Error during planning: GROUPS requires an ORDER BY clause
 SELECT
  COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
  FROM aggregate_test_100
