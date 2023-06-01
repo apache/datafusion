@@ -2386,7 +2386,7 @@ GRC [80.0, 30.0] 110
 TUR [100.0, 75.0] 175
 
 # test_reverse_aggregate_expr
-# Some of the Aggregators can be reversed, by this way we can still run aggregators
+# Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
 # that have contradictory requirements at first glance.
 query TT
 EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
@@ -2417,7 +2417,7 @@ TUR [100.0, 75.0] 75 75
 GRC [80.0, 30.0] 30 30
 
 # test_reverse_aggregate_expr2
-# Some of the Aggregators can be reversed, by this way we can still run aggregators
+# Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
 # that have contradictory requirements at first glance.
 query TT
 EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS amounts,
@@ -2448,7 +2448,7 @@ FRA [50.0, 200.0] 50 50
 TUR [75.0, 100.0] 75 75
 
 # test_reverse_aggregate_expr3
-# Some of the Aggregators can be reversed, by this way we can still run aggregators
+# Some of the Aggregators can be reversed, by this way we can still run aggregators without re-ordering
 # that have contradictory requirements at first glance. This algorithm shouldn't depend
 # on the order of the aggregation expressions.
 query TT
