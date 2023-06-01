@@ -1676,13 +1676,23 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
+
+        // SELECT
         let plan = ctx
             .sql("SELECT * FROM view_t1")
             .await?
             .into_optimized_plan()?;
+
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+        // DROP
+        let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
         Ok(())
     }
 
