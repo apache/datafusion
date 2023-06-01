@@ -39,7 +39,7 @@ use arrow::{
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
+pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
