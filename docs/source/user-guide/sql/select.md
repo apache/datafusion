@@ -38,6 +38,7 @@ DataFusion supports the following syntax for queries:
 [ [UNION](#union-clause) [ ALL | select ] <br/>
 [ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
+[ [EXCLUDE | EXCEPT](#exclude-and-except-clause) ] <br/>
 
 </code>
 
@@ -246,4 +247,20 @@ Example:
 ```sql
 SELECT age, person FROM table
 LIMIT 10
+```
+
+## EXCLUDE and EXCEPT clause
+
+Excluded named columns from query results.
+
+Example selecting all columns except for `age` and `person`:
+
+```sql
+SELECT * EXCEPT(age, person)
+FROM table;
+```
+
+```sql
+SELECT * EXCLUDE(age, person)
+FROM table;
 ```
