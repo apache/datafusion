@@ -352,7 +352,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
-                Self::check_wildcard_options(options)?;
+                Self::check_wildcard_options(&options)?;
 
                 if empty_from {
                     return Err(DataFusionError::Plan(
@@ -360,34 +360,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ));
                 }
                 // do not expand from outer schema
-                expand_wildcard(plan.schema().as_ref(), plan)
+                expand_wildcard(plan.schema().as_ref(), plan, Some(options))
             }
             SelectItem::QualifiedWildcard(ref object_name, options) => {
-                Self::check_wildcard_options(options)?;
-
+                Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(&qualifier, plan.schema().as_ref())
+                expand_qualified_wildcard(
+                    &qualifier,
+                    plan.schema().as_ref(),
+                    Some(options),
+                )
             }
         }
     }
 
-    fn check_wildcard_options(options: WildcardAdditionalOptions) -> Result<()> {
+    fn check_wildcard_options(options: &WildcardAdditionalOptions) -> Result<()> {
         let WildcardAdditionalOptions {
-            opt_exclude,
-            opt_except,
+            // opt_exclude is handled
+            opt_exclude: _opt_exclude,
+            opt_except: _opt_except,
             opt_rename,
             opt_replace,
         } = options;
 
-        if opt_exclude.is_some()
-            || opt_except.is_some()
-            || opt_rename.is_some()
-            || opt_replace.is_some()
-        {
+        if opt_rename.is_some() || opt_replace.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with EXCLUDE, EXCEPT, RENAME or REPLACE not supported "
-                    .to_string(),
+                "wildcard * with RENAME or REPLACE not supported ".to_string(),
             ))
         } else {
             Ok(())
