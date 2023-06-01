@@ -53,6 +53,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)));
         };
 
+        // If function is a window function (it has an OVER clause),
+        // it shouldn't have ordering requirement as function argument
+        // required ordering should be defined in OVER clause.
+        if !function.order_by.is_empty() && function.over.is_some() {
+            return Err(DataFusionError::Plan(
+                "Aggregate ORDER BY is not implemented for window functions".to_string(),
+            ));
+        }
+
         // then, window function
         if let Some(WindowType::WindowSpec(window)) = function.over.take() {
             let partition_by = window
@@ -107,10 +116,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         if let Ok(fun) = AggregateFunction::from_str(&name) {
             let distinct = function.distinct;
+            let order_by =
+                self.order_by_to_sort_expr(&function.order_by, schema, planner_context)?;
+            let order_by = (!order_by.is_empty()).then_some(order_by);
             let (fun, args) =
                 self.aggregate_fn_to_expr(fun, function.args, schema, planner_context)?;
             return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-                fun, args, distinct, None, None,
+                fun, args, distinct, None, order_by,
             )));
         };
 

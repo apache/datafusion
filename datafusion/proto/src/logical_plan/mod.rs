@@ -17,7 +17,7 @@
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::CustomTableScanNode;
+use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
     convert_required,
     protobuf::{
@@ -325,19 +325,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let file_sort_order = scan
-                    .file_sort_order
-                    .iter()
-                    .map(|expr| from_proto::parse_expr(expr, ctx))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                // Protobuf doesn't distinguish between "not present"
-                // and empty
-                let file_sort_order = if file_sort_order.is_empty() {
-                    None
-                } else {
-                    Some(file_sort_order)
-                };
+                let mut all_sort_orders = vec![];
+                for order in &scan.file_sort_order {
+                    let file_sort_order = order
+                        .logical_expr_nodes
+                        .iter()
+                        .map(|expr| from_proto::parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    all_sort_orders.push(file_sort_order)
+                }
 
                 let file_format: Arc<dyn FileFormat> =
                     match scan.file_format_type.as_ref().ok_or_else(|| {
@@ -384,7 +380,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
-                    .with_file_sort_order(file_sort_order);
+                    .with_file_sort_order(all_sort_orders);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -505,11 +501,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )))?
                 }
 
-                let order_exprs = create_extern_table
-                    .order_exprs
-                    .iter()
-                    .map(|expr| from_proto::parse_expr(expr, ctx))
-                    .collect::<Result<Vec<Expr>, _>>()?;
+                let mut order_exprs = vec![];
+                for expr in &create_extern_table.order_exprs {
+                    let order_expr = expr
+                        .logical_expr_nodes
+                        .iter()
+                        .map(|expr| from_proto::parse_expr(expr, ctx))
+                        .collect::<Result<Vec<Expr>, _>>()?;
+                    order_exprs.push(order_expr)
+                }
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
@@ -849,15 +849,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     };
 
                     let options = listing_table.options();
-                    let file_sort_order =
-                        if let Some(file_sort_order) = &options.file_sort_order {
-                            file_sort_order
+
+                    let mut exprs_vec: Vec<LogicalExprNodeCollection> = vec![];
+                    for order in &options.file_sort_order {
+                        let expr_vec = LogicalExprNodeCollection {
+                            logical_expr_nodes: order
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<protobuf::LogicalExprNode>, _>>()?
-                        } else {
-                            vec![]
+                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
                         };
+                        exprs_vec.push(expr_vec);
+                    }
 
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
@@ -880,7 +882,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 target_partitions: options.target_partitions as u32,
-                                file_sort_order,
+                                file_sort_order: exprs_vec,
                             },
                         )),
                     })
@@ -1188,28 +1190,39 @@ impl AsLogicalPlan for LogicalPlanNode {
                     unbounded,
                     options,
                 },
-            )) => Ok(protobuf::LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
-                    protobuf::CreateExternalTableNode {
-                        name: Some(name.clone().into()),
-                        location: location.clone(),
-                        file_type: file_type.clone(),
-                        has_header: *has_header,
-                        schema: Some(df_schema.try_into()?),
-                        table_partition_cols: table_partition_cols.clone(),
-                        if_not_exists: *if_not_exists,
-                        delimiter: String::from(*delimiter),
-                        order_exprs: order_exprs
+            )) => {
+                let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
+                for order in order_exprs {
+                    let temp = LogicalExprNodeCollection {
+                        logical_expr_nodes: order
                             .iter()
                             .map(|expr| expr.try_into())
-                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
-                        definition: definition.clone().unwrap_or_default(),
-                        file_compression_type: file_compression_type.to_string(),
-                        unbounded: *unbounded,
-                        options: options.clone(),
-                    },
-                )),
-            }),
+                            .collect::<Result<Vec<_>, to_proto::Error>>(
+                        )?,
+                    };
+                    converted_order_exprs.push(temp);
+                }
+
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
+                        protobuf::CreateExternalTableNode {
+                            name: Some(name.clone().into()),
+                            location: location.clone(),
+                            file_type: file_type.clone(),
+                            has_header: *has_header,
+                            schema: Some(df_schema.try_into()?),
+                            table_partition_cols: table_partition_cols.clone(),
+                            if_not_exists: *if_not_exists,
+                            delimiter: String::from(*delimiter),
+                            order_exprs: converted_order_exprs,
+                            definition: definition.clone().unwrap_or_default(),
+                            file_compression_type: file_compression_type.to_string(),
+                            unbounded: *unbounded,
+                            options: options.clone(),
+                        },
+                    )),
+                })
+            }
             LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 input,

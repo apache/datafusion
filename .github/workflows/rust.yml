@@ -197,18 +197,17 @@ jobs:
           rust-version: stable
       - name: Generate benchmark data and expected query results
         run: |
-          mkdir -p benchmarks/data/answers
+          mkdir -p datafusion/core/tests/sqllogictests/test_files/tpch/data
           git clone https://github.com/databricks/tpch-dbgen.git
           cd tpch-dbgen
           make
-          ./dbgen -f -s 1
-          mv *.tbl ../benchmarks/data
-          mv ./answers/* ../benchmarks/data/answers/
+          ./dbgen -f -s 0.1
+          mv *.tbl ../datafusion/core/tests/sqllogictests/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
-          export TPCH_DATA=`pwd`/benchmarks/data
-          cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
+          export TPCH_DATA=`realpath datafusion/core/tests/sqllogictests/test_files/tpch/data`
           cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
+          INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 

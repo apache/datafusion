@@ -128,12 +128,6 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let file_sort_order = if cmd.order_exprs.is_empty() {
-            None
-        } else {
-            Some(cmd.order_exprs.clone())
-        };
-
         // look for 'infinite' as an option
         let infinite_source = cmd.unbounded;
 
@@ -143,7 +137,7 @@ impl TableProviderFactory for ListingTableFactory {
             .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_infinite_source(infinite_source)
-            .with_file_sort_order(file_sort_order);
+            .with_file_sort_order(cmd.order_exprs.clone());
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {

@@ -16,16 +16,25 @@
 // under the License.
 
 use crate::expressions::Column;
-use crate::{PhysicalSortExpr, PhysicalSortRequirement};
+use crate::{
+    normalize_expr_with_equivalence_properties, PhysicalSortExpr, PhysicalSortRequirement,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow_schema::SortOptions;
+use datafusion_common::DataFusionError;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
 
-/// Equivalence Properties is a vec of EquivalentClass.
+/// Represents a collection of [`EquivalentClass`] (equivalences
+/// between columns in relations)
+///
+/// This is used to represent both:
+///
+/// 1. Equality conditions (like `A=B`), when `T` = [`Column`]
+/// 2. Ordering (like `A ASC = B ASC`), when `T` = [`OrderedColumn`]
 #[derive(Debug, Clone)]
 pub struct EquivalenceProperties<T = Column> {
     classes: Vec<EquivalentClass<T>>,
@@ -40,6 +49,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         }
     }
 
+    /// return the set of equivalences
     pub fn classes(&self) -> &[EquivalentClass<T>] {
         &self.classes
     }
@@ -48,6 +58,7 @@ impl<T: Eq + Hash + Clone> EquivalenceProperties<T> {
         self.schema.clone()
     }
 
+    /// Add the [`EquivalentClass`] from `iter` to this list
     pub fn extend<I: IntoIterator<Item = EquivalentClass<T>>>(&mut self, iter: I) {
         for ec in iter {
             self.classes.push(ec)
@@ -187,7 +198,9 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     }
 }
 
-/// This object represents a [`Column`] with a definite ordering.
+/// This object represents a [`Column`] with a definite ordering, for
+/// example `A ASC` and is used to represent equivalent orderings in
+/// the optimizer.
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct OrderedColumn {
     pub col: Column,
@@ -205,6 +218,24 @@ impl From<OrderedColumn> for PhysicalSortExpr {
         PhysicalSortExpr {
             expr: Arc::new(value.col) as _,
             options: value.options,
+        }
+    }
+}
+
+impl TryFrom<PhysicalSortExpr> for OrderedColumn {
+    type Error = DataFusionError;
+
+    fn try_from(value: PhysicalSortExpr) -> Result<Self, Self::Error> {
+        if let Some(col) = value.expr.as_any().downcast_ref::<Column>() {
+            Ok(OrderedColumn {
+                col: col.clone(),
+                options: value.options,
+            })
+        } else {
+            Err(DataFusionError::NotImplemented(
+                "Only Column PhysicalSortExpr's can be downcasted to OrderedColumn yet"
+                    .to_string(),
+            ))
         }
     }
 }
@@ -256,6 +287,80 @@ impl OrderingEquivalentClass {
                 self.insert(items);
             }
         }
+    }
+}
+
+/// This is a builder object facilitating incremental construction
+/// for ordering equivalences.
+pub struct OrderingEquivalenceBuilder {
+    eq_properties: EquivalenceProperties,
+    ordering_eq_properties: OrderingEquivalenceProperties,
+    existing_ordering: Vec<PhysicalSortExpr>,
+}
+
+impl OrderingEquivalenceBuilder {
+    pub fn new(schema: SchemaRef) -> Self {
+        let eq_properties = EquivalenceProperties::new(schema.clone());
+        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema);
+        Self {
+            eq_properties,
+            ordering_eq_properties,
+            existing_ordering: vec![],
+        }
+    }
+
+    pub fn extend(
+        mut self,
+        new_ordering_eq_properties: OrderingEquivalenceProperties,
+    ) -> Self {
+        self.ordering_eq_properties
+            .extend(new_ordering_eq_properties.classes().iter().cloned());
+        self
+    }
+
+    pub fn with_existing_ordering(
+        mut self,
+        existing_ordering: Option<Vec<PhysicalSortExpr>>,
+    ) -> Self {
+        if let Some(existing_ordering) = existing_ordering {
+            self.existing_ordering = existing_ordering;
+        }
+        self
+    }
+
+    pub fn with_equivalences(mut self, new_eq_properties: EquivalenceProperties) -> Self {
+        self.eq_properties = new_eq_properties;
+        self
+    }
+
+    pub fn add_equal_conditions(&mut self, new_equivalent_ordering: Vec<OrderedColumn>) {
+        let mut normalized_out_ordering = vec![];
+        for item in &self.existing_ordering {
+            // To account for ordering equivalences, first normalize the expression:
+            let normalized = normalize_expr_with_equivalence_properties(
+                item.expr.clone(),
+                self.eq_properties.classes(),
+            );
+            // Currently we only support ordering equivalences for `Column` expressions.
+            // TODO: Add support for ordering equivalence for all `PhysicalExpr`s.
+            if let Some(column) = normalized.as_any().downcast_ref::<Column>() {
+                normalized_out_ordering
+                    .push(OrderedColumn::new(column.clone(), item.options));
+            } else {
+                break;
+            }
+        }
+        // If there is an existing ordering, add new ordering as an equivalence:
+        if !normalized_out_ordering.is_empty() {
+            self.ordering_eq_properties.add_equal_conditions((
+                &normalized_out_ordering,
+                &new_equivalent_ordering,
+            ));
+        }
+    }
+
+    pub fn build(self) -> OrderingEquivalenceProperties {
+        self.ordering_eq_properties
     }
 }
 

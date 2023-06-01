@@ -400,12 +400,6 @@ mod tests {
     };
     use std::ops::Add;
 
-    #[cfg(test)]
-    #[ctor::ctor]
-    fn init() {
-        let _ = env_logger::try_init();
-    }
-
     /// Test multiple correlated subqueries
     #[test]
     fn multiple_subqueries() -> Result<()> {

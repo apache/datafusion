@@ -88,7 +88,6 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     }
 
     /// Read the next batch of records
-    #[allow(clippy::should_implement_trait)]
     pub fn next_batch(&mut self, batch_size: usize) -> ArrowResult<Option<RecordBatch>> {
         let rows = self
             .reader

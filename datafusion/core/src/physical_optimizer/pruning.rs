@@ -947,6 +947,7 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use std::collections::HashMap;
+    use std::ops::{Not, Rem};
 
     #[derive(Debug)]
     /// Mock statistic provider for tests
@@ -1523,9 +1524,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test OR operator joining supported c1 < 1 expression and unsupported c2 % 2 = 0 expression
-        let expr = col("c1")
-            .lt(lit(1))
-            .or(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = col("c1").lt(lit(1)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expected_expr = "true";
         let predicate_expr = test_build_predicate_expression(
             &expr,
