@@ -17,7 +17,7 @@
 
 //! This module provides common traits for visiting or rewriting tree nodes easily.
 
-use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use crate::plan::{with_new_children_if_necessary, ExecutionPlan};
 use datafusion_common::tree_node::{DynTreeNode, Transformed};
 use datafusion_common::Result;
 use std::sync::Arc;

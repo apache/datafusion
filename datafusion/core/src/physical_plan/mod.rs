@@ -18,7 +18,6 @@
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 
 pub use self::metrics::Metric;
-use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
@@ -29,24 +28,23 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::utils::DataPtr;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
 pub use display::DisplayFormatType;
 use futures::stream::{Stream, TryStreamExt};
-use std::fmt;
-use std::fmt::Debug;
 
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::DataFusionError;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::{any::Any, pin::Pin};
 
 // backwards compatibility
-pub use datafusion_execution::{Distribution, ExecutionPlan, stream::{RecordBatchStream, SendableRecordBatchStream}};
+pub use datafusion_execution::{
+    ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+};
+pub use datafusion_physical_expr::{Distribution, Partitioning};
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
@@ -82,7 +80,6 @@ impl Stream for EmptyRecordBatchStream {
 /// Physical planner interface
 pub use self::planner::PhysicalPlanner;
 
-
 /// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
 /// Currently there are 3 kinds of execution plan which needs data exchange
@@ -111,28 +108,8 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
     }
 }
 
-/// Returns a copy of this plan if we change any child according to the pointer comparison.
-/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
-pub fn with_new_children_if_necessary(
-    plan: Arc<dyn ExecutionPlan>,
-    children: Vec<Arc<dyn ExecutionPlan>>,
-) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    let old_children = plan.children();
-    if children.len() != old_children.len() {
-        Err(DataFusionError::Internal(
-            "Wrong number of children".to_string(),
-        ))
-    } else if children.is_empty()
-        || children
-            .iter()
-            .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
-    {
-        Ok(Transformed::Yes(plan.with_new_children(children)?))
-    } else {
-        Ok(Transformed::No(plan))
-    }
-}
+// backwards compatibility
+pub use datafusion_execution::plan::with_new_children_if_necessary;
 
 /// Return a [wrapper](DisplayableExecutionPlan) around an
 /// [`ExecutionPlan`] which can be displayed in various easier to
@@ -358,11 +335,9 @@ pub fn ordering_equivalence_properties_helper(
 
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
-use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, LexOrdering,
-};
+use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::LexOrdering;
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -418,19 +393,21 @@ pub mod insert;
 pub mod joins;
 pub mod limit;
 pub mod memory;
-pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
 pub mod stream;
 pub mod streaming;
-pub mod tree_node;
 pub mod udaf;
 pub mod union;
 pub mod unnest;
 pub mod values;
 pub mod windows;
+
+// backwards compatibility
+pub use datafusion_execution::metrics;
+pub use datafusion_execution::tree_node;
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;

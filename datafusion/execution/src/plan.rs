@@ -17,11 +17,12 @@
 
 use arrow::datatypes::SchemaRef;
 use core::fmt;
-use datafusion_common::{Result, Statistics};
-use datafusion_expr::Partitioning;
+use datafusion_common::{
+    tree_node::Transformed, utils::DataPtr, DataFusionError, Result, Statistics,
+};
 use datafusion_physical_expr::{
-    Distribution, EquivalenceProperties, OrderingEquivalenceProperties, PhysicalSortExpr,
-    PhysicalSortRequirement,
+    Distribution, EquivalenceProperties, OrderingEquivalenceProperties, Partitioning,
+    PhysicalSortExpr, PhysicalSortRequirement,
 };
 use std::{any::Any, fmt::Debug, sync::Arc};
 
@@ -182,4 +183,27 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
+}
+
+/// Returns a copy of this plan if we change any child according to the pointer comparison.
+/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
+pub fn with_new_children_if_necessary(
+    plan: Arc<dyn ExecutionPlan>,
+    children: Vec<Arc<dyn ExecutionPlan>>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let old_children = plan.children();
+    if children.len() != old_children.len() {
+        Err(DataFusionError::Internal(
+            "Wrong number of children".to_string(),
+        ))
+    } else if children.is_empty()
+        || children
+            .iter()
+            .zip(old_children.iter())
+            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
+    {
+        Ok(Transformed::Yes(plan.with_new_children(children)?))
+    } else {
+        Ok(Transformed::No(plan))
+    }
 }

@@ -22,11 +22,12 @@ pub mod disk_manager;
 pub mod memory_pool;
 pub mod metrics;
 pub mod object_store;
-mod plan;
+pub mod plan;
 pub mod registry;
 pub mod runtime_env;
 mod stream;
 mod task;
+pub mod tree_node;
 
 pub use plan::ExecutionPlan;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};

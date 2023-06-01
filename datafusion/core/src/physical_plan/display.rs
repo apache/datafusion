@@ -25,6 +25,9 @@ use crate::logical_expr::{StringifiedPlan, ToStringifiedPlan};
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
+// backward compatibility
+pub use datafusion_execution::plan::DisplayFormatType;
+
 /// Wraps an `ExecutionPlan` with various ways to display this plan
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,
