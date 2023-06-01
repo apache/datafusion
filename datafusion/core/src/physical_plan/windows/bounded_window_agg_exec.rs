@@ -21,7 +21,6 @@
 //! infinite inputs.
 
 use crate::error::Result;
-use datafusion_execution::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -33,6 +32,7 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use datafusion_execution::TaskContext;
 
 use ahash::RandomState;
 use arrow::{

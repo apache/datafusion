@@ -25,6 +25,6 @@ pub mod registry;
 pub mod runtime_env;
 mod task;
 
-pub use task::TaskContext;
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
+pub use task::TaskContext;

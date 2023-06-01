@@ -34,10 +34,10 @@ use std::any::Any;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
-use datafusion_execution::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::Distribution;
 use datafusion_common::DataFusionError;
+use datafusion_execution::TaskContext;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
 /// user defined destinations.

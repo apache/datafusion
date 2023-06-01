@@ -17,7 +17,6 @@
 
 //! Aggregate without grouping columns
 
-use datafusion_execution::TaskContext;
 use crate::physical_plan::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
     AggregateMode,
@@ -27,14 +26,15 @@ use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::BoxStream;
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::filter::batch_filter;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;

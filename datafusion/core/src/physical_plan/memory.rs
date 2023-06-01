@@ -30,8 +30,8 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion_execution::TaskContext;
 use datafusion_common::DataFusionError;
+use datafusion_execution::TaskContext;
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data

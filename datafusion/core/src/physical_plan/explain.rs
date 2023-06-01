@@ -29,8 +29,8 @@ use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatc
 use log::trace;
 
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
-use datafusion_execution::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_execution::TaskContext;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes

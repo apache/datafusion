@@ -25,7 +25,6 @@ use std::{any::Any, sync::Arc, task::Poll};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
-use datafusion_execution::TaskContext;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
@@ -37,6 +36,7 @@ use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 
 use super::utils::{
     adjust_right_output_partitioning, cross_join_equivalence_properties,
@@ -457,10 +457,10 @@ mod tests {
     use super::*;
     use crate::assert_batches_sorted_eq;
     use crate::common::assert_contains;
-    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::physical_plan::common;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_scan_i32, columns};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     async fn join_collect(
         left: Arc<dyn ExecutionPlan>,
