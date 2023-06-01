@@ -404,12 +404,15 @@ impl BatchSerializer for CsvSerializer {
 // If there is an error occurs, this macro tries to
 // abort writer before returning error.
 macro_rules! handle_err_or_continue {
-    ($result:expr, $writer:expr) => {
+    ($result:expr, $writers:expr) => {
         match $result {
             Ok(value) => Ok(value),
             Err(e) => {
-                let abort_future = $writer.abort_writer()?;
-                let _ = abort_future.await;
+                // Abort all writers, before returning error
+                for writer in $writers {
+                    let abort_future = writer.abort_writer()?;
+                    let _ = abort_future.await;
+                }
                 let err: Result<DataFusionError, _> = e.try_into();
                 match err {
                     Ok(data_fusion_err) => Err(data_fusion_err),
@@ -516,16 +519,17 @@ impl DataSink for CsvSink {
             // write data to files in round robin like
             i = (i + 1) % num_partitions;
             let serializer = &mut serializers[i];
-            let writer = &mut writers[i];
-            let batch = handle_err_or_continue!(maybe_batch, writer)?;
+            let batch = handle_err_or_continue!(maybe_batch, &mut writers)?;
             row_count += batch.num_rows();
             let bytes =
-                handle_err_or_continue!(serializer.serialize(batch).await, writer)?;
-            handle_err_or_continue!(writer.write_all(&bytes).await, writer)?;
+                handle_err_or_continue!(serializer.serialize(batch).await, &mut writers)?;
+            let writer = &mut writers[i];
+            handle_err_or_continue!(writer.write_all(&bytes).await, &mut writers)?;
         }
         // Cleanup
-        for writer in &mut writers {
-            handle_err_or_continue!(writer.shutdown().await, writer)?;
+        let n_writer = writers.len();
+        for idx in 0..n_writer {
+            handle_err_or_continue!(writers[idx].shutdown().await, &mut writers)?;
         }
         Ok(row_count as u64)
     }
