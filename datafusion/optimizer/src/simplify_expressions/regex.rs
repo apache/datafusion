@@ -168,18 +168,9 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
 /// returns true if the elements in a `Concat` pattern are:
 /// - `[Look::Start, Capture(Alternation(Literals...)), Look::End]`
 fn is_anchored_capture(v: &[Hir]) -> bool {
-    if 3 != v.len() {
-        return false;
-    }
-
-    let first_last = (
-        v.first().expect("length checked"),
-        v.last().expect("length checked"),
-    );
-    if !matches!(first_last,
-    (s, e) if s.kind() == &HirKind::Look(Look::Start)
-        && e.kind() == &HirKind::Look(Look::End)
-         )
+    if v.len() != 3
+        || !matches!((v.first().unwrap().kind(), v.last().unwrap().kind()),
+                 (&HirKind::Look(Look::Start), &HirKind::Look(Look::End)))
     {
         return false;
     }
