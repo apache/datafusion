@@ -52,8 +52,8 @@ mod row_hash;
 mod utils;
 
 pub use datafusion_expr::AggregateFunction;
+use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 use datafusion_physical_expr::utils::ordering_satisfy_requirement_concrete;
 
 /// Hash aggregate modes
@@ -442,16 +442,6 @@ fn get_finest_requirement<
         }
     }
     Ok(finest_req)
-}
-
-/// Checks whether the given aggregate expression is order-sensitive.
-/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
-/// However, a `FirstAgg` depends on the input ordering (if the order changes,
-/// the first value in the list would change).
-fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
-    aggr_expr.as_any().is::<FirstValue>()
-        || aggr_expr.as_any().is::<LastValue>()
-        || aggr_expr.as_any().is::<ArrayAgg>()
 }
 
 /// Calculate the required input ordering for the [`AggregateExec`] by considering
