@@ -16,10 +16,9 @@
 // under the License.
 
 use crate::alias::AliasGenerator;
+use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
-use crate::utils::{
-    conjunction, replace_qualified_name, split_conjunction, PullUpCorrelatedExpr,
-};
+use crate::utils::{conjunction, replace_qualified_name, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Column, DataFusionError, Result};
@@ -223,9 +222,9 @@ fn build_join(
         in_predicate_opt: in_predicate_opt.clone(),
         exists_sub_query: in_predicate_opt.is_none(),
         can_pull_up: true,
-        need_collect_count_expr_map: false,
+        need_handle_count_bug: false,
         collected_count_expr_map: Default::default(),
-        expr_check_map: Default::default(),
+        pull_up_having_expr: None,
     };
     let new_plan = subquery.clone().rewrite(&mut pull_up)?;
     if !pull_up.can_pull_up {

@@ -16,15 +16,14 @@
 // under the License.
 
 use crate::alias::AliasGenerator;
+use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{
-    conjunction, replace_qualified_name, ExprCheckMap, PullUpCorrelatedExpr,
-};
+use crate::utils::{conjunction, replace_qualified_name};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::{BTreeSet, HashMap};
@@ -82,30 +81,16 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
                     if let Some((optimized_subquery, expr_check_map)) =
-                        build_join(&subquery, &cur_input, &alias, true)?
+                        build_join(&subquery, &cur_input, &alias)?
                     {
                         if !expr_check_map.is_empty() {
                             rewrite_expr =
                                 rewrite_expr.clone().transform_up(&|expr| {
                                     if let Expr::Column(col) = &expr {
-                                        if let Some((expr1, expr2)) =
+                                        if let Some(map_expr) =
                                             expr_check_map.get(&col.name)
                                         {
-                                            let new_expr = Expr::Case(expr::Case {
-                                                expr: None,
-                                                when_then_expr: vec![(
-                                                    Box::new(Expr::IsNull(Box::new(
-                                                        Expr::Column(
-                                                            Column::new_unqualified(
-                                                                "__always_true",
-                                                            ),
-                                                        ),
-                                                    ))),
-                                                    Box::new(expr2.clone()),
-                                                )],
-                                                else_expr: Some(Box::new(expr1.clone())),
-                                            });
-                                            Ok(Transformed::Yes(new_expr))
+                                            Ok(Transformed::Yes(map_expr.clone()))
                                         } else {
                                             Ok(Transformed::No(expr))
                                         }
@@ -146,7 +131,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueryies {
                     if let Some((optimized_subquery, expr_check_map)) =
-                        build_join(&subquery, &cur_input, &alias, true)?
+                        build_join(&subquery, &cur_input, &alias)?
                     {
                         cur_input = optimized_subquery;
                         if !expr_check_map.is_empty() {
@@ -154,29 +139,20 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                                 if let Some(rewrite_expr) =
                                     expr_to_rewrite_expr_map.get(expr)
                                 {
-                                    let new_expr = rewrite_expr.clone().transform_up(&|expr| {
-                                        if let Expr::Column(col) = &expr {
-                                            if let Some((expr1, expr2)) = expr_check_map.get(&col.name)
-                                            {
-                                                let new_expr = Expr::Case(expr::Case {
-                                                    expr: None,
-                                                    when_then_expr: vec![(
-                                                        Box::new(Expr::IsNull(Box::new(
-                                                            Expr::Column(Column::new_unqualified("__always_true")),
-                                                        ))),
-                                                        Box::new(expr2.clone()),
-                                                    )],
-                                                    else_expr: Some(Box::new(expr1.clone())),
-                                                });
-                                                Ok(Transformed::Yes(new_expr))
+                                    let new_expr =
+                                        rewrite_expr.clone().transform_up(&|expr| {
+                                            if let Expr::Column(col) = &expr {
+                                                if let Some(map_expr) =
+                                                    expr_check_map.get(&col.name)
+                                                {
+                                                    Ok(Transformed::Yes(map_expr.clone()))
+                                                } else {
+                                                    Ok(Transformed::No(expr))
+                                                }
                                             } else {
                                                 Ok(Transformed::No(expr))
                                             }
-                                        } else {
-                                            Ok(Transformed::No(expr))
-                                        }
-
-                                    })?;
+                                        })?;
                                     expr_to_rewrite_expr_map.insert(expr, new_expr);
                                 }
                             }
@@ -303,8 +279,7 @@ fn build_join(
     subquery: &Subquery,
     filter_input: &LogicalPlan,
     subquery_alias: &str,
-    need_collect_count_expr_map: bool,
-) -> Result<Option<(LogicalPlan, ExprCheckMap)>> {
+) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
     let mut pull_up = PullUpCorrelatedExpr {
         join_filters: vec![],
@@ -312,15 +287,17 @@ fn build_join(
         in_predicate_opt: None,
         exists_sub_query: false,
         can_pull_up: true,
-        need_collect_count_expr_map,
+        need_handle_count_bug: true,
         collected_count_expr_map: Default::default(),
-        expr_check_map: Default::default(),
+        pull_up_having_expr: None,
     };
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up)?;
     if !pull_up.can_pull_up {
         return Ok(None);
     }
 
+    let collected_count_expr_map =
+        pull_up.collected_count_expr_map.get(&new_plan).cloned();
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(subquery_alias.to_string())?
         .build()?;
@@ -368,7 +345,47 @@ fn build_join(
             )?
             .build()?
     };
-    Ok(Some((new_plan, pull_up.expr_check_map.clone())))
+    let mut computation_project_expr = HashMap::new();
+    if let Some(expr_map) = collected_count_expr_map {
+        for (name, result) in expr_map {
+            let computer_expr = if let Some(filter) = &pull_up.pull_up_having_expr {
+                Expr::Case(expr::Case {
+                    expr: None,
+                    when_then_expr: vec![
+                        (
+                            Box::new(Expr::IsNull(Box::new(Expr::Column(
+                                Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
+                            )))),
+                            Box::new(result),
+                        ),
+                        (
+                            Box::new(Expr::Not(Box::new(filter.clone()))),
+                            Box::new(Expr::Literal(ScalarValue::Null)),
+                        ),
+                    ],
+                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                        name.clone(),
+                    )))),
+                })
+            } else {
+                Expr::Case(expr::Case {
+                    expr: None,
+                    when_then_expr: vec![(
+                        Box::new(Expr::IsNull(Box::new(Expr::Column(
+                            Column::new_unqualified(UN_MATCHED_ROW_INDICATOR),
+                        )))),
+                        Box::new(result),
+                    )],
+                    else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(
+                        name.clone(),
+                    )))),
+                })
+            };
+            computation_project_expr.insert(name, computer_expr);
+        }
+    }
+
+    Ok(Some((new_plan, computation_project_expr)))
 }
 
 #[cfg(test)]
