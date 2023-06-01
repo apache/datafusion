@@ -24,20 +24,19 @@
 use std::collections::VecDeque;
 use std::mem;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-use crate::datasource::file_format::{BatchSerializer, FileWriterExt};
+use crate::datasource::file_format::FileWriterExt;
 use crate::datasource::listing::PartitionedFile;
 use crate::error::Result;
 use crate::physical_plan::file_format::{
-    FileMeta, FileScanConfig, FileSinkConfig, PartitionColumnProjector,
+    FileMeta, FileScanConfig, PartitionColumnProjector,
 };
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
-use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use crate::physical_plan::RecordBatchStream;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -430,60 +429,6 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
     }
 }
 
-/// `FileSinkStream` struct handles writing record batches to a file-like output.
-pub struct FileSinkStream<S: BatchSerializer, O: FileWriterFactory> {
-    /// Input stream providing record batches to be written
-    pub(crate) input: SendableRecordBatchStream,
-    /// Serializer responsible for converting record batches into a suitable file format
-    pub(crate) serializer: S,
-    /// Serializer responsible for converting record batches into a suitable file format
-    pub(crate) opener: O,
-    /// Schema of the record batches being written
-    pub(crate) schema: SchemaRef,
-    /// File sink stream specific metrics for monitoring performance
-    pub(crate) file_stream_metrics: FileSinkStreamMetrics,
-    pub(crate) file: PartitionedFile,
-}
-
-impl<S: BatchSerializer, O: FileWriterFactory> FileSinkStream<S, O> {
-    pub fn new(
-        config: &FileSinkConfig,
-        partition: usize,
-        serializer: S,
-        opener: O,
-        inner_stream: SendableRecordBatchStream,
-        metrics: &ExecutionPlanMetricsSet,
-    ) -> Self {
-        Self {
-            schema: Arc::clone(&config.output_schema),
-            input: inner_stream,
-            serializer,
-            opener,
-            file_stream_metrics: FileSinkStreamMetrics::new(metrics, partition),
-            file: config.file_groups[partition].clone(),
-        }
-    }
-}
-
-/// Note that all the following metrics are in terms of wall-clock time,
-/// so they include time spent waiting on I/O as well as other operations.
-pub struct FileSinkStreamMetrics {
-    /// Time spent waiting for the FileStream's input.
-    pub time_processing: StartableTime,
-}
-
-impl FileSinkStreamMetrics {
-    pub(crate) fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
-        let time_processing = StartableTime {
-            metrics: MetricBuilder::new(metrics)
-                .subset_time("time_elapsed_processing", partition),
-            start: None,
-        };
-
-        Self { time_processing }
-    }
-}
-
 /// Generic API for opening a file using an [`ObjectStore`] and resolving to a
 /// async writer.
 ///
@@ -499,25 +444,22 @@ pub trait FileWriterFactory: Unpin + Send + Sync {
 mod tests {
     use super::*;
     use crate::datasource::file_format::{
-        AsyncPut, AsyncPutMultipart, AsyncPutWriter, FileWriterMode,
+        AsyncPut, AsyncPutMultipart, AsyncPutWriter, BatchSerializer, FileWriterMode,
     };
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_plan::file_format::{build_file_sink_stream, FileMeta};
+    use crate::physical_plan::file_format::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
-    use crate::physical_plan::stream::RecordBatchStreamAdapter;
     use crate::prelude::SessionContext;
     use crate::{
         error::Result,
         test::{make_partition, object_store::register_test_store},
     };
-    use arrow_schema::{DataType, Field, Schema};
     use async_trait::async_trait;
     use bytes::Bytes;
     use datafusion_common::DataFusionError;
     use futures::StreamExt;
-    use object_store::memory::InMemory;
-    use object_store::path::Path;
-    use object_store::{GetResult, ObjectMeta, ObjectStore};
+    use object_store::ObjectStore;
+    use std::sync::Arc;
     use tokio::io::AsyncWrite;
 
     struct TestOpener {
@@ -677,85 +619,5 @@ mod tests {
                 _ => unimplemented!(),
             }
         }
-    }
-
-    async fn write_and_collect(total_bytes: usize, mode: FileWriterMode) -> Bytes {
-        let file_schema =
-            Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-        let batch = RecordBatch::new_empty(file_schema.clone());
-        let number_of_batches = 10;
-        assert_eq!(total_bytes % number_of_batches, 0);
-        let batch_serialize_size = total_bytes / number_of_batches;
-        let input = Box::pin(RecordBatchStreamAdapter::new(
-            file_schema.clone(),
-            futures::stream::iter(
-                itertools::repeat_n(batch.clone(), number_of_batches)
-                    .map(Ok::<_, DataFusionError>),
-            ),
-        ));
-
-        let memory = Arc::new(InMemory::new());
-
-        let object = ObjectMeta {
-            location: Path::parse("mock_file1").unwrap(),
-            last_modified: Default::default(),
-            size: 0,
-        };
-
-        let config = FileSinkConfig {
-            object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
-            file_groups: vec![object.clone().into()],
-            output_schema: file_schema,
-            table_partition_cols: vec![],
-            writer_mode: mode,
-        };
-        let metrics = ExecutionPlanMetricsSet::new();
-
-        let state = FileSinkStream {
-            input,
-            serializer: TestSerializer {
-                bytes: Bytes::from(vec![0; batch_serialize_size]),
-            },
-            opener: TestWriterOpener {
-                object_store: memory.clone(),
-                writer_mode: config.writer_mode,
-            },
-            schema: config.output_schema.clone(),
-            file_stream_metrics: FileSinkStreamMetrics::new(&metrics, 0),
-            file: config.file_groups[0].clone(),
-        };
-
-        let file_sink_stream = build_file_sink_stream(state).unwrap();
-
-        file_sink_stream
-            .map(|b| b.expect("No error expected in stream"))
-            .collect::<Vec<_>>()
-            .await;
-
-        let mut res = match memory.get(&object.location).await.unwrap() {
-            GetResult::Stream(s) => {
-                s.map(|b| b.expect("No error expected in stream"))
-                    .collect::<Vec<_>>()
-                    .await
-            }
-            GetResult::File(_, _) => unreachable!(),
-        };
-        res.swap_remove(0)
-    }
-
-    #[tokio::test]
-    async fn test_put_mode() -> Result<()> {
-        let num_bytes = 1000;
-        let bytes = write_and_collect(num_bytes, FileWriterMode::Put).await;
-        assert_eq!(bytes.len(), num_bytes);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_put_multipart_mode() -> Result<()> {
-        let num_bytes = 1000;
-        let bytes = write_and_collect(num_bytes, FileWriterMode::PutMultipart).await;
-        assert_eq!(bytes.len(), num_bytes);
-        Ok(())
     }
 }

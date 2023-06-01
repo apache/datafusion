@@ -18,9 +18,11 @@
 //! CSV format abstractions
 
 use std::any::Any;
-
 use std::collections::HashSet;
+use std::fmt;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
@@ -31,6 +33,7 @@ use bytes::{Buf, Bytes};
 
 use datafusion_common::DataFusionError;
 
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
@@ -38,14 +41,17 @@ use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore}
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::file_format::{BatchSerializer, DEFAULT_SCHEMA_INFER_MAX_RECORD};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{
-    CsvExec, CsvWriterExec, FileScanConfig, FileSinkConfig,
+    CsvExec, CsvWriterOpener, FileGroupDisplay, FileScanConfig, FileSinkConfig,
+    FileWriterFactory,
 };
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::Statistics;
+use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -231,14 +237,14 @@ impl FileFormat for CsvFormat {
         _state: &SessionState,
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvWriterExec::try_new(
-            input,
+        let sink = Arc::new(CsvSink::new(
             conf,
             self.has_header,
             self.delimiter,
-            self.file_compression_type.to_owned(),
-        )?;
-        Ok(Arc::new(exec))
+            self.file_compression_type.clone(),
+        ));
+
+        Ok(Arc::new(InsertExec::new(input, sink)) as _)
     }
 }
 
@@ -392,6 +398,111 @@ impl BatchSerializer for CsvSerializer {
         drop(writer);
         self.header = false;
         Ok(Bytes::from(self.buffer.drain(..).collect::<Vec<u8>>()))
+    }
+}
+
+/// Implements for writing to a Csv File
+struct CsvSink {
+    /// Config options for writing data
+    config: FileSinkConfig,
+    has_header: bool,
+    delimiter: u8,
+    file_compression_type: FileCompressionType,
+}
+
+impl Debug for CsvSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CsvSink")
+            .field("has_header", &self.has_header)
+            .field("delimiter", &self.delimiter)
+            .finish()
+    }
+}
+
+impl Display for CsvSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CsvSink(writer_mode={:?}, file_groups={})",
+            self.config.writer_mode,
+            FileGroupDisplay(&self.config.file_groups),
+        )
+    }
+}
+
+impl CsvSink {
+    fn new(
+        config: FileSinkConfig,
+        has_header: bool,
+        delimiter: u8,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        Self {
+            config,
+            has_header,
+            delimiter,
+            file_compression_type,
+        }
+    }
+}
+
+#[async_trait]
+impl DataSink for CsvSink {
+    async fn write_all(
+        &self,
+        mut data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let num_partitions = self.config.file_groups.len();
+
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.config.object_store_url)?;
+        let opener = CsvWriterOpener::new(
+            self.config.writer_mode,
+            object_store,
+            self.file_compression_type.to_owned(),
+        );
+
+        // Construct serializer and writer for each file group
+        let mut serializers = vec![];
+        let mut writers = vec![];
+        for file_group in &self.config.file_groups {
+            let header = if matches!(&self.config.writer_mode, FileWriterMode::Append) {
+                file_group.object_meta.size == 0 && self.has_header
+            } else {
+                self.has_header
+            };
+            let builder = WriterBuilder::new().with_delimiter(self.delimiter);
+            let serializer = CsvSerializer::new()
+                .with_builder(builder)
+                .with_header(header);
+            serializers.push(serializer);
+
+            let file = file_group.clone();
+            let writer = opener
+                .create_writer(file.object_meta.clone().into())
+                .await?;
+            writers.push(writer);
+        }
+
+        let mut i = 0;
+        let mut row_count = 0;
+        while let Some(maybe_batch) = data.next().await {
+            let batch = maybe_batch?;
+            row_count += batch.num_rows();
+            // write data to files in round robin like
+            i = (i + 1) % num_partitions;
+            let serializer = &mut serializers[i];
+            let writer = &mut writers[i];
+            let bytes = serializer.serialize(batch).await?;
+            writer.write_all(&bytes).await?;
+        }
+        // Cleanup
+        for writer in &mut writers {
+            writer.shutdown().await?;
+        }
+        Ok(row_count as u64)
     }
 }
 

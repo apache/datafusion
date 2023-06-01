@@ -1571,8 +1571,17 @@ mod tests {
 
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Ensure the result is empty after the insert operation
-        assert!(res.is_empty());
+        // Insert returns number of rows written, in our case this would be 6.
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &res);
         // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
         let file = File::open(path.clone())?;
         let reader = csv::ReaderBuilder::new(schema.clone())
@@ -1611,7 +1620,18 @@ mod tests {
             .await?;
 
         // Again, execute the physical plan and collect the results
-        collect(plan, session_ctx.task_ctx()).await?;
+        let res = collect(plan, session_ctx.task_ctx()).await?;
+        // Insert returns number of rows written, in our case this would be 6.
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &res);
 
         // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
         let file = File::open(path.clone())?;

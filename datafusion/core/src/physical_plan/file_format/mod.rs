@@ -27,7 +27,7 @@ mod json;
 mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::{CsvConfig, CsvExec, CsvOpener, CsvWriterExec};
+pub use self::csv::{CsvConfig, CsvExec, CsvOpener, CsvWriterOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
@@ -43,14 +43,13 @@ pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
-use crate::datasource::file_format::{BatchSerializer, FileWriterMode};
+use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-use crate::physical_plan::file_format::file_stream::FileWriterFactory;
-use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+pub use crate::physical_plan::file_format::file_stream::FileWriterFactory;
+use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -62,8 +61,6 @@ use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
 
-use file_stream::FileSinkStream;
-use futures::StreamExt;
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -76,7 +73,6 @@ use std::{
     sync::Arc,
     vec,
 };
-use tokio::io::AsyncWriteExt;
 
 use super::{ColumnStatistics, Statistics};
 
@@ -270,65 +266,6 @@ impl FileSinkConfig {
     }
 }
 
-use std::convert::TryInto;
-
-macro_rules! handle_err_or_continue {
-    ($result:expr, $state:expr, $writer:expr) => {
-        match $result {
-            Ok(value) => value,
-            Err(e) => {
-                let abort_future = $writer.abort_writer().unwrap();
-                let _ = abort_future.await;
-                let err: Result<DataFusionError, _> = e.try_into();
-                match err {
-                    Ok(data_fusion_err) => return Some((Err(data_fusion_err), $state)),
-                    Err(_) => {
-                        return Some((
-                            Err(DataFusionError::Internal("File sink error.".to_owned())),
-                            $state,
-                        ))
-                    }
-                }
-            }
-        }
-    };
-}
-
-/// Builds a file sink stream that writes record batches to a file using the provided serializer and file writer factory.
-pub fn build_file_sink_stream<
-    S: BatchSerializer + 'static,
-    O: FileWriterFactory + 'static,
->(
-    state: FileSinkStream<S, O>,
-) -> Result<SendableRecordBatchStream> {
-    let schema = state.schema.clone();
-    let stream = futures::stream::unfold(state, |mut this| async move {
-        let mut writer = match this
-            .opener
-            .create_writer(this.file.object_meta.clone().into())
-            .await
-        {
-            Ok(w) => w,
-            Err(e) => return Some((Err(e), this)),
-        };
-        while let Some(maybe_batch) = this.input.next().await {
-            this.file_stream_metrics.time_processing.stop();
-            let batch = handle_err_or_continue!(maybe_batch, this, writer);
-            let bytes = handle_err_or_continue!(
-                this.serializer.serialize(batch).await,
-                this,
-                writer
-            );
-
-            handle_err_or_continue!(writer.write_all(&bytes).await, this, writer);
-            this.file_stream_metrics.time_processing.start();
-        }
-        handle_err_or_continue!(writer.shutdown().await, this, writer);
-        None
-    });
-    Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
-}
-
 impl Debug for FileScanConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
@@ -419,7 +356,7 @@ impl<'a> Display for FileGroupsDisplay<'a> {
 /// [file1, file2,...]
 /// ```
 #[derive(Debug)]
-struct FileGroupDisplay<'a>(&'a [PartitionedFile]);
+pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
 impl<'a> Display for FileGroupDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
