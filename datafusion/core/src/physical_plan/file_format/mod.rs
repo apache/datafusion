@@ -315,34 +315,19 @@ struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
 impl<'a> Display for FileGroupsDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let mut first_group = true;
-        let groups = if self.0.len() == 1 { "group" } else { "groups" };
-        write!(f, "{{{} {}: [", self.0.len(), groups)?;
+        let n_group = self.0.len();
+        let groups = if n_group == 1 { "group" } else { "groups" };
+        write!(f, "{{{n_group} {groups}: [")?;
         // To avoid showing too many partitions
         let max_groups = 5;
-        for group in self.0.iter().take(max_groups) {
-            if !first_group {
+        for (idx, group) in self.0.iter().take(max_groups).enumerate() {
+            if idx > 0 {
                 write!(f, ", ")?;
             }
-            first_group = false;
-            write!(f, "[")?;
-
-            let mut first_file = true;
-            for pf in group {
-                if !first_file {
-                    write!(f, ", ")?;
-                }
-                first_file = false;
-
-                write!(f, "{}", pf.object_meta.location.as_ref())?;
-
-                if let Some(range) = pf.range.as_ref() {
-                    write!(f, ":{}..{}", range.start, range.end)?;
-                }
-            }
-            write!(f, "]")?;
+            write!(f, "{}", FileGroupDisplay(group))?;
         }
-        if self.0.len() > max_groups {
+        // Remaining elements are showed as `...` (to indicate there is more)
+        if n_group > max_groups {
             write!(f, ", ...")?;
         }
         write!(f, "]}}")?;
@@ -363,15 +348,11 @@ impl<'a> Display for FileGroupDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         let group = self.0;
         write!(f, "[")?;
-        let mut first_file = true;
-        for pf in group {
-            if !first_file {
+        for (idx, pf) in group.iter().enumerate() {
+            if idx > 0 {
                 write!(f, ", ")?;
             }
-            first_file = false;
-
             write!(f, "{}", pf.object_meta.location.as_ref())?;
-
             if let Some(range) = pf.range.as_ref() {
                 write!(f, ":{}..{}", range.start, range.end)?;
             }
@@ -1421,6 +1402,14 @@ mod tests {
 
         let expected = "{3 groups: [[foo, bar], [baz], []]}";
         assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    #[test]
+    fn file_group_display_many() {
+        let files = vec![partitioned_file("foo"), partitioned_file("bar")];
+
+        let expected = "[foo, bar]";
+        assert_eq!(&FileGroupDisplay(&files).to_string(), expected);
     }
 
     /// create a PartitionedFile for testing
