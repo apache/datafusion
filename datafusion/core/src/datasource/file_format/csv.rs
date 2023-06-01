@@ -401,6 +401,29 @@ impl BatchSerializer for CsvSerializer {
     }
 }
 
+// If there is an error occurs, this macro tries to
+// abort writer before returning error.
+macro_rules! handle_err_or_continue {
+    ($result:expr, $writer:expr) => {
+        match $result {
+            Ok(value) => Ok(value),
+            Err(e) => {
+                let abort_future = $writer.abort_writer()?;
+                let _ = abort_future.await;
+                let err: Result<DataFusionError, _> = e.try_into();
+                match err {
+                    Ok(data_fusion_err) => Err(data_fusion_err),
+                    Err(_) => {
+                        return Err(DataFusionError::Internal(
+                            "File sink error.".to_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+    };
+}
+
 /// Implements for writing to a Csv File
 struct CsvSink {
     /// Config options for writing data
@@ -490,18 +513,19 @@ impl DataSink for CsvSink {
         let mut i = 0;
         let mut row_count = 0;
         while let Some(maybe_batch) = data.next().await {
-            let batch = maybe_batch?;
-            row_count += batch.num_rows();
             // write data to files in round robin like
             i = (i + 1) % num_partitions;
             let serializer = &mut serializers[i];
             let writer = &mut writers[i];
-            let bytes = serializer.serialize(batch).await?;
-            writer.write_all(&bytes).await?;
+            let batch = handle_err_or_continue!(maybe_batch, writer)?;
+            row_count += batch.num_rows();
+            let bytes =
+                handle_err_or_continue!(serializer.serialize(batch).await, writer)?;
+            handle_err_or_continue!(writer.write_all(&bytes).await, writer)?;
         }
         // Cleanup
         for writer in &mut writers {
-            writer.shutdown().await?;
+            handle_err_or_continue!(writer.shutdown().await, writer)?;
         }
         Ok(row_count as u64)
     }
