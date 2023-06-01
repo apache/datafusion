@@ -38,7 +38,7 @@ use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map, reverse_order_bys,
-    utils::{convert_to_expr, get_indices_of_matching_exprs, ordering_satisfy_concrete},
+    utils::{convert_to_expr, get_indices_of_matching_exprs},
     AggregateExpr, LexOrdering, LexOrderingReq, OrderingEquivalenceProperties,
     PhysicalExpr, PhysicalSortExpr, PhysicalSortRequirement,
 };
@@ -54,7 +54,9 @@ mod utils;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::utils::ordering_satisfy_requirement_concrete;
+use datafusion_physical_expr::utils::{
+    get_finer_ordering, ordering_satisfy_requirement_concrete,
+};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -360,28 +362,6 @@ fn get_init_req(
             return fn_reqs.clone();
         }
     }
-    None
-}
-
-fn get_finer_ordering<
-    'a,
-    F: Fn() -> EquivalenceProperties,
-    F2: Fn() -> OrderingEquivalenceProperties,
->(
-    provided: &'a [PhysicalSortExpr],
-    req: &'a [PhysicalSortExpr],
-    eq_properties: F,
-    ordering_eq_properties: F2,
-) -> Option<&'a [PhysicalSortExpr]> {
-    if ordering_satisfy_concrete(provided, req, &eq_properties, &ordering_eq_properties) {
-        // Finer requirement is `provided`, since it satisfies the other:
-        return Some(provided);
-    }
-    if ordering_satisfy_concrete(req, provided, &eq_properties, &ordering_eq_properties) {
-        // Finer requirement is `req`, since it satisfies the other:
-        return Some(req);
-    }
-    // Neither `provided` nor `req` satisfies one another, they are incompatible.
     None
 }
 
