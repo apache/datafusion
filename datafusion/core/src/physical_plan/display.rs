@@ -25,13 +25,6 @@ use crate::logical_expr::{StringifiedPlan, ToStringifiedPlan};
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
-/// Options for controlling how each [`ExecutionPlan`] should format itself
-#[derive(Debug, Clone, Copy)]
-pub enum DisplayFormatType {
-    /// Default, compact format. Example: `FilterExec: c12 < 10.0`
-    Default,
-}
-
 /// Wraps an `ExecutionPlan` with various ways to display this plan
 pub struct DisplayableExecutionPlan<'a> {
     inner: &'a dyn ExecutionPlan,

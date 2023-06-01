@@ -21,6 +21,7 @@ pub mod conditional_expressions;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod datetime_expressions;
+mod distribution;
 pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
@@ -45,9 +46,9 @@ pub mod utils;
 pub mod var_provider;
 pub mod window;
 
-// reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
+pub use distribution::{Distribution, Partitioning};
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
     EquivalenceProperties, EquivalentClass, OrderedColumn, OrderingEquivalenceProperties,
