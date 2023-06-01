@@ -29,6 +29,7 @@ use sqlparser::parser::Parser;
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Given column vectors, returns row at `idx`.
 pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
@@ -287,6 +288,34 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
         count += 1;
     }
     count
+}
+
+/// An extension trait for smart pointers. Provides an interface to get a
+/// raw pointer to the data (with metadata stripped away).
+///
+/// This is useful to see if two smart pointers point to the same allocation.
+pub trait DataPtr {
+    /// Returns a raw pointer to the data, stripping away all metadata.
+    fn data_ptr(this: &Self) -> *const ();
+
+    /// Check if two pointers point to the same data.
+    fn data_ptr_eq(this: &Self, other: &Self) -> bool {
+        // Discard pointer metadata (including the v-table).
+        let this = Self::data_ptr(this);
+        let other = Self::data_ptr(other);
+
+        std::ptr::eq(this, other)
+    }
+}
+
+// Currently, it's brittle to compare `Arc`s of dyn traits with `Arc::ptr_eq`
+// due to this check including v-table equality. It may be possible to use
+// `Arc::ptr_eq` directly if a fix to https://github.com/rust-lang/rust/issues/103763
+// is stabilized.
+impl<T: ?Sized> DataPtr for Arc<T> {
+    fn data_ptr(this: &Self) -> *const () {
+        Arc::as_ptr(this) as *const ()
+    }
 }
 
 #[cfg(test)]
@@ -590,5 +619,25 @@ mod tests {
         assert_eq!(longest_consecutive_prefix([0, 1, 3, 4]), 2);
         assert_eq!(longest_consecutive_prefix([0, 1, 2, 3, 4]), 5);
         assert_eq!(longest_consecutive_prefix([1, 2, 3, 4]), 0);
+    }
+
+    #[test]
+    fn arc_data_ptr_eq() {
+        let x = Arc::new(());
+        let y = Arc::new(());
+        let y_clone = Arc::clone(&y);
+
+        assert!(
+            Arc::data_ptr_eq(&x, &x),
+            "same `Arc`s should point to same data"
+        );
+        assert!(
+            !Arc::data_ptr_eq(&x, &y),
+            "different `Arc`s should point to different data"
+        );
+        assert!(
+            Arc::data_ptr_eq(&y, &y_clone),
+            "cloned `Arc` should point to same data as the original"
+        );
     }
 }

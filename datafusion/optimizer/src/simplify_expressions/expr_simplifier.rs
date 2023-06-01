@@ -17,6 +17,8 @@
 
 //! Expression simplification API
 
+use std::ops::Not;
+
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
@@ -1176,7 +1178,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        ops::{BitAnd, BitOr, BitXor},
+        sync::Arc,
+    };
 
     use crate::simplify_expressions::{
         utils::for_test::{cast_to_int64_expr, now_expr, to_timestamp_expr},
@@ -2044,7 +2050,7 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_and() {
         // (c2 > 5) & (c2 > 5) -> (c2 > 5)
-        let expr = (col("c2").gt(lit(5))).bitwise_and(col("c2").gt(lit(5)));
+        let expr = (col("c2").gt(lit(5))).bitand(col("c2").gt(lit(5)));
         let expected = col("c2").gt(lit(5));
 
         assert_eq!(simplify(expr), expected);
@@ -2053,7 +2059,7 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_or() {
         // (c2 > 5) | (c2 > 5) -> (c2 > 5)
-        let expr = (col("c2").gt(lit(5))).bitwise_or(col("c2").gt(lit(5)));
+        let expr = (col("c2").gt(lit(5))).bitor(col("c2").gt(lit(5)));
         let expected = col("c2").gt(lit(5));
 
         assert_eq!(simplify(expr), expected);
@@ -2062,13 +2068,13 @@ mod tests {
     #[test]
     fn test_simplify_simple_bitwise_xor() {
         // c4 ^ c4 -> 0
-        let expr = (col("c4")).bitwise_xor(col("c4"));
+        let expr = (col("c4")).bitxor(col("c4"));
         let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
         // c3 ^ c3 -> 0
-        let expr = col("c3").bitwise_xor(col("c3"));
+        let expr = col("c3").bitxor(col("c3"));
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);

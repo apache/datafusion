@@ -43,7 +43,10 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
-use crate::protobuf::{physical_aggregate_expr_node, PhysicalSortExprNode, ScalarValue};
+use crate::protobuf::{
+    physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    ScalarValue,
+};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
@@ -481,21 +484,21 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             .map(|p| p.as_slice().try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let output_ordering = if let Some(output_ordering) = &conf.output_ordering {
-            output_ordering
+        let mut output_orderings = vec![];
+        for order in &conf.output_ordering {
+            let expr_node_vec = order
                 .iter()
-                .map(|o| {
-                    let expr = o.expr.clone().try_into()?;
+                .map(|sort_expr| {
+                    let expr = sort_expr.expr.clone().try_into()?;
                     Ok(PhysicalSortExprNode {
                         expr: Some(Box::new(expr)),
-                        asc: !o.options.descending,
-                        nulls_first: o.options.nulls_first,
+                        asc: !sort_expr.options.descending,
+                        nulls_first: sort_expr.options.nulls_first,
                     })
                 })
-                .collect::<Result<Vec<PhysicalSortExprNode>>>()?
-        } else {
-            vec![]
-        };
+                .collect::<Result<Vec<PhysicalSortExprNode>>>()?;
+            output_orderings.push(expr_node_vec)
+        }
 
         Ok(protobuf::FileScanExecConf {
             file_groups,
@@ -515,7 +518,12 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .map(|x| x.0.clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
-            output_ordering,
+            output_ordering: output_orderings
+                .into_iter()
+                .map(|e| PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: e,
+                })
+                .collect::<Vec<_>>(),
         })
     }
 }

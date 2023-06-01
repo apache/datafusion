@@ -907,11 +907,11 @@ macro_rules! impl_op_arithmetic {
             )))),
             // Binary operations on arguments with different types:
             (ScalarValue::Date32(Some(days)), _) => {
-                let value = date32_add(*days, $RHS, get_sign!($OPERATION))?;
+                let value = date32_op(*days, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::Date32(Some(value)))
             }
             (ScalarValue::Date64(Some(ms)), _) => {
-                let value = date64_add(*ms, $RHS, get_sign!($OPERATION))?;
+                let value = date64_op(*ms, $RHS, get_sign!($OPERATION))?;
                 Ok(ScalarValue::Date64(Some(value)))
             }
             (ScalarValue::TimestampSecond(Some(ts_s), zone), _) => {
@@ -1247,14 +1247,14 @@ pub fn calculate_naives<const TIME_MODE: bool>(
 }
 
 #[inline]
-pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
+pub fn date32_op(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::days(days as i64));
     do_date_math(prior, scalar, sign).map(|d| d.sub(epoch).num_days() as i32)
 }
 
 #[inline]
-pub fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
+pub fn date64_op(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::milliseconds(ms));
     do_date_math(prior, scalar, sign).map(|d| d.sub(epoch).num_milliseconds())
@@ -1398,7 +1398,7 @@ where
 {
     Ok(match scalar {
         ScalarValue::IntervalDayTime(Some(i)) => add_day_time(prior, *i, sign),
-        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i * sign),
+        ScalarValue::IntervalYearMonth(Some(i)) => shift_months(prior, *i, sign),
         ScalarValue::IntervalMonthDayNano(Some(i)) => add_m_d_nano(prior, *i, sign),
         other => Err(DataFusionError::Execution(format!(
             "DateIntervalExpr does not support non-interval type {other:?}"
@@ -1415,7 +1415,7 @@ where
     D: Datelike + Add<Duration, Output = D>,
 {
     Ok(match INTERVAL_MODE {
-        YM_MODE => shift_months(prior, interval as i32 * sign),
+        YM_MODE => shift_months(prior, interval as i32, sign),
         DT_MODE => add_day_time(prior, interval as i64, sign),
         MDN_MODE => add_m_d_nano(prior, interval, sign),
         _ => {
@@ -1427,7 +1427,7 @@ where
 }
 
 // Can remove once chrono:0.4.23 is released
-fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
+pub fn add_m_d_nano<D>(prior: D, interval: i128, sign: i32) -> D
 where
     D: Datelike + Add<Duration, Output = D>,
 {
@@ -1435,13 +1435,13 @@ where
     let months = months * sign;
     let days = days * sign;
     let nanos = nanos * sign as i64;
-    let a = shift_months(prior, months);
+    let a = shift_months(prior, months, 1);
     let b = a.add(Duration::days(days as i64));
     b.add(Duration::nanoseconds(nanos))
 }
 
 // Can remove once chrono:0.4.23 is released
-fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
+pub fn add_day_time<D>(prior: D, interval: i64, sign: i32) -> D
 where
     D: Datelike + Add<Duration, Output = D>,
 {

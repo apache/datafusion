@@ -28,7 +28,9 @@ use datafusion::{
 use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
-use datafusion::logical_expr::expr::{BinaryExpr, Case, Cast, Sort, WindowFunction};
+use datafusion::logical_expr::expr::{
+    BinaryExpr, Case, Cast, ScalarFunction as DFScalarFunction, Sort, WindowFunction,
+};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
 use prost_types::Any as ProtoAny;
@@ -564,6 +566,7 @@ pub fn make_binary_op_scalar_func(
 }
 
 /// Convert DataFusion Expr to Substrait Rex
+#[allow(deprecated)]
 pub fn to_substrait_rex(
     expr: &Expr,
     schema: &DFSchemaRef,
@@ -573,6 +576,29 @@ pub fn to_substrait_rex(
     ),
 ) -> Result<Expression> {
     match expr {
+        Expr::ScalarFunction(DFScalarFunction { fun, args }) => {
+            let mut arguments: Vec<FunctionArgument> = vec![];
+            for arg in args {
+                arguments.push(FunctionArgument {
+                    arg_type: Some(ArgType::Value(to_substrait_rex(
+                        arg,
+                        schema,
+                        extension_info,
+                    )?)),
+                });
+            }
+            let function_name = fun.to_string().to_lowercase();
+            let function_anchor = _register_function(function_name, extension_info);
+            Ok(Expression {
+                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments,
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                })),
+            })
+        }
         Expr::Between(Between {
             expr,
             negated,

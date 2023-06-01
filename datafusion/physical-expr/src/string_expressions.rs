@@ -235,7 +235,6 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             .map(|index| {
                 let mut owned_string: String = "".to_owned();
                 for arg in args {
-                    #[allow(clippy::collapsible_match)]
                     match arg {
                         ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value)) => {
                             if let Some(value) = maybe_value {

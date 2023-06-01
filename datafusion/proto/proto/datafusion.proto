@@ -96,6 +96,10 @@ message ParquetFormat {
 
 message AvroFormat {}
 
+message LogicalExprNodeCollection {
+  repeated LogicalExprNode logical_expr_nodes = 1;
+}
+
 message ListingTableScanNode {
   reserved 1; // was string table_name
   OwnedTableReference table_name = 14;
@@ -112,7 +116,7 @@ message ListingTableScanNode {
     ParquetFormat parquet = 11;
     AvroFormat avro = 12;
   }
-  repeated LogicalExprNode file_sort_order = 13;
+  repeated LogicalExprNodeCollection file_sort_order = 13;
 }
 
 message ViewTableScanNode {
@@ -183,7 +187,7 @@ message CreateExternalTableNode {
   string delimiter = 8;
   string definition = 9;
   string file_compression_type = 10;
-  repeated LogicalExprNode order_exprs = 13;
+  repeated LogicalExprNodeCollection order_exprs = 13;
   bool unbounded = 14;
   map<string, string> options = 11;
 }
@@ -1188,6 +1192,10 @@ message ScanLimit {
   uint32 limit = 1;
 }
 
+message PhysicalSortExprNodeCollection {
+  repeated PhysicalSortExprNode physical_sort_expr_nodes = 1;
+}
+
 message FileScanExecConf {
   // Was repeated ConfigOption options = 10;
   reserved 10;
@@ -1199,7 +1207,7 @@ message FileScanExecConf {
   Statistics statistics = 6;
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
-  repeated PhysicalSortExprNode output_ordering = 9;
+  repeated PhysicalSortExprNodeCollection output_ordering = 9;
 }
 
 message ParquetScanExecNode {
