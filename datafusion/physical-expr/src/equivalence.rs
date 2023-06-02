@@ -436,7 +436,7 @@ pub fn project_ordering_equivalence_properties(
             .iter()
             .filter(|sort_exprs| {
                 sort_exprs.iter().any(|sort_expr| {
-                    let col_infos = get_column_infos(&sort_expr.expr);
+                    let col_infos = get_column_indices(&sort_expr.expr);
                     // If any one of the columns, used in Expression is invalid, remove expression
                     // from ordering equivalences
                     col_infos.into_iter().any(|(idx, name)| {
@@ -593,12 +593,12 @@ mod tests {
     #[test]
     fn test_get_column_infos() -> Result<()> {
         let expr1 = Arc::new(Column::new("col1", 2)) as _;
-        assert_eq!(get_column_infos(&expr1), vec![(2, "col1".to_string())]);
+        assert_eq!(get_column_indices(&expr1), vec![(2, "col1".to_string())]);
         let expr2 = Arc::new(Column::new("col2", 5)) as _;
-        assert_eq!(get_column_infos(&expr2), vec![(5, "col2".to_string())]);
+        assert_eq!(get_column_indices(&expr2), vec![(5, "col2".to_string())]);
         let expr3 = Arc::new(BinaryExpr::new(expr1, Operator::Plus, expr2)) as _;
         assert_eq!(
-            get_column_infos(&expr3),
+            get_column_indices(&expr3),
             vec![(2, "col1".to_string()), (5, "col2".to_string())]
         );
         Ok(())
