@@ -304,7 +304,7 @@ mod test {
     use super::*;
     use arrow_schema::{DataType, Field, Schema};
 
-    use crate::{execution::context::SessionContext, test::exec::PanicingExec};
+    use crate::{execution::context::SessionContext, test::exec::PanicExec};
 
     #[tokio::test]
     #[should_panic(expected = "PanickingStream did panic")]
@@ -313,7 +313,7 @@ mod test {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
         let num_partitions = 10;
-        let input = PanicingExec::new(schema.clone(), num_partitions);
+        let input = PanicExec::new(schema.clone(), num_partitions);
         consume(input).await
     }
 
@@ -325,7 +325,7 @@ mod test {
 
         // make 2 partitions, second panics before the first
         let num_partitions = 2;
-        let input = PanicingExec::new(schema.clone(), num_partitions)
+        let input = PanicExec::new(schema.clone(), num_partitions)
             .with_partition_panic(0, 10)
             .with_partition_panic(1, 3); // partition 1 should panic first (after 3 )
 
@@ -334,7 +334,7 @@ mod test {
 
     /// Consumes all the input's partitions into a
     /// RecordBatchReceiverStream and runs it to completion
-    async fn consume(input: PanicingExec) {
+    async fn consume(input: PanicExec) {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 

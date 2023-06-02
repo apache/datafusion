@@ -642,7 +642,7 @@ pub async fn assert_strong_count_converges_to_zero<T>(refs: Weak<T>) {
 ///
 /// This is useful to test panic handling of certain execution plans.
 #[derive(Debug)]
-pub struct PanicingExec {
+pub struct PanicExec {
     /// Schema that is mocked by this plan.
     schema: SchemaRef,
 
@@ -651,7 +651,7 @@ pub struct PanicingExec {
     batches_until_panics: Vec<usize>,
 }
 
-impl PanicingExec {
+impl PanicExec {
     /// Create new [`PanickingExec`] with a give schema and number of
     /// partitions, which will each panic immediately.
     pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
@@ -668,7 +668,7 @@ impl PanicingExec {
     }
 }
 
-impl ExecutionPlan for PanicingExec {
+impl ExecutionPlan for PanicExec {
     fn as_any(&self) -> &dyn Any {
         self
     }

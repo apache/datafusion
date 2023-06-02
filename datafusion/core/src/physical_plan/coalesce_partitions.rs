@@ -177,7 +177,7 @@ mod tests {
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, PanicingExec,
+        assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
     };
     use crate::test::{self, assert_is_pending};
 
@@ -239,7 +239,7 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
-        let panicking_exec = Arc::new(PanicingExec::new(Arc::clone(&schema), 2));
+        let panicking_exec = Arc::new(PanicExec::new(Arc::clone(&schema), 2));
         let coalesce_partitions_exec =
             Arc::new(CoalescePartitionsExec::new(panicking_exec));
 
