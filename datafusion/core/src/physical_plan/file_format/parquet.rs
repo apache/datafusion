@@ -17,8 +17,6 @@
 
 //! Execution plan for reading Parquet files
 
-use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_physical_expr::PhysicalExpr;
 use fmt::Debug;
 use std::any::Any;
 use std::cmp::min;
@@ -27,25 +25,32 @@ use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::config::ConfigOptions;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::FileMeta;
+use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 use crate::{
+    config::ConfigOptions,
     datasource::listing::FileRange,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
+        common::AbortOnDropSingle,
         expressions::PhysicalSortExpr,
-        file_format::{FileScanConfig, SchemaAdapter},
+        file_format::{FileMeta, FileScanConfig, SchemaAdapter},
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
-        Statistics,
+        ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+        Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
+use datafusion_physical_expr::{
+    LexOrdering, OrderingEquivalenceProperties, PhysicalExpr,
+};
+
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
@@ -64,8 +69,6 @@ mod page_filter;
 mod row_filter;
 mod row_groups;
 
-use crate::physical_plan::common::AbortOnDropSingle;
-use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 pub use metrics::ParquetFileMetrics;
 
 #[derive(Default)]
@@ -90,7 +93,7 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    projected_output_ordering: Option<Vec<PhysicalSortExpr>>,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
@@ -342,7 +345,16 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.projected_output_ordering.as_deref()
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn with_new_children(
@@ -900,7 +912,7 @@ mod tests {
                     projection,
                     limit: None,
                     table_partition_cols: vec![],
-                    output_ordering: None,
+                    output_ordering: vec![],
                     infinite_source: false,
                 },
                 predicate,
@@ -1549,7 +1561,7 @@ mod tests {
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
-                    output_ordering: None,
+                    output_ordering: vec![],
                     infinite_source: false,
                 },
                 None,
@@ -1663,7 +1675,7 @@ mod tests {
                         ),
                     ),
                 ],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1725,7 +1737,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1917,7 +1929,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1954,7 +1966,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -1996,7 +2008,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -2034,7 +2046,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -2073,7 +2085,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -2102,7 +2114,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,

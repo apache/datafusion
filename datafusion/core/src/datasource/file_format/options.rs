@@ -443,7 +443,7 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
             // TODO: Add file sort order into CsvReadOptions and introduce here.
-            .with_file_sort_order(None)
+            .with_file_sort_order(vec![])
             .with_infinite_source(self.infinite)
     }
 

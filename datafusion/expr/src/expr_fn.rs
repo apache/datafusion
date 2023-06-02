@@ -772,7 +772,6 @@ pub fn create_udf(
 
 /// Creates a new UDAF with a specific signature, state type and return type.
 /// The signature and state type must match the `Accumulator's implementation`.
-#[allow(clippy::rc_buffer)]
 pub fn create_udaf(
     name: &str,
     input_type: DataType,

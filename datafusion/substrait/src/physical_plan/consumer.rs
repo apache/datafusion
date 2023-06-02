@@ -112,7 +112,7 @@ pub async fn from_substrait_rel(
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],
-                        output_ordering: None,
+                        output_ordering: vec![],
                         infinite_source: false,
                     };
 

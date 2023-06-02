@@ -19,7 +19,9 @@
 
 #### Overview
 
-This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files in [`test_files`](test_files).
+This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We
+use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files
+in [`test_files`](test_files).
 
 #### Running tests: TLDR Examples
 
@@ -91,7 +93,8 @@ Assuming it looks good, check it in!
 
 #### Running tests: Validation Mode
 
-In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the file to the output produced by that run.
+In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the
+file to the output produced by that run.
 
 For example, to run all tests suites in validation mode
 
@@ -136,9 +139,29 @@ docker run \
   postgres
 ```
 
+#### Running Tests: `tpch`
+
+Test files in `tpch` directory runs against the `TPCH` data set (SF =
+0.1), which must be generated before running. You can use following
+command to generate tpch data, assuming you are in the repository
+root:
+
+```shell
+docker run -it \
+  -v "$(realpath datafusion/core/tests/sqllogictests/test_files/tpch/data)":/data \
+  ghcr.io/databloom-ai/tpch-docker:main -vf -s 0.1
+```
+
+Then you need to add `INCLUDE_TPCH=true` to run tpch tests:
+
+```shell
+INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
+```
+
 #### Updating tests: Completion Mode
 
-In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is a full script that is a copy of the prototype script with result inserted.
+In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the
+database engine. The output is a full script that is a copy of the prototype script with result inserted.
 
 You can update the tests / generate expected output by passing the `--complete` argument.
 
@@ -149,11 +172,16 @@ cargo test -p datafusion --test sqllogictests -- ddl --complete
 
 #### sqllogictests
 
-sqllogictest is a program originally written for SQLite to verify the correctness of SQL queries against the SQLite engine. The program is engine-agnostic and can parse sqllogictest files (`.slt`), runs queries against an SQL engine and compare the output to the expected output.
+sqllogictest is a program originally written for SQLite to verify the correctness of SQL queries against the SQLite
+engine. The program is engine-agnostic and can parse sqllogictest files (`.slt`), runs queries against an SQL engine and
+compare the output to the expected output.
 
-Tests in the `.slt` file are a sequence of query record generally starting with `CREATE` statements to populate tables and then further queries to test the populated data (arrow-datafusion exception).
+Tests in the `.slt` file are a sequence of query record generally starting with `CREATE` statements to populate tables
+and then further queries to test the populated data (arrow-datafusion exception).
 
-Each `.slt` file runs in its own, isolated `SessionContext`, to make the test setup explicit and so they can run in parallel. Thus it important to keep the tests from having externally visible side effects (like writing to a global location such as `/tmp/`)
+Each `.slt` file runs in its own, isolated `SessionContext`, to make the test setup explicit and so they can run in
+parallel. Thus it important to keep the tests from having externally visible side effects (like writing to a global
+location such as `/tmp/`)
 
 Query records follow the format:
 
@@ -166,7 +194,8 @@ query <type_string> <sort_mode>
 ```
 
 - `test_name`: Uniquely identify the test name (arrow-datafusion only)
-- `type_string`: A short string that specifies the number of result columns and the expected datatype of each result column. There is one character in the <type_string> for each result column. The characters codes are:
+- `type_string`: A short string that specifies the number of result columns and the expected datatype of each result
+  column. There is one character in the <type_string> for each result column. The characters codes are:
   - 'B' - **B**oolean,
   - 'D' - **D**atetime,
   - 'I' - **I**nteger,
@@ -179,10 +208,19 @@ query <type_string> <sort_mode>
   - NULL values are rendered as `NULL`,
   - empty strings are rendered as `(empty)`,
   - boolean values are rendered as `true`/`false`,
-  - this list can be not exhaustive, check the `datafusion/core/tests/sqllogictests/src/engines/conversion.rs` for details.
-- `sort_mode`: If included, it must be one of `nosort` (**default**), `rowsort`, or `valuesort`. In `nosort` mode, the results appear in exactly the order in which they were received from the database engine. The `nosort` mode should only be used on queries that have an `ORDER BY` clause or which only have a single row of result, since otherwise the order of results is undefined and might vary from one database engine to another. The `rowsort` mode gathers all output from the database engine then sorts it by rows on the client side. Sort comparisons use [sort_unstable](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_unstable) on the rendered text representation of the values. Hence, "9" sorts after "10", not before. The `valuesort` mode works like `rowsort` except that it does not honor row groupings. Each individual result value is sorted on its own.
+  - this list can be not exhaustive, check the `datafusion/core/tests/sqllogictests/src/engines/conversion.rs` for
+    details.
+- `sort_mode`: If included, it must be one of `nosort` (**default**), `rowsort`, or `valuesort`. In `nosort` mode, the
+  results appear in exactly the order in which they were received from the database engine. The `nosort` mode should
+  only be used on queries that have an `ORDER BY` clause or which only have a single row of result, since otherwise the
+  order of results is undefined and might vary from one database engine to another. The `rowsort` mode gathers all
+  output from the database engine then sorts it by rows on the client side. Sort comparisons
+  use [sort_unstable](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_unstable) on the rendered text
+  representation of the values. Hence, "9" sorts after "10", not before. The `valuesort` mode works like `rowsort`
+  except that it does not honor row groupings. Each individual result value is sorted on its own.
 
-> :warning: It is encouraged to either apply `order by`, or use `rowsort` for queries without explicit `order by` clauses.
+> :warning: It is encouraged to either apply `order by`, or use `rowsort` for queries without explicit `order by`
+> clauses.
 
 ##### Example
 

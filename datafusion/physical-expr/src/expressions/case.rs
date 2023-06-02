@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
@@ -23,7 +24,7 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, and_kleene, eq_dyn, is_not_null, is_null, not, or, or_kleene};
+use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
@@ -139,7 +140,10 @@ impl CaseExpr {
             // build boolean array representing which rows match the "when" value
             let when_match = eq_dyn(&when_value, base_value.as_ref())?;
             // Treat nulls as false
-            let when_match = and_kleene(&when_match, &is_not_null(&when_match)?)?;
+            let when_match = match when_match.null_count() {
+                0 => Cow::Borrowed(&when_match),
+                _ => Cow::Owned(prep_null_mask_filter(&when_match)),
+            };
 
             let then_value = self.when_then_expr[i]
                 .1
@@ -189,13 +193,6 @@ impl CaseExpr {
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
-            // Treat 'NULL' as false value
-            let when_value = match when_value {
-                ColumnarValue::Scalar(value) if value.is_null() => {
-                    continue;
-                }
-                _ => when_value,
-            };
             let when_value = when_value.into_array(batch.num_rows());
             let when_value = as_boolean_array(&when_value).map_err(|e| {
                 DataFusionError::Context(
@@ -203,10 +200,15 @@ impl CaseExpr {
                     Box::new(e),
                 )
             })?;
+            // Treat 'NULL' as false value
+            let when_value = match when_value.null_count() {
+                0 => Cow::Borrowed(when_value),
+                _ => Cow::Owned(prep_null_mask_filter(when_value)),
+            };
 
             let then_value = self.when_then_expr[i]
                 .1
-                .evaluate_selection(batch, when_value)?;
+                .evaluate_selection(batch, &when_value)?;
             let then_value = match then_value {
                 ColumnarValue::Scalar(value) if value.is_null() => {
                     new_null_array(&return_type, batch.num_rows())
@@ -214,14 +216,12 @@ impl CaseExpr {
                 _ => then_value.into_array(batch.num_rows()),
             };
 
-            current_value = zip(when_value, then_value.as_ref(), current_value.as_ref())?;
+            current_value =
+                zip(&when_value, then_value.as_ref(), current_value.as_ref())?;
 
             // Succeed tuples should be filtered out for short-circuit evaluation,
             // null values for the current when expr should be kept
-            remainder = and(
-                &remainder,
-                &or_kleene(&not(when_value)?, &is_null(when_value)?)?,
-            )?;
+            remainder = and(&remainder, &not(&when_value)?)?;
         }
 
         if let Some(e) = &self.else_expr {

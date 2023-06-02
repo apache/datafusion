@@ -518,7 +518,7 @@ pub async fn register_unbounded_file_with_ordering(
     schema: SchemaRef,
     file_path: &Path,
     table_name: &str,
-    file_sort_order: Option<Vec<Expr>>,
+    file_sort_order: Vec<Vec<Expr>>,
     with_unbounded_execution: bool,
 ) -> Result<()> {
     // Mark infinite and provide schema:
