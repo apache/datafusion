@@ -1651,13 +1651,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let agg_expr = aggregates::create_aggregate_expr(
-                fun,
-                *distinct,
-                &args,
-                physical_input_schema,
-                name,
-            )?;
             let order_by = match order_by {
                 Some(e) => Some(
                     e.iter()
@@ -1673,6 +1666,16 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
+            let orderings = order_by.clone().unwrap_or(vec![]);
+            let orderings = orderings.into_iter().map(|elem| elem.expr).collect::<Vec<_>>();
+            let agg_expr = aggregates::create_aggregate_expr(
+                fun,
+                *distinct,
+                &args,
+                &orderings,
+                physical_input_schema,
+                name,
+            )?;
             Ok((agg_expr, filter, order_by))
         }
         Expr::AggregateUDF(AggregateUDF {

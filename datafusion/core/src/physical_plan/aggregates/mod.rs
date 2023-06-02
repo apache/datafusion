@@ -564,32 +564,31 @@ impl AggregateExec {
         // in `Final` mode, it is not important to produce correct result in `Partial` mode.
         // We only support `Single` mode, where we are sure that output produced is final, and it
         // is produced in a single step.
-        if mode == AggregateMode::Single {
-            let requirement = get_finest_requirement(
-                &mut aggr_expr,
-                &mut order_by_expr,
-                || input.equivalence_properties(),
-                || input.ordering_equivalence_properties(),
-            )?;
-            let aggregator_requirement = requirement
-                .as_ref()
-                .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
-            aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
-            // If all aggregate expressions are reversible, also consider reverse
-            // requirement(s). The reason is that existing ordering may satisfy the
-            // given requirement or its reverse. By considering both, we can generate better plans.
-            if aggr_expr
-                .iter()
-                .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
-            {
-                let reverse_agg_requirement = requirement.map(|reqs| {
-                    PhysicalSortRequirement::from_sort_exprs(
-                        reverse_order_bys(&reqs).iter(),
-                    )
-                });
-                aggregator_reverse_reqs = reverse_agg_requirement;
-            }
+        let requirement = get_finest_requirement(
+            &mut aggr_expr,
+            &mut order_by_expr,
+            || input.equivalence_properties(),
+            || input.ordering_equivalence_properties(),
+        )?;
+        let aggregator_requirement = requirement
+            .as_ref()
+            .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
+        aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
+        // If all aggregate expressions are reversible, also consider reverse
+        // requirement(s). The reason is that existing ordering may satisfy the
+        // given requirement or its reverse. By considering both, we can generate better plans.
+        if aggr_expr
+            .iter()
+            .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
+        {
+            let reverse_agg_requirement = requirement.map(|reqs| {
+                PhysicalSortRequirement::from_sort_exprs(
+                    reverse_order_bys(&reqs).iter(),
+                )
+            });
+            aggregator_reverse_reqs = reverse_agg_requirement;
         }
+
 
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
@@ -611,15 +610,15 @@ impl AggregateExec {
             &aggregation_ordering,
         )?;
 
-        // If aggregator is working on multiple partitions and there is an order-sensitive aggregator with a requirement return error.
-        if input.output_partitioning().partition_count() > 1
-            && order_by_expr.iter().any(|req| req.is_some())
-        {
-            return Err(DataFusionError::NotImplemented(
-                "Order-sensitive aggregators is not supported on multiple partitions"
-                    .to_string(),
-            ));
-        }
+        // // If aggregator is working on multiple partitions and there is an order-sensitive aggregator with a requirement return error.
+        // if input.output_partitioning().partition_count() > 1
+        //     && order_by_expr.iter().any(|req| req.is_some())
+        // {
+        //     return Err(DataFusionError::NotImplemented(
+        //         "Order-sensitive aggregators is not supported on multiple partitions"
+        //             .to_string(),
+        //     ));
+        // }
 
         Ok(AggregateExec {
             mode,

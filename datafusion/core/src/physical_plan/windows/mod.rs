@@ -71,7 +71,7 @@ pub fn create_window_expr(
     Ok(match fun {
         WindowFunction::AggregateFunction(fun) => {
             let aggregate =
-                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+                aggregates::create_aggregate_expr(fun, false, args, &[], input_schema, name)?;
             if !window_frame.start_bound.is_unbounded() {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     aggregate,

@@ -29,6 +29,8 @@ use datafusion_expr::Accumulator;
 
 use std::any::Any;
 use std::sync::Arc;
+use petgraph::visit::Walker;
+use datafusion_common::utils::get_row_at_idx;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug)]
@@ -83,6 +85,7 @@ impl AggregateExpr for FirstValue {
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
+            vec![],
             self.data_type.clone(),
         )))
     }
@@ -152,16 +155,20 @@ pub struct LastValue {
     name: String,
     pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    orderings: Vec<Field>,
 }
 
 impl LastValue {
     /// Creates a new LAST_VALUE aggregation function.
-    pub fn new(expr: Arc<dyn PhysicalExpr>, data_type: DataType) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, orderings: Vec<Field>, data_type: DataType) -> Self {
         let name = format!("LAST_VALUE({})", expr);
+        println!("expr: {:?}", expr);
+        println!("orderings: {:?}", orderings);
         Self {
             name: name.into(),
             data_type,
             expr,
+            orderings,
         }
     }
 }
@@ -181,11 +188,15 @@ impl AggregateExpr for LastValue {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
+        let mut fields = vec![Field::new(
             format_state_name(&self.name, "last_value"),
             self.data_type.clone(),
             true,
-        )])
+        )];
+        for field in &self.orderings{
+            fields.push(field.clone());
+        }
+        Ok(fields)
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -224,6 +235,7 @@ impl PartialEq<dyn Any> for LastValue {
 #[derive(Debug)]
 struct LastValueAccumulator {
     last: ScalarValue,
+    orderings: Vec<ScalarValue>,
 }
 
 impl LastValueAccumulator {
@@ -231,6 +243,7 @@ impl LastValueAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
+            orderings: vec![],
         })
     }
 }
@@ -241,10 +254,14 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        if !values.is_empty() {
+        for (idx, elem) in values.iter().enumerate() {
+            println!("idx:{:?}, elem:{:?}", idx, elem);
+        }
+        if !values[0].is_empty() {
+            let row = get_row_at_idx(values, values.len() - 1)?;
             // Update with last value in the array.
-            self.last = ScalarValue::try_from_array(values, values.len() - 1)?;
+            self.last = row[0].clone();
+            self.orderings = row[1..].to_vec();
         }
         Ok(())
     }

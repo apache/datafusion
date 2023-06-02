@@ -32,6 +32,8 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::aggregate_function::{return_type, sum_type_of_avg};
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
+use arrow_schema::Field;
+use crate::expressions::format_state_name;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -39,6 +41,7 @@ pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    orderings: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -50,7 +53,17 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     let rt_type = return_type(fun, &input_phy_types)?;
     let input_phy_exprs = input_phy_exprs.to_vec();
-
+    println!("input_phy_exprs: {:?}", input_phy_exprs);
+    println!("orderings: {:?}", orderings);
+    let mut ordering_fields = vec![];
+    for expr in orderings {
+        let field = Field::new(
+            format_state_name(expr.to_string().as_str(), "last_value"),
+            expr.data_type(input_schema)?,
+            expr.nullable(input_schema)?,
+        );
+        ordering_fields.push(field);
+    }
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, rt_type),
@@ -314,6 +327,7 @@ pub fn create_aggregate_expr(
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
+            ordering_fields,
             input_phy_types[0].clone(),
         )),
     })
