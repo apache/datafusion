@@ -482,7 +482,10 @@ impl SchemaAdapter {
 /// and any necessary type conversions that need to be applied.
 #[derive(Debug)]
 pub struct SchemaMapping {
+    /// The schema of the table. This is the expected schema after conversion and it should match the schema of the query result.
     table_schema: SchemaRef,
+    /// The index in the batch schema matching the corresponding field in table_schema
+    /// i.e. table_schema[i] = file_schema[field_mappings[i].0]
     field_mappings: Vec<Option<usize>>,
 }
 
