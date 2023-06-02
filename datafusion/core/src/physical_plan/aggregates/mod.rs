@@ -373,12 +373,12 @@ fn get_finest_requirement<
     F2: Fn() -> OrderingEquivalenceProperties,
 >(
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
-    order_by_expr: &[Option<LexOrdering>],
+    order_by_expr: &mut [Option<LexOrdering>],
     eq_properties: F,
     ordering_eq_properties: F2,
 ) -> Result<Option<LexOrdering>> {
     let mut finest_req = get_init_req(aggr_expr, order_by_expr);
-    for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter()) {
+    for (aggr_expr, fn_req) in aggr_expr.iter_mut().zip(order_by_expr.iter_mut()) {
         let fn_req = if let Some(fn_req) = fn_req {
             fn_req
         } else {
@@ -408,6 +408,7 @@ fn get_finest_requirement<
                     // reverse requirement is compatible with existing requirements:
                     *aggr_expr = reverse;
                     *finest_req = finer.to_vec();
+                    *fn_req = fn_req_reverse;
                     continue;
                 }
             }
@@ -541,27 +542,32 @@ impl AggregateExec {
         )?;
 
         let schema = Arc::new(schema);
+        // Reset ordering requirement to `None` if aggregator is not order-sensitive
+        order_by_expr = aggr_expr
+            .iter()
+            .zip(order_by_expr.into_iter())
+            .map(|(aggr_expr, fn_reqs)| {
+                // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
+                if is_order_sensitive(aggr_expr) {
+                    fn_reqs
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
         let mut aggregator_reqs = vec![];
         let mut aggregator_reverse_reqs = None;
-        // Ordering requirement makes sense only in Partial and Single modes.
-        // In other modes, all groups are collapsed, therefore their input schema
-        // can not contain expressions in the requirement.
-        if mode == AggregateMode::Partial || mode == AggregateMode::Single {
-            order_by_expr = aggr_expr
-                .iter()
-                .zip(order_by_expr.into_iter())
-                .map(|(aggr_expr, fn_reqs)| {
-                    // If aggregation function is ordering sensitive, keep ordering requirement as is; otherwise ignore requirement
-                    if is_order_sensitive(aggr_expr) {
-                        fn_reqs
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+        // Currently we support order-sensitive aggregation only in `Single` mode.
+        // For `Final` and `FinalPartitioned` modes, we cannot guarantee they will receive
+        // data according to ordering requirements. As long as we cannot produce correct result
+        // in `Final` mode, it is not important to produce correct result in `Partial` mode.
+        // We only support `Single` mode, where we are sure that output produced is Final, and it
+        // is produced in a single step.
+        if mode == AggregateMode::Single {
             let requirement = get_finest_requirement(
                 &mut aggr_expr,
-                &order_by_expr,
+                &mut order_by_expr,
                 || input.equivalence_properties(),
                 || input.ordering_equivalence_properties(),
             )?;
@@ -604,6 +610,16 @@ impl AggregateExec {
             aggregator_reverse_reqs,
             &aggregation_ordering,
         )?;
+
+        // If aggregator is working on multiple partitions and there is an order-sensitive aggregator with a requirement return error.
+        if input.output_partitioning().partition_count() > 1
+            && order_by_expr.iter().any(|req| req.is_some())
+        {
+            return Err(DataFusionError::NotImplemented(
+                "Order-sensitive aggregators is not support on multiple partitions"
+                    .to_string(),
+            ));
+        }
 
         Ok(AggregateExec {
             mode,
@@ -1846,7 +1862,7 @@ mod tests {
             &vec![OrderedColumn::new(col_a.clone(), options1)],
             &vec![OrderedColumn::new(col_c.clone(), options2)],
         ));
-        let order_by_exprs = vec![
+        let mut order_by_exprs = vec![
             None,
             Some(vec![PhysicalSortExpr {
                 expr: Arc::new(col_a.clone()),
@@ -1877,15 +1893,12 @@ mod tests {
                 options: options2,
             }]),
         ];
-        let aggr_expr = Arc::new(FirstValue::new(
-            Arc::new(col_a.clone()),
-            "first1",
-            DataType::Int32,
-        )) as _;
+        let aggr_expr =
+            Arc::new(FirstValue::new(Arc::new(col_a.clone()), DataType::Int32)) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(
             &mut aggr_exprs,
-            &order_by_exprs,
+            &mut order_by_exprs,
             || eq_properties.clone(),
             || ordering_eq_properties.clone(),
         )?;
