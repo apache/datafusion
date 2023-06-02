@@ -140,8 +140,7 @@ impl ExecutionPlan for AnalyzeExec {
         let mut input_stream = builder.build();
         let output = async move {
             let mut total_rows = 0;
-            while let Some(batch) = input_stream.next().await {
-                let batch = batch?;
+            while let Some(batch) = input_stream.next().await.transpose()? {
                 total_rows += batch.num_rows();
             }
 
