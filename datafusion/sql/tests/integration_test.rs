@@ -40,6 +40,7 @@ use rstest::rstest;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
+    // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
 }
 

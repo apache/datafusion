@@ -31,9 +31,6 @@ use futures::stream::{Stream, StreamExt};
 use hashbrown::raw::RawTable;
 use itertools::izip;
 
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     AggregationOrdering, GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
@@ -41,6 +38,9 @@ use crate::physical_plan::aggregates::{
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 
 use crate::physical_plan::aggregates::utils::{
     aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
@@ -407,8 +407,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
@@ -514,8 +513,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());

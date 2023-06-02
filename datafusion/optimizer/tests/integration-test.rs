@@ -35,6 +35,7 @@ use std::sync::Arc;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
+    // enable logging so RUST_LOG works
     let _ = env_logger::try_init();
 }
 
