@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Table source
+
 use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use std::any::Any;
-
-///! Table source
 
 /// Indicates whether and how a filter expression can be handled by a
 /// TableProvider for table scans.

@@ -17,7 +17,7 @@
 
 //! Implements the SQL [Information Schema] for DataFusion.
 //!
-//! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
+//! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
 use async_trait::async_trait;
 use std::{any::Any, sync::Arc};
