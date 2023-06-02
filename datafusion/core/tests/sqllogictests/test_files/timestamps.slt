@@ -397,13 +397,13 @@ drop table ts_data_secs
 ##########
 
 # not support interval 0
-statement error Execution error: DATE_BIN stride must be non-zero and positive
+statement error Execution error: DATE_BIN stride must be non-zero
 SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero and positive
+statement error Execution error: DATE_BIN stride must be non-zero
 SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
 
-statement error Execution error: DATE_BIN stride must be non-zero and positive
+statement error Execution error: DATE_BIN stride must be non-zero
 SELECT
   DATE_BIN(INTERVAL '0' minute, time) AS time,
   count(val)

@@ -525,7 +525,7 @@ fn date_bin_impl(
     // Return error if stride is 0
     if stride == 0 {
         return Err(DataFusionError::Execution(
-            "DATE_BIN stride must be non-zero and positive".to_string(),
+            "DATE_BIN stride must be non-zero".to_string(),
         ));
     }
 
@@ -1044,7 +1044,7 @@ mod tests {
         ]);
         assert_eq!(
             res.err().unwrap().to_string(),
-            "Execution error: DATE_BIN stride must be non-zero and positive"
+            "Execution error: DATE_BIN stride must be non-zero"
         );
 
         // stride: overflow of day-time interval
