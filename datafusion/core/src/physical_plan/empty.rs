@@ -32,7 +32,7 @@ use log::trace;
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]

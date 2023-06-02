@@ -655,7 +655,7 @@ mod tests {
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())?
             .build()?;
         let expected =
-            "Filter: test.d != Int32(3) AND test.d != Int32(2) AND test.d != Int32(1)\
+            "Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -669,7 +669,7 @@ mod tests {
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())?
             .build()?;
         let expected =
-            "Filter: test.d = Int32(3) OR test.d = Int32(2) OR test.d = Int32(1)\
+            "Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)

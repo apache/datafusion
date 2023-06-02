@@ -17,3 +17,10 @@
 
 /// Run all tests that are found in the `sql` directory
 mod sql;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}

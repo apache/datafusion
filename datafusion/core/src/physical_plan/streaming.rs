@@ -28,9 +28,9 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::PhysicalSortExpr;
 
 use crate::datasource::streaming::PartitionStream;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use datafusion_execution::TaskContext;
 
 /// An [`ExecutionPlan`] for [`PartitionStream`]
 pub struct StreamingTableExec {

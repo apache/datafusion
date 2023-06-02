@@ -33,7 +33,7 @@ use crate::physical_plan::{
 };
 
 use super::SendableRecordBatchStream;
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
