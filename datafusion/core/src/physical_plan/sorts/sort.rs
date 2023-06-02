@@ -20,11 +20,6 @@
 //! but spills to disk if needed.
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::{
-    human_readable_size, MemoryConsumer, MemoryReservation,
-};
-use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, spawn_buffered, IPCWriter};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -41,6 +36,11 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use datafusion_execution::memory_pool::{
+    human_readable_size, MemoryConsumer, MemoryReservation,
+};
+use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, error, trace};
@@ -648,7 +648,6 @@ impl ExecutionPlan for SortExec {
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::collect;
     use crate::physical_plan::expressions::col;
@@ -661,6 +660,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_primitive_array, as_string_array};
+    use datafusion_execution::runtime_env::RuntimeConfig;
     use futures::FutureExt;
     use std::collections::HashMap;
 

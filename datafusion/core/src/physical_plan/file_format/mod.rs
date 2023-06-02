@@ -130,7 +130,7 @@ pub struct FileScanConfig {
     /// [`RuntimeEnv::object_store`]
     ///
     /// [`ObjectStore`]: object_store::ObjectStore
-    /// [`RuntimeEnv::object_store`]: crate::execution::runtime_env::RuntimeEnv::object_store
+    /// [`RuntimeEnv::object_store`]: datafusion_execution::runtime_env::RuntimeEnv::object_store
     pub object_store_url: ObjectStoreUrl,
     /// Schema before `projection` is applied. It contains the all columns that may
     /// appear in the files. It does not include table partition columns
