@@ -141,22 +141,22 @@ fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, entry: &T) -> bool {
 }
 
 // Helper function to calculate column info recursively
-fn get_column_infos_helper(
+fn get_column_indices_helper(
     indices: &mut Vec<(usize, String)>,
     expr: &Arc<dyn PhysicalExpr>,
 ) {
     if let Some(col) = expr.as_any().downcast_ref::<Column>() {
         indices.push((col.index(), col.name().to_string()))
     } else if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        get_column_infos_helper(indices, binary_expr.left());
-        get_column_infos_helper(indices, binary_expr.right());
+        get_column_indices_helper(indices, binary_expr.left());
+        get_column_indices_helper(indices, binary_expr.right());
     };
 }
 
 /// Get index and name of each column that is in the expression (Can return multiple entries for `BinaryExpr`s)
-fn get_column_infos(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
+fn get_column_indices(expr: &Arc<dyn PhysicalExpr>) -> Vec<(usize, String)> {
     let mut result = vec![];
-    get_column_infos_helper(&mut result, expr);
+    get_column_indices_helper(&mut result, expr);
     result
 }
 

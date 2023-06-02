@@ -19,7 +19,9 @@
 
 use std::ops::Not;
 
+use super::or_in_list_simplifier::OrInListSimplifier;
 use super::utils::*;
+
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use arrow::{
@@ -116,6 +118,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     pub fn simplify(&self, expr: Expr) -> Result<Expr> {
         let mut simplifier = Simplifier::new(&self.info);
         let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+        let mut or_in_list_simplifier = OrInListSimplifier::new();
 
         // TODO iterate until no changes are made during rewrite
         // (evaluating constants can enable new simplifications and
@@ -123,6 +126,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         // https://github.com/apache/arrow-datafusion/issues/1160
         expr.rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)?
+            .rewrite(&mut or_in_list_simplifier)?
             // run both passes twice to try an minimize simplifications that we missed
             .rewrite(&mut const_evaluator)?
             .rewrite(&mut simplifier)
@@ -432,17 +436,37 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             {
                 let first_val = list[0].clone();
                 if negated {
-                    list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
-                            (*expr.clone()).not_eq(y).and(acc)
-                        })
+                    list.into_iter().skip(1).fold(
+                        (*expr.clone()).not_eq(first_val),
+                        |acc, y| {
+                            // Note that `A and B and C and D` is a left-deep tree structure
+                            // as such we want to maintain this structure as much as possible
+                            // to avoid reordering the expression during each optimization
+                            // pass.
+                            //
+                            // Left-deep tree structure for `A and B and C and D`:
+                            // ```
+                            //        &
+                            //       / \
+                            //      &   D
+                            //     / \
+                            //    &   C
+                            //   / \
+                            //  A   B
+                            // ```
+                            //
+                            // The code below maintain the left-deep tree structure.
+                            acc.and((*expr.clone()).not_eq(y))
+                        },
+                    )
                 } else {
-                    list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).eq(first_val), |acc, y| {
-                            (*expr.clone()).eq(y).or(acc)
-                        })
+                    list.into_iter().skip(1).fold(
+                        (*expr.clone()).eq(first_val),
+                        |acc, y| {
+                            // Same reasoning as above
+                            acc.or((*expr.clone()).eq(y))
+                        },
+                    )
                 }
             }
             //
@@ -2454,6 +2478,37 @@ mod tests {
             regex_not_match(col("c1"), lit("^foo$")),
             col("c1").not_eq(lit("foo")),
         );
+
+        // regular expressions that match exact captured literals
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar)$")),
+            col("c1").eq(lit("foo")).or(col("c1").eq(lit("bar"))),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^(foo|bar)$")),
+            col("c1")
+                .not_eq(lit("foo"))
+                .and(col("c1").not_eq(lit("bar"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo)$")),
+            col("c1").eq(lit("foo")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz)$")),
+            ((col("c1").eq(lit("foo"))).or(col("c1").eq(lit("bar"))))
+                .or(col("c1").eq(lit("baz"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz|qux)$")),
+            col("c1")
+                .in_list(vec![lit("foo"), lit("bar"), lit("baz"), lit("qux")], false),
+        );
+
+        // regular expressions that mismatch captured literals
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
         assert_no_change(regex_match(col("c1"), lit("^")));
@@ -2888,11 +2943,11 @@ mod tests {
 
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
-            col("c1").eq(lit(2)).or(col("c1").eq(lit(1)))
+            col("c1").eq(lit(1)).or(col("c1").eq(lit(2)))
         );
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
-            col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+            col("c1").not_eq(lit(1)).and(col("c1").not_eq(lit(2)))
         );
 
         let subquery = Arc::new(test_table_scan_with_name("test").unwrap());
@@ -2918,7 +2973,7 @@ mod tests {
         let subquery2 =
             scalar_subquery(Arc::new(test_table_scan_with_name("test2").unwrap()));
 
-        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery2> AND c1 != <subquery1>
+        // c1 NOT IN (<subquery1>, <subquery2>) -> c1 != <subquery1> AND c1 != <subquery2>
         assert_eq!(
             simplify(in_list(
                 col("c1"),
@@ -2926,18 +2981,36 @@ mod tests {
                 true
             )),
             col("c1")
-                .not_eq(subquery2.clone())
-                .and(col("c1").not_eq(subquery1.clone()))
+                .not_eq(subquery1.clone())
+                .and(col("c1").not_eq(subquery2.clone()))
         );
 
-        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery2> OR c1 == <subquery1>
+        // c1 IN (<subquery1>, <subquery2>) -> c1 == <subquery1> OR c1 == <subquery2>
         assert_eq!(
             simplify(in_list(
                 col("c1"),
                 vec![subquery1.clone(), subquery2.clone()],
                 false
             )),
-            col("c1").eq(subquery2).or(col("c1").eq(subquery1))
+            col("c1").eq(subquery1).or(col("c1").eq(subquery2))
+        );
+
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) ->
+        // c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8)
+        let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
+            in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
+        );
+        assert_eq!(simplify(expr.clone()), expr);
+    }
+
+    #[test]
+    fn simplify_large_or() {
+        let expr = (0..5)
+            .map(|i| col("c1").eq(lit(i)))
+            .fold(lit(false), |acc, e| acc.or(e));
+        assert_eq!(
+            simplify(expr),
+            in_list(col("c1"), (0..5).map(lit).collect(), false),
         );
     }
 
