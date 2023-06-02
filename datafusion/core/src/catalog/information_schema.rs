@@ -81,15 +81,17 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        builder.add_table(
-                            &catalog_name,
-                            &schema_name,
-                            &table_name,
-                            table.table_type(),
-                        );
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            let table = schema.table(&table_name).await.unwrap();
+                            builder.add_table(
+                                &catalog_name,
+                                &schema_name,
+                                &table_name,
+                                table.table_type(),
+                            );
+                        }
                     }
                 }
             }
@@ -118,15 +120,17 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        builder.add_view(
-                            &catalog_name,
-                            &schema_name,
-                            &table_name,
-                            table.get_table_definition(),
-                        )
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            let table = schema.table(&table_name).await.unwrap();
+                            builder.add_view(
+                                &catalog_name,
+                                &schema_name,
+                                &table_name,
+                                table.get_table_definition(),
+                            )
+                        }
                     }
                 }
             }
@@ -140,19 +144,21 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        for (field_position, field) in
-                            table.schema().fields().iter().enumerate()
-                        {
-                            builder.add_column(
-                                &catalog_name,
-                                &schema_name,
-                                &table_name,
-                                field_position,
-                                field,
-                            )
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            let table = schema.table(&table_name).await.unwrap();
+                            for (field_position, field) in
+                                table.schema().fields().iter().enumerate()
+                            {
+                                builder.add_column(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    field_position,
+                                    field,
+                                )
+                            }
                         }
                     }
                 }
