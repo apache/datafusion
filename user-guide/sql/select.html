@@ -365,6 +365,11 @@
    LIMIT clause
   </a>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#exclude-and-except-clause">
+   EXCLUDE and EXCEPT clause
+  </a>
+ </li>
 </ul>
 
 </nav>
@@ -429,7 +434,8 @@ In this documentation we describe the SQL syntax in DataFusion.</p>
 [ <a class="reference internal" href="#having-clause">HAVING</a> condition] <br/>
 [ <a class="reference internal" href="#union-clause">UNION</a> [ ALL | select ] <br/>
 [ <a class="reference internal" href="#order-by-clause">ORDER BY</a> expression [ ASC | DESC ][, …] ] <br/>
-[ <a class="reference internal" href="#limit-clause">LIMIT</a> count ] <br/></p>
+[ <a class="reference internal" href="#limit-clause">LIMIT</a> count ] <br/>
+[ <a class="reference internal" href="#exclude-and-except-clause">EXCLUDE | EXCEPT</a> ] <br/></p>
 </code>
 <section id="with-clause">
 <h2>WITH clause<a class="headerlink" href="#with-clause" title="Permalink to this heading">¶</a></h2>
@@ -611,6 +617,19 @@ This order can be changed to descending by adding <code class="docutils literal 
 <p>Example:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">table</span>
 <span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span>
+</pre></div>
+</div>
+</section>
+<section id="exclude-and-except-clause">
+<h2>EXCLUDE and EXCEPT clause<a class="headerlink" href="#exclude-and-except-clause" title="Permalink to this heading">¶</a></h2>
+<p>Excluded named columns from query results.</p>
+<p>Example selecting all columns except for <code class="docutils literal notranslate"><span class="pre">age</span></code> and <code class="docutils literal notranslate"><span class="pre">person</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="p">(</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="p">;</span>
+</pre></div>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">EXCLUDE</span><span class="p">(</span><span class="n">age</span><span class="p">,</span><span class="w"> </span><span class="n">person</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">table</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
