@@ -28,7 +28,7 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode,
 };
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
+use crate::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
 
 use super::optimizer::PhysicalOptimizerRule;
 use crate::error::Result;
@@ -292,25 +292,42 @@ fn try_collect_left(
     let right = hash_join.right();
     let join_type = hash_join.join_type();
 
+    let left_supports_by_size = collect_threshold.map_or(true, |threshold| {
+        supports_collect_by_size(&**left, threshold)
+    });
     let left_can_collect = match join_type {
-        JoinType::Left | JoinType::Full | JoinType::LeftAnti => false,
+        JoinType::Left | JoinType::Full | JoinType::LeftAnti => {
+            left_supports_by_size
+                && matches!(
+                    left.output_partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                        | Partitioning::RoundRobinBatch(_)
+                )
+        }
         JoinType::Inner
         | JoinType::LeftSemi
         | JoinType::Right
         | JoinType::RightSemi
-        | JoinType::RightAnti => collect_threshold.map_or(true, |threshold| {
-            supports_collect_by_size(&**left, threshold)
-        }),
+        | JoinType::RightAnti => left_supports_by_size,
     };
+    let right_supports_by_size = collect_threshold.map_or(true, |threshold| {
+        supports_collect_by_size(&**right, threshold)
+    });
+
     let right_can_collect = match join_type {
-        JoinType::Right | JoinType::Full | JoinType::RightAnti => false,
+        JoinType::Right | JoinType::Full | JoinType::RightAnti => {
+            left_supports_by_size
+                && matches!(
+                    left.output_partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                        | Partitioning::RoundRobinBatch(_)
+                )
+        }
         JoinType::Inner
         | JoinType::RightSemi
         | JoinType::Left
         | JoinType::LeftSemi
-        | JoinType::LeftAnti => collect_threshold.map_or(true, |threshold| {
-            supports_collect_by_size(&**right, threshold)
-        }),
+        | JoinType::LeftAnti => right_supports_by_size,
     };
     match (left_can_collect, right_can_collect) {
         (true, true) => {
