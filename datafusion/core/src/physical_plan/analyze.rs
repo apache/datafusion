@@ -34,7 +34,7 @@ use tokio::task::JoinSet;
 use super::expressions::PhysicalSortExpr;
 use super::stream::RecordBatchStreamAdapter;
 use super::{Distribution, SendableRecordBatchStream};
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
 /// discards the results, and then prints out an annotated plan with metrics

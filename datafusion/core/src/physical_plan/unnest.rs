@@ -24,13 +24,13 @@ use arrow::array::{
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
 use log::trace;
 use std::time::Instant;
 use std::{any::Any, sync::Arc};
 
-use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, expressions::Column, DisplayFormatType,
     Distribution, EquivalenceProperties, ExecutionPlan, Partitioning, PhysicalExpr,
