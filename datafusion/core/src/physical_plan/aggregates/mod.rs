@@ -562,7 +562,7 @@ impl AggregateExec {
         // For `Final` and `FinalPartitioned` modes, we cannot guarantee they will receive
         // data according to ordering requirements. As long as we cannot produce correct result
         // in `Final` mode, it is not important to produce correct result in `Partial` mode.
-        // We only support `Single` mode, where we are sure that output produced is Final, and it
+        // We only support `Single` mode, where we are sure that output produced is final, and it
         // is produced in a single step.
         if mode == AggregateMode::Single {
             let requirement = get_finest_requirement(
@@ -616,7 +616,7 @@ impl AggregateExec {
             && order_by_expr.iter().any(|req| req.is_some())
         {
             return Err(DataFusionError::NotImplemented(
-                "Order-sensitive aggregators is not support on multiple partitions"
+                "Order-sensitive aggregators is not supported on multiple partitions"
                     .to_string(),
             ));
         }

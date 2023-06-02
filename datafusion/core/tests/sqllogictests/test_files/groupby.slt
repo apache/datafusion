@@ -2583,7 +2583,7 @@ statement ok
 set datafusion.execution.target_partitions = 2;
 
 # Currently, we do not support running order-sensitive aggregators in multiple partitions.
-statement error This feature is not implemented: Order-sensitive aggregators is not support on multiple partitions
+statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
 SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   LAST_VALUE(amount ORDER BY amount DESC) AS fv2
