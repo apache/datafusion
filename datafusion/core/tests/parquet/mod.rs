@@ -47,6 +47,13 @@ mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}
+
 // ----------------------
 // Begin test fixture
 // ----------------------

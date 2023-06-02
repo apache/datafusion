@@ -68,17 +68,15 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
 
         if let WindowFrameBound::Following(val) = &start_bound {
             if val.is_null() {
-                return Err(DataFusionError::Plan(
-                    "Invalid window frame: start bound cannot be unbounded following"
-                        .to_owned(),
-                ));
+                plan_error(
+                    "Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING",
+                )?
             }
         } else if let WindowFrameBound::Preceding(val) = &end_bound {
             if val.is_null() {
-                return Err(DataFusionError::Plan(
-                    "Invalid window frame: end bound cannot be unbounded preceding"
-                        .to_owned(),
-                ));
+                plan_error(
+                    "Invalid window frame: end bound cannot be UNBOUNDED PRECEDING",
+                )?
             }
         };
         Ok(Self {
@@ -163,13 +161,10 @@ pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFram
                 frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
             }
         } else {
-            return Err(DataFusionError::Plan(format!(
-                "With window frame of type RANGE, the ORDER BY expression must be of length 1, got {order_bys}")));
+            plan_error("RANGE requires exactly one ORDER BY column")?
         }
     } else if frame.units == WindowFrameUnits::Groups && order_bys == 0 {
-        return Err(DataFusionError::Plan(
-            "GROUPS mode requires an ORDER BY clause".to_string(),
-        ));
+        plan_error("GROUPS requires an ORDER BY clause")?
     };
     Ok(frame)
 }
@@ -246,8 +241,9 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
             let result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
-                    let msg = format!("INTERVAL expression cannot be {e:?}");
-                    return Err(DataFusionError::SQL(ParserError(msg)));
+                    return Err(DataFusionError::SQL(ParserError(format!(
+                        "INTERVAL expression cannot be {e:?}"
+                    ))));
                 }
             };
             if let Some(leading_field) = leading_field {
@@ -256,13 +252,14 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
                 result
             }
         }
-        _ => {
-            return Err(DataFusionError::Plan(
-                "Invalid window frame: frame offsets must be non negative integers"
-                    .to_owned(),
-            ));
-        }
+        _ => plan_error(
+            "Invalid window frame: frame offsets must be non negative integers",
+        )?,
     })))
+}
+
+fn plan_error<T>(err_message: &str) -> Result<T> {
+    Err(DataFusionError::Plan(err_message.to_string()))
 }
 
 impl fmt::Display for WindowFrameBound {
@@ -340,7 +337,7 @@ mod tests {
         let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Error during planning: Invalid window frame: start bound cannot be unbounded following".to_owned()
+            "Error during planning: Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING".to_owned()
         );
 
         let window_frame = ast::WindowFrame {
@@ -351,7 +348,7 @@ mod tests {
         let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Error during planning: Invalid window frame: end bound cannot be unbounded preceding".to_owned()
+            "Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING".to_owned()
         );
 
         let window_frame = ast::WindowFrame {
