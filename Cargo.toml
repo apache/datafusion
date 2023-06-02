@@ -35,7 +35,7 @@ members = [
 ]
 
 [workspace.package]
-version = "25.0.0"
+version = "26.0.0"
 edition = "2021"
 readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
