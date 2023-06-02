@@ -310,10 +310,12 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
+            name,
             input_phy_types[0].clone(),
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
+            name,
             input_phy_types[0].clone(),
         )),
     })

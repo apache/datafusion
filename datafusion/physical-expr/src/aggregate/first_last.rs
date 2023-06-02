@@ -40,8 +40,11 @@ pub struct FirstValue {
 
 impl FirstValue {
     /// Creates a new FIRST_VALUE aggregation function.
-    pub fn new(expr: Arc<dyn PhysicalExpr>, data_type: DataType) -> Self {
-        let name = format!("FIRST_VALUE({})", expr);
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
         Self {
             name: name.into(),
             data_type,
@@ -81,8 +84,14 @@ impl AggregateExpr for FirstValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        let name = if self.name.starts_with("FIRST") {
+            format!("LAST{}", &self.name[5..])
+        } else {
+            format!("LAST_VALUE({})", self.expr)
+        };
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
+            name,
             self.data_type.clone(),
         )))
     }
@@ -156,8 +165,11 @@ pub struct LastValue {
 
 impl LastValue {
     /// Creates a new LAST_VALUE aggregation function.
-    pub fn new(expr: Arc<dyn PhysicalExpr>, data_type: DataType) -> Self {
-        let name = format!("LAST_VALUE({})", expr);
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
         Self {
             name: name.into(),
             data_type,
@@ -197,8 +209,14 @@ impl AggregateExpr for LastValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        let name = if self.name.starts_with("LAST") {
+            format!("FIRST{}", &self.name[4..])
+        } else {
+            format!("FIRST_VALUE({})", self.expr)
+        };
         Some(Arc::new(FirstValue::new(
             self.expr.clone(),
+            name,
             self.data_type.clone(),
         )))
     }
