@@ -407,8 +407,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
@@ -514,8 +513,7 @@ impl BoundedAggregateStream {
 
                     // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
