@@ -485,9 +485,10 @@ impl FileOpener for ParquetOpener {
                 &self.metrics,
             )?;
 
-        let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
+        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+        let schema_adapter = SchemaAdapter::new(projected_schema.clone());
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
@@ -506,8 +507,8 @@ impl FileOpener for ParquetOpener {
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
 
-            let (schema_mapping, adapted_projections) = schema_adapter
-                .map_schema_with_projection(builder.schema(), &projection)?;
+            let (schema_mapping, adapted_projections) =
+                schema_adapter.map_schema(builder.schema())?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(

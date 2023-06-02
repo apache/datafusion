@@ -57,7 +57,7 @@ use arrow::compute::can_cast_types;
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::fmt::Debug;
@@ -392,30 +392,6 @@ impl SchemaAdapter {
         file_schema.index_of(field.name()).ok()
     }
 
-    /// Map projected column indexes to the file schema. This will fail if the table schema
-    /// and the file schema contain a field with the same name and different types.
-    #[allow(dead_code)]
-    pub fn map_projections(
-        &self,
-        file_schema: &Schema,
-        projections: &[usize],
-    ) -> Result<Vec<usize>> {
-        let mut mapped: Vec<usize> = vec![];
-        for idx in projections {
-            let field = self.table_schema.field(*idx);
-            if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
-                if file_schema.field(mapped_idx).data_type() == field.data_type() {
-                    mapped.push(mapped_idx)
-                } else {
-                    let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
-                    info!("{}", msg);
-                    return Err(DataFusionError::Execution(msg));
-                }
-            }
-        }
-        Ok(mapped)
-    }
-
     /// Re-order projected columns by index in record batch to match table schema column ordering. If the record
     /// batch does not contain a column for an expected field, insert a null-valued column at the
     /// required column index.
@@ -460,50 +436,15 @@ impl SchemaAdapter {
     /// If the provided `file_schema` contains columns of a different type to the expected
     /// `table_schema`, the method will attempt to cast the array data from the file schema
     /// to the table schema where possible.
-    #[allow(dead_code)]
-    pub fn map_schema(&self, file_schema: &Schema) -> Result<SchemaMapping> {
-        let mut field_mappings = Vec::new();
-
-        for (idx, field) in self.table_schema.fields().iter().enumerate() {
-            match file_schema.field_with_name(field.name()) {
-                Ok(file_field) => {
-                    if can_cast_types(file_field.data_type(), field.data_type()) {
-                        field_mappings.push((idx, Some(field.data_type().clone())))
-                    } else {
-                        return Err(DataFusionError::Plan(format!(
-                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                            field.name(),
-                            file_field.data_type(),
-                            field.data_type()
-                        )));
-                    }
-                }
-                Err(_) => {
-                    return Err(DataFusionError::Plan(format!(
-                        "File schema does not contain expected field {}",
-                        field.name()
-                    )));
-                }
-            }
-        }
-        Ok(SchemaMapping {
-            table_schema: self.table_schema.clone(),
-            field_mappings,
-        })
-    }
-
-    /// Creates a `SchemaMapping` that can be used to cast or map the columns from the file schema
-    /// to the table schema, taking into account the provided projections.
-    pub fn map_schema_with_projection(
+    pub fn map_schema(
         &self,
         file_schema: &Schema,
-        projections: &[usize],
     ) -> Result<(SchemaMapping, Vec<usize>)> {
-        let mut field_mappings: Vec<(usize, Option<DataType>)> = Vec::new();
+        let mut field_mappings: Vec<Option<usize>> =
+            Vec::with_capacity(self.table_schema.fields().len());
         let mut mapped: Vec<usize> = vec![];
 
-        for idx in projections {
-            let field = self.table_schema.field(*idx);
+        for field in self.table_schema.fields() {
             match file_schema.index_of(field.name().as_str()) {
                 Ok(mapped_idx)
                     if can_cast_types(
@@ -511,7 +452,7 @@ impl SchemaAdapter {
                         field.data_type(),
                     ) =>
                 {
-                    field_mappings.push((*idx, Some(field.data_type().clone())));
+                    field_mappings.push(Some(mapped_idx));
                     mapped.push(mapped_idx);
                 }
                 Ok(mapped_idx) => {
@@ -523,7 +464,7 @@ impl SchemaAdapter {
                     )));
                 }
                 Err(_) => {
-                    field_mappings.push((*idx, None));
+                    field_mappings.push(None);
                 }
             }
         }
@@ -542,42 +483,32 @@ impl SchemaAdapter {
 #[derive(Debug)]
 pub struct SchemaMapping {
     table_schema: SchemaRef,
-    field_mappings: Vec<(usize, Option<DataType>)>,
+    field_mappings: Vec<Option<usize>>,
 }
 
 impl SchemaMapping {
     /// Adapts a `RecordBatch` to match the `table_schema` using the stored mapping and conversions.
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let mut cols = Vec::with_capacity(self.field_mappings.len());
-
-        let batch_schema = batch.schema();
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
-        for (idx, data_type) in &self.field_mappings {
-            let table_field = &self.table_schema.fields()[*idx];
-            match batch_schema.column_with_name(table_field.name().as_str()) {
-                Some((batch_idx, _name)) if data_type.is_some() => {
-                    cols.push(arrow::compute::cast(
-                        &batch_cols[batch_idx],
-                        data_type.as_ref().unwrap(),
-                    )?);
-                }
-                _ => cols.push(new_null_array(table_field.data_type(), batch_rows)),
-            }
-        }
+
+        let cols = self
+            .table_schema
+            .fields()
+            .iter()
+            .zip(&self.field_mappings)
+            .map(|(field, mapping)| match mapping {
+                Some(idx) => arrow::compute::cast(&batch_cols[*idx], field.data_type())
+                    .map_err(DataFusionError::ArrowError),
+                None => Ok(new_null_array(field.data_type(), batch_rows)),
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Necessary to handle empty batches
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
 
-        let batch_schema: SchemaRef = if cols.len() != self.table_schema.fields.len() {
-            let projection: Vec<usize> =
-                self.field_mappings.iter().map(|(idx, _)| *idx).collect();
-            Arc::new(self.table_schema.project(&projection)?)
-        } else {
-            self.table_schema.clone()
-        };
         let record_batch =
-            RecordBatch::try_new_with_options(batch_schema, cols, &options)?;
+            RecordBatch::try_new_with_options(self.table_schema.clone(), cols, &options)?;
         Ok(record_batch)
     }
 }
@@ -1208,132 +1139,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_adapter_adapt_projections() {
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int64, true),
-            Field::new("c3", DataType::Int8, true),
-        ]));
-
-        let file_schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int64, true),
-        ]);
-
-        let file_schema_2 = Arc::new(Schema::new(vec![
-            Field::new("c3", DataType::Int8, true),
-            Field::new("c2", DataType::Int64, true),
-        ]));
-
-        let file_schema_3 =
-            Arc::new(Schema::new(vec![Field::new("c3", DataType::Float32, true)]));
-
-        let adapter = SchemaAdapter::new(table_schema);
-
-        let projections1: Vec<usize> = vec![0, 1, 2];
-        let projections2: Vec<usize> = vec![2];
-
-        let mapped = adapter
-            .map_projections(&file_schema, projections1.as_slice())
-            .expect("mapping projections");
-
-        assert_eq!(mapped, vec![0, 1]);
-
-        let mapped = adapter
-            .map_projections(&file_schema, projections2.as_slice())
-            .expect("mapping projections");
-
-        assert!(mapped.is_empty());
-
-        let mapped = adapter
-            .map_projections(&file_schema_2, projections1.as_slice())
-            .expect("mapping projections");
-
-        assert_eq!(mapped, vec![1, 0]);
-
-        let mapped = adapter
-            .map_projections(&file_schema_2, projections2.as_slice())
-            .expect("mapping projections");
-
-        assert_eq!(mapped, vec![0]);
-
-        let mapped = adapter.map_projections(&file_schema_3, projections1.as_slice());
-
-        assert!(mapped.is_err());
-    }
-
-    #[test]
-    fn schema_adapter_map_schema() {
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::UInt64, true),
-            Field::new("c3", DataType::Float64, true),
-        ]));
-
-        let adapter = SchemaAdapter::new(table_schema.clone());
-
-        // file schema matches table schema
-        let file_schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::UInt64, true),
-            Field::new("c3", DataType::Float64, true),
-        ]);
-
-        let mapping = adapter.map_schema(&file_schema).unwrap();
-
-        assert_eq!(
-            mapping.field_mappings,
-            vec![
-                (0, Some(DataType::Utf8)),
-                (1, Some(DataType::UInt64)),
-                (2, Some(DataType::Float64)),
-            ]
-        );
-        assert_eq!(mapping.table_schema, table_schema);
-
-        // file schema has columns of a different but castable type
-        let file_schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int32, true), // can be casted to UInt64
-            Field::new("c3", DataType::Float32, true), // can be casted to Float64
-        ]);
-
-        let mapping = adapter.map_schema(&file_schema).unwrap();
-
-        assert_eq!(
-            mapping.field_mappings,
-            vec![
-                (0, Some(DataType::Utf8)),
-                (1, Some(DataType::UInt64)),
-                (2, Some(DataType::Float64)),
-            ]
-        );
-        assert_eq!(mapping.table_schema, table_schema);
-
-        // file schema lacks necessary columns
-        let file_schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int32, true),
-        ]);
-
-        let err = adapter.map_schema(&file_schema).unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("File schema does not contain expected field"));
-
-        // file schema has columns of a different and non-castable type
-        let file_schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int32, true),
-            Field::new("c3", DataType::Date64, true), // cannot be casted to Float64
-        ]);
-        let err = adapter.map_schema(&file_schema).unwrap_err();
-
-        assert!(err.to_string().contains("Cannot cast file schema field"));
-    }
-
-    #[test]
     fn schema_mapping_map_batch() {
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
@@ -1349,7 +1154,7 @@ mod tests {
             Field::new("c3", DataType::Float32, true),
         ]);
 
-        let mapping = adapter.map_schema(&file_schema).expect("map schema failed");
+        let (mapping, _) = adapter.map_schema(&file_schema).expect("map schema failed");
 
         let c1 = StringArray::from(vec!["hello", "world"]);
         let c2 = UInt64Array::from(vec![9_u64, 5_u64]);
@@ -1388,8 +1193,6 @@ mod tests {
             Field::new("c4", DataType::Float32, true),
         ]));
 
-        let adapter = SchemaAdapter::new(table_schema.clone());
-
         let file_schema = Schema::new(vec![
             Field::new("id", DataType::Int32, true),
             Field::new("c1", DataType::Boolean, true),
@@ -1397,10 +1200,11 @@ mod tests {
             Field::new("c3", DataType::Binary, true),
             Field::new("c4", DataType::Int64, true),
         ]);
+
         let indices = vec![1, 2, 4];
-        let (mapping, _) = adapter
-            .map_schema_with_projection(&file_schema, &indices)
-            .unwrap();
+        let schema = SchemaRef::from(table_schema.project(&indices).unwrap());
+        let adapter = SchemaAdapter::new(schema);
+        let (mapping, _) = adapter.map_schema(&file_schema).unwrap();
 
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
         let c1 = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
