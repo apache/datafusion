@@ -15,6 +15,39 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
+####
+# Configuration
+####
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+
+####
+# Data Setup
+####
+
+statement ok
+CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+AS VALUES
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4);
+
+statement ok
+CREATE TABLE join_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+AS VALUES
+(11, 'z', 3),
+(22, 'y', 1),
+(44, 'x', 3),
+(55, 'w', 3);
+
+
 ##########
 ## Joins Tests
 ##########
@@ -622,3 +655,192 @@ DROP TABLE t1
 
 statement ok
 DROP TABLE t2
+
+# TODO: test_join_timestamp
+
+# TODO: test_join_float32
+
+# TODO: test_join_float64
+
+# TODO: inner_join_qualified_names
+
+# TODO: nestedjoin_with_alias
+
+# TODO: nestedjoin_without_alias
+
+# TODO: join_tables_with_duplicated_column_name_not_in_on_constraint
+
+# TODO: join_timestamp
+
+# TODO: left_join_should_not_panic_with_empty_side
+
+# TODO: left_join_using_2
+
+# TODO: left_join_using_join_key_projection
+
+# TODO: left_join_2
+
+# TODO: join_partitioned
+
+# TODO: hash_join_with_date32
+
+# TODO: hash_join_with_date64
+
+# TODO: hash_join_with_decimal
+
+# TODO: hash_join_with_dictionary
+
+# TODO: reduce_left_join_1
+
+# TODO: reduce_left_join_2
+
+# TODO: reduce_left_join_3
+
+# TODO: reduce_right_join_1
+
+# TODO: reduce_right_join_2
+
+# TODO: reduce_full_join_to_right_join
+
+# TODO: reduce_full_join_to_left_join
+
+# TODO: reduce_full_join_to_inner_join
+
+# TODO: sort_merge_equijoin
+
+# TODO: sort_merge_join_on_date32
+
+# TODO: sort_merge_join_on_decimal
+
+# TODO: left_semi_join
+
+# TODO: left_semi_join_pushdown
+
+# TODO: left_anti_join
+
+# TODO: error_left_anti_join
+
+# TODO: null_aware_left_anti_join
+
+# TODO: right_semi_join
+
+# TODO: join_and_aggregate_on_same_key
+
+# TODO: reduce_cross_join_with_expr_join_key_all
+
+# TODO: reduce_cross_join_with_cast_expr_join_key
+
+# TODO: reduce_cross_join_with_wildcard_and_expr
+
+# TODO: both_side_expr_key_inner_join
+
+# TODO: left_side_expr_key_inner_join
+
+# TODO: right_side_expr_key_inner_join
+
+# TODO: select_wildcard_with_expr_key_inner_join
+
+# TODO: join_with_type_coercion_for_equi_expr
+
+# TODO: join_only_with_filter
+
+# TODO: type_coercion_join_with_filter_and_equi_expr
+
+# TODO: test_cross_join_to_groupby_with_different_key_ordering
+
+# TODO: subquery_to_join_with_both_side_expr
+
+# TODO: subquery_to_join_with_multi_filter
+
+# TODO: three_projection_exprs_subquery_to_join
+
+# TODO: in_subquery_to_join_with_correlated_outer_filter
+
+# TODO: not_in_subquery_to_join_with_correlated_outer_filter
+
+# TODO: in_subquery_to_join_with_outer_filter
+
+# TODO: two_in_subquery_to_join_with_outer_filter
+
+# TODO: right_as_inner_table_nested_loop_join
+
+# TODO: left_as_inner_table_nested_loop_join
+
+# TODO: exists_subquery_to_join_expr_filter
+
+# TODO: exists_subquery_to_join_inner_filter
+
+# TODO: exists_subquery_to_join_outer_filter
+
+# TODO: not_exists_subquery_to_join_expr_filter
+
+# TODO: exists_distinct_subquery_to_join
+
+# TODO: exists_distinct_subquery_to_join_with_expr
+
+
+# Exists distinct subquery left anti join with literal
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query TT
+EXPLAIN
+SELECT * FROM join_t1
+WHERE NOT EXISTS(
+    SELECT DISTINCT 1, t2_int
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+logical_plan
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--SubqueryAlias: __correlated_sq_1
+----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
+------TableScan: join_t2 projection=[t2_id]
+
+query ITI
+SELECT * FROM join_t1
+WHERE NOT EXISTS(
+    SELECT DISTINCT 1, t2_int
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+11 a 1
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query TT
+EXPLAIN
+SELECT * FROM join_t1
+WHERE NOT EXISTS(
+    SELECT DISTINCT 1, t2_int
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+logical_plan
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_3.t2_id AS Int64) * Int64(2)
+--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--SubqueryAlias: __correlated_sq_3
+----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
+------TableScan: join_t2 projection=[t2_id]
+
+query ITI
+SELECT * FROM join_t1
+WHERE NOT EXISTS(
+    SELECT DISTINCT 1, t2_int
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+11 a 1
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
