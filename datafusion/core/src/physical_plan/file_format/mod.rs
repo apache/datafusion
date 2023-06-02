@@ -31,10 +31,11 @@ pub use self::csv::{CsvConfig, CsvExec, CsvOpener, CsvWriterOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
-    array::{ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
+    array::{new_null_array, ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
     buffer::Buffer,
+    compute::can_cast_types,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
-    record_batch::RecordBatch,
+    record_batch::{RecordBatch, RecordBatchOptions},
 };
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
@@ -55,20 +56,16 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use arrow::array::new_null_array;
-use arrow::compute::can_cast_types;
-use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
 
 use log::{debug, info, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::fmt::Debug;
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fmt::{Display, Formatter, Result as FmtResult},
+    fmt::{Debug, Display, Formatter, Result as FmtResult},
     marker::PhantomData,
     sync::Arc,
     vec,

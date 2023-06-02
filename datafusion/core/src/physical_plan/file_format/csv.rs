@@ -336,7 +336,7 @@ pub struct CsvWriterOpener {
 }
 
 impl CsvWriterOpener {
-    /// Create write and opener for Csv files
+    /// Creates writer/opener for CSV files.
     pub fn new(
         writer_mode: FileWriterMode,
         object_store: Arc<dyn ObjectStore>,

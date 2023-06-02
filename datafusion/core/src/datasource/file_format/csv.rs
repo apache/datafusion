@@ -22,22 +22,21 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use arrow_array::RecordBatch;
-use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-
 use datafusion_common::DataFusionError;
-
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
+
+use async_trait::async_trait;
+use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+use tokio::io::AsyncWriteExt;
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
@@ -401,14 +400,13 @@ impl BatchSerializer for CsvSerializer {
     }
 }
 
-// If there is an error occurs, this macro tries to
-// abort writer before returning error.
+/// This macro tries to abort all writers before returning a possible error.
 macro_rules! handle_err_or_continue {
     ($result:expr, $writers:expr) => {
         match $result {
             Ok(value) => Ok(value),
             Err(e) => {
-                // Abort all writers, before returning error
+                // Abort all writers before returning the error:
                 for writer in $writers {
                     let abort_future = writer.abort_writer()?;
                     let _ = abort_future.await;
@@ -418,7 +416,7 @@ macro_rules! handle_err_or_continue {
                     Ok(data_fusion_err) => Err(data_fusion_err),
                     Err(_) => {
                         return Err(DataFusionError::Internal(
-                            "File sink error.".to_owned(),
+                            "Unexpected file sink error.".to_owned(),
                         ));
                     }
                 }
@@ -427,7 +425,7 @@ macro_rules! handle_err_or_continue {
     };
 }
 
-/// Implements for writing to a Csv File
+/// Implements [`DataSink`] for writing to a CSV file.
 struct CsvSink {
     /// Config options for writing data
     config: FileSinkConfig,
@@ -495,11 +493,9 @@ impl DataSink for CsvSink {
         let mut serializers = vec![];
         let mut writers = vec![];
         for file_group in &self.config.file_groups {
-            let header = if matches!(&self.config.writer_mode, FileWriterMode::Append) {
-                file_group.object_meta.size == 0 && self.has_header
-            } else {
-                self.has_header
-            };
+            let header = self.has_header
+                && (!matches!(&self.config.writer_mode, FileWriterMode::Append)
+                    || file_group.object_meta.size == 0);
             let builder = WriterBuilder::new().with_delimiter(self.delimiter);
             let serializer = CsvSerializer::new()
                 .with_builder(builder)
@@ -513,22 +509,22 @@ impl DataSink for CsvSink {
             writers.push(writer);
         }
 
-        let mut i = 0;
+        let mut idx = 0;
         let mut row_count = 0;
         while let Some(maybe_batch) = data.next().await {
-            // write data to files in round robin like
-            i = (i + 1) % num_partitions;
-            let serializer = &mut serializers[i];
+            // Write data to files in a round robin fashion:
+            idx = (idx + 1) % num_partitions;
+            let serializer = &mut serializers[idx];
             let batch = handle_err_or_continue!(maybe_batch, &mut writers)?;
             row_count += batch.num_rows();
             let bytes =
                 handle_err_or_continue!(serializer.serialize(batch).await, &mut writers)?;
-            let writer = &mut writers[i];
+            let writer = &mut writers[idx];
             handle_err_or_continue!(writer.write_all(&bytes).await, &mut writers)?;
         }
-        // Cleanup
-        let n_writer = writers.len();
-        for idx in 0..n_writer {
+        // Perform cleanup:
+        let n_writers = writers.len();
+        for idx in 0..n_writers {
             handle_err_or_continue!(writers[idx].shutdown().await, &mut writers)?;
         }
         Ok(row_count as u64)

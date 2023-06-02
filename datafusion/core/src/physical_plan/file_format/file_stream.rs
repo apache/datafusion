@@ -533,9 +533,6 @@ pub trait FileWriterFactory: Unpin + Send + Sync {
 mod tests {
     use arrow_schema::Schema;
     use datafusion_common::DataFusionError;
-    use futures::StreamExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     use super::*;
     use crate::datasource::file_format::{
@@ -549,8 +546,13 @@ mod tests {
         error::Result,
         test::{make_partition, object_store::register_test_store},
     };
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use async_trait::async_trait;
     use bytes::Bytes;
+    use futures::StreamExt;
     use object_store::ObjectStore;
     use tokio::io::AsyncWrite;
 

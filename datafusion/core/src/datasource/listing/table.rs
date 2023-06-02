@@ -1568,7 +1568,7 @@ mod tests {
 
         // Execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Insert returns number of rows written, in our case this would be 6.
+        // Insert returns the number of rows written, in our case this would be 6.
         let expected = vec![
             "+-------+",
             "| count |",
@@ -1618,7 +1618,7 @@ mod tests {
 
         // Again, execute the physical plan and collect the results
         let res = collect(plan, session_ctx.task_ctx()).await?;
-        // Insert returns number of rows written, in our case this would be 6.
+        // Insert returns the number of rows written, in our case this would be 6.
         let expected = vec![
             "+-------+",
             "| count |",
