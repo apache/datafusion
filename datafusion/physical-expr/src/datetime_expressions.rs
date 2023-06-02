@@ -522,6 +522,13 @@ fn date_bin_impl(
 
     let (stride, stride_fn) = stride.bin_fn();
 
+    // Return error if stride is 0
+    if stride == 0 {
+        return Err(DataFusionError::Execution(
+            "DATE_BIN stride must be non-zero".to_string(),
+        ));
+    }
+
     let f_nanos = |x: Option<i64>| x.map(|x| stride_fn(stride, x, origin));
     let f_micros = |x: Option<i64>| {
         let scale = 1_000;
@@ -1027,6 +1034,17 @@ mod tests {
         assert_eq!(
             res.err().unwrap().to_string(),
             "Execution error: DATE_BIN expects stride argument to be an INTERVAL but got Interval(YearMonth)"
+        );
+
+        // stride: invalid value
+        let res = date_bin(&[
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(0))),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(Some(1), None)),
+        ]);
+        assert_eq!(
+            res.err().unwrap().to_string(),
+            "Execution error: DATE_BIN stride must be non-zero"
         );
 
         // stride: overflow of day-time interval
