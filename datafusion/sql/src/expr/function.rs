@@ -43,7 +43,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // (e.g. "foo.bar") for function names yet
             function.name.to_string()
         } else {
-            self.normalizer.normalize(function.name.0[0].clone())
+            crate::utils::normalize_ident(function.name.0[0].clone())
         };
 
         // next, scalar built-in
