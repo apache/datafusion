@@ -154,8 +154,13 @@ impl RecordBatchReceiverStreamBuilder {
                             // resume on the main thread
                             std::panic::resume_unwind(e.into_panic());
                         } else {
-                            return Some(Err(DataFusionError::Execution(format!(
-                                "Task error: {e}"
+                            // This should only occur if the task is
+                            // cancelled, which would only occur if
+                            // the JoinSet were aborted, which in turn
+                            // would imply that the receiver has been
+                            // dropped and this code is not running
+                            return Some(Err(DataFusionError::Internal(format!(
+                                "Non Panic Task error: {e}"
                             ))));
                         }
                     }
@@ -314,7 +319,7 @@ mod test {
 
         let num_partitions = 10;
         let input = PanicExec::new(schema.clone(), num_partitions);
-        consume(input).await
+        consume(input, 10).await
     }
 
     #[tokio::test]
@@ -329,12 +334,15 @@ mod test {
             .with_partition_panic(0, 10)
             .with_partition_panic(1, 3); // partition 1 should panic first (after 3 )
 
-        consume(input).await
+        let max_batches = 5; // expect to read every other batch: (0,1,0,1,0,panic)
+        consume(input, max_batches).await
     }
 
     /// Consumes all the input's partitions into a
     /// RecordBatchReceiverStream and runs it to completion
-    async fn consume(input: PanicExec) {
+    ///
+    /// panic's if more than max_batches is seen,
+    async fn consume(input: PanicExec, max_batches: usize) {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -350,8 +358,14 @@ mod test {
         let mut stream = builder.build();
 
         // drain the stream until it is complete, panic'ing on error
+        let mut num_batches = 0;
         while let Some(next) = stream.next().await {
             next.unwrap();
+            num_batches += 1;
+            assert!(
+                num_batches < max_batches,
+                "Got the limit of {num_batches} batches before seeing panic"
+            );
         }
     }
 }
