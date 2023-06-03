@@ -88,8 +88,8 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
     }
 
     /// Read the next batch of records
-    pub fn next_batch(&mut self, batch_size: usize) -> ArrowResult<Option<RecordBatch>> {
-        let rows = self
+    pub fn next_batch(&mut self, batch_size: usize) -> Option<ArrowResult<RecordBatch>> {
+        let rows_result = self
             .reader
             .by_ref()
             .take(batch_size)
@@ -102,15 +102,19 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     "Row needs to be of type object, got: {other:?}"
                 ))),
             })
-            .collect::<ArrowResult<Vec<Vec<(String, Value)>>>>()?;
-        if rows.is_empty() {
-            // reached end of file
-            return Ok(None);
-        }
+            .collect::<ArrowResult<Vec<Vec<(String, Value)>>>>();
+
+        let rows = match rows_result {
+            // Return error early
+            Err(e) => return Some(Err(e)),
+            // No rows: return None early
+            Ok(rows) if rows.is_empty() => return None,
+            Ok(rows) => rows,
+        };
+
         let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
         let projection = self.projection.clone().unwrap_or_default();
-        let arrays =
-            self.build_struct_array(rows.as_slice(), self.schema.fields(), &projection);
+        let arrays = self.build_struct_array(&rows, self.schema.fields(), &projection);
         let projected_fields = if projection.is_empty() {
             self.schema.fields().clone()
         } else {
@@ -121,7 +125,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 .collect()
         };
         let projected_schema = Arc::new(Schema::new(projected_fields));
-        arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr).map(Some))
+        Some(arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr)))
     }
 
     fn build_boolean_array(&self, rows: RecordSlice, col_name: &str) -> ArrayRef {
@@ -416,14 +420,13 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
         let num_list_bytes = bit_util::ceil(list_len, 8);
         let mut offsets = Vec::with_capacity(list_len + 1);
         let mut list_nulls = MutableBuffer::from_len_zeroed(num_list_bytes);
-        let list_nulls = list_nulls.as_slice_mut();
         offsets.push(cur_offset);
         rows.iter().enumerate().for_each(|(i, v)| {
             // TODO: unboxing Union(Array(Union(...))) should probably be done earlier
             let v = maybe_resolve_union(v);
             if let Value::Array(a) = v {
                 cur_offset += OffsetSize::from_usize(a.len()).unwrap();
-                bit_util::set_bit(list_nulls, i);
+                bit_util::set_bit(&mut list_nulls, i);
             } else if let Value::Null = v {
                 // value is null, not incremented
             } else {
@@ -446,17 +449,11 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             if let Value::Boolean(child) = value {
                                 // if valid boolean, append value
                                 if *child {
-                                    bit_util::set_bit(
-                                        bool_values.as_slice_mut(),
-                                        curr_index,
-                                    );
+                                    bit_util::set_bit(&mut bool_values, curr_index);
                                 }
                             } else {
                                 // null slot
-                                bit_util::unset_bit(
-                                    bool_nulls.as_slice_mut(),
-                                    curr_index,
-                                );
+                                bit_util::unset_bit(&mut bool_nulls, curr_index);
                             }
                             curr_index += 1;
                         });
@@ -526,10 +523,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     .map(|row| {
                         if let Value::Array(values) = row {
                             values.iter().for_each(|_| {
-                                bit_util::set_bit(
-                                    null_buffer.as_slice_mut(),
-                                    struct_index,
-                                );
+                                bit_util::set_bit(&mut null_buffer, struct_index);
                                 struct_index += 1;
                             });
                             values
@@ -543,7 +537,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                     })
                     .collect();
                 let rows = rows.iter().collect::<Vec<&Vec<(String, Value)>>>();
-                let arrays = self.build_struct_array(rows.as_slice(), fields, &[])?;
+                let arrays = self.build_struct_array(&rows, fields, &[])?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
@@ -719,7 +713,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                                     })
                                     .collect::<Vec<&Value>>();
                                 self.build_nested_list_array::<i32>(
-                                    extracted_rows.as_slice(),
+                                    &extracted_rows,
                                     list_field,
                                 )?
                             }
@@ -742,7 +736,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             .map(|(i, row)| (i, self.field_lookup(field.name(), row)))
                             .map(|(i, v)| {
                                 if let Some(Value::Record(value)) = v {
-                                    bit_util::set_bit(null_buffer.as_slice_mut(), i);
+                                    bit_util::set_bit(&mut null_buffer, i);
                                     value
                                 } else {
                                     panic!("expected struct got {v:?}");
@@ -750,7 +744,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                             })
                             .collect::<Vec<&Vec<(String, Value)>>>();
                         let arrays =
-                            self.build_struct_array(struct_rows.as_slice(), fields, &[])?;
+                            self.build_struct_array(&struct_rows, fields, &[])?;
                         // construct a struct array's data in order to set null buffer
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)
