@@ -39,7 +39,7 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Limit execution plan
 #[derive(Debug)]

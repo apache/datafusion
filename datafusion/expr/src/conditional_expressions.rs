@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Conditional expressions
 use crate::expr::Case;
-///! Conditional expressions
 use crate::{expr_schema::ExprSchemable, Expr};
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DataFusionError, Result};
