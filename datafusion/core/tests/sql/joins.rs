@@ -18,41 +18,6 @@
 use super::*;
 use datafusion::from_slice::FromSlice;
 
-// TODO Tests to prove correct implementation of INNER JOIN's with qualified names.
-//  https://issues.apache.org/jira/projects/ARROW/issues/ARROW-11432.
-#[tokio::test]
-#[ignore]
-async fn inner_join_qualified_names() -> Result<()> {
-    // Setup the statements that test qualified names function correctly.
-    let equivalent_sql = [
-        "SELECT t1.a, t1.b, t1.c, t2.a, t2.b, t2.c
-            FROM t1
-            INNER JOIN t2 ON t1.a = t2.a
-            ORDER BY t1.a",
-        "SELECT t1.a, t1.b, t1.c, t2.a, t2.b, t2.c
-            FROM t1
-            INNER JOIN t2 ON t2.a = t1.a
-            ORDER BY t1.a",
-    ];
-
-    let expected = vec![
-        "+---+----+----+---+-----+-----+",
-        "| a | b  | c  | a | b   | c   |",
-        "+---+----+----+---+-----+-----+",
-        "| 1 | 10 | 50 | 1 | 100 | 500 |",
-        "| 2 | 20 | 60 | 2 | 200 | 600 |",
-        "| 4 | 40 | 80 | 4 | 400 | 800 |",
-        "+---+----+----+---+-----+-----+",
-    ];
-
-    for sql in equivalent_sql.iter() {
-        let ctx = create_join_context_qualified("t1", "t2")?;
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
-    }
-    Ok(())
-}
-
 #[tokio::test]
 #[ignore]
 /// TODO: need to repair. Wrong Test: ambiguous column name: a
@@ -70,84 +35,6 @@ async fn nestedjoin_with_alias() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn nestedjoin_without_alias() -> Result<()> {
-    let sql = "select * from (select 1 as a, 2 as b) c INNER JOIN (select 1 as a, 3 as d) e on c.a = e.a;";
-    let expected = vec![
-        "+---+---+---+---+",
-        "| a | b | a | d |",
-        "+---+---+---+---+",
-        "| 1 | 2 | 1 | 3 |",
-        "+---+---+---+---+",
-    ];
-    let ctx = SessionContext::new();
-    let actual = execute_to_batches(&ctx, sql).await;
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
-    let ctx = SessionContext::new();
-    let batch = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int32Array::from_slice([1, 2, 3])) as _),
-        (
-            "country",
-            Arc::new(StringArray::from_slice(["Germany", "Sweden", "Japan"])) as _,
-        ),
-    ])
-    .unwrap();
-    ctx.register_batch("countries", batch)?;
-
-    let batch = RecordBatch::try_from_iter(vec![
-        (
-            "id",
-            Arc::new(Int32Array::from_slice([1, 2, 3, 4, 5, 6, 7])) as _,
-        ),
-        (
-            "city",
-            Arc::new(StringArray::from_slice([
-                "Hamburg",
-                "Stockholm",
-                "Osaka",
-                "Berlin",
-                "Göteborg",
-                "Tokyo",
-                "Kyoto",
-            ])) as _,
-        ),
-        (
-            "country_id",
-            Arc::new(Int32Array::from_slice([1, 2, 3, 1, 2, 3, 3])) as _,
-        ),
-    ])
-    .unwrap();
-
-    ctx.register_batch("cities", batch)?;
-
-    // city.id is not in the on constraint, but the output result will contain both city.id and
-    // country.id
-    let sql = "SELECT t1.id, t2.id, t1.city, t2.country FROM cities AS t1 JOIN countries AS t2 ON t1.country_id = t2.id ORDER BY t1.id";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----+----+-----------+---------+",
-        "| id | id | city      | country |",
-        "+----+----+-----------+---------+",
-        "| 1  | 1  | Hamburg   | Germany |",
-        "| 2  | 2  | Stockholm | Sweden  |",
-        "| 3  | 3  | Osaka     | Japan   |",
-        "| 4  | 1  | Berlin    | Germany |",
-        "| 5  | 2  | Göteborg  | Sweden  |",
-        "| 6  | 3  | Tokyo     | Japan   |",
-        "| 7  | 3  | Kyoto     | Japan   |",
-        "+----+----+-----------+---------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
