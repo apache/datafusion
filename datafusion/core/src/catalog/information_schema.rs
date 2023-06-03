@@ -84,13 +84,14 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            let table = schema.table(&table_name).await.unwrap();
-                            builder.add_table(
-                                &catalog_name,
-                                &schema_name,
-                                &table_name,
-                                table.table_type(),
-                            );
+                            if let Some(table) = schema.table(&table_name).await {
+                                builder.add_table(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    table.table_type(),
+                                );
+                            }
                         }
                     }
                 }
@@ -123,13 +124,14 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            let table = schema.table(&table_name).await.unwrap();
-                            builder.add_view(
-                                &catalog_name,
-                                &schema_name,
-                                &table_name,
-                                table.get_table_definition(),
-                            )
+                            if let Some(table) = schema.table(&table_name).await {
+                                builder.add_view(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    table.get_table_definition(),
+                                )
+                            }
                         }
                     }
                 }
@@ -147,17 +149,18 @@ impl InformationSchemaConfig {
                     // schema name may not exist in the catalog, so we need to check
                     if let Some(schema) = catalog.schema(&schema_name) {
                         for table_name in schema.table_names() {
-                            let table = schema.table(&table_name).await.unwrap();
-                            for (field_position, field) in
-                                table.schema().fields().iter().enumerate()
-                            {
-                                builder.add_column(
-                                    &catalog_name,
-                                    &schema_name,
-                                    &table_name,
-                                    field_position,
-                                    field,
-                                )
+                            if let Some(table) = schema.table(&table_name).await {
+                                for (field_position, field) in
+                                    table.schema().fields().iter().enumerate()
+                                {
+                                    builder.add_column(
+                                        &catalog_name,
+                                        &schema_name,
+                                        &table_name,
+                                        field_position,
+                                        field,
+                                    )
+                                }
                             }
                         }
                     }
