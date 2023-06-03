@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::expressions::{ArrayAgg, FirstValue, LastValue};
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
@@ -129,4 +130,14 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
             "Retractable Accumulator hasn't been implemented for {self:?} yet"
         )))
     }
+}
+
+/// Checks whether the given aggregate expression is order-sensitive.
+/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
+/// However, a `FirstValue` depends on the input ordering (if the order changes,
+/// the first value in the list would change).
+pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
+    aggr_expr.as_any().is::<FirstValue>()
+        || aggr_expr.as_any().is::<LastValue>()
+        || aggr_expr.as_any().is::<ArrayAgg>()
 }
