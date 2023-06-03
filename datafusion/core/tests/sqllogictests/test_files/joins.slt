@@ -26,6 +26,8 @@ set datafusion.execution.target_partitions = 2;
 statement ok
 set datafusion.execution.batch_size = 4096;
 
+statement ok
+set datafusion.explain.logical_plan_only = true;
 
 ####
 # Data Setup
@@ -867,7 +869,23 @@ DROP TABLE t2;
 
 # TODO: hash_join_with_dictionary
 
-# TODO: reduce_left_join_1
+# Reduce left join 1 (to inner join)
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query TT
+EXPLAIN select * from join_t1 left join join_t2 on join_t1.t1_id = join_t2.t2_id where join_t2.t2_id < 100
+----
+logical_plan
+Inner Join: join_t1.t1_id = join_t2.t2_id
+--Filter: join_t1.t1_id < UInt32(100)
+----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--Filter: join_t2.t2_id < UInt32(100)
+----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
 
 # TODO: reduce_left_join_2
 
@@ -957,9 +975,6 @@ DROP TABLE t2;
 
 
 # Exists distinct subquery left anti join with literal
-
-statement ok
-set datafusion.explain.logical_plan_only = true;
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
