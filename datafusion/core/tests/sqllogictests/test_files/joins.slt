@@ -810,7 +810,46 @@ DROP TABLE cities;
 
 # TODO: join_timestamp
 
-# TODO: left_join_should_not_panic_with_empty_side
+# Left join and right join should not panic with empty side
+
+statement ok
+CREATE TABLE t1 (t1_id BIGINT, ti_value VARCHAR NOT NULL) AS VALUES
+    (5247, 'a'),
+    (3821, 'b'),
+    (6321, 'c'),
+    (8821, 'd'),
+    (7748, 'e');
+
+statement ok
+CREATE TABLE t2 (t2_id BIGINT, t2_value BOOLEAN) AS VALUES
+    (358, true),
+    (2820, false),
+    (3804, NULL),
+    (7748, NULL);
+
+query ITIB rowsort
+SELECT * FROM t1 LEFT JOIN t2 ON t1_id = t2_id
+----
+3821 b NULL NULL
+5247 a NULL NULL
+6321 c NULL NULL
+7748 e 7748 NULL
+8821 d NULL NULL
+
+query IBIT rowsort
+SELECT * FROM t2 RIGHT JOIN t1 ON t1_id = t2_id
+----
+7748 NULL 7748 e
+NULL NULL 3821 b
+NULL NULL 5247 a
+NULL NULL 6321 c
+NULL NULL 8821 d
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
 
 # TODO: left_join_using_2
 
