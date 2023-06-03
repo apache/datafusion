@@ -656,11 +656,71 @@ DROP TABLE t1
 statement ok
 DROP TABLE t2
 
-# TODO: test_join_timestamp
+# Join timestamp
 
-# TODO: test_join_float32
+statement ok
+CREATE TABLE timestamp(time TIMESTAMP) AS VALUES
+    (131964190213133),
+    (131964190213134),
+    (131964190213135);
 
-# TODO: test_join_float64
+query PP
+SELECT *
+FROM timestamp as a
+JOIN (SELECT * FROM timestamp) as b
+ON a.time = b.time
+ORDER BY a.time
+----
+1970-01-02T12:39:24.190213133 1970-01-02T12:39:24.190213133
+1970-01-02T12:39:24.190213134 1970-01-02T12:39:24.190213134
+1970-01-02T12:39:24.190213135 1970-01-02T12:39:24.190213135
+
+statement ok
+DROP TABLE timestamp;
+
+# Join float32
+
+statement ok
+CREATE TABLE population(city VARCHAR, population FLOAT) AS VALUES
+    ('a', 838.698),
+    ('b', 1778.934),
+    ('c', 626.443);
+
+query TRTR
+SELECT *
+FROM population as a
+JOIN (SELECT * FROM population) as b
+ON a.population = b.population
+ORDER BY a.population
+----
+c 626.443 c 626.443
+a 838.698 a 838.698
+b 1778.934 b 1778.934
+
+statement ok
+DROP TABLE population;
+
+# Join float64
+
+statement ok
+CREATE TABLE population(city VARCHAR, population DOUBLE) AS VALUES
+    ('a', 838.698),
+    ('b', 1778.934),
+    ('c', 626.443);
+
+query TRTR
+SELECT *
+FROM population as a
+JOIN (SELECT * FROM population) as b
+ON a.population = b.population
+ORDER BY a.population
+----
+c 626.443 c 626.443
+a 838.698 a 838.698
+b 1778.934 b 1778.934
+
+statement ok
+DROP TABLE population;
 
 # TODO: inner_join_qualified_names
 
