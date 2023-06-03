@@ -17,7 +17,7 @@
 
 use crate::parser::{
     CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt, LexOrdering,
-    Statement as DFStatement,
+    Statement as DFStatement, CopyToSource,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -569,11 +569,47 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
-    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
+    fn copy_to_plan(&self, statement: CopyToStatement) -> Result<LogicalPlan> {
         // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
-        Err(DataFusionError::NotImplemented(
-            "`COPY .. TO ..` statement is not yet supported".to_string(),
-        ))
+        //Err(DataFusionError::NotImplemented(
+        //"`COPY .. TO ..` statement is not yet supported".to_string(),
+        //))
+        let CopyToStatement { source, target, options } = statement;
+        let input = match source {
+            CopyToSource::Relation(table_name) => {
+                // TODO create at table scan here
+
+                return Err(DataFusionError::Plan(
+                "COPY FROM TABLE not yet supported."
+                        .to_owned(),
+                ));
+            }
+            CopyToSource::Query(query) => {
+                self.query_to_plan(query, &mut PlannerContext::new())?
+            },
+        };
+
+        // figure out what to do with the target?
+        // should we treat it like a table name???
+
+        // TODO parse the target name for real
+        //let table_ref = self.object_name_to_table_reference(target)?;
+        let table_ref = OwnedTableReference::bare(target);
+        let table_source = self.schema_provider.get_table_provider(table_ref.clone())?;
+        let table_schema = table_source.schema().as_ref().clone();
+        let table_schema = DFSchema::try_from(table_schema)?;
+        let table_schema = Arc::new(table_schema);
+
+        // TODO need to add projection to match schemas
+
+        let plan = LogicalPlan::Dml(DmlStatement {
+            table_name: table_ref,
+            table_schema,
+            input: Arc::new(input),
+            op: WriteOp::Insert,
+        });
+
+        Ok(plan)
     }
 
     fn build_order_by(
@@ -826,7 +862,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self.schema_provider.get_table_provider(table_ref.clone())?;
-        let schema = (*provider.schema()).clone();
+        let schema = provider.schema().as_ref().clone();
         let schema = DFSchema::try_from(schema)?;
         let scan =
             LogicalPlanBuilder::scan(object_name_to_string(&table_name), provider, None)?
