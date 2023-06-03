@@ -869,10 +869,15 @@ DROP TABLE t2;
 
 # TODO: hash_join_with_dictionary
 
-# Reduce left join 1 (to inner join)
+
+###
+# Configuration setup
+###
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
+
+# Reduce left join 1 (to inner join)
 
 query TT
 EXPLAIN select * from join_t1 left join join_t2 on join_t1.t1_id = join_t2.t2_id where join_t2.t2_id < 100
@@ -884,10 +889,28 @@ Inner Join: join_t1.t1_id = join_t2.t2_id
 --Filter: join_t2.t2_id < UInt32(100)
 ----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
+# Reduce left join 2 (to inner join)
+
+query TT
+EXPLAIN
+SELECT *
+FROM join_t1
+LEFT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
+WHERE join_t2.t2_int < 10 or (join_t1.t1_int > 2 and join_t2.t2_name != 'w')
+----
+logical_plan
+Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8("w")
+--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8("w")
+----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+
+###
+# Configuration teardown
+###
+
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 
-# TODO: reduce_left_join_2
 
 # TODO: reduce_left_join_3
 
