@@ -338,12 +338,6 @@ pub mod datafusion_strsim {
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
     /// required to change one sequence into the other.
-    ///
-    /// ```
-    /// use strsim::generic_levenshtein;
-    ///
-    /// assert_eq!(3, generic_levenshtein(&[1,2,3], &[1,2,3,4,5,6]));
-    /// ```
     fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
         a: &'a Iter1,
         b: &'b Iter2,
@@ -383,7 +377,7 @@ pub mod datafusion_strsim {
     /// required to change one string into the other.
     ///
     /// ```
-    /// use strsim::levenshtein;
+    /// use datafusion_common::utils::datafusion_strsim::levenshtein;
     ///
     /// assert_eq!(3, levenshtein("kitten", "sitting"));
     /// ```
