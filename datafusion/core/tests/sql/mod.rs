@@ -409,45 +409,6 @@ fn create_right_semi_anti_join_context_with_null_ids(
     Ok(ctx)
 }
 
-fn create_join_context_qualified(
-    left_name: &str,
-    right_name: &str,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::UInt32, true),
-        Field::new("b", DataType::UInt32, true),
-        Field::new("c", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
-            Arc::new(UInt32Array::from_slice([10, 20, 30, 40])),
-            Arc::new(UInt32Array::from_slice([50, 60, 70, 80])),
-        ],
-    )?;
-    ctx.register_batch(left_name, t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::UInt32, true),
-        Field::new("b", DataType::UInt32, true),
-        Field::new("c", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from_slice([1, 2, 9, 4])),
-            Arc::new(UInt32Array::from_slice([100, 200, 300, 400])),
-            Arc::new(UInt32Array::from_slice([500, 600, 700, 800])),
-        ],
-    )?;
-    ctx.register_batch(right_name, t2_data)?;
-
-    Ok(ctx)
-}
-
 fn create_hashjoin_datatype_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
