@@ -1059,7 +1059,6 @@ dependencies = [
  "datafusion-common",
  "lazy_static",
  "sqlparser",
- "strsim",
  "strum",
  "strum_macros",
 ]

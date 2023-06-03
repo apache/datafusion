@@ -33,7 +33,7 @@ use crate::{
     AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction, TypeSignature,
 };
 use arrow::datatypes::DataType;
-use strsim::levenshtein;
+use datafusion_common::utils::datafusion_strsim;
 use strum::IntoEnumIterator;
 
 impl TypeSignature {
@@ -100,7 +100,9 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
     let target = target.to_lowercase();
     candidates
         .into_iter()
-        .min_by_key(|candidate| levenshtein(&candidate.to_lowercase(), &target))
+        .min_by_key(|candidate| {
+            datafusion_strsim::levenshtein(&candidate.to_lowercase(), &target)
+        })
         .expect("No candidates provided.") // Panic if `candidates` argument is empty
 }
 
