@@ -489,24 +489,6 @@ impl SchemaMapping {
         let batch_cols = batch.columns().to_vec();
         let batch_schema = batch.schema().clone();
 
-        // let cols = self
-        //     .table_schema
-        //     .fields()
-        //     .iter()
-        //     .zip(&self.field_mappings)
-        //     .map(|(field, mapping)|  {
-        //          if mapping {
-        //             match batch_schema.index_of(fiel) {
-        //                 Ok(batch_idx) => {
-        //                     arrow::compute::cast(&batch_cols[batch_idx], field.data_type())
-        //                         .map_err(DataFusionError::ArrowError)
-        //                 }
-        //                 Err(_) => Ok(new_null_array(field.data_type(), batch_rows)),
-        //             }
-        //         }
-        //         None => Ok(new_null_array(field.data_type(), batch_rows)),
-        //     })
-        //     .collect::<Result<Vec<_>>>()?;
         let cols = self
             .table_schema
             .fields()
