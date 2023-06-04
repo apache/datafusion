@@ -440,33 +440,24 @@ impl SchemaAdapter {
         &self,
         file_schema: &Schema,
     ) -> Result<(SchemaMapping, Vec<usize>)> {
-        let mut field_mappings: Vec<Option<usize>> =
-            Vec::with_capacity(self.table_schema.fields().len());
+        let mut field_mappings: Vec<bool> = vec![false; self.table_schema.fields().len()];
         let mut mapped: Vec<usize> = vec![];
-        let mut batch_idx = 0;
 
-        for field in self.table_schema.fields() {
-            match file_schema.index_of(field.name().as_str()) {
-                Ok(mapped_idx)
-                    if can_cast_types(
-                        file_schema.field(mapped_idx).data_type(),
-                        field.data_type(),
-                    ) =>
-                {
-                    field_mappings.push(Some(batch_idx));
-                    batch_idx += 1;
+        for (idx, field) in self.table_schema.fields().iter().enumerate() {
+            if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+                if can_cast_types(
+                    file_schema.field(mapped_idx).data_type(),
+                    field.data_type(),
+                ) {
+                    field_mappings[idx] = true;
                     mapped.push(mapped_idx);
-                }
-                Ok(mapped_idx) => {
+                } else {
                     return Err(DataFusionError::Plan(format!(
                         "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
                         field.name(),
                         file_schema.field(mapped_idx).data_type(),
                         field.data_type()
                     )));
-                }
-                Err(_) => {
-                    field_mappings.push(None);
                 }
             }
         }
@@ -486,9 +477,9 @@ impl SchemaAdapter {
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion and it should match the schema of the query result.
     table_schema: SchemaRef,
-    /// The field in table_schema at index i is mapped to the field in batch_schema at the index field_mappings\[i\].0
-    /// i.e. table_schema\[i\] = batch_schema\[field_mappings\[i\].0\]
-    field_mappings: Vec<Option<usize>>,
+    /// In `field_mappings`, a `true` value indicates that the corresponding field in `table_schema` exists in `file_schema`,
+    /// while a `false` value indicates that the corresponding field does not exist.
+    field_mappings: Vec<bool>,
 }
 
 impl SchemaMapping {
@@ -496,16 +487,44 @@ impl SchemaMapping {
     fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
+        let batch_schema = batch.schema().clone();
 
+        // let cols = self
+        //     .table_schema
+        //     .fields()
+        //     .iter()
+        //     .zip(&self.field_mappings)
+        //     .map(|(field, mapping)|  {
+        //          if mapping {
+        //             match batch_schema.index_of(fiel) {
+        //                 Ok(batch_idx) => {
+        //                     arrow::compute::cast(&batch_cols[batch_idx], field.data_type())
+        //                         .map_err(DataFusionError::ArrowError)
+        //                 }
+        //                 Err(_) => Ok(new_null_array(field.data_type(), batch_rows)),
+        //             }
+        //         }
+        //         None => Ok(new_null_array(field.data_type(), batch_rows)),
+        //     })
+        //     .collect::<Result<Vec<_>>>()?;
         let cols = self
             .table_schema
             .fields()
             .iter()
-            .zip(&self.field_mappings)
-            .map(|(field, mapping)| match mapping {
-                Some(idx) => arrow::compute::cast(&batch_cols[*idx], field.data_type())
-                    .map_err(DataFusionError::ArrowError),
-                None => Ok(new_null_array(field.data_type(), batch_rows)),
+            .enumerate()
+            .map(|(idx, field)| {
+                if self.field_mappings[idx] {
+                    match batch_schema.index_of(field.name()) {
+                        Ok(batch_idx) => arrow::compute::cast(
+                            &batch_cols[batch_idx],
+                            field.data_type(),
+                        )
+                        .map_err(DataFusionError::ArrowError),
+                        Err(_) => Ok(new_null_array(field.data_type(), batch_rows)),
+                    }
+                } else {
+                    Ok(new_null_array(field.data_type(), batch_rows))
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 
