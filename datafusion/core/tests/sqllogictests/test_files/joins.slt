@@ -904,6 +904,32 @@ Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR
 --Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8("w")
 ----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
+# Reduce left join 3 (to inner join)
+
+query TT
+EXPLAIN
+SELECT *
+FROM (
+    SELECT join_t1.*
+    FROM join_t1
+    LEFT JOIN join_t2 ON join_t1.t1_id = join_t2.t2_id
+    WHERE join_t2.t2_int < 3
+) t3
+LEFT JOIN join_t2 on t3.t1_int = join_t2.t2_int
+WHERE t3.t1_id < 100
+----
+logical_plan
+Left Join: t3.t1_int = join_t2.t2_int
+--SubqueryAlias: t3
+----Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
+------Inner Join: join_t1.t1_id = join_t2.t2_id
+--------Filter: join_t1.t1_id < UInt32(100)
+----------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--------Projection: join_t2.t2_id
+----------Filter: join_t2.t2_int < UInt32(3) AND join_t2.t2_id < UInt32(100)
+------------TableScan: join_t2 projection=[t2_id, t2_int]
+--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+
 ###
 # Configuration teardown
 ###
@@ -911,8 +937,6 @@ Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 
-
-# TODO: reduce_left_join_3
 
 # TODO: reduce_right_join_1
 
