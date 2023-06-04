@@ -18,7 +18,7 @@
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_array::types::Int32Type;
-use arrow_array::{ArrayRef, DictionaryArray, Float32Array, Int64Array, ListArray};
+use arrow_array::{ArrayRef, DictionaryArray, Float32Array, Int64Array, StringArray};
 use arrow_schema::DataType;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::physical_plan::collect;
@@ -42,29 +42,21 @@ async fn multi_parquet_coercion() {
     let c1: ArrayRef = Arc::new(d1);
     let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
     let c3: ArrayRef = Arc::new(Float32Array::from(vec![Some(10.0), Some(20.0), None]));
-    let c4 = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-        Some(vec![Some(1), Some(2), Some(3)]),
-        Some(vec![Some(4), Some(5)]),
-        Some(vec![Some(6)]),
-    ]));
 
-    let batch1 = RecordBatch::try_from_iter(vec![
-        ("c1", c1),
-        ("c2", c2.clone()),
-        ("c3", c3.clone()),
-    ])
-    .unwrap();
-    let batch2 =
-        RecordBatch::try_from_iter(vec![("c2", c2), ("c3", c3), ("c4", c4)]).unwrap();
+    // batch1: c1(dict), c2(int64)
+    let batch1 =
+        RecordBatch::try_from_iter(vec![("c1", c1), ("c2", c2.clone())]).unwrap();
+    // batch2: c2(int64), c3(float32)
+    let batch2 = RecordBatch::try_from_iter(vec![("c2", c2), ("c3", c3)]).unwrap();
 
     let (meta, _files) = store_parquet(vec![batch1, batch2]).await.unwrap();
     let file_groups = meta.into_iter().map(Into::into).collect();
 
+    // cast c1 to utf8, c2 to int32, c3 to float64
     let file_schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
-        Field::new("c4", DataType::Utf8, true),
     ]));
     let parquet_exec = ParquetExec::new(
         FileScanConfig {
@@ -87,16 +79,80 @@ async fn multi_parquet_coercion() {
     let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
 
     let expected = vec![
-        "+-------+----+------+-----------+",
-        "| c1    | c2 | c3   | c4        |",
-        "+-------+----+------+-----------+",
-        "|       |    |      | [6]       |",
-        "|       | 1  | 10.0 | [1, 2, 3] |",
-        "|       | 2  | 20.0 |           |",
-        "|       | 2  | 20.0 | [4, 5]    |",
-        "| one   | 1  | 10.0 |           |",
-        "| three |    |      |           |",
-        "+-------+----+------+-----------+",
+        "+-------+----+------+",
+        "| c1    | c2 | c3   |",
+        "+-------+----+------+",
+        "|       |    |      |",
+        "|       | 1  | 10.0 |",
+        "|       | 2  |      |",
+        "|       | 2  | 20.0 |",
+        "| one   | 1  |      |",
+        "| three |    |      |",
+        "+-------+----+------+",
+    ];
+    assert_batches_sorted_eq!(expected, &read);
+}
+
+#[tokio::test]
+async fn multi_parquet_coercion_projection() {
+    let d1: DictionaryArray<Int32Type> =
+        vec![Some("one"), None, Some("three")].into_iter().collect();
+    let c1: ArrayRef = Arc::new(d1);
+    let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+    let c3: ArrayRef = Arc::new(Float32Array::from(vec![Some(10.0), Some(20.0), None]));
+    let c1s = Arc::new(StringArray::from(vec![
+        Some("baz"),
+        Some("Boo"),
+        Some("foo"),
+    ]));
+
+    // batch1: c2(int64), c1(dict)
+    let batch1 =
+        RecordBatch::try_from_iter(vec![("c2", c2.clone()), ("c1", c1)]).unwrap();
+    // batch2: c2(int64), c1(str), c3(float32)
+    let batch2 =
+        RecordBatch::try_from_iter(vec![("c2", c2), ("c1", c1s), ("c3", c3)]).unwrap();
+
+    let (meta, _files) = store_parquet(vec![batch1, batch2]).await.unwrap();
+    let file_groups = meta.into_iter().map(Into::into).collect();
+
+    // cast c1 to utf8, c2 to int32, c3 to float64
+    let file_schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, true),
+        Field::new("c2", DataType::Int32, true),
+        Field::new("c3", DataType::Float64, true),
+    ]));
+    let parquet_exec = ParquetExec::new(
+        FileScanConfig {
+            object_store_url: ObjectStoreUrl::local_filesystem(),
+            file_groups: vec![file_groups],
+            file_schema,
+            statistics: Statistics::default(),
+            projection: Some(vec![1, 0, 2]),
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: vec![],
+            infinite_source: false,
+        },
+        None,
+        None,
+    );
+
+    let session_ctx = SessionContext::new();
+    let task_ctx = session_ctx.task_ctx();
+    let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+
+    let expected = vec![
+        "+----+-------+------+",
+        "| c2 | c1    | c3   |",
+        "+----+-------+------+",
+        "|    | foo   |      |",
+        "|    | three |      |",
+        "| 1  | baz   | 10.0 |",
+        "| 1  | one   |      |",
+        "| 2  |       |      |",
+        "| 2  | Boo   | 20.0 |",
+        "+----+-------+------+",
     ];
     assert_batches_sorted_eq!(expected, &read);
 }

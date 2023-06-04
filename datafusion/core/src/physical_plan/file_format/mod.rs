@@ -443,6 +443,7 @@ impl SchemaAdapter {
         let mut field_mappings: Vec<Option<usize>> =
             Vec::with_capacity(self.table_schema.fields().len());
         let mut mapped: Vec<usize> = vec![];
+        let mut batch_idx = 0;
 
         for field in self.table_schema.fields() {
             match file_schema.index_of(field.name().as_str()) {
@@ -452,7 +453,8 @@ impl SchemaAdapter {
                         field.data_type(),
                     ) =>
                 {
-                    field_mappings.push(Some(mapped_idx));
+                    field_mappings.push(Some(batch_idx));
+                    batch_idx += 1;
                     mapped.push(mapped_idx);
                 }
                 Ok(mapped_idx) => {
@@ -484,8 +486,8 @@ impl SchemaAdapter {
 pub struct SchemaMapping {
     /// The schema of the table. This is the expected schema after conversion and it should match the schema of the query result.
     table_schema: SchemaRef,
-    /// The index in the batch schema matching the corresponding field in table_schema
-    /// i.e. table_schema[i] = file_schema[field_mappings[i].0]
+    /// The field in table_schema at index i is mapped to the field in batch_schema at the index field_mappings\[i\].0
+    /// i.e. table_schema\[i\] = batch_schema\[field_mappings\[i\].0\]
     field_mappings: Vec<Option<usize>>,
 }
 
