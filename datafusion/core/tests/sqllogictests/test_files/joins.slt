@@ -930,6 +930,21 @@ Left Join: t3.t1_int = join_t2.t2_int
 ------------TableScan: join_t2 projection=[t2_id, t2_int]
 --TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
+# Reduce right join 1 (to inner join)
+
+query TT
+EXPLAIN
+SELECT *
+FROM join_t1
+RIGHT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
+WHERE join_t1.t1_int IS NOT NULL
+----
+logical_plan
+Inner Join: join_t1.t1_id = join_t2.t2_id
+--Filter: join_t1.t1_int IS NOT NULL
+----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+
 ###
 # Configuration teardown
 ###
@@ -937,8 +952,6 @@ Left Join: t3.t1_int = join_t2.t2_int
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 
-
-# TODO: reduce_right_join_1
 
 # TODO: reduce_right_join_2
 
