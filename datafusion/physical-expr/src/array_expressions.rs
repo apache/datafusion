@@ -322,9 +322,7 @@ pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let list_arrays =
                 downcast_vec!(arrays, ListArray).collect::<Result<Vec<&ListArray>>>()?;
             let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-            let capacity = Capacities::Array(
-                list_arrays.iter().map(|a| a.len()).sum(),
-            );
+            let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
             let array_data: Vec<_> =
                 list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
             let array_data = array_data.iter().collect();
