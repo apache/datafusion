@@ -413,13 +413,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_inner_join_table_reuse() -> Result<()> {
+    async fn roundtrip_inner_join_table_reuse_zero_index() -> Result<()> {
         assert_expected_plan(
             "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.a = d2.a",
             "Projection: data.b, data.c\
             \n  Inner Join: data.a = data.a\
             \n    TableScan: data projection=[a, b]\
             \n    TableScan: data projection=[a, c]",
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_inner_join_table_reuse_non_zero_index() -> Result<()> {
+        assert_expected_plan(
+            "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
+            "Projection: data.b, data.c\
+            \n  Inner Join: data.b = data.b\
+            \n    TableScan: data projection=[b]\
+            \n    TableScan: data projection=[b, c]",
         )
         .await
     }

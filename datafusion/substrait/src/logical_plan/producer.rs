@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, usize};
+use std::collections::HashMap;
 
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -394,7 +394,7 @@ fn to_substrait_join_expr(
         HashMap<String, u32>,
     ),
 ) -> Result<Expression> {
-    // Only support AND confunction for each binary expression in join conditions
+    // Only support AND conjunction for each binary expression in join conditions
     let mut exprs: Vec<Expression> = vec![];
     for (left, right) in join_conditions {
         // Parse left
@@ -581,7 +581,28 @@ pub fn make_binary_op_scalar_func(
 }
 
 /// Convert DataFusion Expr to Substrait Rex
-#[allow(deprecated)]
+///
+/// # Arguments
+///
+/// * `expr` - DataFusion expression to be parse into a Substrait expression
+/// * `schema` - DataFusion input schema for looking up field qualifiers
+/// * `col_ref_offset` - Offset for caculating Substrait field reference indices.
+///                     This should only be set by caller with more than one input relations i.e. Join.
+///                     Substrait expects one set of indices when joining two relations.
+///                     Let's say `left` and `right` have `m` and `n` columns, respectively. The `right`
+///                     relation will have column indices from `0` to `n-1`, however, Substrait will expect
+///                     the `right` indices to be offset by the `left`. This means Substrait will expect to
+///                     evaluate the join condition expression on indices [0 .. n-1, n .. n+m-1]. For example:
+///                     ```SELECT *
+///                        FROM t1
+///                        JOIN t2
+///                        ON t1.c1 = t2.c0;```
+///                     where t1 consists of columns [c0, c1, c2], and t2 = columns [c0, c1]
+///                     the join condition should become
+///                     `col_ref(1) = col_ref(3 + 0)`
+///                     , where `3` is the number of `left` columns (`col_ref_offset`) and `0` is the index
+///                     of the join key column from `right`
+/// * `extension_info` - Substrait extension info. Contains registered function information
 pub fn to_substrait_rex(
     expr: &Expr,
     schema: &DFSchemaRef,
