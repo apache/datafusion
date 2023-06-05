@@ -309,13 +309,17 @@ mod test {
     use super::*;
     use arrow_schema::{DataType, Field, Schema};
 
-    use crate::{execution::context::SessionContext, test::exec::PanicExec};
+    use crate::{execution::context::SessionContext, test::{exec::{PanicExec, BlockingExec, assert_strong_count_converges_to_zero}}};
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]))
+    }
+
 
     #[tokio::test]
     #[should_panic(expected = "PanickingStream did panic")]
     async fn record_batch_receiver_stream_propagates_panics() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let schema = schema();
 
         let num_partitions = 10;
         let input = PanicExec::new(schema.clone(), num_partitions);
@@ -325,8 +329,7 @@ mod test {
     #[tokio::test]
     #[should_panic(expected = "PanickingStream did panic: 1")]
     async fn record_batch_receiver_stream_propagates_panics_one() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let schema = schema();
 
         // make 2 partitions, second panics before the first
         let num_partitions = 2;
@@ -336,6 +339,31 @@ mod test {
 
         let max_batches = 5; // expect to read every other batch: (0,1,0,1,0,panic)
         consume(input, max_batches).await
+    }
+
+    #[tokio::test]
+    async fn record_batch_receiver_stream_drop_cancel() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let schema = schema();
+
+        // Make an input that will not proceed
+        let input = BlockingExec::new(schema.clone(), 1);
+        let refs = input.refs();
+
+        // Configure a RecordBatchReceiverStream to consume the input
+        let mut builder =
+            RecordBatchReceiverStream::builder(schema, 2);
+        builder.run_input(Arc::new(input), 0, task_ctx.clone());
+
+        let stream = builder.build();
+
+        // input stream should be present
+        assert!(std::sync::Weak::strong_count(&refs) > 0);
+
+        // drop the stream, ensure the refs go to zero
+        drop(stream);
+        assert_strong_count_converges_to_zero(refs).await;
     }
 
     /// Consumes all the input's partitions into a
