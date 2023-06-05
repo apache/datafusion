@@ -989,6 +989,22 @@ Left Join: join_t1.t1_id = join_t2.t2_id
 ----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
+# Reduce full join to inner join
+
+query TT
+EXPLAIN
+SELECT *
+FROM join_t1
+FULL JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
+WHERE join_t1.t1_name != 'b' and join_t2.t2_name = 'x'
+----
+logical_plan
+Inner Join: join_t1.t1_id = join_t2.t2_id
+--Filter: join_t1.t1_name != Utf8("b")
+----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--Filter: join_t2.t2_name = Utf8("x")
+----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+
 ###
 # Configuration teardown
 ###
@@ -996,8 +1012,6 @@ Left Join: join_t1.t1_id = join_t2.t2_id
 statement ok
 set datafusion.optimizer.repartition_joins = true;
 
-
-# TODO: reduce_full_join_to_inner_join
 
 # TODO: sort_merge_equijoin
 
