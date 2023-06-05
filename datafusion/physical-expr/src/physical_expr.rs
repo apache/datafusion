@@ -80,8 +80,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
 
     /// Return the boundaries of this expression. This method (and all the
     /// related APIs) are experimental and subject to change.
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        context
+    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
+        Ok(context)
     }
 
     /// Computes bounds for the expression using interval arithmetic.
@@ -184,33 +184,30 @@ pub struct ExprBoundaries {
 
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries`.
-    pub fn new(
-        min_value: ScalarValue,
-        max_value: ScalarValue,
-        distinct_count: Option<usize>,
-    ) -> Self {
-        Self::new_with_selectivity(min_value, max_value, distinct_count, None)
+    pub fn try_new(interval: Interval, distinct_count: Option<usize>) -> Result<Self> {
+        Self::new_with_selectivity(interval, distinct_count, None)
     }
 
     /// Create a new `ExprBoundaries` with a selectivity value.
     pub fn new_with_selectivity(
-        min_value: ScalarValue,
-        max_value: ScalarValue,
+        interval: Interval,
         distinct_count: Option<usize>,
         selectivity: Option<f64>,
-    ) -> Self {
-        assert!(!matches!(
-            min_value.partial_cmp(&max_value),
-            Some(Ordering::Greater)
-        ));
-        Self {
+    ) -> Result<Self> {
+        if interval.min_val().partial_cmp(&interval.max_val()) == Some(Ordering::Greater)
+        {
+            return Err(DataFusionError::Internal(
+                "Min value of the interval cannot be larger than max value".to_string(),
+            ));
+        }
+        Ok(Self {
             interval: Interval::new(
-                IntervalBound::new(min_value, false),
-                IntervalBound::new(max_value, false),
+                IntervalBound::new(interval.min_val(), false),
+                IntervalBound::new(interval.max_val(), false),
             ),
             distinct_count,
             selectivity,
-        }
+        })
     }
 
     /// Create a new `ExprBoundaries` from a column level statistics.
@@ -242,11 +239,11 @@ impl ExprBoundaries {
     }
 
     pub fn min_val(&self) -> ScalarValue {
-        self.interval.lower.value.clone()
+        self.interval.min_val()
     }
 
     pub fn max_val(&self) -> ScalarValue {
-        self.interval.upper.value.clone()
+        self.interval.max_val()
     }
 }
 
@@ -337,7 +334,7 @@ macro_rules! analysis_expect {
     ($context: ident, $expr: expr) => {
         match $expr {
             Some(expr) => expr,
-            None => return $context.with_boundaries(None),
+            None => return Ok($context.with_boundaries(None)),
         }
     };
 }
@@ -421,26 +418,35 @@ mod tests {
 
     #[test]
     fn reduce_boundaries() -> Result<()> {
-        let different_boundaries = ExprBoundaries::new(
-            ScalarValue::Int32(Some(1)),
-            ScalarValue::Int32(Some(10)),
+        let different_boundaries = ExprBoundaries::try_new(
+            Interval::new(
+                IntervalBound::new(ScalarValue::Int32(Some(1)), false),
+                IntervalBound::new(ScalarValue::Int32(Some(10)), false),
+            ),
             None,
-        );
+        )?;
         assert_eq!(different_boundaries.reduce(), None);
 
-        let scalar_boundaries = ExprBoundaries::new(
-            ScalarValue::Int32(Some(1)),
-            ScalarValue::Int32(Some(1)),
+        let scalar_boundaries = ExprBoundaries::try_new(
+            Interval::new(
+                IntervalBound::new(ScalarValue::Int32(Some(1)), false),
+                IntervalBound::new(ScalarValue::Int32(Some(1)), false),
+            ),
             None,
-        );
+        )?;
         assert_eq!(
             scalar_boundaries.reduce(),
             Some(ScalarValue::Int32(Some(1)))
         );
 
         // Can still reduce.
-        let no_boundaries =
-            ExprBoundaries::new(ScalarValue::Int32(None), ScalarValue::Int32(None), None);
+        let no_boundaries = ExprBoundaries::try_new(
+            Interval::new(
+                IntervalBound::new(ScalarValue::Int32(None), false),
+                IntervalBound::new(ScalarValue::Int32(None), false),
+            ),
+            None,
+        )?;
         assert_eq!(no_boundaries.reduce(), Some(ScalarValue::Int32(None)));
 
         Ok(())

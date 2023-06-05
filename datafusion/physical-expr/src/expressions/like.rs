@@ -183,8 +183,8 @@ impl PhysicalExpr for LikeExpr {
     }
 
     /// Return the boundaries of this binary expression's result.
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        context.with_boundaries(None)
+    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
+        Ok(context.with_boundaries(None))
     }
 }
 

@@ -83,7 +83,7 @@ use self::kernels_arrow::{
 use super::column::Column;
 use crate::expressions::cast_column;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::intervals::{apply_operator, Interval};
+use crate::intervals::{apply_operator, Interval, IntervalBound};
 use crate::physical_expr::down_cast_any_ref;
 use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::cast::as_boolean_array;
@@ -751,7 +751,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     /// Return the boundaries of this binary expression's result.
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
+    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
         match &self.op {
             Operator::Eq
             | Operator::Gt
@@ -760,11 +760,11 @@ impl PhysicalExpr for BinaryExpr {
             | Operator::GtEq => {
                 // We currently only support comparison when we know at least one of the sides are
                 // a known value (a scalar). This includes predicates like a > 20 or 5 > a.
-                let context = self.left.analyze(context);
+                let context = self.left.analyze(context)?;
                 let left_boundaries =
                     analysis_expect!(context, context.boundaries()).clone();
 
-                let context = self.right.analyze(context);
+                let context = self.right.analyze(context)?;
                 let right_boundaries =
                     analysis_expect!(context, context.boundaries.clone());
 
@@ -791,11 +791,11 @@ impl PhysicalExpr for BinaryExpr {
                     }
                     _ => {
                         // Both sides are columns, so we give up.
-                        context.with_boundaries(None)
+                        Ok(context.with_boundaries(None))
                     }
                 }
             }
-            _ => context.with_boundaries(None),
+            _ => Ok(context.with_boundaries(None)),
         }
     }
 
@@ -858,59 +858,31 @@ fn analyze_expr_scalar_comparison(
     op: &Operator,
     left: &Arc<dyn PhysicalExpr>,
     right: ScalarValue,
-) -> AnalysisContext {
-    let left_bounds = analysis_expect!(context, left.analyze(context.clone()).boundaries);
-    let left_min = left_bounds.min_val();
-    let left_max = left_bounds.max_val();
+) -> Result<AnalysisContext> {
+    let analyzed = left.analyze(context.clone())?;
+    let left_bounds = analysis_expect!(context, analyzed.boundaries);
+    let left_interval = Interval::new(
+        IntervalBound::new(left_bounds.min_val(), false),
+        IntervalBound::new(left_bounds.max_val(), false),
+    );
+    let right_singleton = Interval::new(
+        IntervalBound::new(right.clone(), false),
+        IntervalBound::new(right.clone(), false),
+    );
 
     // Direct selectivity is applicable when we can determine that this comparison will
     // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
     // where the `a`'s max value is 4).
-    let (always_selects, never_selects) = match op {
-        Operator::Lt => (right > left_max, right <= left_min),
-        Operator::LtEq => (right >= left_max, right < left_min),
-        Operator::Gt => (right < left_min, right >= left_max),
-        Operator::GtEq => (right <= left_min, right > left_max),
-        Operator::Eq => (
-            // Since min/max can be artificial (e.g. the min or max value of a column
-            // might be under/over the real value), we can't assume if the right equals
-            // to any left.min / left.max values it is always going to be selected. But
-            // we can assume that if the range(left) doesn't overlap with right, it is
-            // never going to be selected.
-            false,
-            right < left_min || right > left_max,
-        ),
-        _ => unreachable!(),
-    };
+    let selective_interval = apply_operator(op, &left_interval, &right_singleton)?;
 
-    // Both can not be true at the same time.
-    assert!(!(always_selects && never_selects));
-
-    let selectivity = match (always_selects, never_selects) {
-        (true, _) => 1.0,
-        (_, true) => 0.0,
-        (false, false) => {
-            // If there is a partial overlap, then we can estimate the selectivity
-            // by computing the ratio of the existing overlap to the total range. Since we
-            // currently don't have access to a value distribution histogram, the part below
-            // assumes a uniform distribution by default.
-
-            // Our [min, max] is inclusive, so we need to add 1 to the difference.
-            let total_range = analysis_expect!(context, left_max.distance(&left_min)) + 1;
-            let overlap_between_boundaries = analysis_expect!(
-                context,
-                match op {
-                    Operator::Lt => right.distance(&left_min),
-                    Operator::Gt => left_max.distance(&right),
-                    Operator::LtEq => right.distance(&left_min).map(|dist| dist + 1),
-                    Operator::GtEq => left_max.distance(&right).map(|dist| dist + 1),
-                    Operator::Eq => Some(1),
-                    _ => None,
-                }
-            );
-
-            overlap_between_boundaries as f64 / total_range as f64
-        }
+    let selectivity = match (selective_interval.min_val(), selective_interval.max_val()) {
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => 1.0,
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => 0.0,
+        // If there is a partial overlap, then we can estimate the selectivity
+        // by computing the ratio of the existing overlap to the total range. Since we
+        // currently don't have access to a value distribution histogram, the part below
+        // assumes a uniform distribution by default.
+        _ => calculate_selectivity(op, &right, &left_interval),
     };
 
     // The context represents all the knowledge we have gathered during the
@@ -929,18 +901,18 @@ fn analyze_expr_scalar_comparison(
                     // it is actually smaller than what we have right now) and it is a valid
                     // value (e.g. [0, 100] < -100 would update the boundaries to [0, -100] if
                     // there weren't the selectivity check).
-                    if right < left_max && selectivity > 0.0 {
-                        (left_min, right)
+                    if right < left_bounds.max_val() && selectivity > 0.0 {
+                        (left_bounds.min_val(), right)
                     } else {
-                        (left_min, left_max)
+                        (left_bounds.min_val(), left_bounds.max_val())
                     }
                 }
                 Operator::Gt | Operator::GtEq => {
                     // Same as above, but this time we want to limit the lower bound.
-                    if right > left_min && selectivity > 0.0 {
-                        (right, left_max)
+                    if right > left_bounds.min_val() && selectivity > 0.0 {
+                        (right, left_bounds.max_val())
                     } else {
-                        (left_min, left_max)
+                        (left_bounds.min_val(), left_bounds.max_val())
                     }
                 }
                 // For equality, we don't have the range problem so even if the selectivity
@@ -949,29 +921,78 @@ fn analyze_expr_scalar_comparison(
                 _ => unreachable!(),
             };
 
-            let left_bounds =
-                ExprBoundaries::new(left_min, left_max, left_bounds.distinct_count);
+            let left_bounds = ExprBoundaries::try_new(
+                Interval::new(
+                    IntervalBound::new(left_min, false),
+                    IntervalBound::new(left_max, false),
+                ),
+                left_bounds.distinct_count,
+            )?;
             context.with_column_update(column_expr.index(), left_bounds)
         }
         None => context,
     };
 
-    // The selectivity can't be be greater than 1.0.
-    assert!(selectivity <= 1.0);
-
-    let (pred_min, pred_max, pred_distinct) = match (always_selects, never_selects) {
-        (false, true) => (false, false, 1),
-        (true, false) => (true, true, 1),
-        _ => (false, true, 2),
-    };
+    let (pred_min, pred_max, pred_distinct) =
+        match (selective_interval.min_val(), selective_interval.max_val()) {
+            (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => {
+                (false, false, 1)
+            }
+            (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => {
+                (true, true, 1)
+            }
+            _ => (false, true, 2),
+        };
 
     let result_boundaries = Some(ExprBoundaries::new_with_selectivity(
-        ScalarValue::Boolean(Some(pred_min)),
-        ScalarValue::Boolean(Some(pred_max)),
+        Interval::new(
+            IntervalBound::new(ScalarValue::Boolean(Some(pred_min)), false),
+            IntervalBound::new(ScalarValue::Boolean(Some(pred_max)), false),
+        ),
         Some(pred_distinct),
         Some(selectivity),
-    ));
-    context.with_boundaries(result_boundaries)
+    )?);
+    Ok(context.with_boundaries(result_boundaries))
+}
+
+fn calculate_selectivity(
+    op: &Operator,
+    right: &ScalarValue,
+    left_interval: &Interval,
+) -> f64 {
+    if !left_interval.is_integer_type() {
+        return 0.0;
+    }
+    let total_range = match left_interval.cardinality() {
+        Some(total_range) => total_range,
+        None => return 0.0,
+    };
+    let cardinality = |lower, upper| {
+        Interval::new(lower, upper)
+            .cardinality()
+            .map_or(0.0, |r| r as f64 / total_range as f64)
+    };
+
+    match op {
+        Operator::Lt => {
+            let upper = IntervalBound::new(right.clone(), true);
+            cardinality(left_interval.lower.clone(), upper)
+        }
+        Operator::LtEq => {
+            let upper = IntervalBound::new(right.clone(), false);
+            cardinality(left_interval.lower.clone(), upper)
+        }
+        Operator::Gt => {
+            let lower = IntervalBound::new(right.clone(), true);
+            cardinality(lower, left_interval.upper.clone())
+        }
+        Operator::GtEq => {
+            let lower = IntervalBound::new(right.clone(), false);
+            cardinality(lower, left_interval.upper.clone())
+        }
+        Operator::Eq => 1.0 / total_range as f64,
+        _ => 0.0,
+    }
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel

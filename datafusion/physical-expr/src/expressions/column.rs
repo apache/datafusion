@@ -104,10 +104,16 @@ impl PhysicalExpr for Column {
     }
 
     /// Return the boundaries of this column, if known.
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        assert!(self.index < context.column_boundaries.len());
+    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
+        if self.index < context.column_boundaries.len() {
+            return Err(DataFusionError::Internal(format!(
+                "Column index is :{}, but AnalysisContext has {} columns",
+                self.index,
+                context.column_boundaries.len()
+            )));
+        }
         let col_bounds = context.column_boundaries[self.index].clone();
-        context.with_boundaries(col_bounds)
+        Ok(context.with_boundaries(col_bounds))
     }
 }
 

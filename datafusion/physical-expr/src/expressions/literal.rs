@@ -25,7 +25,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::physical_expr::down_cast_any_ref;
+use crate::{
+    intervals::{Interval, IntervalBound},
+    physical_expr::down_cast_any_ref,
+};
 use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -86,12 +89,14 @@ impl PhysicalExpr for Literal {
 
     /// Return the boundaries of this literal expression (which is the same as
     /// the value it represents).
-    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
-        context.with_boundaries(Some(ExprBoundaries::new(
-            self.value.clone(),
-            self.value.clone(),
+    fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
+        Ok(context.with_boundaries(Some(ExprBoundaries::try_new(
+            Interval::new(
+                IntervalBound::new(self.value().clone(), false),
+                IntervalBound::new(self.value().clone(), false),
+            ),
             Some(1),
-        )))
+        )?)))
     }
 }
 

@@ -451,6 +451,54 @@ impl Interval {
         lower: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
         upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
     };
+
+    pub fn min_val(&self) -> ScalarValue {
+        self.lower.value.clone()
+    }
+
+    pub fn max_val(&self) -> ScalarValue {
+        self.upper.value.clone()
+    }
+
+    pub fn width(&self) -> Option<ScalarValue> {
+        self.max_val().sub(self.min_val()).ok()
+    }
+
+    // Cardinality is applicable for discrete datatypes.
+    pub fn cardinality(&self) -> Option<u64> {
+        if self.is_integer_type() {
+            if let Some(diff) = self.max_val().distance(&self.min_val()) {
+                if diff == 0 {
+                    return Some(0);
+                }
+                match (self.lower.open, self.upper.open) {
+                    (false, false) => Some(diff as u64 + 1),
+                    (true, true) => Some(diff as u64 - 1),
+                    _ => Some(diff as u64),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn is_integer_type(&self) -> bool {
+        self.get_datatype().map_or(false, |data_type| {
+            matches!(
+                data_type,
+                DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32
+                    | DataType::UInt64
+            )
+        })
+    }
 }
 
 /// Indicates whether interval arithmetic is supported for the given operator.

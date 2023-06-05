@@ -182,42 +182,45 @@ impl ExecutionPlan for FilterExec {
 
         let analysis_ctx = self.predicate.analyze(starter_ctx);
 
-        match analysis_ctx.boundaries {
-            Some(boundaries) => {
-                // Build back the column level statistics from the boundaries inside the
-                // analysis context. It is possible that these are going to be different
-                // than the input statistics, especially when a comparison is made inside
-                // the predicate expression (e.g. `col1 > 100`).
-                let column_statistics = analysis_ctx
-                    .column_boundaries
-                    .iter()
-                    .map(|boundary| match boundary {
-                        Some(boundary) => ColumnStatistics {
-                            min_value: Some(boundary.min_val()),
-                            max_value: Some(boundary.max_val()),
-                            ..Default::default()
-                        },
-                        None => ColumnStatistics::default(),
-                    })
-                    .collect();
+        if let Ok(analysis_ctx) = analysis_ctx {
+            match analysis_ctx.boundaries {
+                Some(boundaries) => {
+                    // Build back the column level statistics from the boundaries inside the
+                    // analysis context. It is possible that these are going to be different
+                    // than the input statistics, especially when a comparison is made inside
+                    let column_statistics = analysis_ctx
+                        .column_boundaries
+                        .iter()
+                        .map(|boundary| match boundary {
+                            Some(boundary) => ColumnStatistics {
+                                min_value: Some(boundary.min_val()),
+                                max_value: Some(boundary.max_val()),
+                                ..Default::default()
+                            },
+                            None => ColumnStatistics::default(),
+                        })
+                        .collect();
 
-                Statistics {
-                    num_rows: input_stats.num_rows.zip(boundaries.selectivity).map(
-                        |(num_rows, selectivity)| {
-                            (num_rows as f64 * selectivity).ceil() as usize
-                        },
-                    ),
-                    total_byte_size: input_stats
-                        .total_byte_size
-                        .zip(boundaries.selectivity)
-                        .map(|(num_rows, selectivity)| {
-                            (num_rows as f64 * selectivity).ceil() as usize
-                        }),
-                    column_statistics: Some(column_statistics),
-                    ..Default::default()
+                    Statistics {
+                        num_rows: input_stats.num_rows.zip(boundaries.selectivity).map(
+                            |(num_rows, selectivity)| {
+                                (num_rows as f64 * selectivity).ceil() as usize
+                            },
+                        ),
+                        total_byte_size: input_stats
+                            .total_byte_size
+                            .zip(boundaries.selectivity)
+                            .map(|(num_rows, selectivity)| {
+                                (num_rows as f64 * selectivity).ceil() as usize
+                            }),
+                        column_statistics: Some(column_statistics),
+                        ..Default::default()
+                    }
                 }
+                None => Statistics::default(),
             }
-            None => Statistics::default(),
+        } else {
+            Statistics::default()
         }
     }
 }
