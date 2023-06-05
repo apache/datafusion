@@ -1237,3 +1237,31 @@ SELECT arrow_typeof(1, 1);
 # error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
 statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
 SELECT power(1, 2, 3);
+
+# turn off enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld
+
+# turn on enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld
