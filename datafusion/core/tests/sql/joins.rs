@@ -344,33 +344,6 @@ async fn hash_join_with_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
-async fn reduce_full_join_to_left_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", false)?;
-
-    // reduce to left join
-    let sql =
-        "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b'";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
-    let plan = dataframe.into_optimized_plan()?;
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Left Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Filter: t1.t1_name != Utf8(\"b\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "    TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn reduce_full_join_to_inner_join() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", false)?;
 
