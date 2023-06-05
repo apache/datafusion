@@ -518,7 +518,7 @@ impl SessionContext {
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(schema, batches)?);
+                let table = Arc::new(MemTable::new_not_registered(schema, batches));
 
                 self.register_table(&name, table)?;
                 self.return_empty_dataframe()
