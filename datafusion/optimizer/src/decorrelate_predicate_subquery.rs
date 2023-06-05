@@ -602,12 +602,6 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    #[cfg(test)]
-    #[ctor::ctor]
-    fn init() {
-        let _ = env_logger::try_init();
-    }
-
     /// Test multiple correlated subqueries
     /// See subqueries.rs where_in_multiple()
     #[test]

@@ -1192,11 +1192,9 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: Distinct should be replaced to Aggregate".to_string(),
                     ))
                 }
-                LogicalPlan::Analyze(a) => {
-                    let input = self.create_initial_plan(&a.input, session_state).await?;
-                    let schema = SchemaRef::new((*a.schema).clone().into());
-                    Ok(Arc::new(AnalyzeExec::new(a.verbose, input, schema)))
-                }
+                LogicalPlan::Analyze(_) => Err(DataFusionError::Internal(
+                    "Unsupported logical plan: Analyze must be root of the plan".to_string(),
+                )),
                 LogicalPlan::Extension(e) => {
                     let physical_inputs = self.create_initial_plan_multi(e.node.inputs(), session_state).await?;
 
@@ -1851,6 +1849,10 @@ impl DefaultPhysicalPlanner {
                 stringified_plans,
                 e.verbose,
             ))))
+        } else if let LogicalPlan::Analyze(a) = logical_plan {
+            let input = self.create_physical_plan(&a.input, session_state).await?;
+            let schema = SchemaRef::new((*a.schema).clone().into());
+            Ok(Some(Arc::new(AnalyzeExec::new(a.verbose, input, schema))))
         } else {
             Ok(None)
         }
@@ -1925,10 +1927,8 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::execution::context::TaskContext;
-    use crate::execution::options::CsvReadOptions;
-    use crate::execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
@@ -1941,6 +1941,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{assert_contains, TableReference};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::TaskContext;
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
@@ -2228,7 +2230,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } } }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } } }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);
