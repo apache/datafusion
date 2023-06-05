@@ -1201,8 +1201,8 @@ mod tests {
         lit, ApproxDistinct, Column, Count, FirstValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, EquivalenceProperties, OrderedColumn,
-        OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        AggregateExpr, EquivalenceProperties, OrderingEquivalenceProperties,
+        PhysicalExpr, PhysicalSortExpr,
     };
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -1860,8 +1860,14 @@ mod tests {
         eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), options1)],
-            &vec![OrderedColumn::new(col_c.clone(), options2)],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()) as _,
+                options: options1,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_c.clone()) as _,
+                options: options2,
+            }],
         ));
         let mut order_by_exprs = vec![
             None,
