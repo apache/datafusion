@@ -355,8 +355,8 @@ impl FileWriterFactory for CsvWriterOpener {
     async fn create_writer(&self, file_meta: FileMeta) -> Result<Box<dyn FileWriterExt>> {
         let object = &file_meta.object_meta;
         match self.writer_mode {
-            // If the mode is append, call the store's append method and return a ready poll
-            // with the result wrapped in a custom error type if it fails
+            // If the mode is append, call the store's append method and return wrapped in
+            // a boxed trait object.
             FileWriterMode::Append => {
                 let writer = self
                     .object_store
@@ -381,8 +381,7 @@ impl FileWriterFactory for CsvWriterOpener {
                 Ok(writer)
             }
             // If the mode is put multipart, call the store's put_multipart method and
-            // return the writer wrapped in a ready poll or return an error wrapped
-            // in a custom error type if it fails
+            // return the writer wrapped in a boxed trait object.
             FileWriterMode::PutMultipart => {
                 let (multipart_id, writer) = self
                     .object_store
