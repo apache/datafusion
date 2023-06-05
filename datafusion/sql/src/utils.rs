@@ -23,8 +23,8 @@ use sqlparser::ast::Ident;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF,
-    WindowFunction,
+    GroupingSet, InList, InSubquery, JsonAccess, Like, Placeholder, ScalarFunction,
+    ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -423,6 +423,20 @@ where
             Expr::Placeholder(Placeholder { id, data_type }) => Ok(Expr::Placeholder(
                 Placeholder::new(id.clone(), data_type.clone()),
             )),
+            Expr::JsonAccess(JsonAccess {
+                json,
+                operator,
+                operand,
+            }) => Ok(Expr::JsonAccess({
+                let json = Box::new(clone_with_replacement(json, replacement_fn)?);
+                let operand = Box::new(clone_with_replacement(operand, replacement_fn)?);
+                let operator = *operator;
+                JsonAccess {
+                    json,
+                    operator,
+                    operand,
+                }
+            })),
         },
     }
 }

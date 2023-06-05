@@ -185,6 +185,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::Cast(_)
         | Expr::TryCast(_)
         | Expr::ScalarFunction(..)
+        | Expr::JsonAccess(_)
         | Expr::InList { .. } => Ok(VisitRecursion::Continue),
         Expr::Sort(_)
         | Expr::AggregateFunction(_)

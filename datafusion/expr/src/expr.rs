@@ -20,6 +20,7 @@
 use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
+use crate::json::JsonAcessOperator;
 use crate::logical_plan::Subquery;
 use crate::udaf;
 use crate::utils::{expr_to_columns, find_out_reference_exprs};
@@ -178,6 +179,28 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+    /// Access a JSON object, e.g. `json->'a'`
+    JsonAccess(JsonAccess),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct JsonAccess {
+    /// The json value being accessed
+    pub json: Box<Expr>,
+    /// The type of json access (`->` versus `->>`, etc)
+    pub operator: JsonAcessOperator,
+    /// The operand of the access (field name or index)
+    pub operand: Box<Expr>,
+}
+
+impl JsonAccess {
+    pub fn new(json: Box<Expr>, operator: JsonAcessOperator, operand: Box<Expr>) -> Self {
+        Self {
+            json,
+            operator,
+            operand,
+        }
+    }
 }
 
 /// Binary expression
@@ -696,6 +719,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard => "Wildcard",
+            Expr::JsonAccess(..) => "JsonAccess",
         }
     }
 
@@ -1134,6 +1158,11 @@ impl fmt::Debug for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
+            Expr::JsonAccess(JsonAccess {
+                json,
+                operator,
+                operand,
+            }) => write!(f, "{json:?} {operator} {operand:?}"),
         }
     }
 }
@@ -1429,6 +1458,15 @@ fn create_name(e: &Expr) -> Result<String> {
             "Create name does not support qualified wildcard".to_string(),
         )),
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
+        Expr::JsonAccess(JsonAccess {
+            json,
+            operator,
+            operand,
+        }) => {
+            let json = create_name(json)?;
+            let operand = create_name(operand)?;
+            Ok(format!("{} {} {}", json, operator, operand))
+        }
     }
 }
 

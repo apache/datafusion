@@ -18,7 +18,8 @@
 use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
-    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
+    InSubquery, JsonAccess, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast,
+    WindowFunction,
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
@@ -156,6 +157,15 @@ impl ExprSchemable for Expr {
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
+            Expr::JsonAccess(JsonAccess {
+                json,
+                operator,
+                operand,
+            }) => {
+                let json = json.get_type(schema)?;
+                let operand = operand.get_type(schema)?;
+                operator.result_type(&json, &operand)
+            }
         }
     }
 
@@ -242,6 +252,8 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            // You can always access a non-existent field, which returns null
+            Expr::JsonAccess(_) => Ok(true),
         }
     }
 

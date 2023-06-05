@@ -19,8 +19,8 @@
 
 use crate::expr::{
     AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, Cast, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
-    TryCast, WindowFunction,
+    GroupingSet, InList, InSubquery, JsonAccess, Like, Placeholder, ScalarFunction,
+    ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::Expr;
 use datafusion_common::tree_node::VisitRecursion;
@@ -126,7 +126,10 @@ impl TreeNode for Expr {
                 expr_vec.push(expr.as_ref().clone());
                 expr_vec.extend(list.clone());
                 expr_vec
-            }
+            },
+            Expr::JsonAccess(JsonAccess { json, operand, .. }) => {
+                vec![json.as_ref().clone(), operand.as_ref().clone()]
+            },
         };
 
         for child in children.iter() {
@@ -358,6 +361,19 @@ impl TreeNode for Expr {
             }
             Expr::Placeholder(Placeholder { id, data_type }) => {
                 Expr::Placeholder(Placeholder { id, data_type })
+            }
+            Expr::JsonAccess(JsonAccess {
+                json,
+                operator,
+                operand,
+            }) => {
+                let json = transform_boxed(json, &mut transform)?;
+                let operand = transform_boxed(operand, &mut transform)?;
+                Expr::JsonAccess(JsonAccess {
+                    json,
+                    operator,
+                    operand,
+                })
             }
         })
     }

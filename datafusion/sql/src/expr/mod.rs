@@ -31,12 +31,14 @@ use arrow_schema::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::expr::{InList, Placeholder};
+use datafusion_expr::expr::{InList, JsonAccess, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, Interval, TrimWhereField, Value};
+use sqlparser::ast::{
+    ArrayAgg, Expr as SQLExpr, Interval, JsonOperator, TrimWhereField, Value,
+};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -328,11 +330,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(*subquery, schema, planner_context),
 
             SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, planner_context),
+            SQLExpr::JsonAccess { left, operator, right } => self.parse_json_access(*left, operator, *right, schema, planner_context),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {sql:?}"
             ))),
         }
+    }
+
+    fn parse_json_access(
+        &self,
+        left: SQLExpr,
+        operator: JsonOperator,
+        right: SQLExpr,
+        input_schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let json = self.sql_expr_to_logical_expr(left, input_schema, planner_context)?;
+        let operand =
+            self.sql_expr_to_logical_expr(right, input_schema, planner_context)?;
+        let operator = operator.try_into()?;
+        Ok(Expr::JsonAccess(JsonAccess::new(
+            Box::new(json),
+            operator,
+            Box::new(operand),
+        )))
     }
 
     fn parse_array_agg(
