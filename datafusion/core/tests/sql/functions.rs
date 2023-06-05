@@ -64,10 +64,9 @@ async fn case_sensitive_identifiers_functions() {
     let err = plan_and_collect(&ctx, "SELECT \"SQRT\"(i) FROM t")
         .await
         .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Error during planning: Invalid function 'SQRT'"
-    );
+    assert!(err
+        .to_string()
+        .contains("Error during planning: Invalid function 'SQRT'"));
 
     let results = plan_and_collect(&ctx, "SELECT \"sqrt\"(i) FROM t")
         .await
