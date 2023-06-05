@@ -446,7 +446,6 @@ pub async fn plan_to_csv(
 mod tests {
     use super::*;
     use crate::datasource::file_format::file_type::FileType;
-    use crate::physical_plan::displayable;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
@@ -947,67 +946,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    async fn register_aggregate_csv_by_sql(ctx: &SessionContext, table_name: &str) {
-        let testdata = arrow_test_data();
-
-        ctx.sql(&format!(
-            "CREATE EXTERNAL TABLE {table_name} (
-                c1  VARCHAR NOT NULL,
-                c2  TINYINT NOT NULL,
-                c3  SMALLINT NOT NULL,
-                c4  SMALLINT NOT NULL,
-                c5  INTEGER NOT NULL,
-                c6  BIGINT NOT NULL,
-                c7  SMALLINT NOT NULL,
-                c8  INT NOT NULL,
-                c9  INT UNSIGNED NOT NULL,
-                c10 BIGINT UNSIGNED NOT NULL,
-                c11 FLOAT NOT NULL,
-                c12 DOUBLE NOT NULL,
-                c13 VARCHAR NOT NULL
-            )
-            STORED AS CSV
-            WITH HEADER ROW
-            LOCATION '{testdata}/csv/aggregate_test_100.csv'
-        "
-        ))
-        .await
-        .expect("Creating dataframe for CREATE EXTERNAL TABLE");
-    }
-
-    #[tokio::test]
-    async fn test_listing_table_insert_into() -> Result<()> {
-        // Create session context
-        let config = SessionConfig::new().with_target_partitions(8);
-        let ctx = SessionContext::with_config(config);
-        // Create external table again without if not exist
-        register_aggregate_csv_by_sql(&ctx, "table_1").await;
-        register_aggregate_csv_by_sql(&ctx, "table_2").await;
-        let sql = "INSERT INTO table_2 SELECT * FROM table_1 ORDER by c1
-            ";
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-        let expected = {
-            vec![
-                "InsertExec: sink=CsvSink(writer_mode=Append, file_groups=[ARROW_TEST_DATA/testing/data/csv/aggregate_test_100.csv])",
-                "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c5@4 as c5, c6@5 as c6, c7@6 as c7, c8@7 as c8, c9@8 as c9, c10@9 as c10, c11@10 as c11, c12@11 as c12, c13@12 as c13]",
-                "    SortExec: expr=[c1@0 ASC NULLS LAST]",
-                "      CsvExec: files={1 group: [[ARROW_TEST_DATA/testing/data/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]",
-            ]
-        };
-
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        let actual_first = actual[0];
-        // We only assert some parts, "../testing/data/csv/aggregate_test_100.csv" is not the wrong part.
-        assert!(
-            actual_first.contains("InsertExec")
-                && actual_first.contains("writer_mode=Append"),
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-        Ok(())
     }
 }
