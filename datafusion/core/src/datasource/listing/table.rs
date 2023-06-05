@@ -775,7 +775,8 @@ impl TableProvider for ListingTable {
 
         if self.table_paths().len() > 1 {
             return Err(DataFusionError::Plan(
-                "Datafusion currently supports tables from single file.".to_owned(),
+                "Writing to a table backed by multiple files is not supported yet"
+                    .to_owned(),
             ));
         }
 
@@ -783,7 +784,7 @@ impl TableProvider for ListingTable {
         // Get the object store for the table path.
         let store = state.runtime_env().object_store(table_path)?;
 
-        let file_list_future = pruned_partition_list(
+        let file_list_stream = pruned_partition_list(
             store.as_ref(),
             table_path,
             &[],
@@ -792,7 +793,7 @@ impl TableProvider for ListingTable {
         )
         .await?;
 
-        let file_groups = file_list_future.try_collect::<Vec<_>>().await?;
+        let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
 
         if file_groups.len() > 1 {
             return Err(DataFusionError::Plan(

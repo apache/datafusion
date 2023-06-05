@@ -240,7 +240,7 @@ impl FileScanConfig {
 }
 
 /// The base configurations to provide when creating a physical plan for
-/// any given file format.
+/// writing to any given file format.
 #[derive(Debug, Clone)]
 pub struct FileSinkConfig {
     /// Object store URL, used to get an ObjectStore instance

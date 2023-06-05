@@ -205,7 +205,7 @@ impl AsyncWrite for AsyncPutWriter {
     }
 }
 
-/// A simple wrapper around an `AsyncWrite` type.
+/// A simple wrapper around an `AsyncWrite` type that implements `FileWriterExt`.
 pub struct AsyncPut<W: AsyncWrite + Unpin + Send> {
     writer: W,
 }
