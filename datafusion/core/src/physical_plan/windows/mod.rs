@@ -53,9 +53,7 @@ use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_e
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::{
-    OrderedColumn, OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -270,14 +268,17 @@ pub(crate) fn window_ordering_equivalence(
                 .is::<RowNumber>()
             {
                 if let Some((idx, field)) =
-                    schema.column_with_name(expr.field().unwrap().name())
+                    schema.column_with_name(builtin_window_expr.name())
                 {
                     let column = Column::new(field.name(), idx);
                     let options = SortOptions {
                         descending: false,
                         nulls_first: false,
                     }; // ASC, NULLS LAST
-                    let rhs = OrderedColumn::new(column, options);
+                    let rhs = PhysicalSortExpr {
+                        expr: Arc::new(column) as _,
+                        options,
+                    };
                     builder.add_equal_conditions(vec![rhs]);
                 }
             }
