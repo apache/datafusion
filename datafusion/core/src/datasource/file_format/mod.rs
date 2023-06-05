@@ -205,6 +205,17 @@ impl AsyncWrite for AsyncPutWriter {
     }
 }
 
+/// An extension trait for `AsyncWrite` types that adds an `abort_writer` method.
+pub trait FileWriterExt: AsyncWrite + Unpin + Send {
+    /// Aborts the writer and returns a boxed future with the result.
+    /// The default implementation returns an immediately resolved future with `Ok(())`.
+    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
+        Err(DataFusionError::Execution(
+            "Abort handling is not implemented".to_string(),
+        ))
+    }
+}
+
 /// A simple wrapper around an `AsyncWrite` type that implements `FileWriterExt`.
 pub struct AsyncPut<W: AsyncWrite + Unpin + Send> {
     writer: W,
@@ -241,12 +252,7 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncPut<W> {
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncPut<W> {}
-
-/// An extension trait for `AsyncWrite` types that adds an `abort_writer` method.
-pub trait FileWriterExt: AsyncWrite + Unpin + Send {
-    /// Aborts the writer and returns a boxed future with the result.
-    /// The default implementation returns an immediately resolved future with `Ok(())`.
+impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncPut<W> {
     fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
         Ok(async { Ok(()) }.boxed())
     }
@@ -352,7 +358,13 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncAppend<W> {
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncAppend<W> {}
+impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncAppend<W> {
+    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
+        Err(DataFusionError::Execution(
+            "Cannot abort in append mode".to_string(),
+        ))
+    }
+}
 
 /// An enum that defines different file writer modes.
 #[derive(Debug, Clone, Copy)]
