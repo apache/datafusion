@@ -49,7 +49,7 @@ We recommend splitting your contributions into smaller PRs rather than large PRs
 2. The PR discussions tend to be more focused and less likely to get lost among several different threads.
 3. It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.
 
-If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together chan help.
+If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.
 
 # Reviewing Pull Requests
 
