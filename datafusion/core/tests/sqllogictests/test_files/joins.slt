@@ -1013,7 +1013,27 @@ statement ok
 set datafusion.optimizer.repartition_joins = true;
 
 
-# TODO: sort_merge_equijoin
+# Sort merge equijoin
+
+query ITT
+SELECT t1_id, t1_name, t2_name
+FROM join_t1
+JOIN join_t2 ON t1_id = t2_id
+ORDER BY t1_id
+----
+11 a z
+22 b y
+44 d x
+
+query ITT
+SELECT t1_id, t1_name, t2_name
+FROM join_t1
+JOIN join_t2 ON t2_id = t1_id
+ORDER BY t1_id
+----
+11 a z
+22 b y
+44 d x
 
 # TODO: sort_merge_join_on_date32
 

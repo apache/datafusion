@@ -344,30 +344,6 @@ async fn hash_join_with_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
-async fn sort_merge_equijoin() -> Result<()> {
-    let ctx = create_sort_merge_join_context("t1_id", "t2_id")?;
-    let equivalent_sql = [
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
-        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
-    ];
-    let expected = vec![
-        "+-------+---------+---------+",
-        "| t1_id | t1_name | t2_name |",
-        "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 22    | b       | y       |",
-        "| 44    | d       | x       |",
-        "+-------+---------+---------+",
-    ];
-    for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&ctx, sql).await;
-        assert_batches_eq!(expected, &actual);
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn sort_merge_join_on_date32() -> Result<()> {
     let ctx = create_sort_merge_join_datatype_context()?;
 
