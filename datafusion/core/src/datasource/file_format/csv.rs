@@ -40,8 +40,8 @@ use tokio::io::AsyncWriteExt;
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::file_format::{BatchSerializer, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use crate::datasource::file_format::{FileWriterExt, FileWriterMode};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{
@@ -400,29 +400,26 @@ impl BatchSerializer for CsvSerializer {
     }
 }
 
-/// This macro tries to abort all writers before returning a possible error.
-macro_rules! handle_err_or_continue {
-    ($result:expr, $writers:expr) => {
-        match $result {
-            Ok(value) => Ok(value),
-            Err(e) => {
-                // Abort all writers before returning the error:
-                for writer in $writers {
-                    let abort_future = writer.abort_writer()?;
+async fn check_for_errors<T>(
+    result: Result<T>,
+    writers: &mut [Box<dyn FileWriterExt>],
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(e) => {
+            // Abort all writers before returning the error:
+            for writer in writers {
+                let mut abort_future = writer.abort_writer();
+                if let Ok(abort_future) = &mut abort_future {
                     let _ = abort_future.await;
                 }
-                let err: Result<DataFusionError, _> = e.try_into();
-                match err {
-                    Ok(data_fusion_err) => Err(data_fusion_err),
-                    Err(_) => {
-                        return Err(DataFusionError::Internal(
-                            "Unexpected file sink error.".to_owned(),
-                        ));
-                    }
-                }
+                // Ignore errors that occur during abortion,
+                // We do try to abort all writers before returning error.
             }
+            // After aborting writers return original error.
+            Err(e)
         }
-    };
+    }
 }
 
 /// Implements [`DataSink`] for writing to a CSV file.
@@ -511,21 +508,32 @@ impl DataSink for CsvSink {
 
         let mut idx = 0;
         let mut row_count = 0;
+        // Map errors to DatafusionError.
+        let err_converter =
+            |_| DataFusionError::Internal("Unexpected FileSink Error".to_string());
         while let Some(maybe_batch) = data.next().await {
             // Write data to files in a round robin fashion:
             idx = (idx + 1) % num_partitions;
             let serializer = &mut serializers[idx];
-            let batch = handle_err_or_continue!(maybe_batch, &mut writers)?;
+            let batch = check_for_errors(maybe_batch, &mut writers).await?;
             row_count += batch.num_rows();
             let bytes =
-                handle_err_or_continue!(serializer.serialize(batch).await, &mut writers)?;
+                check_for_errors(serializer.serialize(batch).await, &mut writers).await?;
             let writer = &mut writers[idx];
-            handle_err_or_continue!(writer.write_all(&bytes).await, &mut writers)?;
+            check_for_errors(
+                writer.write_all(&bytes).await.map_err(err_converter),
+                &mut writers,
+            )
+            .await?;
         }
         // Perform cleanup:
         let n_writers = writers.len();
         for idx in 0..n_writers {
-            handle_err_or_continue!(writers[idx].shutdown().await, &mut writers)?;
+            check_for_errors(
+                writers[idx].shutdown().await.map_err(err_converter),
+                &mut writers,
+            )
+            .await?;
         }
         Ok(row_count as u64)
     }
