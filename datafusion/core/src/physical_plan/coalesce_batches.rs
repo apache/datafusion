@@ -29,10 +29,10 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 
-use crate::execution::context::TaskContext;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 

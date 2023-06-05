@@ -1460,14 +1460,13 @@ impl SessionState {
             // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // distribution. Please make sure that the whole plan tree is determined before this rule.
             Arc::new(EnforceDistribution::new()),
+            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
+            Arc::new(CombinePartialFinalAggregate::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
-            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution
-            // and EnforceSorting rules
-            Arc::new(CombinePartialFinalAggregate::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
