@@ -32,7 +32,7 @@ use datafusion::logical_expr::expr::{
     BinaryExpr, Case, Cast, ScalarFunction as DFScalarFunction, Sort, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
-use datafusion::prelude::{binary_expr, Expr};
+use datafusion::prelude::Expr;
 use prost_types::Any as ProtoAny;
 use substrait::{
     proto::{
@@ -603,6 +603,7 @@ pub fn make_binary_op_scalar_func(
 ///                     , where `3` is the number of `left` columns (`col_ref_offset`) and `0` is the index
 ///                     of the join key column from `right`
 /// * `extension_info` - Substrait extension info. Contains registered function information
+#[allow(deprecated)]
 pub fn to_substrait_rex(
     expr: &Expr,
     schema: &DFSchemaRef,
@@ -620,6 +621,7 @@ pub fn to_substrait_rex(
                     arg_type: Some(ArgType::Value(to_substrait_rex(
                         arg,
                         schema,
+                        col_ref_offset,
                         extension_info,
                     )?)),
                 });
