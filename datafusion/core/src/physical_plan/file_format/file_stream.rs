@@ -27,14 +27,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::ScalarValue;
-use futures::future::BoxFuture;
-use futures::stream::BoxStream;
-use futures::{ready, FutureExt, Stream, StreamExt};
-
 use crate::datasource::listing::PartitionedFile;
 use crate::error::Result;
 use crate::physical_plan::file_format::{
@@ -44,6 +36,15 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 use crate::physical_plan::RecordBatchStream;
+
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+
+use futures::future::BoxFuture;
+use futures::stream::BoxStream;
+use futures::{ready, FutureExt, Stream, StreamExt};
 
 /// A fallible future that resolves to a stream of [`RecordBatch`]
 pub type FileOpenFuture =
@@ -138,19 +139,19 @@ enum FileStreamState {
 }
 
 /// A timer that can be started and stopped.
-struct StartableTime {
-    metrics: Time,
+pub struct StartableTime {
+    pub(crate) metrics: Time,
     // use for record each part cost time, will eventually add into 'metrics'.
-    start: Option<Instant>,
+    pub(crate) start: Option<Instant>,
 }
 
 impl StartableTime {
-    fn start(&mut self) {
+    pub(crate) fn start(&mut self) {
         assert!(self.start.is_none());
         self.start = Some(Instant::now());
     }
 
-    fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         if let Some(start) = self.start.take() {
             self.metrics.add_elapsed(start);
         }
@@ -519,18 +520,24 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
 mod tests {
     use arrow_schema::Schema;
     use datafusion_common::DataFusionError;
-    use futures::StreamExt;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     use super::*;
+    use crate::datasource::file_format::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::file_format::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::prelude::SessionContext;
     use crate::{
         error::Result,
         test::{make_partition, object_store::register_test_store},
     };
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::StreamExt;
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]
@@ -980,5 +987,16 @@ mod tests {
         ], &batches);
 
         Ok(())
+    }
+
+    struct TestSerializer {
+        bytes: Bytes,
+    }
+
+    #[async_trait]
+    impl BatchSerializer for TestSerializer {
+        async fn serialize(&mut self, _batch: RecordBatch) -> Result<Bytes> {
+            Ok(self.bytes.clone())
+        }
     }
 }
