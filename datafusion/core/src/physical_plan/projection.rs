@@ -407,9 +407,9 @@ mod tests {
     use crate::physical_plan::common::collect;
     use crate::physical_plan::expressions::{self, col};
     use crate::prelude::SessionContext;
-    use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::binary;
     use futures::future;

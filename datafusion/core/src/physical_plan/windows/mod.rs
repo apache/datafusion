@@ -26,9 +26,9 @@ use crate::physical_plan::{
     type_coercion::coerce,
     udaf, ExecutionPlan, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
 use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},

@@ -42,10 +42,8 @@ use super::{
 };
 use crate::physical_plan::common::get_meet_of_orderings;
 use crate::physical_plan::stream::ObservedStream;
-use crate::{
-    error::Result,
-    physical_plan::{expressions, metrics::BaselineMetrics},
-};
+use crate::physical_plan::{expressions, metrics::BaselineMetrics};
+use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use tokio::macros::support::thread_rng_n;
 

@@ -234,7 +234,6 @@ mod tests {
     use futures::FutureExt;
     use tokio_stream::StreamExt;
 
-    use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
@@ -247,6 +246,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
+    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
 
     use super::*;
 

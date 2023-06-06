@@ -726,6 +726,7 @@ impl RecordBatchStream for NestedLoopJoinStream {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::physical_expr::expressions::BinaryExpr;
     use crate::{
         assert_batches_sorted_eq,
@@ -742,7 +743,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use datafusion_expr::Operator;
 
-    use super::*;
     use crate::physical_plan::joins::utils::JoinSide;
     use crate::prelude::SessionContext;
     use datafusion_common::ScalarValue;

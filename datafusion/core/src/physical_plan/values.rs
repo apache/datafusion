@@ -23,10 +23,10 @@ use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use std::any::Any;
