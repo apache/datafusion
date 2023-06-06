@@ -116,8 +116,8 @@ impl RecordBatchStream for TestStream {
     }
 }
 
-/// A Mock ExecutionPlan that can be used for writing tests of other ExecutionPlans
-///
+/// A Mock ExecutionPlan that can be used for writing tests of other
+/// ExecutionPlans
 #[derive(Debug)]
 pub struct MockExec {
     /// the results to send back
@@ -129,15 +129,18 @@ pub struct MockExec {
 }
 
 impl MockExec {
-    /// Create a new exec with a single partition that returns the
-    /// record batches in this Exec. Note the batches are not produced
-    /// immediately (the caller has to actually yield and another task
-    /// must run) to ensure any poll loops are correct.
+    /// Create a new `MockExec` with a single partition that returns
+    /// the specified `Results`s.
+    ///
+    /// By default, the batches are not produced immediately (the
+    /// caller has to actually yield and another task must run) to
+    /// ensure any poll loops are correct. This behavior can be
+    /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
         Self {
             data,
             schema,
-            use_task: false,
+            use_task: true,
         }
     }
 
@@ -198,9 +201,9 @@ impl ExecutionPlan for MockExec {
 
         if self.use_task {
             let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
-            // send data in order but in a separate
-            // thread (to ensure the batches are not available without the
-            // DelayedStream yielding).
+            // send data in order but in a separate task (to ensure
+            // the batches are not available without the stream
+            // yielding).
             let tx = builder.tx();
             builder.spawn(async move {
                 for batch in data {

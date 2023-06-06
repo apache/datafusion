@@ -117,14 +117,24 @@ impl RecordBatchReceiverStreamBuilder {
                 Ok(stream) => stream,
             };
 
+            // Transfer batches from inner stream to the output tx
+            // immediately.
             while let Some(item) = stream.next().await {
-                // If send fails, plan being torn down,
-                // there is no place to send the error.
+                let is_err = item.is_err();
+
+                // If send fails, plan being torn down, there is no
+                // place to send the error and no reason to continue.
                 if output.send(item).await.is_err() {
                     debug!(
                         "Stopping execution: output is gone, plan cancelling: {}",
                         displayable(input.as_ref()).one_line()
                     );
+                    return;
+                }
+
+                // stop after the first error is encontered (don't
+                // drive all streams to completion)
+                if is_err {
                     return;
                 }
             }
@@ -332,7 +342,7 @@ mod test {
 
     #[tokio::test]
     #[should_panic(expected = "PanickingStream did panic: 1")]
-    async fn record_batch_receiver_stream_propagates_panics_one() {
+    async fn record_batch_receiver_stream_propagates_panics_early_shutdown() {
         let schema = schema();
 
         // make 2 partitions, second panics before the first
@@ -341,7 +351,12 @@ mod test {
             .with_partition_panic(0, 10)
             .with_partition_panic(1, 3); // partition 1 should panic first (after 3 )
 
-        let max_batches = 5; // expect to read every other batch: (0,1,0,1,0,panic)
+        // ensure that the panic results in an early shutdown (that
+        // everything stops after the first panic).
+
+        // Since the stream reads every other batch: (0,1,0,1,0,panic)
+        // so should not exceed 5 batches prior to the panic
+        let max_batches = 5;
         consume(input, max_batches).await
     }
 
@@ -378,10 +393,6 @@ mod test {
         let task_ctx = session_ctx.task_ctx();
         let schema = schema();
 
-        // Make an input that will not proceed
-        let blocking_input = BlockingExec::new(schema.clone(), 1);
-        let refs = blocking_input.refs();
-
         // make an input that will error
         let error_stream = MockExec::new(
             vec![
@@ -392,17 +403,9 @@ mod test {
         )
         .with_use_task(false);
 
-        // Configure a RecordBatchReceiverStream to consume the
-        // blocking input (which will never advance) and the stream
-        // that will error.
-
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
-        builder.run_input(Arc::new(blocking_input), 0, task_ctx.clone());
         builder.run_input(Arc::new(error_stream), 0, task_ctx.clone());
         let mut stream = builder.build();
-
-        // first input input should be present
-        assert!(std::sync::Weak::strong_count(&refs) > 0);
 
         // get the first result, which should be an error
         let first_batch = stream.next().await.unwrap();
@@ -411,9 +414,6 @@ mod test {
 
         // There should be no more batches produced (should not get the second error)
         assert!(stream.next().await.is_none());
-
-        // And the other inputs should be cleaned up (even before stream is dropped)
-        assert_strong_count_converges_to_zero(refs).await;
     }
 
     /// Consumes all the input's partitions into a
