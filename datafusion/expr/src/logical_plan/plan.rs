@@ -43,6 +43,9 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::sync::Arc;
 
+// backwards compatibility
+pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+
 use super::DdlStatement;
 
 /// A LogicalPlan represents the different types of relational
@@ -1719,93 +1722,6 @@ pub enum Partitioning {
     Hash(Vec<Expr>, usize),
     /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
     DistributeBy(Vec<Expr>),
-}
-
-/// Represents which type of plan, when storing multiple
-/// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PlanType {
-    /// The initial LogicalPlan provided to DataFusion
-    InitialLogicalPlan,
-    /// The LogicalPlan which results from applying an analyzer pass
-    AnalyzedLogicalPlan {
-        /// The name of the analyzer which produced this plan
-        analyzer_name: String,
-    },
-    /// The LogicalPlan after all analyzer passes have been applied
-    FinalAnalyzedLogicalPlan,
-    /// The LogicalPlan which results from applying an optimizer pass
-    OptimizedLogicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized LogicalPlan that was converted to a physical plan
-    FinalLogicalPlan,
-    /// The initial physical plan, prepared for execution
-    InitialPhysicalPlan,
-    /// The ExecutionPlan which results from applying an optimizer pass
-    OptimizedPhysicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized physical which would be executed
-    FinalPhysicalPlan,
-}
-
-impl Display for PlanType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
-            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
-                write!(f, "logical_plan after {analyzer_name}")
-            }
-            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
-            PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                write!(f, "logical_plan after {optimizer_name}")
-            }
-            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
-            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
-            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
-                write!(f, "physical_plan after {optimizer_name}")
-            }
-            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
-        }
-    }
-}
-
-/// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StringifiedPlan {
-    /// An identifier of what type of plan this string represents
-    pub plan_type: PlanType,
-    /// The string representation of the plan
-    pub plan: Arc<String>,
-}
-
-impl StringifiedPlan {
-    /// Create a new Stringified plan of `plan_type` with string
-    /// representation `plan`
-    pub fn new(plan_type: PlanType, plan: impl Into<String>) -> Self {
-        StringifiedPlan {
-            plan_type,
-            plan: Arc::new(plan.into()),
-        }
-    }
-
-    /// returns true if this plan should be displayed. Generally
-    /// `verbose_mode = true` will display all available plans
-    pub fn should_display(&self, verbose_mode: bool) -> bool {
-        match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
-            _ => verbose_mode,
-        }
-    }
-}
-
-/// Trait for something that can be formatted as a stringified plan
-pub trait ToStringifiedPlan {
-    /// Create a stringified plan with the specified type
-    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
 }
 
 /// Unnest a column that contains a nested list type.
