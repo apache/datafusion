@@ -309,12 +309,16 @@ mod test {
     use super::*;
     use arrow_schema::{DataType, Field, Schema};
 
-    use crate::{execution::context::SessionContext, test::{exec::{PanicExec, BlockingExec, assert_strong_count_converges_to_zero}}};
+    use crate::{
+        execution::context::SessionContext,
+        test::exec::{
+            assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
+        },
+    };
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]))
     }
-
 
     #[tokio::test]
     #[should_panic(expected = "PanickingStream did panic")]
@@ -352,8 +356,7 @@ mod test {
         let refs = input.refs();
 
         // Configure a RecordBatchReceiverStream to consume the input
-        let mut builder =
-            RecordBatchReceiverStream::builder(schema, 2);
+        let mut builder = RecordBatchReceiverStream::builder(schema, 2);
         builder.run_input(Arc::new(input), 0, task_ctx.clone());
 
         let stream = builder.build();
@@ -363,6 +366,53 @@ mod test {
 
         // drop the stream, ensure the refs go to zero
         drop(stream);
+        assert_strong_count_converges_to_zero(refs).await;
+    }
+
+    #[tokio::test]
+    /// Ensure that if an error is received in one stream, the
+    /// `RecordBatchReceiverStream` stops early and does not drive
+    /// other streams to completion.
+    async fn record_batch_receiver_stream_error_does_not_drive_completion() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let schema = schema();
+
+        // Make an input that will not proceed
+        let blocking_input = BlockingExec::new(schema.clone(), 1);
+        let refs = blocking_input.refs();
+
+        // make an input that will error
+        let error_stream = MockExec::new(
+            vec![
+                Err(DataFusionError::Execution("Test1".to_string())),
+                Err(DataFusionError::Execution("Test2".to_string())),
+            ],
+            schema.clone(),
+        )
+        .with_use_task(false);
+
+        // Configure a RecordBatchReceiverStream to consume the
+        // blocking input (which will never advance) and the stream
+        // that will error.
+
+        let mut builder = RecordBatchReceiverStream::builder(schema, 2);
+        builder.run_input(Arc::new(blocking_input), 0, task_ctx.clone());
+        builder.run_input(Arc::new(error_stream), 0, task_ctx.clone());
+        let mut stream = builder.build();
+
+        // first input input should be present
+        assert!(std::sync::Weak::strong_count(&refs) > 0);
+
+        // get the first result, which should be an error
+        let first_batch = stream.next().await.unwrap();
+        let first_err = first_batch.unwrap_err();
+        assert_eq!(first_err.to_string(), "Execution error: Test1");
+
+        // There should be no more batches produced (should not get the second error)
+        assert!(stream.next().await.is_none());
+
+        // And the other inputs should be cleaned up (even before stream is dropped)
         assert_strong_count_converges_to_zero(refs).await;
     }
 
