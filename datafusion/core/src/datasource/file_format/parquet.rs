@@ -599,7 +599,7 @@ pub(crate) mod test_util {
     }
 
     //// write batches chunk_size rows at a time
-    fn write_in_chunks<W: std::io::Write>(
+    fn write_in_chunks<W: std::io::Write + Send>(
         writer: &mut ArrowWriter<W>,
         batch: &RecordBatch,
         chunk_size: usize,
@@ -618,7 +618,6 @@ mod tests {
     use super::super::test_util::scan_format;
     use crate::physical_plan::collect;
     use std::fmt::{Display, Formatter};
-    use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -641,7 +640,7 @@ mod tests {
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetResult, ListResult, MultipartId};
+    use object_store::{GetOptions, GetResult, ListResult, MultipartId};
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
@@ -739,17 +738,13 @@ mod tests {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn get_range(
+        async fn get_opts(
             &self,
             location: &Path,
-            range: Range<usize>,
-        ) -> object_store::Result<Bytes> {
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
-            self.inner.get_range(location, range).await
+            self.inner.get_opts(location, options).await
         }
 
         async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {

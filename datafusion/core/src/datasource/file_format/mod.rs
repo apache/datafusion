@@ -103,7 +103,7 @@ pub(crate) mod test_util {
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetResult, ListResult, MultipartId};
+    use object_store::{GetOptions, GetResult, ListResult, MultipartId};
     use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
@@ -201,11 +201,11 @@ pub(crate) mod test_util {
             ))
         }
 
-        async fn get_range(
+        async fn get_opts(
             &self,
             _location: &Path,
-            _range: Range<usize>,
-        ) -> object_store::Result<Bytes> {
+            _opts: GetOptions,
+        ) -> object_store::Result<GetResult> {
             unimplemented!()
         }
 

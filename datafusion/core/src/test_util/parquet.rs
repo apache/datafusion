@@ -109,6 +109,7 @@ impl TestParquetFile {
             location: Path::parse(canonical_path.to_str().unwrap_or_default())?,
             last_modified: Default::default(),
             size,
+            e_tag: None,
         };
 
         Ok(Self {
