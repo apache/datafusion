@@ -42,8 +42,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
+use datafusion_common::JoinType;
 
 use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
