@@ -336,6 +336,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#array-expressions">
+   Array Expressions
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#regular-expressions">
    Regular Expressions
   </a>
@@ -799,6 +804,63 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 </tr>
 <tr class="row-odd"><td><p>upper</p></td>
 <td><p>Converts all characters in the string into upper case. Example: <code class="docutils literal notranslate"><span class="pre">upper('hello')</span> <span class="pre">-&gt;</span> <span class="pre">HELLO</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="array-expressions">
+<h2>Array Expressions<a class="headerlink" href="#array-expressions" title="Permalink to this heading">¶</a></h2>
+<table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Function</p></th>
+<th class="head"><p>Notes</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>array_append(array, element)</p></td>
+<td><p>Appends an element to the end of an array.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_concat(array[, …, array_n])</p></td>
+<td><p>Concatenates arrays.</p></td>
+</tr>
+<tr class="row-even"><td><p>array_dims(array)</p></td>
+<td><p>Returns an array of the array’s dimensions.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_fill(element, array)</p></td>
+<td><p>Returns an array filled with copies of the given value.</p></td>
+</tr>
+<tr class="row-even"><td><p>array_length(array, dimension)</p></td>
+<td><p>Returns the length of the array dimension.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_ndims(array)</p></td>
+<td><p>Returns the number of dimensions of the array.</p></td>
+</tr>
+<tr class="row-even"><td><p>array_position(array, element)</p></td>
+<td><p>Searches for an element in the array, returns first occurrence.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_positions(array, element)</p></td>
+<td><p>Searches for an element in the array, returns all occurrences.</p></td>
+</tr>
+<tr class="row-even"><td><p>array_prepend(array, element)</p></td>
+<td><p>Prepends an element to the beginning of an array.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_remove(array, element)</p></td>
+<td><p>Removes all elements equal to the given value from the array.</p></td>
+</tr>
+<tr class="row-even"><td><p>array_replace(array, from, to)</p></td>
+<td><p>Replaces a specified element with another specified element.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_to_string(array, delimeter)</p></td>
+<td><p>Converts each element to its text representation.</p></td>
+</tr>
+<tr class="row-even"><td><p>cardinality(array)</p></td>
+<td><p>Returns the total number of elements in the array.</p></td>
+</tr>
+<tr class="row-odd"><td><p>make_array(value1, [value2 [, …]])</p></td>
+<td><p>Returns an Arrow array using the specified input expressions.</p></td>
+</tr>
+<tr class="row-even"><td><p>trim_array(array, n)</p></td>
+<td><p>Removes the last n elements from the array.</p></td>
 </tr>
 </tbody>
 </table>
