@@ -1011,7 +1011,6 @@ dependencies = [
  "sqlparser",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "url",
  "uuid",
