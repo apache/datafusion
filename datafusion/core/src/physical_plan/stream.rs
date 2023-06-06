@@ -193,10 +193,9 @@ impl RecordBatchReceiverStreamBuilder {
             .filter_map(|item| async move { item });
 
         // Merge the streams together so whichever is ready first
-        // produces the batch (since futures::stream:StreamExt is
-        // already in scope, need to call it explicitly)
+        // produces the batch
         let inner =
-            tokio_stream::StreamExt::merge(ReceiverStream::new(rx), check_stream).boxed();
+            futures::stream::select(ReceiverStream::new(rx), check_stream).boxed();
 
         Box::pin(RecordBatchReceiverStream { schema, inner })
     }
