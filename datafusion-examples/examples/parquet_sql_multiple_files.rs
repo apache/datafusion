@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     // for the query
     ctx.register_listing_table(
         "my_table",
-        &format!("file://{testdata}"),
+        &format!("file://{testdata}/alltypes_plain.parquet"),
         listing_options,
         None,
         None,
