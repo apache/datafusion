@@ -485,9 +485,10 @@ impl FileOpener for ParquetOpener {
                 &self.metrics,
             )?;
 
-        let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
+        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+        let schema_adapter = SchemaAdapter::new(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
@@ -505,8 +506,9 @@ impl FileOpener for ParquetOpener {
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
-            let adapted_projections =
-                schema_adapter.map_projections(builder.schema(), &projection)?;
+
+            let (schema_mapping, adapted_projections) =
+                schema_adapter.map_schema(builder.schema())?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
@@ -575,11 +577,8 @@ impl FileOpener for ParquetOpener {
             let adapted = stream
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                 .map(move |maybe_batch| {
-                    maybe_batch.and_then(|b| {
-                        schema_adapter
-                            .adapt_batch(b, &projection)
-                            .map_err(Into::into)
-                    })
+                    maybe_batch
+                        .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
                 });
 
             Ok(adapted.boxed())
@@ -795,13 +794,14 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::{ArrayRef, Float32Array, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::Schema;
     use arrow::record_batch::RecordBatch;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field, SchemaBuilder},
     };
+    use arrow_array::Date64Array;
     use chrono::{TimeZone, Utc};
     use datafusion_common::ScalarValue;
     use datafusion_common::{assert_contains, ToDFSchema};
@@ -892,7 +892,6 @@ mod tests {
                     .unwrap(),
                 ),
             };
-
             // If testing with page_index_predicate, write parquet
             // files with multiple pages
             let multi_page = page_index_predicate;
@@ -1465,8 +1464,11 @@ mod tests {
 
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        let c4: ArrayRef =
-            Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0_f32), None]));
+        let c4: ArrayRef = Arc::new(Date64Array::from(vec![
+            Some(86400000),
+            None,
+            Some(259200000),
+        ]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![
@@ -1490,7 +1492,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
         assert_contains!(read.unwrap_err().to_string(),
-                         "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
+            "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
     }
 
     #[tokio::test]
