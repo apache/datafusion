@@ -35,6 +35,8 @@ use arrow::datatypes::SchemaRef;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
+use super::FileScanConfig;
+
 use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
@@ -45,8 +47,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
-
-use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
