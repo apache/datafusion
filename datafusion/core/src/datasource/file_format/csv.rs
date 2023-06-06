@@ -40,13 +40,15 @@ use tokio::io::AsyncWriteExt;
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::{BatchSerializer, DEFAULT_SCHEMA_INFER_MAX_RECORD};
+use crate::datasource::file_format::{
+    AsyncAppend, AsyncPut, AsyncPutMultipart, AsyncPutWriter, BatchSerializer,
+    DEFAULT_SCHEMA_INFER_MAX_RECORD,
+};
 use crate::datasource::file_format::{FileWriterExt, FileWriterMode};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{
-    CsvExec, CsvWriterOpener, FileGroupDisplay, FileScanConfig, FileSinkConfig,
-    FileWriterFactory,
+    CsvExec, FileGroupDisplay, FileMeta, FileScanConfig, FileSinkConfig,
 };
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::Statistics;
@@ -466,6 +468,52 @@ impl CsvSink {
             file_compression_type,
         }
     }
+
+    // Create a write for Csv files
+    async fn create_writer(
+        &self,
+        file_meta: FileMeta,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<Box<dyn FileWriterExt>> {
+        let object = &file_meta.object_meta;
+        match self.config.writer_mode {
+            // If the mode is append, call the store's append method and return wrapped in
+            // a boxed trait object.
+            FileWriterMode::Append => {
+                let writer = object_store
+                    .append(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                let writer = Box::new(AsyncAppend::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                )) as _;
+                Ok(writer)
+            }
+            // If the mode is put, create a new AsyncPut writer and return it wrapped in
+            // a boxed trait object
+            FileWriterMode::Put => {
+                let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
+                let writer = Box::new(AsyncPut::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                )) as _;
+                Ok(writer)
+            }
+            // If the mode is put multipart, call the store's put_multipart method and
+            // return the writer wrapped in a boxed trait object.
+            FileWriterMode::PutMultipart => {
+                let (multipart_id, writer) = object_store
+                    .put_multipart(&object.location)
+                    .await
+                    .map_err(DataFusionError::ObjectStore)?;
+                Ok(Box::new(AsyncPutMultipart::new(
+                    self.file_compression_type.convert_async_writer(writer)?,
+                    object_store,
+                    multipart_id,
+                    object.location.clone(),
+                )))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -480,11 +528,6 @@ impl DataSink for CsvSink {
         let object_store = context
             .runtime_env()
             .object_store(&self.config.object_store_url)?;
-        let opener = CsvWriterOpener::new(
-            self.config.writer_mode,
-            object_store,
-            self.file_compression_type.to_owned(),
-        );
 
         // Construct serializer and writer for each file group
         let mut serializers = vec![];
@@ -503,8 +546,8 @@ impl DataSink for CsvSink {
             serializers.push(serializer);
 
             let file = file_group.clone();
-            let writer = opener
-                .create_writer(file.object_meta.clone().into())
+            let writer = self
+                .create_writer(file.object_meta.clone().into(), object_store.clone())
                 .await?;
             writers.push(writer);
         }

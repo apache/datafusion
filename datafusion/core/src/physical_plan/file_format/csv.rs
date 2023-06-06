@@ -18,15 +18,11 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::datasource::file_format::{
-    AsyncAppend, AsyncPut, AsyncPutMultipart, AsyncPutWriter, FileWriterExt,
-    FileWriterMode,
-};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
-    FileOpenFuture, FileOpener, FileStream, FileWriterFactory,
+    FileOpenFuture, FileOpener, FileStream,
 };
 use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -41,7 +37,6 @@ use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use super::FileScanConfig;
 
-use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
@@ -325,77 +320,6 @@ impl FileOpener for CsvOpener {
                 }
             }
         }))
-    }
-}
-
-/// A [`FileWriterExt`] that opens a CSV file and yields a [`Box<dyn AsyncWrite + Unpin + Send>`]
-pub struct CsvWriterOpener {
-    writer_mode: FileWriterMode,
-    object_store: Arc<dyn ObjectStore>,
-    file_compression_type: FileCompressionType,
-}
-
-impl CsvWriterOpener {
-    /// Creates writer/opener for CSV files.
-    pub fn new(
-        writer_mode: FileWriterMode,
-        object_store: Arc<dyn ObjectStore>,
-        file_compression_type: FileCompressionType,
-    ) -> Self {
-        Self {
-            writer_mode,
-            object_store,
-            file_compression_type,
-        }
-    }
-}
-
-#[async_trait]
-impl FileWriterFactory for CsvWriterOpener {
-    async fn create_writer(&self, file_meta: FileMeta) -> Result<Box<dyn FileWriterExt>> {
-        let object = &file_meta.object_meta;
-        match self.writer_mode {
-            // If the mode is append, call the store's append method and return wrapped in
-            // a boxed trait object.
-            FileWriterMode::Append => {
-                let writer = self
-                    .object_store
-                    .append(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                let writer = Box::new(AsyncAppend::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                )) as _;
-                Ok(writer)
-            }
-            // If the mode is put, create a new AsyncPut writer and return it wrapped in
-            // a boxed trait object
-            FileWriterMode::Put => {
-                let writer = Box::new(AsyncPutWriter::new(
-                    object.clone(),
-                    self.object_store.clone(),
-                ));
-                let writer = Box::new(AsyncPut::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                )) as _;
-                Ok(writer)
-            }
-            // If the mode is put multipart, call the store's put_multipart method and
-            // return the writer wrapped in a boxed trait object.
-            FileWriterMode::PutMultipart => {
-                let (multipart_id, writer) = self
-                    .object_store
-                    .put_multipart(&object.location)
-                    .await
-                    .map_err(DataFusionError::ObjectStore)?;
-                Ok(Box::new(AsyncPutMultipart::new(
-                    self.file_compression_type.convert_async_writer(writer)?,
-                    self.object_store.clone(),
-                    multipart_id,
-                    object.location.clone(),
-                )))
-            }
-        }
     }
 }
 

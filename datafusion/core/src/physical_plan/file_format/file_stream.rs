@@ -27,7 +27,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
-use crate::datasource::file_format::FileWriterExt;
 use crate::datasource::listing::PartitionedFile;
 use crate::error::Result;
 use crate::physical_plan::file_format::{
@@ -43,7 +42,6 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 
-use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{ready, FutureExt, Stream, StreamExt};
@@ -518,26 +516,13 @@ impl<F: FileOpener> RecordBatchStream for FileStream<F> {
     }
 }
 
-/// Generic API for opening a file using an [`ObjectStore`] and resolving to a
-/// async writer.
-///
-/// [`ObjectStore`]: object_store::ObjectStore
-///
-#[async_trait]
-pub trait FileWriterFactory: Unpin + Send + Sync {
-    /// Asynchronously request the specified file and return a async writer
-    async fn create_writer(&self, file_meta: FileMeta) -> Result<Box<dyn FileWriterExt>>;
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_schema::Schema;
     use datafusion_common::DataFusionError;
 
     use super::*;
-    use crate::datasource::file_format::{
-        AsyncPut, AsyncPutMultipart, AsyncPutWriter, BatchSerializer, FileWriterMode,
-    };
+    use crate::datasource::file_format::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::file_format::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -553,8 +538,6 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use futures::StreamExt;
-    use object_store::ObjectStore;
-    use tokio::io::AsyncWrite;
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning
     #[derive(Default)]
@@ -1014,45 +997,6 @@ mod tests {
     impl BatchSerializer for TestSerializer {
         async fn serialize(&mut self, _batch: RecordBatch) -> Result<Bytes> {
             Ok(self.bytes.clone())
-        }
-    }
-
-    struct TestWriterOpener {
-        writer_mode: FileWriterMode,
-        object_store: Arc<dyn ObjectStore>,
-    }
-
-    #[async_trait]
-    impl FileWriterFactory for TestWriterOpener {
-        async fn create_writer(
-            &self,
-            file_meta: FileMeta,
-        ) -> Result<Box<dyn FileWriterExt>> {
-            let object = file_meta.object_meta.clone();
-            match self.writer_mode {
-                FileWriterMode::Put => {
-                    let writer = Box::new(AsyncPutWriter::new(
-                        object.clone(),
-                        self.object_store.clone(),
-                    ))
-                        as Box<dyn AsyncWrite + Send + Unpin>;
-                    Ok(Box::new(AsyncPut::new(writer)))
-                }
-                FileWriterMode::PutMultipart => {
-                    match self.object_store.put_multipart(&object.location).await {
-                        Ok((multipart_id, writer)) => {
-                            Ok(Box::new(AsyncPutMultipart::new(
-                                writer,
-                                self.object_store.clone(),
-                                multipart_id,
-                                object.location.clone(),
-                            )))
-                        }
-                        Err(e) => Err(DataFusionError::ObjectStore(e)),
-                    }
-                }
-                _ => unimplemented!(),
-            }
         }
     }
 }

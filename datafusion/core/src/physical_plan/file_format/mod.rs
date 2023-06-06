@@ -27,7 +27,7 @@ mod json;
 mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
-pub use self::csv::{CsvConfig, CsvExec, CsvOpener, CsvWriterOpener};
+pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
@@ -49,7 +49,6 @@ use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
-pub use crate::physical_plan::file_format::file_stream::FileWriterFactory;
 use crate::physical_plan::ExecutionPlan;
 use crate::{
     error::{DataFusionError, Result},
