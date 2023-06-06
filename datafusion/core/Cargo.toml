@@ -71,7 +71,7 @@ datafusion-sql = { path = "../sql", version = "26.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
-hashbrown = { version = "0.13", features = ["raw"] }
+hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "1.9.2"
 itertools = "0.10"
 lazy_static = { version = "^1.4.0" }
