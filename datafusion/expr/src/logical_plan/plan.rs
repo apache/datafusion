@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Logical plan types
+
 use crate::expr::InSubquery;
 use crate::expr::{Exists, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
-///! Logical plan types
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};

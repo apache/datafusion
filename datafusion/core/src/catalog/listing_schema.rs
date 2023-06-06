@@ -32,19 +32,21 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// A `SchemaProvider` that scans an `ObjectStore` to automatically discover tables
+/// A [`SchemaProvider`] that scans an [`ObjectStore`] to automatically discover tables
 ///
 /// A subfolder relationship is assumed, i.e. given:
-/// authority = s3://host.example.com:3000
-/// path = /data/tpch
-/// factory = `DeltaTableFactory`
+/// - authority = `s3://host.example.com:3000`
+/// - path = `/data/tpch`
+/// - factory = `DeltaTableFactory`
 ///
 /// A table called "customer" will be registered for the folder:
-/// s3://host.example.com:3000/data/tpch/customer
+/// `s3://host.example.com:3000/data/tpch/customer`
 ///
 /// assuming it contains valid deltalake data, i.e:
-/// s3://host.example.com:3000/data/tpch/customer/part-00000-xxxx.snappy.parquet
-/// s3://host.example.com:3000/data/tpch/customer/_delta_log/
+/// - `s3://host.example.com:3000/data/tpch/customer/part-00000-xxxx.snappy.parquet`
+/// - `s3://host.example.com:3000/data/tpch/customer/_delta_log/`
+///
+/// [`ObjectStore`]: object_store::ObjectStore
 pub struct ListingSchemaProvider {
     authority: String,
     path: object_store::path::Path,

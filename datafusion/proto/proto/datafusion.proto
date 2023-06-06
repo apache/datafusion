@@ -72,6 +72,7 @@ message LogicalPlanNode {
     ViewTableScanNode view_scan = 24;
     CustomTableScanNode custom_scan = 25;
     PrepareNode prepare = 26;
+    DropViewNode drop_view = 27;
   }
 }
 
@@ -207,6 +208,12 @@ message CreateCatalogSchemaNode {
 message CreateCatalogNode {
   string catalog_name = 1;
   bool if_not_exists = 2;
+  DfSchema schema = 3;
+}
+
+message DropViewNode {
+  OwnedTableReference name = 1;
+  bool if_exists = 2;
   DfSchema schema = 3;
 }
 
