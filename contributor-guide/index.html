@@ -299,6 +299,23 @@
     </a>
    </li>
    <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#creating-pull-requests">
+     Creating Pull Requests
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h1 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#reviewing-pull-requests">
+   Reviewing Pull Requests
+  </a>
+  <ul class="visible nav section-nav flex-column">
+   <li class="toc-h2 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#major-and-minor-prs">
+     “Major” and “Minor” PRs
+    </a>
+   </li>
+   <li class="toc-h2 nav-item toc-entry">
     <a class="reference internal nav-link" href="#getting-started">
      Getting Started
     </a>
@@ -470,11 +487,29 @@ list to help you get started.</p>
 <p>We welcome pull requests (PRs) from anyone from the community.</p>
 <p>DataFusion is a very active fast-moving project and we try to review and merge PRs quickly to keep the review backlog down and the pace up. After review and approval, one of the <a class="reference external" href="https://arrow.apache.org/committers/">many people with commit access</a> will merge your PR.</p>
 <p>Review bandwidth is currently our most limited resource, and we highly encourage reviews by the broader community. If you are waiting for your PR to be reviewed, consider helping review other PRs that are waiting. Such review both helps the reviewer to learn the codebase and become more expert, as well as helps identify issues in the PR (such as lack of test coverage), that can be addressed and make future reviews faster and more efficient.</p>
-<p>Things to help look for in a PR:</p>
+</section>
+<section id="creating-pull-requests">
+<h2>Creating Pull Requests<a class="headerlink" href="#creating-pull-requests" title="Permalink to this heading">¶</a></h2>
+<p>We recommend splitting your contributions into smaller PRs rather than large PRs (500+ lines) because:</p>
+<ol class="arabic simple">
+<li><p>The PR is more likely to be reviewed quickly – our reviewers struggle to find the contiguous time needed to review large PRs.</p></li>
+<li><p>The PR discussions tend to be more focused and less likely to get lost among several different threads.</p></li>
+<li><p>It is often easier to accept and act on feedback when it comes early on in a small change, before a particular approach has been polished too much.</p></li>
+</ol>
+<p>If you are concerned that a larger design will be lost in a string of small PRs, creating a large draft PR that shows how they all work together can help.</p>
+</section>
+</section>
+<section id="reviewing-pull-requests">
+<h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Permalink to this heading">¶</a></h1>
+<p>When reviewing PRs, please remember our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.</p>
+<p>Please ensure any issues you raise contains a rationale and suggested alternative – it is frustrating to be told “don’t do it this way” without any clear reason or alternate provided.</p>
+<p>Some things to specifically check:</p>
 <ol class="arabic simple">
 <li><p>Is the feature or fix covered sufficiently with tests (see <code class="docutils literal notranslate"><span class="pre">Test</span> <span class="pre">Organization</span></code> below)?</p></li>
 <li><p>Is the code clear, and fits the style of the existing codebase?</p></li>
 </ol>
+<section id="major-and-minor-prs">
+<h2>“Major” and “Minor” PRs<a class="headerlink" href="#major-and-minor-prs" title="Permalink to this heading">¶</a></h2>
 <p>Since we are a worldwide community, we have contributors in many timezones who review and comment. To ensure anyone who wishes has an opportunity to review a PR, our committers try to ensure that at least 24 hours passes between when a “major” PR is approved and when it is merged.</p>
 <p>A “major” PR means there is a substantial change in design or a change in the API. Committers apply their best judgment to determine what constitutes a substantial change. A “minor” PR might be merged without a 24 hour delay, again subject to the judgment of the committer. Examples of potential “minor” PRs are:</p>
 <ol class="arabic simple">
@@ -483,6 +518,7 @@ list to help you get started.</p>
 <li><p>Non-controversial build-related changes (clippy, version upgrades etc.)</p></li>
 <li><p>Smaller non-controversial feature additions</p></li>
 </ol>
+<p>The good thing about open code and open development is that any issues in one change can almost always be fixed with a follow on PR.</p>
 </section>
 <section id="getting-started">
 <h2>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this heading">¶</a></h2>
