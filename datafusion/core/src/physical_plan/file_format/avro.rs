@@ -170,6 +170,7 @@ mod private {
     use bytes::Buf;
     use futures::StreamExt;
     use object_store::{GetResult, ObjectStore};
+    use crate::datasource::avro_to_arrow::Reader as AvroReader;
 
     pub struct AvroConfig {
         pub schema: SchemaRef,
@@ -182,8 +183,8 @@ mod private {
         fn open<R: std::io::Read>(
             &self,
             reader: R,
-        ) -> Result<crate::avro_to_arrow::Reader<'static, R>> {
-            crate::avro_to_arrow::Reader::try_new(
+        ) -> Result<AvroReader<'static, R>> {
+            AvroReader::try_new(
                 reader,
                 self.schema.clone(),
                 self.batch_size,

@@ -15,12 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion data sources
+//! DataFusion data sources: [`TableProvider`] and [`ListingTable`]
+//!
+//! [`ListingTable`]: crate::datasource::listing::ListingTable
 
 // TODO(clippy): Having a `datasource::datasource` module path is unclear and ambiguous.
 // The child module should probably be renamed to something that more accurately
 // describes its content. Something along the lines of `provider`, or `providers`.
 #![allow(clippy::module_inception)]
+pub mod avro_to_arrow;
 pub mod datasource;
 pub mod default_table_source;
 pub mod empty;
