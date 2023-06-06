@@ -460,29 +460,27 @@ impl Interval {
         self.upper.value.clone()
     }
 
-    pub fn width(&self) -> Option<ScalarValue> {
-        self.max_val().sub(self.min_val()).ok()
+    pub fn width(&self) -> Result<ScalarValue> {
+        self.max_val().sub(self.min_val())
     }
 
     // Cardinality is applicable for discrete datatypes.
-    pub fn cardinality(&self) -> Option<u64> {
+    pub fn cardinality(&self) -> Result<u64> {
         if let Ok(data_type) = self.get_datatype() {
             if data_type.is_integer() {
                 if let Some(diff) = self.max_val().distance(&self.min_val()) {
-                    match (self.lower.open, self.upper.open) {
-                        (false, false) => Some(diff as u64 + 1),
-                        (true, true) => Some(diff as u64 - 1),
-                        _ => Some(diff as u64),
-                    }
-                } else {
-                    None
+                    return Ok(match (self.lower.open, self.upper.open) {
+                        (false, false) => diff as u64 + 1,
+                        (true, true) => diff as u64 - 1,
+                        _ => diff as u64,
+                    });
                 }
-            } else {
-                None
             }
-        } else {
-            None
         }
+        Err(DataFusionError::Execution(format!(
+            "Cardinality cannot be calculated for {:?}",
+            self
+        )))
     }
 }
 

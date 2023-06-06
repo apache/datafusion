@@ -300,7 +300,7 @@ mod test {
     fn stats_bounds_analysis() -> Result<()> {
         let (schema, statistics) = get_test_table_stats();
         let context = AnalysisContext::from_statistics(&schema, &statistics);
-
+        use ScalarValue::*;
         let cases = [
             // (name, index, expected boundaries)
             (
@@ -308,8 +308,8 @@ mod test {
                 0,
                 Some(ExprBoundaries::try_new(
                     Interval::new(
-                        IntervalBound::new(ScalarValue::Int32(Some(1)), false),
-                        IntervalBound::new(ScalarValue::Int32(Some(100)), false),
+                        IntervalBound::new(Int32(Some(1)), false),
+                        IntervalBound::new(Int32(Some(100)), false),
                     ),
                     Some(15),
                 )?),
@@ -319,8 +319,8 @@ mod test {
                 1,
                 Some(ExprBoundaries::try_new(
                     Interval::new(
-                        IntervalBound::new(ScalarValue::Null, false),
-                        IntervalBound::new(ScalarValue::Null, false),
+                        IntervalBound::new(Null, false),
+                        IntervalBound::new(Null, false),
                     ),
                     None,
                 )?),
@@ -330,8 +330,8 @@ mod test {
                 2,
                 Some(ExprBoundaries::try_new(
                     Interval::new(
-                        IntervalBound::new(ScalarValue::Int32(Some(1)), false),
-                        IntervalBound::new(ScalarValue::Int32(Some(75)), false),
+                        IntervalBound::new(Int32(Some(1)), false),
+                        IntervalBound::new(Int32(Some(75)), false),
                     ),
                     None,
                 )?),

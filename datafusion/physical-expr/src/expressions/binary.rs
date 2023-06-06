@@ -876,20 +876,10 @@ fn analyze_expr_scalar_comparison(
     let selective_interval = apply_operator(op, &left_interval, &right_singleton)?;
 
     let selectivity = match (selective_interval.min_val(), selective_interval.max_val()) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Some(1.0),
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => {
-            Some(0.0)
-        }
-        _ => calculate_selectivity(op, &left_interval, &right),
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => 1.0,
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => 0.0,
+        _ => calculate_selectivity(op, &left_interval, &right)?,
     };
-
-    let selectivity = selectivity.ok_or_else(|| {
-        DataFusionError::NotImplemented(format!(
-            "Selectivity analysis is not supported for {:?} and {:?}",
-            left_interval,
-            right.get_datatype()
-        ))
-    })?;
 
     // The context represents all the knowledge we have gathered during the
     // analysis process, which we can now add more since the expression's upper
@@ -965,7 +955,7 @@ fn calculate_selectivity(
     op: &Operator,
     left_interval: &Interval,
     right: &ScalarValue,
-) -> Option<f64> {
+) -> Result<f64> {
     if (right.get_datatype().is_floating() && *op == Operator::Eq)
         || (right.get_datatype().is_floating()
             && *op == Operator::LtEq
@@ -978,81 +968,82 @@ fn calculate_selectivity(
     {
         // Selectivity is selected as minimum floating point number to distinguish
         // non-selective cases of floating datatypes from equality cases.
-        return Some(f64::MIN_POSITIVE);
+        return Ok(f64::MIN_POSITIVE);
     };
-
-    if let Ok(left_datatype) = left_interval.get_datatype() {
-        if left_datatype.is_floating() && right.get_datatype().is_floating() {
-            let total_range = match left_interval.width() {
-                Some(ScalarValue::Float32(Some(f))) => f as f64,
-                Some(ScalarValue::Float64(Some(f))) => f,
-                _ => return None,
-            };
-            let ratio = |lower, upper| {
-                Interval::new(lower, upper)
-                    .width()
-                    .map_or(0.0, |value| match value {
-                        ScalarValue::Float32(Some(r)) => r as f64 / total_range,
-                        ScalarValue::Float64(Some(r)) => r / total_range,
-                        _ => 0.0,
-                    })
-            };
-            match op {
-                Operator::Lt => {
-                    let upper = IntervalBound::new(right.clone(), true);
-                    Some(ratio(left_interval.lower.clone(), upper))
-                }
-                Operator::LtEq => {
-                    let upper = IntervalBound::new(right.clone(), false);
-                    Some(ratio(left_interval.lower.clone(), upper))
-                }
-                Operator::Gt => {
-                    let lower = IntervalBound::new(right.clone(), true);
-                    Some(ratio(lower, left_interval.upper.clone()))
-                }
-                Operator::GtEq => {
-                    let lower = IntervalBound::new(right.clone(), false);
-                    Some(ratio(lower, left_interval.upper.clone()))
-                }
-                // It is unreachable for floating point values.
-                Operator::Eq => None,
-                _ => Some(0.0),
+    let err = || {
+        Err(DataFusionError::Execution(
+            "Couldn't calculate selectivity".to_string(),
+        ))
+    };
+    let left_datatype = left_interval.get_datatype()?;
+    if left_datatype.is_floating() && right.get_datatype().is_floating() {
+        let total_range = match left_interval.width()? {
+            ScalarValue::Float32(Some(f)) => f as f64,
+            ScalarValue::Float64(Some(f)) => f,
+            _ => {
+                return Err(DataFusionError::Execution(
+                    "Expects to receive floating point number".to_string(),
+                ))
             }
-        } else if left_datatype.is_integer() && right.get_datatype().is_integer() {
-            let total_range = match left_interval.cardinality() {
-                Some(total_range) => total_range,
-                None => return None,
-            };
-            let ratio = |lower, upper| {
-                Interval::new(lower, upper)
-                    .cardinality()
-                    .map_or(0.0, |r| r as f64 / total_range as f64)
-            };
-            match op {
-                Operator::Lt => {
-                    let upper = IntervalBound::new(right.clone(), true);
-                    Some(ratio(left_interval.lower.clone(), upper))
-                }
-                Operator::LtEq => {
-                    let upper = IntervalBound::new(right.clone(), false);
-                    Some(ratio(left_interval.lower.clone(), upper))
-                }
-                Operator::Gt => {
-                    let lower = IntervalBound::new(right.clone(), true);
-                    Some(ratio(lower, left_interval.upper.clone()))
-                }
-                Operator::GtEq => {
-                    let lower = IntervalBound::new(right.clone(), false);
-                    Some(ratio(lower, left_interval.upper.clone()))
-                }
-                Operator::Eq => Some(1.0 / total_range as f64),
-                _ => Some(0.0),
+        };
+        let ratio = |lower, upper| {
+            let value = Interval::new(lower, upper).width()?;
+            Ok(match value {
+                ScalarValue::Float32(Some(r)) => r as f64 / total_range,
+                ScalarValue::Float64(Some(r)) => r / total_range,
+                _ => 0.0,
+            })
+        };
+        match op {
+            Operator::Lt => {
+                let upper = IntervalBound::new(right.clone(), true);
+                ratio(left_interval.lower.clone(), upper)
             }
-        } else {
-            return None;
+            Operator::LtEq => {
+                let upper = IntervalBound::new(right.clone(), false);
+                ratio(left_interval.lower.clone(), upper)
+            }
+            Operator::Gt => {
+                let lower = IntervalBound::new(right.clone(), true);
+                ratio(lower, left_interval.upper.clone())
+            }
+            Operator::GtEq => {
+                let lower = IntervalBound::new(right.clone(), false);
+                ratio(lower, left_interval.upper.clone())
+            }
+            // It is unreachable for floating point values.
+            Operator::Eq => err(),
+            _ => Ok(0.0),
+        }
+    } else if left_datatype.is_integer() && right.get_datatype().is_integer() {
+        let total_range = left_interval.cardinality()?;
+        let ratio = |lower, upper| {
+            let value = Interval::new(lower, upper).cardinality()?;
+            Ok(value as f64 / total_range as f64)
+        };
+        match op {
+            Operator::Lt => {
+                let upper = IntervalBound::new(right.clone(), true);
+                ratio(left_interval.lower.clone(), upper)
+            }
+            Operator::LtEq => {
+                let upper = IntervalBound::new(right.clone(), false);
+                ratio(left_interval.lower.clone(), upper)
+            }
+            Operator::Gt => {
+                let lower = IntervalBound::new(right.clone(), true);
+                ratio(lower, left_interval.upper.clone())
+            }
+            Operator::GtEq => {
+                let lower = IntervalBound::new(right.clone(), false);
+                ratio(lower, left_interval.upper.clone())
+            }
+            Operator::Eq => Ok(1.0 / total_range as f64),
+            _ => Ok(0.0),
         }
     } else {
-        None
+        // Selectivity is supported for integer and floating point types
+        return err();
     }
 }
 
