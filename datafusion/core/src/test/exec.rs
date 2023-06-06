@@ -31,7 +31,6 @@ use arrow::{
 };
 use futures::Stream;
 
-use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -40,6 +39,9 @@ use crate::physical_plan::{
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::stream::RecordBatchReceiverStream,
+};
+use crate::{
+    execution::context::TaskContext, physical_plan::stream::RecordBatchStreamAdapter,
 };
 
 /// Index into the data that has been returned so far
@@ -114,22 +116,40 @@ impl RecordBatchStream for TestStream {
     }
 }
 
-/// A Mock ExecutionPlan that can be used for writing tests of other ExecutionPlans
-///
+/// A Mock ExecutionPlan that can be used for writing tests of other
+/// ExecutionPlans
 #[derive(Debug)]
 pub struct MockExec {
     /// the results to send back
     data: Vec<Result<RecordBatch>>,
     schema: SchemaRef,
+    /// if true (the default), sends data using a separate task to to ensure the
+    /// batches are not available without this stream yielding first
+    use_task: bool,
 }
 
 impl MockExec {
-    /// Create a new exec with a single partition that returns the
-    /// record batches in this Exec. Note the batches are not produced
-    /// immediately (the caller has to actually yield and another task
-    /// must run) to ensure any poll loops are correct.
+    /// Create a new `MockExec` with a single partition that returns
+    /// the specified `Results`s.
+    ///
+    /// By default, the batches are not produced immediately (the
+    /// caller has to actually yield and another task must run) to
+    /// ensure any poll loops are correct. This behavior can be
+    /// changed with `with_use_task`
     pub fn new(data: Vec<Result<RecordBatch>>, schema: SchemaRef) -> Self {
-        Self { data, schema }
+        Self {
+            data,
+            schema,
+            use_task: true,
+        }
+    }
+
+    /// If `use_task` is true (the default) then the batches are sent
+    /// back using a separate task to ensure the underlying stream is
+    /// not immediately ready
+    pub fn with_use_task(mut self, use_task: bool) -> Self {
+        self.use_task = use_task;
+        self
     }
 }
 
@@ -179,26 +199,30 @@ impl ExecutionPlan for MockExec {
             })
             .collect();
 
-        let (tx, rx) = tokio::sync::mpsc::channel(2);
-
-        // task simply sends data in order but in a separate
-        // thread (to ensure the batches are not available without the
-        // DelayedStream yielding).
-        let join_handle = tokio::task::spawn(async move {
-            for batch in data {
-                println!("Sending batch via delayed stream");
-                if let Err(e) = tx.send(batch).await {
-                    println!("ERROR batch via delayed stream: {e}");
+        if self.use_task {
+            let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
+            // send data in order but in a separate task (to ensure
+            // the batches are not available without the stream
+            // yielding).
+            let tx = builder.tx();
+            builder.spawn(async move {
+                for batch in data {
+                    println!("Sending batch via delayed stream");
+                    if let Err(e) = tx.send(batch).await {
+                        println!("ERROR batch via delayed stream: {e}");
+                    }
                 }
-            }
-        });
-
-        // returned stream simply reads off the rx stream
-        Ok(RecordBatchReceiverStream::create(
-            &self.schema,
-            rx,
-            join_handle,
-        ))
+            });
+            // returned stream simply reads off the rx stream
+            Ok(builder.build())
+        } else {
+            // make an input that will error
+            let stream = futures::stream::iter(data);
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.schema(),
+                stream,
+            )))
+        }
     }
 
     fn fmt_as(
@@ -307,12 +331,13 @@ impl ExecutionPlan for BarrierExec {
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
-        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let mut builder = RecordBatchReceiverStream::builder(self.schema(), 2);
 
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
         let b = self.barrier.clone();
-        let join_handle = tokio::task::spawn(async move {
+        let tx = builder.tx();
+        builder.spawn(async move {
             println!("Partition {partition} waiting on barrier");
             b.wait().await;
             for batch in data {
@@ -324,11 +349,7 @@ impl ExecutionPlan for BarrierExec {
         });
 
         // returned stream simply reads off the rx stream
-        Ok(RecordBatchReceiverStream::create(
-            &self.schema,
-            rx,
-            join_handle,
-        ))
+        Ok(builder.build())
     }
 
     fn fmt_as(
@@ -642,4 +663,145 @@ pub async fn assert_strong_count_converges_to_zero<T>(refs: Weak<T>) {
     })
     .await
     .unwrap();
+}
+
+///
+
+/// Execution plan that emits streams that panics.
+///
+/// This is useful to test panic handling of certain execution plans.
+#[derive(Debug)]
+pub struct PanicExec {
+    /// Schema that is mocked by this plan.
+    schema: SchemaRef,
+
+    /// Number of output partitions. Each partition will produce this
+    /// many empty output record batches prior to panicing
+    batches_until_panics: Vec<usize>,
+}
+
+impl PanicExec {
+    /// Create new [`PanickingExec`] with a give schema and number of
+    /// partitions, which will each panic immediately.
+    pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
+        Self {
+            schema,
+            batches_until_panics: vec![0; n_partitions],
+        }
+    }
+
+    /// Set the number of batches prior to panic for a partition
+    pub fn with_partition_panic(mut self, partition: usize, count: usize) -> Self {
+        self.batches_until_panics[partition] = count;
+        self
+    }
+}
+
+impl ExecutionPlan for PanicExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        // this is a leaf node and has no children
+        vec![]
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        let num_partitions = self.batches_until_panics.len();
+        Partitioning::UnknownPartitioning(num_partitions)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Err(DataFusionError::Internal(format!(
+            "Children cannot be replaced in {:?}",
+            self
+        )))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(PanicStream {
+            partition,
+            batches_until_panic: self.batches_until_panics[partition],
+            schema: Arc::clone(&self.schema),
+            ready: false,
+        }))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "PanickingExec",)
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        unimplemented!()
+    }
+}
+
+/// A [`RecordBatchStream`] that yields every other batch and panics
+/// after `batches_until_panic` batches have been produced.
+///
+/// Useful for testing the behavior of streams on panic
+#[derive(Debug)]
+struct PanicStream {
+    /// Which partition was this
+    partition: usize,
+    /// How may batches will be produced until panic
+    batches_until_panic: usize,
+    /// Schema mocked by this stream.
+    schema: SchemaRef,
+    /// Should we return ready ?
+    ready: bool,
+}
+
+impl Stream for PanicStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.batches_until_panic > 0 {
+            if self.ready {
+                self.batches_until_panic -= 1;
+                self.ready = false;
+                let batch = RecordBatch::new_empty(self.schema.clone());
+                return Poll::Ready(Some(Ok(batch)));
+            } else {
+                self.ready = true;
+                // get called again
+                cx.waker().clone().wake();
+                return Poll::Pending;
+            }
+        }
+        panic!("PanickingStream did panic: {}", self.partition)
+    }
+}
+
+impl RecordBatchStream for PanicStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
 }

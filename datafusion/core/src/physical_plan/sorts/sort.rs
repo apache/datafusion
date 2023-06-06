@@ -52,7 +52,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 use tokio::task;
 
 struct ExternalSorterMetrics {
@@ -373,18 +373,16 @@ fn read_spill_as_stream(
     path: NamedTempFile,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
-    let (sender, receiver): (Sender<Result<RecordBatch>>, Receiver<Result<RecordBatch>>) =
-        tokio::sync::mpsc::channel(2);
-    let join_handle = task::spawn_blocking(move || {
+    let mut builder = RecordBatchReceiverStream::builder(schema, 2);
+    let sender = builder.tx();
+
+    builder.spawn_blocking(move || {
         if let Err(e) = read_spill(sender, path.path()) {
             error!("Failure while reading spill file: {:?}. Error: {}", path, e);
         }
     });
-    Ok(RecordBatchReceiverStream::create(
-        &schema,
-        receiver,
-        join_handle,
-    ))
+
+    Ok(builder.build())
 }
 
 fn write_sorted(
