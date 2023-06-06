@@ -53,7 +53,7 @@ pub struct MemTable {
 
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches.
-    /// If the provided schema and record bathces' schema do not match,
+    /// If the provided schema and record batches' schema do not match,
     /// the function returns an error.
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
         if partitions
@@ -82,8 +82,8 @@ impl MemTable {
         partitions: Vec<Vec<RecordBatch>>,
     ) -> Self {
         let schema = partitions
-            .get(0)
-            .and_then(|f| f.get(0))
+            .first()
+            .and_then(|f| f.first())
             .map(|first| first.schema())
             .unwrap_or(schema);
 
