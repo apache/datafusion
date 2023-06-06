@@ -36,7 +36,7 @@ path = "src/lib.rs"
 dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "26.0.0" }
 datafusion-expr = { path = "../expr", version = "26.0.0" }
-hashbrown = { version = "0.13", features = ["raw"] }
+hashbrown = { version = "0.14", features = ["raw"] }
 log = "^0.4"
 object_store = "0.5.4"
 parking_lot = "0.12"
