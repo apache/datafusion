@@ -20,6 +20,7 @@
 use ahash::RandomState;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use crate::hash_utils::HashValue;
@@ -329,6 +330,12 @@ impl PhysicalExpr for InListExpr {
             self.negated,
             self.static_filter.clone(),
         )))
+    }
+
+    fn dyn_hash(&self, _state: &mut dyn Hasher) {
+        // `self.static_filter` doesn't support hashing. Hence
+        // we cannot calculate hash for this type.
+        unimplemented!();
     }
 }
 

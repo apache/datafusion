@@ -19,6 +19,7 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
@@ -96,7 +97,7 @@ use datafusion_expr::type_coercion::binary::{
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
@@ -836,6 +837,11 @@ impl PhysicalExpr for BinaryExpr {
             propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
         };
         Ok(vec![left, right])
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

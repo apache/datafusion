@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use crate::intervals::Interval;
@@ -131,6 +132,12 @@ impl PhysicalExpr for CastExpr {
         Ok(vec![Some(
             interval.cast_to(&cast_type, &self.cast_options)?,
         )])
+    }
+
+    fn dyn_hash(&self, _state: &mut dyn Hasher) {
+        // `self.cast_options` doesn't support hashing
+        // Hence we cannot calculate `dyn_hash` for this type.
+        unimplemented!();
     }
 }
 
