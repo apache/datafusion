@@ -49,7 +49,7 @@ arrow = { version = "40.0.0", features = ["prettyprint"] }
 arrow-flight = { version = "40.0.0", features = ["flight-sql-experimental"] }
 arrow-buffer = { version = "40.0.0", default-features = false }
 arrow-schema = { version = "40.0.0", default-features = false }
-arrow-array = { version = "40.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-array = { version = "41.0.0", default-features = false, features = ["chrono-tz"] }
 parquet = { version = "40.0.0", features = ["arrow", "async", "object_store"] }
 
 [profile.release]
