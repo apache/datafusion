@@ -876,14 +876,20 @@ fn analyze_expr_scalar_comparison(
     let selective_interval = apply_operator(op, &left_interval, &right_singleton)?;
 
     let selectivity = match (selective_interval.min_val(), selective_interval.max_val()) {
-        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => 1.0,
-        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => 0.0,
-        // If there is a partial overlap, then we can estimate the selectivity
-        // by computing the ratio of the existing overlap to the total range. Since we
-        // currently don't have access to a value distribution histogram, the part below
-        // assumes a uniform distribution by default.
-        _ => calculate_selectivity(op, &right, &left_interval),
+        (ScalarValue::Boolean(Some(true)), ScalarValue::Boolean(Some(true))) => Some(1.0),
+        (ScalarValue::Boolean(Some(false)), ScalarValue::Boolean(Some(false))) => {
+            Some(0.0)
+        }
+        _ => calculate_selectivity(op, &left_interval, &right),
     };
+
+    let selectivity = selectivity.ok_or_else(|| {
+        DataFusionError::NotImplemented(format!(
+            "Selectivity analysis is not supported for {:?} and {:?}",
+            left_interval,
+            right.get_datatype()
+        ))
+    })?;
 
     // The context represents all the knowledge we have gathered during the
     // analysis process, which we can now add more since the expression's upper
@@ -957,41 +963,96 @@ fn analyze_expr_scalar_comparison(
 
 fn calculate_selectivity(
     op: &Operator,
-    right: &ScalarValue,
     left_interval: &Interval,
-) -> f64 {
-    if !left_interval.is_integer_type() {
-        return 0.0;
-    }
-    let total_range = match left_interval.cardinality() {
-        Some(total_range) => total_range,
-        None => return 0.0,
-    };
-    let cardinality = |lower, upper| {
-        Interval::new(lower, upper)
-            .cardinality()
-            .map_or(0.0, |r| r as f64 / total_range as f64)
+    right: &ScalarValue,
+) -> Option<f64> {
+    if (right.get_datatype().is_floating() && *op == Operator::Eq)
+        || (right.get_datatype().is_floating()
+            && *op == Operator::LtEq
+            && !left_interval.lower.open
+            && left_interval.min_val() == right.clone())
+        || (right.get_datatype().is_floating()
+            && *op == Operator::GtEq
+            && !left_interval.upper.open
+            && left_interval.max_val() == right.clone())
+    {
+        // Selectivity is selected as minimum floating point number to distinguish
+        // non-selective cases of floating datatypes from equality cases.
+        return Some(f64::MIN_POSITIVE);
     };
 
-    match op {
-        Operator::Lt => {
-            let upper = IntervalBound::new(right.clone(), true);
-            cardinality(left_interval.lower.clone(), upper)
+    if let Ok(left_datatype) = left_interval.get_datatype() {
+        if left_datatype.is_floating() && right.get_datatype().is_floating() {
+            let total_range = match left_interval.width() {
+                Some(ScalarValue::Float32(Some(f))) => f as f64,
+                Some(ScalarValue::Float64(Some(f))) => f,
+                _ => return None,
+            };
+            let ratio = |lower, upper| {
+                Interval::new(lower, upper)
+                    .width()
+                    .map_or(0.0, |value| match value {
+                        ScalarValue::Float32(Some(r)) => r as f64 / total_range,
+                        ScalarValue::Float64(Some(r)) => r / total_range,
+                        _ => 0.0,
+                    })
+            };
+            match op {
+                Operator::Lt => {
+                    let upper = IntervalBound::new(right.clone(), true);
+                    Some(ratio(left_interval.lower.clone(), upper))
+                }
+                Operator::LtEq => {
+                    let upper = IntervalBound::new(right.clone(), false);
+                    Some(ratio(left_interval.lower.clone(), upper))
+                }
+                Operator::Gt => {
+                    let lower = IntervalBound::new(right.clone(), true);
+                    Some(ratio(lower, left_interval.upper.clone()))
+                }
+                Operator::GtEq => {
+                    let lower = IntervalBound::new(right.clone(), false);
+                    Some(ratio(lower, left_interval.upper.clone()))
+                }
+                // It is unreachable for floating point values.
+                Operator::Eq => None,
+                _ => Some(0.0),
+            }
+        } else if left_datatype.is_integer() && right.get_datatype().is_integer() {
+            let total_range = match left_interval.cardinality() {
+                Some(total_range) => total_range,
+                None => return None,
+            };
+            let ratio = |lower, upper| {
+                Interval::new(lower, upper)
+                    .cardinality()
+                    .map_or(0.0, |r| r as f64 / total_range as f64)
+            };
+            match op {
+                Operator::Lt => {
+                    let upper = IntervalBound::new(right.clone(), true);
+                    Some(ratio(left_interval.lower.clone(), upper))
+                }
+                Operator::LtEq => {
+                    let upper = IntervalBound::new(right.clone(), false);
+                    Some(ratio(left_interval.lower.clone(), upper))
+                }
+                Operator::Gt => {
+                    let lower = IntervalBound::new(right.clone(), true);
+                    Some(ratio(lower, left_interval.upper.clone()))
+                }
+                Operator::GtEq => {
+                    let lower = IntervalBound::new(right.clone(), false);
+                    Some(ratio(lower, left_interval.upper.clone()))
+                }
+                Operator::Eq => Some(1.0 / total_range as f64),
+                _ => Some(0.0),
+            }
+        } else {
+            return None;
         }
-        Operator::LtEq => {
-            let upper = IntervalBound::new(right.clone(), false);
-            cardinality(left_interval.lower.clone(), upper)
-        }
-        Operator::Gt => {
-            let lower = IntervalBound::new(right.clone(), true);
-            cardinality(lower, left_interval.upper.clone())
-        }
-        Operator::GtEq => {
-            let lower = IntervalBound::new(right.clone(), false);
-            cardinality(lower, left_interval.upper.clone())
-        }
-        Operator::Eq => 1.0 / total_range as f64,
-        _ => 0.0,
+    } else {
+        None
     }
 }
 
@@ -4585,7 +4646,7 @@ mod tests {
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::Int64(Some(rhs));
             let analysis_ctx =
-                analyze_expr_scalar_comparison(context, &operator, &left, right);
+                analyze_expr_scalar_comparison(context, &operator, &left, right)?;
             let boundaries = analysis_ctx
                 .boundaries
                 .as_ref()
@@ -4615,7 +4676,7 @@ mod tests {
             // For getting the updated boundaries, we can simply analyze the LHS
             // with the existing context.
             let left_boundaries = left
-                .analyze(analysis_ctx)
+                .analyze(analysis_ctx)?
                 .boundaries
                 .expect("this case should not return None");
             assert_eq!(left_boundaries.min_val(), ScalarValue::Int64(Some(exp_min)));
@@ -4626,10 +4687,10 @@ mod tests {
 
     #[test]
     fn test_comparison_result_estimate_different_type() -> Result<()> {
-        // A table where the column 'a' has a min of 1.3, a max of 50.7.
+        // A table where the column 'a' has a min of 0.0, a max of 50.0.
         let (schema, statistics) =
-            get_test_table_stats(ScalarValue::from(1.3), ScalarValue::from(50.7));
-        let distance = 50.0; // rounded distance is (max - min) + 1
+            get_test_table_stats(ScalarValue::from(0.0), ScalarValue::from(50.0));
+        let distance = 50.0;
 
         // Since the generic version already covers all the paths, we can just
         // test a small subset of the cases.
@@ -4638,27 +4699,27 @@ mod tests {
             // -------------------------------------------------------------------
             //
             // Table:
-            //   - a (min = 1.3, max = 50.7, distinct_count = 25)
+            //   - a (min = 0.0, max = 50.0)
             //
             // Never selects (out of range)
-            ((Operator::Eq, 1.1), (0.0, 1.1, 1.1)),
-            ((Operator::Eq, 50.75), (0.0, 50.75, 50.75)),
-            ((Operator::Lt, 1.3), (0.0, 1.3, 50.7)),
-            ((Operator::LtEq, 1.29), (0.0, 1.3, 50.7)),
-            ((Operator::Gt, 50.7), (0.0, 1.3, 50.7)),
-            ((Operator::GtEq, 50.75), (0.0, 1.3, 50.7)),
+            ((Operator::Eq, -0.1), (0.0, -0.1, -0.1)),
+            ((Operator::Eq, 50.1), (0.0, 50.1, 50.1)),
+            ((Operator::Lt, 0.0), (0.0, 0.0, 50.0)),
+            ((Operator::LtEq, -0.0001), (0.0, 0.0, 50.0)),
+            ((Operator::Gt, 50.1), (0.0, 0.0, 50.0)),
+            ((Operator::GtEq, 50.0001), (0.0, 0.0, 50.0)),
             // Always selects
-            ((Operator::Lt, 50.75), (1.0, 1.3, 50.7)),
-            ((Operator::LtEq, 50.75), (1.0, 1.3, 50.7)),
-            ((Operator::Gt, 1.29), (1.0, 1.3, 50.7)),
-            ((Operator::GtEq, 1.3), (1.0, 1.3, 50.7)),
+            ((Operator::Lt, 50.0001), (1.0, 0.0, 50.0)),
+            ((Operator::LtEq, 50.0), (1.0, 0.0, 50.0)),
+            ((Operator::Gt, -0.0001), (1.0, 0.0, 50.0)),
+            ((Operator::GtEq, 0.0), (1.0, 0.0, 50.0)),
             // Partial selection (the x in 'x/distance' is basically the rounded version of
             // the bound distance, as per the implementation).
-            ((Operator::Eq, 27.8), (1.0 / distance, 27.8, 27.8)),
-            ((Operator::Lt, 5.2), (4.0 / distance, 1.3, 5.2)), // On a uniform distribution, this is {2.6, 3.9}
-            ((Operator::LtEq, 1.3), (1.0 / distance, 1.3, 1.3)),
-            ((Operator::Gt, 45.5), (5.0 / distance, 45.5, 50.7)), // On a uniform distribution, this is {46.8, 48.1, 49.4}
-            ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7)),
+            ((Operator::Eq, 27.8), (f64::MIN_POSITIVE, 27.8, 27.8)),
+            ((Operator::Lt, 5.2), (5.2 / distance, 0.0, 5.2)),
+            ((Operator::LtEq, 0.0), (f64::MIN_POSITIVE, 0.0, 0.0)),
+            ((Operator::Gt, 45.5), (4.5 / distance, 45.5, 50.0)),
+            ((Operator::GtEq, 50.0), (f64::MIN_POSITIVE, 50.0, 50.0)),
         ];
 
         for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
@@ -4666,7 +4727,7 @@ mod tests {
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::from(rhs);
             let analysis_ctx =
-                analyze_expr_scalar_comparison(context, &operator, &left, right);
+                analyze_expr_scalar_comparison(context, &operator, &left, right)?;
             let boundaries = analysis_ctx
                 .clone()
                 .boundaries
@@ -4694,7 +4755,7 @@ mod tests {
             }
 
             let left_boundaries = left
-                .analyze(analysis_ctx)
+                .analyze(analysis_ctx)?
                 .boundaries
                 .expect("this case should not return None");
             assert_eq!(
@@ -4726,7 +4787,7 @@ mod tests {
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
-            .analyze(context)
+            .analyze(context)?
             .boundaries
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.76));
@@ -4755,7 +4816,7 @@ mod tests {
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
-            .analyze(context)
+            .analyze(context)?
             .boundaries
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.5));

@@ -105,7 +105,7 @@ impl PhysicalExpr for Column {
 
     /// Return the boundaries of this column, if known.
     fn analyze(&self, context: AnalysisContext) -> Result<AnalysisContext> {
-        if self.index < context.column_boundaries.len() {
+        if self.index >= context.column_boundaries.len() {
             return Err(DataFusionError::Internal(format!(
                 "Column index is :{}, but AnalysisContext has {} columns",
                 self.index,
@@ -216,6 +216,8 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod test {
     use crate::expressions::Column;
+    use crate::intervals::Interval;
+    use crate::intervals::IntervalBound;
     use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -304,35 +306,41 @@ mod test {
             (
                 "a",
                 0,
-                Some(ExprBoundaries::new(
-                    ScalarValue::Int32(Some(1)),
-                    ScalarValue::Int32(Some(100)),
+                Some(ExprBoundaries::try_new(
+                    Interval::new(
+                        IntervalBound::new(ScalarValue::Int32(Some(1)), false),
+                        IntervalBound::new(ScalarValue::Int32(Some(100)), false),
+                    ),
                     Some(15),
-                )),
+                )?),
             ),
             (
                 "b",
                 1,
-                Some(ExprBoundaries::new(
-                    ScalarValue::Null,
-                    ScalarValue::Null,
+                Some(ExprBoundaries::try_new(
+                    Interval::new(
+                        IntervalBound::new(ScalarValue::Null, false),
+                        IntervalBound::new(ScalarValue::Null, false),
+                    ),
                     None,
-                )),
+                )?),
             ),
             (
                 "c",
                 2,
-                Some(ExprBoundaries::new(
-                    ScalarValue::Int32(Some(1)),
-                    ScalarValue::Int32(Some(75)),
+                Some(ExprBoundaries::try_new(
+                    Interval::new(
+                        IntervalBound::new(ScalarValue::Int32(Some(1)), false),
+                        IntervalBound::new(ScalarValue::Int32(Some(75)), false),
+                    ),
                     None,
-                )),
+                )?),
             ),
         ];
 
         for (name, index, expected) in cases {
             let col = Column::new(name, index);
-            let test_ctx = col.analyze(context.clone());
+            let test_ctx = col.analyze(context.clone())?;
             assert_eq!(test_ctx.boundaries, expected);
         }
 

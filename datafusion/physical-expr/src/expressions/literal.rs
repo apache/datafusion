@@ -154,7 +154,7 @@ mod tests {
         let context = AnalysisContext::new(&schema, vec![]);
 
         let literal_expr = lit(42i32);
-        let result_ctx = literal_expr.analyze(context);
+        let result_ctx = literal_expr.analyze(context)?;
         let boundaries = result_ctx.boundaries.unwrap();
         assert_eq!(boundaries.min_val(), ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.max_val(), ScalarValue::Int32(Some(42)));
