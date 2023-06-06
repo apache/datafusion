@@ -42,11 +42,11 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
+use crate::datasource::physical_plan::{ParquetExec, SchemaAdapter};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
 /// The default file extension of parquet files
@@ -379,7 +379,7 @@ fn summarize_min_max(
 /// This component is a subject to **change** in near future and is exposed for low level integrations
 /// through [`ParquetFileReaderFactory`].
 ///
-/// [`ParquetFileReaderFactory`]: crate::physical_plan::file_format::ParquetFileReaderFactory
+/// [`ParquetFileReaderFactory`]: crate::datasource::physical_plan::ParquetFileReaderFactory
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
@@ -623,7 +623,7 @@ mod tests {
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
-    use crate::physical_plan::file_format::get_scan_files;
+    use crate::datasource::physical_plan::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};

@@ -33,6 +33,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
         arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
@@ -44,7 +45,6 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
-use crate::physical_plan::file_format::{FileScanConfig, FileSinkConfig};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
@@ -357,7 +357,7 @@ impl ListingOptions {
     /// ```
     ///
     /// [Hive Partitioning]: https://docs.cloudera.com/HDPDocuments/HDP2/HDP-2.1.3/bk_system-admin-guide/content/hive_partitioned_tables.html
-    /// [`wrap_partition_type_in_dict`]: crate::physical_plan::file_format::wrap_partition_type_in_dict
+    /// [`wrap_partition_type_in_dict`]: crate::datasource::physical_plan::wrap_partition_type_in_dict
     pub fn with_table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,

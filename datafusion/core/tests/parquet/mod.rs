@@ -29,11 +29,8 @@ use arrow::{
 };
 use chrono::{Datelike, Duration};
 use datafusion::{
-    datasource::{provider_as_source, TableProvider},
-    physical_plan::{
-        accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
-        ExecutionPlanVisitor,
-    },
+    datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
+    physical_plan::{accept, metrics::MetricsSet, ExecutionPlan, ExecutionPlanVisitor},
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};

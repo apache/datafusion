@@ -28,10 +28,10 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::error::Result;
-use crate::physical_plan::file_format::{
+use crate::datasource::physical_plan::{
     FileMeta, FileScanConfig, PartitionColumnProjector,
 };
+use crate::error::Result;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
@@ -524,7 +524,7 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::BatchSerializer;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_plan::file_format::FileMeta;
+    use crate::datasource::physical_plan::FileMeta;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::prelude::SessionContext;
     use crate::{
