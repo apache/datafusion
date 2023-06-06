@@ -55,7 +55,6 @@ use datafusion_execution::memory_pool::MemoryReservation;
 
 use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
-use crate::error::{DataFusionError, Result};
 use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::joins::utils::{
@@ -78,6 +77,7 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::{DataFusionError, Result};
 
 use super::{
     utils::{OnceAsync, OnceFut},

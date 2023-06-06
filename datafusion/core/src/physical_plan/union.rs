@@ -244,7 +244,7 @@ impl ExecutionPlan for UnionExec {
 
         warn!("Error in Union: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in Union"
         )))
     }
@@ -418,7 +418,7 @@ impl ExecutionPlan for InterleaveExec {
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in InterleaveExec"
         )))
     }

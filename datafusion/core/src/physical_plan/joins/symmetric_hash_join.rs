@@ -50,7 +50,6 @@ use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 
-use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
@@ -71,6 +70,7 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;

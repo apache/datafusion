@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
-use crate::error::{DataFusionError, Result};
 use crate::execution::memory_pool::MemoryConsumer;
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::repartition::distributor_channels::channels;
@@ -33,6 +32,7 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use log::trace;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};

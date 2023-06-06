@@ -22,7 +22,7 @@ use std::task::Poll;
 use arrow::record_batch::RecordBatch;
 
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
-use crate::error::Result;
+use datafusion_common::Result;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator

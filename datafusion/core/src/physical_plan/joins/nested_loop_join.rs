@@ -48,8 +48,8 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::error::Result;
 use crate::physical_plan::coalesce_batches::concat_batches;
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 
