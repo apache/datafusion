@@ -36,15 +36,15 @@ use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::file_format::{
-    AsyncAppend, AsyncPut, AsyncPutMultipart, AsyncPutWriter, BatchSerializer,
+    AbortMode, AbortableWrite, AsyncPutWriter, BatchSerializer, MultiPart,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
-use crate::datasource::file_format::{FileWriterExt, FileWriterMode};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::file_format::{
@@ -402,9 +402,9 @@ impl BatchSerializer for CsvSerializer {
     }
 }
 
-async fn check_for_errors<T>(
+async fn check_for_errors<T, W: AsyncWrite + Unpin + Send>(
     result: Result<T>,
-    writers: &mut [Box<dyn FileWriterExt>],
+    writers: &mut [AbortableWrite<W>],
 ) -> Result<T> {
     match result {
         Ok(value) => Ok(value),
@@ -474,7 +474,7 @@ impl CsvSink {
         &self,
         file_meta: FileMeta,
         object_store: Arc<dyn ObjectStore>,
-    ) -> Result<Box<dyn FileWriterExt>> {
+    ) -> Result<AbortableWrite<Box<dyn AsyncWrite + Send + Unpin>>> {
         let object = &file_meta.object_meta;
         match self.config.writer_mode {
             // If the mode is append, call the store's append method and return wrapped in
@@ -484,18 +484,20 @@ impl CsvSink {
                     .append(&object.location)
                     .await
                     .map_err(DataFusionError::ObjectStore)?;
-                let writer = Box::new(AsyncAppend::new(
+                let writer = AbortableWrite::new(
                     self.file_compression_type.convert_async_writer(writer)?,
-                )) as _;
+                    AbortMode::Append,
+                );
                 Ok(writer)
             }
             // If the mode is put, create a new AsyncPut writer and return it wrapped in
             // a boxed trait object
             FileWriterMode::Put => {
                 let writer = Box::new(AsyncPutWriter::new(object.clone(), object_store));
-                let writer = Box::new(AsyncPut::new(
+                let writer = AbortableWrite::new(
                     self.file_compression_type.convert_async_writer(writer)?,
-                )) as _;
+                    AbortMode::Put,
+                );
                 Ok(writer)
             }
             // If the mode is put multipart, call the store's put_multipart method and
@@ -505,12 +507,14 @@ impl CsvSink {
                     .put_multipart(&object.location)
                     .await
                     .map_err(DataFusionError::ObjectStore)?;
-                Ok(Box::new(AsyncPutMultipart::new(
+                Ok(AbortableWrite::new(
                     self.file_compression_type.convert_async_writer(writer)?,
-                    object_store,
-                    multipart_id,
-                    object.location.clone(),
-                )))
+                    AbortMode::MultiPart(MultiPart::new(
+                        object_store,
+                        multipart_id,
+                        object.location.clone(),
+                    )),
+                ))
             }
         }
     }

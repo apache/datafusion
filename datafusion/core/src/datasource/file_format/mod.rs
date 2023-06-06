@@ -205,78 +205,22 @@ impl AsyncWrite for AsyncPutWriter {
     }
 }
 
-/// An extension trait for `AsyncWrite` types that adds an `abort_writer` method.
-pub trait FileWriterExt: AsyncWrite + Unpin + Send {
-    /// Aborts the writer and returns a boxed future with the result.
-    /// The default implementation returns an immediately resolved future with `Ok(())`.
-    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
-        Err(DataFusionError::Execution(
-            "Abort handling is not implemented".to_string(),
-        ))
-    }
-}
-
-/// A simple wrapper around an `AsyncWrite` type that implements `FileWriterExt`.
-pub struct AsyncPut<W: AsyncWrite + Unpin + Send> {
-    writer: W,
-}
-
-impl<W: AsyncWrite + Unpin + Send> AsyncPut<W> {
-    /// Create a new `AsyncPut` instance with the given writer.
-    pub fn new(writer: W) -> Self {
-        Self { writer }
-    }
-}
-
-impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncPut<W> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
-    }
-}
-
-impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncPut<W> {
-    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
-        Ok(async { Ok(()) }.boxed())
-    }
-}
-
-/// A wrapper around an `AsyncWrite` type that provides multipart upload functionality.
-pub struct AsyncPutMultipart<W: AsyncWrite + Unpin + Send> {
-    writer: W,
+/// Stores data needed during abortion of MultiPart writers
+pub(crate) struct MultiPart {
     /// A shared reference to the object store
     store: Arc<dyn ObjectStore>,
     multipart_id: MultipartId,
     location: Path,
 }
 
-impl<W: AsyncWrite + Unpin + Send> AsyncPutMultipart<W> {
-    /// Create a new `AsyncPutMultipart` instance with the given writer, object store, multipart ID, and location.
+impl MultiPart {
+    /// Create a new `MultiPart`
     pub fn new(
-        writer: W,
         store: Arc<dyn ObjectStore>,
         multipart_id: MultipartId,
         location: Path,
     ) -> Self {
         Self {
-            writer,
             store,
             multipart_id,
             location,
@@ -284,57 +228,51 @@ impl<W: AsyncWrite + Unpin + Send> AsyncPutMultipart<W> {
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncPutMultipart<W> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::result::Result<usize, Error>> {
-        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Error>> {
-        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
-    }
+pub(crate) enum AbortMode {
+    Put,
+    Append,
+    MultiPart(MultiPart),
 }
 
-impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncPutMultipart<W> {
-    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
-        let location = self.location.clone();
-        let multipart_id = self.multipart_id.clone();
-        let store = self.store.clone();
-        Ok(Box::pin(async move {
-            store
-                .abort_multipart(&location, &multipart_id)
-                .await
-                .map_err(DataFusionError::ObjectStore)
-        }))
-    }
-}
-
-/// A wrapper around an `AsyncWrite` type that provides append functionality.
-pub struct AsyncAppend<W: AsyncWrite + Unpin + Send> {
+/// A wrapper struct with abort method and writer
+struct AbortableWrite<W: AsyncWrite + Unpin + Send> {
     writer: W,
+    mode: AbortMode,
 }
 
-impl<W: AsyncWrite + Unpin + Send> AsyncAppend<W> {
-    /// Create a new `AsyncAppend` instance with the given writer.
-    pub fn new(writer: W) -> Self {
-        Self { writer }
+impl<W: AsyncWrite + Unpin + Send> AbortableWrite<W> {
+    /// Create a new `AbortableWrite` instance with the given writer, and write mode.
+    fn new(writer: W, mode: AbortMode) -> Self {
+        Self { writer, mode }
+    }
+
+    /// handling of abort for different write modes
+    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
+        match &self.mode {
+            AbortMode::Put => Ok(async { Ok(()) }.boxed()),
+            AbortMode::Append => Err(DataFusionError::Execution(
+                "Cannot abort in append mode".to_string(),
+            )),
+            AbortMode::MultiPart(MultiPart {
+                store,
+                multipart_id,
+                location,
+            }) => {
+                let location = location.clone();
+                let multipart_id = multipart_id.clone();
+                let store = store.clone();
+                Ok(Box::pin(async move {
+                    store
+                        .abort_multipart(&location, &multipart_id)
+                        .await
+                        .map_err(DataFusionError::ObjectStore)
+                }))
+            }
+        }
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncAppend<W> {
+impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AbortableWrite<W> {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -355,14 +293,6 @@ impl<W: AsyncWrite + Unpin + Send> AsyncWrite for AsyncAppend<W> {
         cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), Error>> {
         Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
-    }
-}
-
-impl<W: AsyncWrite + Unpin + Send> FileWriterExt for AsyncAppend<W> {
-    fn abort_writer(&self) -> Result<BoxFuture<'static, Result<()>>> {
-        Err(DataFusionError::Execution(
-            "Cannot abort in append mode".to_string(),
-        ))
     }
 }
 
