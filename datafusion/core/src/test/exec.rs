@@ -735,7 +735,7 @@ impl ExecutionPlan for PanicExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(PanicingStream {
+        Ok(Box::pin(PanicStream {
             partition,
             batches_until_panic: self.batches_until_panics[partition],
             schema: Arc::clone(&self.schema),
@@ -765,7 +765,7 @@ impl ExecutionPlan for PanicExec {
 ///
 /// Useful for testing the behavior of streams on panic
 #[derive(Debug)]
-struct PanicingStream {
+struct PanicStream {
     /// Which partition was this
     partition: usize,
     /// How may batches will be produced until panic
@@ -776,7 +776,7 @@ struct PanicingStream {
     ready: bool,
 }
 
-impl Stream for PanicingStream {
+impl Stream for PanicStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -800,7 +800,7 @@ impl Stream for PanicingStream {
     }
 }
 
-impl RecordBatchStream for PanicingStream {
+impl RecordBatchStream for PanicStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
