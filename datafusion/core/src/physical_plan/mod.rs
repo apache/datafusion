@@ -680,7 +680,6 @@ pub mod common;
 pub mod display;
 pub mod empty;
 pub mod explain;
-pub mod file_format;
 pub mod filter;
 pub mod insert;
 pub mod joins;
