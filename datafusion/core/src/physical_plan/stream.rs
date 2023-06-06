@@ -192,8 +192,9 @@ impl RecordBatchReceiverStreamBuilder {
             // unwrap Option / only return the error
             .filter_map(|item| async move { item });
 
-        // Merge the streams together (but futures::stream:StreamExt
-        // is already in scope, so call it explicitly)
+        // Merge the streams together so whichever is ready first
+        // produces the batch (since futures::stream:StreamExt is
+        // already in scope, need to call it explicitly)
         let inner =
             tokio_stream::StreamExt::merge(ReceiverStream::new(rx), check_stream).boxed();
 
@@ -290,7 +291,7 @@ where
 }
 
 /// Stream wrapper that records `BaselineMetrics` for a particular
-/// partition
+/// `[SendableRecordBatchStream]` (likely a partition)
 pub(crate) struct ObservedStream {
     inner: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
@@ -357,7 +358,7 @@ mod test {
     async fn record_batch_receiver_stream_propagates_panics_early_shutdown() {
         let schema = schema();
 
-        // make 2 partitions, second panics before the first
+        // make 2 partitions, second partition panics before the first
         let num_partitions = 2;
         let input = PanicExec::new(schema.clone(), num_partitions)
             .with_partition_panic(0, 10)
@@ -378,17 +379,16 @@ mod test {
         let task_ctx = session_ctx.task_ctx();
         let schema = schema();
 
-        // Make an input that will not proceed
+        // Make an input that never proceeds
         let input = BlockingExec::new(schema.clone(), 1);
         let refs = input.refs();
 
         // Configure a RecordBatchReceiverStream to consume the input
         let mut builder = RecordBatchReceiverStream::builder(schema, 2);
         builder.run_input(Arc::new(input), 0, task_ctx.clone());
-
         let stream = builder.build();
 
-        // input stream should be present
+        // input should still be present
         assert!(std::sync::Weak::strong_count(&refs) > 0);
 
         // drop the stream, ensure the refs go to zero
@@ -405,7 +405,7 @@ mod test {
         let task_ctx = session_ctx.task_ctx();
         let schema = schema();
 
-        // make an input that will error
+        // make an input that will error twice
         let error_stream = MockExec::new(
             vec![
                 Err(DataFusionError::Execution("Test1".to_string())),
