@@ -20,9 +20,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use datafusion_common::display::StringifiedPlan;
+
 use crate::{
     error::{DataFusionError, Result},
-    logical_expr::StringifiedPlan,
     physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics},
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
