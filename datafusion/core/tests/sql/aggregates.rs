@@ -363,10 +363,9 @@ async fn case_sensitive_identifiers_aggregates() {
     let err = plan_and_collect(&ctx, "SELECT \"MAX\"(i) FROM t")
         .await
         .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Error during planning: Invalid function 'MAX'"
-    );
+    assert!(err
+        .to_string()
+        .contains("Error during planning: Invalid function 'MAX'"));
 
     let results = plan_and_collect(&ctx, "SELECT \"max\"(i) FROM t")
         .await
