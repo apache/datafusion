@@ -36,9 +36,9 @@ use std::task::{Context, Poll};
 use std::{fmt, mem};
 
 use crate::arrow::datatypes::SchemaRef;
+use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::file_format::{FileScanConfig, FileSinkConfig};
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use arrow_array::RecordBatch;

@@ -20,9 +20,9 @@
 //! Works with files following the [Arrow IPC format](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format)
 
 use crate::datasource::file_format::FileFormat;
+use crate::datasource::physical_plan::{ArrowExec, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::physical_plan::file_format::{ArrowExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use arrow::ipc::reader::FileReader;
 use arrow_schema::{Schema, SchemaRef};
