@@ -47,6 +47,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len() as usize,
+        e_tag: None,
     };
 
     let schema = ParquetFormat::default()

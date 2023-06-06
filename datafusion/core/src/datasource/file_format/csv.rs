@@ -458,6 +458,7 @@ mod tests {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
             size: usize::MAX,
+            e_tag: None,
         };
 
         let num_rows_to_read = 100;

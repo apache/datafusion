@@ -1400,6 +1400,7 @@ mod tests {
                 .unwrap()
                 .into(),
             size: 1024,
+            e_tag: None,
         };
 
         let cache = StatisticsCache::default();
