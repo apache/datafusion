@@ -538,11 +538,10 @@ impl DataSink for CsvSink {
         let mut writers = vec![];
         for file_group in &self.config.file_groups {
             // In append mode, consider has_header flag only when file is empty (at the start).
-            let header = if matches!(&self.config.writer_mode, FileWriterMode::Append) {
-                self.has_header && file_group.object_meta.size == 0
-            } else {
-                self.has_header
-            };
+            // For other modes, use has_header flag as is.
+            let header = self.has_header
+                && (!matches!(&self.config.writer_mode, FileWriterMode::Append)
+                    || file_group.object_meta.size == 0);
             let builder = WriterBuilder::new().with_delimiter(self.delimiter);
             let serializer = CsvSerializer::new()
                 .with_builder(builder)
@@ -724,6 +723,7 @@ mod tests {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
             size: usize::MAX,
+            e_tag: None,
         };
 
         let num_rows_to_read = 100;

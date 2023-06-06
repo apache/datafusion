@@ -46,6 +46,7 @@ mod custom_reader;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
+mod schema_coercion;
 
 #[cfg(test)]
 #[ctor::ctor]

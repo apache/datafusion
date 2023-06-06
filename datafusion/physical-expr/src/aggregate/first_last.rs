@@ -84,9 +84,14 @@ impl AggregateExpr for FirstValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        let name = if self.name.starts_with("FIRST") {
+            format!("LAST{}", &self.name[5..])
+        } else {
+            format!("LAST_VALUE({})", self.expr)
+        };
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
-            self.name.clone(),
+            name,
             self.data_type.clone(),
         )))
     }
@@ -214,9 +219,14 @@ impl AggregateExpr for LastValue {
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        let name = if self.name.starts_with("LAST") {
+            format!("FIRST{}", &self.name[4..])
+        } else {
+            format!("FIRST_VALUE({})", self.expr)
+        };
         Some(Arc::new(FirstValue::new(
             self.expr.clone(),
-            self.name.clone(),
+            name,
             self.data_type.clone(),
         )))
     }

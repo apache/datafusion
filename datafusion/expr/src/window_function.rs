@@ -28,6 +28,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
+use strum_macros::EnumIter;
 
 /// WindowFunction
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -73,7 +74,7 @@ impl fmt::Display for WindowFunction {
 }
 
 /// An aggregate function that is part of a built-in window function
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
     /// number of the current row within its partition, counting from 1
     RowNumber,
