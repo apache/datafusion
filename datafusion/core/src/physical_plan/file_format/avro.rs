@@ -165,12 +165,12 @@ impl ExecutionPlan for AvroExec {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
+    use crate::datasource::avro_to_arrow::Reader as AvroReader;
     use crate::physical_plan::file_format::file_stream::{FileOpenFuture, FileOpener};
     use crate::physical_plan::file_format::FileMeta;
     use bytes::Buf;
     use futures::StreamExt;
     use object_store::{GetResult, ObjectStore};
-    use crate::datasource::avro_to_arrow::Reader as AvroReader;
 
     pub struct AvroConfig {
         pub schema: SchemaRef,
@@ -180,10 +180,7 @@ mod private {
     }
 
     impl AvroConfig {
-        fn open<R: std::io::Read>(
-            &self,
-            reader: R,
-        ) -> Result<AvroReader<'static, R>> {
+        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
             AvroReader::try_new(
                 reader,
                 self.schema.clone(),
