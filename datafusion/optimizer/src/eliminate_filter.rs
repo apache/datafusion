@@ -27,7 +27,7 @@ use datafusion_expr::{
 
 use crate::{OptimizerConfig, OptimizerRule};
 
-/// Optimization rule that elimanate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
+/// Optimization rule that eliminate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
 pub struct EliminateFilter;
 

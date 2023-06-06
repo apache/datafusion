@@ -15,72 +15,95 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::error::Result;
-use std::{env, str::FromStr, sync::Arc};
-
-use datafusion::{datasource::object_store::ObjectStoreProvider, error::DataFusionError};
+use datafusion::{
+    error::{DataFusionError, Result},
+    logical_expr::CreateExternalTable,
+};
 use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder};
 use url::Url;
 
-#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
-pub enum ObjectStoreScheme {
-    S3,
-    GCS,
+pub fn get_s3_object_store_builder(
+    url: &Url,
+    cmd: &CreateExternalTable,
+) -> Result<AmazonS3Builder> {
+    let bucket_name = get_bucket_name(url)?;
+    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
+
+    if let (Some(access_key_id), Some(secret_access_key)) = (
+        cmd.options.get("access_key_id"),
+        cmd.options.get("secret_access_key"),
+    ) {
+        builder = builder
+            .with_access_key_id(access_key_id)
+            .with_secret_access_key(secret_access_key);
+    }
+
+    if let Some(session_token) = cmd.options.get("session_token") {
+        builder = builder.with_token(session_token);
+    }
+
+    if let Some(region) = cmd.options.get("region") {
+        builder = builder.with_region(region);
+    }
+
+    Ok(builder)
 }
 
-impl FromStr for ObjectStoreScheme {
-    type Err = DataFusionError;
+pub fn get_oss_object_store_builder(
+    url: &Url,
+    cmd: &CreateExternalTable,
+) -> Result<AmazonS3Builder> {
+    let bucket_name = get_bucket_name(url)?;
+    let mut builder = AmazonS3Builder::from_env()
+        .with_virtual_hosted_style_request(true)
+        .with_bucket_name(bucket_name)
+        // oss don't care about the "region" field
+        .with_region("do_not_care");
 
-    fn from_str(input: &str) -> Result<Self> {
-        match input {
-            "s3" => Ok(ObjectStoreScheme::S3),
-            "gs" | "gcs" => Ok(ObjectStoreScheme::GCS),
-            _ => Err(DataFusionError::Execution(format!(
-                "Unsupported object store scheme {}",
-                input
-            ))),
-        }
+    if let (Some(access_key_id), Some(secret_access_key)) = (
+        cmd.options.get("access_key_id"),
+        cmd.options.get("secret_access_key"),
+    ) {
+        builder = builder
+            .with_access_key_id(access_key_id)
+            .with_secret_access_key(secret_access_key);
     }
+
+    if let Some(endpoint) = cmd.options.get("endpoint") {
+        builder = builder.with_endpoint(endpoint);
+    }
+
+    Ok(builder)
 }
 
-#[derive(Debug)]
-pub struct DatafusionCliObjectStoreProvider {}
+pub fn get_gcs_object_store_builder(
+    url: &Url,
+    cmd: &CreateExternalTable,
+) -> Result<GoogleCloudStorageBuilder> {
+    let bucket_name = get_bucket_name(url)?;
+    let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
 
-/// ObjectStoreProvider for S3 and GCS
-impl ObjectStoreProvider for DatafusionCliObjectStoreProvider {
-    fn get_by_url(&self, url: &Url) -> Result<Arc<dyn object_store::ObjectStore>> {
-        ObjectStoreScheme::from_str(url.scheme()).map(|scheme| match scheme {
-            ObjectStoreScheme::S3 => build_s3_object_store(url),
-            ObjectStoreScheme::GCS => build_gcs_object_store(url),
-        })?
+    if let Some(service_account_path) = cmd.options.get("service_account_path") {
+        builder = builder.with_service_account_path(service_account_path);
     }
+
+    if let Some(service_account_key) = cmd.options.get("service_account_key") {
+        builder = builder.with_service_account_key(service_account_key);
+    }
+
+    if let Some(application_credentials_path) =
+        cmd.options.get("application_credentials_path")
+    {
+        builder = builder.with_application_credentials(application_credentials_path);
+    }
+
+    Ok(builder)
 }
 
-fn build_s3_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>> {
-    let host = get_host_name(url)?;
-    match AmazonS3Builder::from_env().with_bucket_name(host).build() {
-        Ok(s3) => Ok(Arc::new(s3)),
-        Err(err) => Err(DataFusionError::External(Box::new(err))),
-    }
-}
-
-fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>> {
-    let host = get_host_name(url)?;
-    let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(host);
-
-    if let Ok(path) = env::var("GCP_SERVICE_ACCOUNT_PATH") {
-        builder = builder.with_service_account_path(path);
-    }
-    match builder.build() {
-        Ok(gcs) => Ok(Arc::new(gcs)),
-        Err(err) => Err(DataFusionError::External(Box::new(err))),
-    }
-}
-
-fn get_host_name(url: &Url) -> Result<&str> {
+fn get_bucket_name(url: &Url) -> Result<&str> {
     url.host_str().ok_or_else(|| {
         DataFusionError::Execution(format!(
-            "Not able to parse hostname from url, {}",
+            "Not able to parse bucket name from url: {}",
             url.as_str()
         ))
     })
@@ -88,78 +111,35 @@ fn get_host_name(url: &Url) -> Result<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, str::FromStr};
+    use datafusion::{
+        datasource::listing::ListingTableUrl,
+        logical_expr::{DdlStatement, LogicalPlan},
+        prelude::SessionContext,
+    };
 
-    use datafusion::datasource::object_store::ObjectStoreProvider;
-    use url::Url;
+    use super::*;
 
-    use super::DatafusionCliObjectStoreProvider;
+    #[ignore] // https://github.com/apache/arrow-rs/issues/4021
+    #[tokio::test]
+    async fn oss_object_store_builder() -> Result<()> {
+        let access_key_id = "access_key_id";
+        let secret_access_key = "secret_access_key";
+        let region = "us-east-2";
+        let location = "s3://bucket/path/file.parquet";
+        let table_url = ListingTableUrl::parse(location)?;
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'region' '{region}') LOCATION '{location}'");
 
-    #[test]
-    fn s3_provider_no_host() {
-        let no_host_url = "s3:///";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
-            .get_by_url(&Url::from_str(no_host_url).unwrap())
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Not able to parse hostname from url"))
-    }
+        let ctx = SessionContext::new();
+        let plan = ctx.state().create_logical_plan(&sql).await?;
 
-    #[test]
-    fn gs_provider_no_host() {
-        let no_host_url = "gs:///";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
-            .get_by_url(&Url::from_str(no_host_url).unwrap())
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Not able to parse hostname from url"))
-    }
+        match &plan {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+                let _builder = get_oss_object_store_builder(table_url.as_ref(), cmd)?;
+                // get the actual configuration information, then assert_eq!
+            }
+            _ => assert!(false),
+        }
 
-    #[test]
-    fn gcs_provider_no_host() {
-        let no_host_url = "gcs:///";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
-            .get_by_url(&Url::from_str(no_host_url).unwrap())
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Not able to parse hostname from url"))
-    }
-
-    #[test]
-    fn unknown_object_store_type() {
-        let unknown = "unknown://bucket_name/path";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
-            .get_by_url(&Url::from_str(unknown).unwrap())
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Unsupported object store scheme unknown"))
-    }
-
-    #[test]
-    fn s3_region_validation() {
-        let s3 = "s3://bucket_name/path";
-        let provider = DatafusionCliObjectStoreProvider {};
-        let err = provider
-            .get_by_url(&Url::from_str(s3).unwrap())
-            .unwrap_err();
-        assert!(err.to_string().contains("Generic S3 error: Missing region"));
-
-        env::set_var("AWS_REGION", "us-east-1");
-        let url = Url::from_str(s3).expect("Unable to parse s3 url");
-        let res = provider.get_by_url(&url);
-        let msg = match res {
-            Err(e) => format!("{}", e),
-            Ok(_) => "".to_string(),
-        };
-        assert_eq!("".to_string(), msg); // Fail with error message
-        env::remove_var("AWS_REGION");
+        Ok(())
     }
 }

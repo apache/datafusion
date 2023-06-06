@@ -68,17 +68,15 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
 
         if let WindowFrameBound::Following(val) = &start_bound {
             if val.is_null() {
-                return Err(DataFusionError::Execution(
-                    "Invalid window frame: start bound cannot be unbounded following"
-                        .to_owned(),
-                ));
+                plan_error(
+                    "Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING",
+                )?
             }
         } else if let WindowFrameBound::Preceding(val) = &end_bound {
             if val.is_null() {
-                return Err(DataFusionError::Execution(
-                    "Invalid window frame: end bound cannot be unbounded preceding"
-                        .to_owned(),
-                ));
+                plan_error(
+                    "Invalid window frame: end bound cannot be UNBOUNDED PRECEDING",
+                )?
             }
         };
         Ok(Self {
@@ -142,6 +140,33 @@ impl WindowFrame {
             end_bound,
         }
     }
+}
+
+/// Construct equivalent explicit window frames for implicit corner cases.
+/// With this processing, we may assume in downstream code that RANGE/GROUPS
+/// frames contain an appropriate ORDER BY clause.
+pub fn regularize(mut frame: WindowFrame, order_bys: usize) -> Result<WindowFrame> {
+    if frame.units == WindowFrameUnits::Range && order_bys != 1 {
+        // Normally, RANGE frames require an ORDER BY clause with exactly one
+        // column. However, an ORDER BY clause may be absent in two edge cases.
+        if (frame.start_bound.is_unbounded()
+            || frame.start_bound == WindowFrameBound::CurrentRow)
+            && (frame.end_bound == WindowFrameBound::CurrentRow
+                || frame.end_bound.is_unbounded())
+        {
+            if order_bys == 0 {
+                frame.units = WindowFrameUnits::Rows;
+                frame.start_bound =
+                    WindowFrameBound::Preceding(ScalarValue::UInt64(None));
+                frame.end_bound = WindowFrameBound::Following(ScalarValue::UInt64(None));
+            }
+        } else {
+            plan_error("RANGE requires exactly one ORDER BY column")?
+        }
+    } else if frame.units == WindowFrameUnits::Groups && order_bys == 0 {
+        plan_error("GROUPS requires an ORDER BY clause")?
+    };
+    Ok(frame)
 }
 
 /// There are five ways to describe starting and ending frame boundaries:
@@ -208,16 +233,17 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
     Ok(ScalarValue::Utf8(Some(match v {
         ast::Expr::Value(ast::Value::Number(value, false))
         | ast::Expr::Value(ast::Value::SingleQuotedString(value)) => value,
-        ast::Expr::Interval {
+        ast::Expr::Interval(ast::Interval {
             value,
             leading_field,
             ..
-        } => {
+        }) => {
             let result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
-                    let msg = format!("INTERVAL expression cannot be {e:?}");
-                    return Err(DataFusionError::SQL(ParserError(msg)));
+                    return Err(DataFusionError::SQL(ParserError(format!(
+                        "INTERVAL expression cannot be {e:?}"
+                    ))));
                 }
             };
             if let Some(leading_field) = leading_field {
@@ -226,11 +252,14 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
                 result
             }
         }
-        e => {
-            let msg = format!("Window frame bound cannot be {e:?}");
-            return Err(DataFusionError::Internal(msg));
-        }
+        _ => plan_error(
+            "Invalid window frame: frame offsets must be non negative integers",
+        )?,
     })))
+}
+
+fn plan_error<T>(err_message: &str) -> Result<T> {
+    Err(DataFusionError::Plan(err_message.to_string()))
 }
 
 impl fmt::Display for WindowFrameBound {
@@ -308,7 +337,7 @@ mod tests {
         let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Execution error: Invalid window frame: start bound cannot be unbounded following".to_owned()
+            "Error during planning: Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING".to_owned()
         );
 
         let window_frame = ast::WindowFrame {
@@ -319,7 +348,7 @@ mod tests {
         let err = WindowFrame::try_from(window_frame).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Execution error: Invalid window frame: end bound cannot be unbounded preceding".to_owned()
+            "Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING".to_owned()
         );
 
         let window_frame = ast::WindowFrame {

@@ -87,9 +87,6 @@ impl ScalarUDF {
     /// creates a logical expression with a call of the UDF
     /// This utility allows using the UDF without requiring access to the registry.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::ScalarUDF {
-            fun: Arc::new(self.clone()),
-            args,
-        }
+        Expr::ScalarUDF(crate::expr::ScalarUDF::new(Arc::new(self.clone()), args))
     }
 }

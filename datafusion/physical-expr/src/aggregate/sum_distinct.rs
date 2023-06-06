@@ -25,6 +25,7 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -67,9 +68,9 @@ impl AggregateExpr for DistinctSum {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         // State field is a List which stores items to rebuild hash set.
-        Ok(vec![Field::new(
+        Ok(vec![Field::new_list(
             format_state_name(&self.name, "sum distinct"),
-            DataType::List(Box::new(Field::new("item", self.data_type.clone(), true))),
+            Field::new("item", self.data_type.clone(), true),
             false,
         )])
     }
@@ -87,6 +88,24 @@ impl AggregateExpr for DistinctSum {
     }
 }
 
+impl PartialEq<dyn Any> for DistinctSum {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.exprs.len() == x.exprs.len()
+                    && self
+                        .exprs
+                        .iter()
+                        .zip(x.exprs.iter())
+                        .all(|(this, other)| this.eq(other))
+            })
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Debug)]
 struct DistinctSumAccumulator {
     hash_values: HashSet<ScalarValue, RandomState>,
@@ -97,30 +116,6 @@ impl DistinctSumAccumulator {
         Ok(Self {
             hash_values: HashSet::default(),
             data_type: data_type.clone(),
-        })
-    }
-
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        values.iter().for_each(|v| {
-            // If the value is NULL, it is not included in the final sum.
-            if !v.is_null() {
-                self.hash_values.insert(v.clone());
-            }
-        });
-
-        Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        states.iter().try_for_each(|state| match state {
-            ScalarValue::List(Some(values), _) => self.update(values.as_ref()),
-            _ => Err(DataFusionError::Internal(format!(
-                "Unexpected accumulator state {state:?}"
-            ))),
         })
     }
 }
@@ -147,10 +142,14 @@ impl Accumulator for DistinctSumAccumulator {
             return Ok(());
         }
 
-        let scalar_values = (0..values[0].len())
-            .map(|index| ScalarValue::try_from_array(&values[0], index))
-            .collect::<Result<Vec<_>>>()?;
-        self.update(&scalar_values)
+        let arr = &values[0];
+        (0..values[0].len()).try_for_each(|index| {
+            if !arr.is_null(index) {
+                let v = ScalarValue::try_from_array(arr, index)?;
+                self.hash_values.insert(v);
+            }
+            Ok(())
+        })
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -158,12 +157,22 @@ impl Accumulator for DistinctSumAccumulator {
             return Ok(());
         }
 
-        (0..states[0].len()).try_for_each(|index| {
-            let v = states
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.merge(&v)
+        let arr = &states[0];
+        (0..arr.len()).try_for_each(|index| {
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+
+            if let ScalarValue::List(Some(scalar), _) = scalar {
+                scalar.iter().for_each(|scalar| {
+                    if !ScalarValue::is_null(scalar) {
+                        self.hash_values.insert(scalar.clone());
+                    }
+                });
+            } else {
+                return Err(DataFusionError::Internal(
+                    "Unexpected accumulator state".into(),
+                ));
+            }
+            Ok(())
         })
     }
 

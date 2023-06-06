@@ -19,7 +19,7 @@
 
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::{BuiltinWindowState, NumRowsState};
-use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
+use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
@@ -81,11 +81,10 @@ impl PartitionEvaluator for NumRowsEvaluator {
         Ok(BuiltinWindowState::NumRows(self.state.clone()))
     }
 
-    fn get_range(&self, state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
-        Ok(Range {
-            start: state.last_calculated_index,
-            end: state.last_calculated_index + 1,
-        })
+    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
+        let start = idx;
+        let end = idx + 1;
+        Ok(Range { start, end })
     }
 
     /// evaluate window function result inside given range
@@ -122,7 +121,7 @@ mod tests {
             .evaluate(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
         Ok(())
     }
 
@@ -140,7 +139,7 @@ mod tests {
             .evaluate(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
-        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
+        assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
         Ok(())
     }
 }

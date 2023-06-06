@@ -32,7 +32,7 @@ crates = {
     'datafusion-cli': 'datafusion-cli/Cargo.toml',
     'datafusion-common': 'datafusion/common/Cargo.toml',
     'datafusion-expr': 'datafusion/expr/Cargo.toml',
-    'datafusion-jit': 'datafusion/jit/Cargo.toml',
+    'datafusion-execution': 'datafusion/execution/Cargo.toml',
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',
@@ -43,17 +43,34 @@ crates = {
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
 }
 
+def update_workspace_version(new_version: str):
+    cargo_toml = 'Cargo.toml'
+    print(f'updating {cargo_toml}')
+    with open(cargo_toml) as f:
+        data = f.read()
+
+    doc = tomlkit.parse(data)
+    pkg = doc.get('workspace').get('package')
+
+    print('workspace pacakge', pkg)
+    pkg['version'] = new_version
+
+    with open(cargo_toml, 'w') as f:
+        f.write(tomlkit.dumps(doc))
+
+
 def update_datafusion_version(cargo_toml: str, new_version: str):
     print(f'updating {cargo_toml}')
     with open(cargo_toml) as f:
         data = f.read()
 
     doc = tomlkit.parse(data)
-    doc.get('package')['version'] = new_version
+    pkg = doc.get('package')
+    if 'workspace' not in pkg['version']:
+        pkg['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
-
 
 def update_downstream_versions(cargo_toml: str, new_version: str):
     with open(cargo_toml) as f:
@@ -97,6 +114,9 @@ def main():
 
     new_version = args.new_version
     repo_root = Path(__file__).parent.parent.absolute()
+
+    print(f'Updating workspace in {repo_root} to {new_version}')
+    update_workspace_version(new_version)
 
     print(f'Updating datafusion crate versions in {repo_root} to {new_version}')
     for cargo_toml in crates.values():

@@ -14,10 +14,11 @@
 
 //! Push Down Filter optimizer rule ensures that filters are applied as early as possible in the plan
 
+use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
-use datafusion_expr::expr_rewriter::rewrite_expr;
 use datafusion_expr::{
     and,
     expr_rewriter::replace_col,
@@ -26,10 +27,9 @@ use datafusion_expr::{
     utils::from_plan,
     BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
-use std::iter::once;
 use std::sync::Arc;
-use utils::optimize_children;
 
 /// Push Down Filter optimizer rule pushes filter clauses down the plan
 /// # Introduction
@@ -146,6 +146,57 @@ fn can_pushdown_join_predicate(predicate: &Expr, schema: &DFSchema) -> Result<bo
         .collect::<HashSet<_>>()
         .len()
         == columns.len())
+}
+
+// Determine whether the predicate can evaluate as the join conditions
+fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
+    let mut is_evaluate = true;
+    predicate.apply(&mut |expr| match expr {
+        Expr::Column(_)
+        | Expr::Literal(_)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _) => Ok(VisitRecursion::Skip),
+        Expr::Exists { .. }
+        | Expr::InSubquery(_)
+        | Expr::ScalarSubquery(_)
+        | Expr::OuterReferenceColumn(_, _)
+        | Expr::ScalarUDF(..) => {
+            is_evaluate = false;
+            Ok(VisitRecursion::Stop)
+        }
+        Expr::Alias(_, _)
+        | Expr::BinaryExpr(_)
+        | Expr::Like(_)
+        | Expr::ILike(_)
+        | Expr::SimilarTo(_)
+        | Expr::Not(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::IsTrue(_)
+        | Expr::IsFalse(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotTrue(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsNotUnknown(_)
+        | Expr::Negative(_)
+        | Expr::GetIndexedField(_)
+        | Expr::Between(_)
+        | Expr::Case(_)
+        | Expr::Cast(_)
+        | Expr::TryCast(_)
+        | Expr::ScalarFunction(..)
+        | Expr::InList { .. } => Ok(VisitRecursion::Continue),
+        Expr::Sort(_)
+        | Expr::AggregateFunction(_)
+        | Expr::WindowFunction(_)
+        | Expr::AggregateUDF { .. }
+        | Expr::Wildcard
+        | Expr::QualifiedWildcard { .. }
+        | Expr::GroupingSet(_) => Err(DataFusionError::Internal(
+            "Unsupported predicate type".to_string(),
+        )),
+    })?;
+    Ok(is_evaluate)
 }
 
 // examine OR clause to see if any useful clauses can be extracted and push down.
@@ -294,18 +345,25 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
 // push down join/cross-join
 fn push_down_all_join(
     predicates: Vec<Expr>,
-    plan: &LogicalPlan,
+    infer_predicates: Vec<Expr>,
+    join_plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
     on_filter: Vec<Expr>,
+    is_inner_join: bool,
 ) -> Result<LogicalPlan> {
     let on_filter_empty = on_filter.is_empty();
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(plan)?;
+    let (left_preserved, right_preserved) = lr_is_preserved(join_plan)?;
+
+    // The predicates can be divided to three categories:
+    // 1) can push through join to its children(left or right)
+    // 2) can be converted to join conditions if the join type is Inner
+    // 3) should be kept as filter conditions
     let mut left_push = vec![];
     let mut right_push = vec![];
-
     let mut keep_predicates = vec![];
+    let mut join_conditions = vec![];
     for predicate in predicates {
         if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
             left_push.push(predicate);
@@ -313,14 +371,28 @@ fn push_down_all_join(
             && can_pushdown_join_predicate(&predicate, right.schema())?
         {
             right_push.push(predicate);
+        } else if is_inner_join && can_evaluate_as_join_condition(&predicate)? {
+            // Here we do not differ it is eq or non-eq predicate, ExtractEquijoinPredicate will extract the eq predicate
+            // and convert to the join on condition
+            join_conditions.push(predicate);
         } else {
             keep_predicates.push(predicate);
         }
     }
 
-    let mut keep_condition = vec![];
+    // For infer predicates, if they can not push through join, just drop them
+    for predicate in infer_predicates {
+        if left_preserved && can_pushdown_join_predicate(&predicate, left.schema())? {
+            left_push.push(predicate);
+        } else if right_preserved
+            && can_pushdown_join_predicate(&predicate, right.schema())?
+        {
+            right_push.push(predicate);
+        }
+    }
+
     if !on_filter.is_empty() {
-        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(plan)?;
+        let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join_plan)?;
         for on in on_filter {
             if on_left_preserved && can_pushdown_join_predicate(&on, left.schema())? {
                 left_push.push(on)
@@ -329,7 +401,7 @@ fn push_down_all_join(
             {
                 right_push.push(on)
             } else {
-                keep_condition.push(on)
+                join_conditions.push(on)
             }
         }
     }
@@ -347,12 +419,12 @@ fn push_down_all_join(
         right_preserved,
     );
     let on_or_to_left = extract_or_clauses_for_join(
-        &keep_condition.iter().collect::<Vec<_>>(),
+        &join_conditions.iter().collect::<Vec<_>>(),
         left.schema(),
         left_preserved,
     );
     let on_or_to_right = extract_or_clauses_for_join(
-        &keep_condition.iter().collect::<Vec<_>>(),
+        &join_conditions.iter().collect::<Vec<_>>(),
         right.schema(),
         right_preserved,
     );
@@ -382,21 +454,16 @@ fn push_down_all_join(
     //      it always will be the last element, otherwise result
     //      vector will contain only join keys (without additional
     //      element representing filter).
-    let expr = plan.expressions();
-    let expr = if !on_filter_empty && keep_condition.is_empty() {
-        // New filter expression is None - should remove last element
+    let expr = join_plan.expressions();
+    let mut new_exprs = if !on_filter_empty {
         expr[..expr.len() - 1].to_vec()
-    } else if !keep_condition.is_empty() {
-        // Replace last element with new filter expression
-        expr[..expr.len() - 1]
-            .iter()
-            .cloned()
-            .chain(once(keep_condition.into_iter().reduce(Expr::and).unwrap()))
-            .collect()
     } else {
         expr
     };
-    let plan = from_plan(plan, &expr, &[left, right])?;
+    if !join_conditions.is_empty() {
+        new_exprs.push(join_conditions.into_iter().reduce(Expr::and).unwrap());
+    }
+    let plan = from_plan(join_plan, &new_exprs, &[left, right])?;
 
     if keep_predicates.is_empty() {
         Ok(plan)
@@ -417,7 +484,7 @@ fn push_down_join(
     join: &Join,
     parent_predicate: Option<&Expr>,
 ) -> Result<Option<LogicalPlan>> {
-    let mut predicates = match parent_predicate {
+    let predicates = match parent_predicate {
         Some(parent_predicate) => {
             utils::split_conjunction_owned(parent_predicate.clone())
         }
@@ -431,7 +498,10 @@ fn push_down_join(
         .map(|e| utils::split_conjunction_owned(e.clone()))
         .unwrap_or_else(Vec::new);
 
-    if join.join_type == JoinType::Inner {
+    let mut is_inner_join = false;
+    let infer_predicates = if join.join_type == JoinType::Inner {
+        is_inner_join = true;
+        // TODO refine the logic, introduce EquivalenceProperties to logical plan and infer additional filters to push down
         // For inner joins, duplicate filters for joined columns so filters can be pushed down
         // to both sides. Take the following query as an example:
         //
@@ -445,7 +515,7 @@ fn push_down_join(
         // Join clauses with `Using` constraints also take advantage of this logic to make sure
         // predicates reference the shared join columns are pushed to both sides.
         // This logic should also been applied to conditions in JOIN ON clause
-        let join_side_filters = predicates
+        predicates
             .iter()
             .chain(on_filters.iter())
             .filter_map(|predicate| {
@@ -491,18 +561,22 @@ fn push_down_join(
 
                 Some(Ok(join_side_predicate))
             })
-            .collect::<Result<Vec<_>>>()?;
-        predicates.extend(join_side_filters);
-    }
-    if on_filters.is_empty() && predicates.is_empty() {
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        vec![]
+    };
+
+    if on_filters.is_empty() && predicates.is_empty() && infer_predicates.is_empty() {
         return Ok(None);
     }
     Ok(Some(push_down_all_join(
         predicates,
+        infer_predicates,
         plan,
         &join.left,
         &join.right,
         on_filters,
+        is_inner_join,
     )?))
 }
 
@@ -511,25 +585,20 @@ impl OptimizerRule for PushDownFilter {
         "push_down_filter"
     }
 
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
             // we also need to pushdown filter in Join.
-            LogicalPlan::Join(join) => {
-                let optimized_plan = push_down_join(plan, join, None)?;
-                return match optimized_plan {
-                    Some(optimized_plan) => Ok(Some(
-                        optimize_children(self, &optimized_plan, config)?
-                            .unwrap_or(optimized_plan),
-                    )),
-                    None => optimize_children(self, plan, config),
-                };
-            }
-            _ => return optimize_children(self, plan, config),
+            LogicalPlan::Join(join) => return push_down_join(plan, join, None),
+            _ => return Ok(None),
         };
 
         let child_plan = filter.input.as_ref();
@@ -550,20 +619,19 @@ impl OptimizerRule for PushDownFilter {
                 let new_predicate = conjunction(new_predicates).ok_or_else(|| {
                     DataFusionError::Plan("at least one expression exists".to_string())
                 })?;
-                let new_plan = LogicalPlan::Filter(Filter::try_new(
+                let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),
                 )?);
-                return self.try_optimize(&new_plan, config);
+                self.try_optimize(&new_filter, _config)?
+                    .unwrap_or(new_filter)
             }
             LogicalPlan::Repartition(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Sort(_) => {
                 // commutable
                 let new_filter =
-                    plan.with_new_inputs(&[
-                        (**(child_plan.inputs().get(0).unwrap())).clone()
-                    ])?;
+                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
                 child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
@@ -693,38 +761,43 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Join(join) => {
                 match push_down_join(&filter.input, join, Some(&filter.predicate))? {
                     Some(optimized_plan) => optimized_plan,
-                    None => plan.clone(),
+                    None => return Ok(None),
                 }
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let predicates = utils::split_conjunction_owned(filter.predicate.clone());
-                push_down_all_join(predicates, &filter.input, left, right, vec![])?
+                push_down_all_join(
+                    predicates,
+                    vec![],
+                    &filter.input,
+                    left,
+                    right,
+                    vec![],
+                    false,
+                )?
             }
             LogicalPlan::TableScan(scan) => {
-                let mut new_scan_filters = scan.filters.clone();
-                let mut new_predicate = vec![];
+                let filter_predicates = split_conjunction(&filter.predicate);
+                let results = scan
+                    .source
+                    .supports_filters_pushdown(filter_predicates.as_slice())?;
+                let zip = filter_predicates.iter().zip(results.into_iter());
 
-                let filter_predicates =
-                    utils::split_conjunction_owned(filter.predicate.clone());
-
-                for filter_expr in &filter_predicates {
-                    let (preserve_filter_node, add_to_provider) =
-                        match scan.source.supports_filter_pushdown(filter_expr)? {
-                            TableProviderFilterPushDown::Unsupported => (true, false),
-                            TableProviderFilterPushDown::Inexact => (true, true),
-                            TableProviderFilterPushDown::Exact => (false, true),
-                        };
-                    if preserve_filter_node {
-                        new_predicate.push(filter_expr.clone());
-                    }
-                    if add_to_provider {
-                        // avoid reduplicated filter expr.
-                        if new_scan_filters.contains(filter_expr) {
-                            continue;
-                        }
-                        new_scan_filters.push(filter_expr.clone());
-                    }
-                }
+                let new_scan_filters = zip
+                    .clone()
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
+                    .map(|(pred, _)| *pred);
+                let new_scan_filters: Vec<Expr> = scan
+                    .filters
+                    .iter()
+                    .chain(new_scan_filters)
+                    .unique()
+                    .cloned()
+                    .collect();
+                let new_predicate: Vec<Expr> = zip
+                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
+                    .map(|(pred, _)| (*pred).clone())
+                    .collect();
 
                 let new_scan = LogicalPlan::TableScan(TableScan {
                     source: scan.source.clone(),
@@ -743,12 +816,51 @@ impl OptimizerRule for PushDownFilter {
                     None => new_scan,
                 }
             }
-            _ => plan.clone(),
-        };
+            LogicalPlan::Extension(extension_plan) => {
+                let prevent_cols =
+                    extension_plan.node.prevent_predicate_push_down_columns();
 
-        Ok(Some(
-            optimize_children(self, &new_plan, config)?.unwrap_or(new_plan),
-        ))
+                let predicates = utils::split_conjunction_owned(filter.predicate.clone());
+
+                let mut keep_predicates = vec![];
+                let mut push_predicates = vec![];
+                for expr in predicates {
+                    let cols = expr.to_columns()?;
+                    if cols.iter().any(|c| prevent_cols.contains(&c.name)) {
+                        keep_predicates.push(expr);
+                    } else {
+                        push_predicates.push(expr);
+                    }
+                }
+
+                let new_children = match conjunction(push_predicates) {
+                    Some(predicate) => extension_plan
+                        .node
+                        .inputs()
+                        .into_iter()
+                        .map(|child| {
+                            Ok(LogicalPlan::Filter(Filter::try_new(
+                                predicate.clone(),
+                                Arc::new(child.clone()),
+                            )?))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    None => extension_plan.node.inputs().into_iter().cloned().collect(),
+                };
+                // extension with new inputs.
+                let new_extension = child_plan.with_new_inputs(&new_children)?;
+
+                match conjunction(keep_predicates) {
+                    Some(predicate) => LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        Arc::new(new_extension),
+                    )?),
+                    None => new_extension,
+                }
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(new_plan))
     }
 }
 
@@ -764,57 +876,67 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, Expr>,
 ) -> Result<Expr> {
-    rewrite_expr(e, |expr| {
-        if let Expr::Column(c) = &expr {
+    e.transform_up(&|expr| {
+        Ok(if let Expr::Column(c) = &expr {
             match replace_map.get(&c.flat_name()) {
-                Some(new_c) => Ok(new_c.clone()),
-                None => Ok(expr),
+                Some(new_c) => Transformed::Yes(new_c.clone()),
+                None => Transformed::No(expr),
             }
         } else {
-            Ok(expr)
-        }
+            Transformed::No(expr)
+        })
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::optimizer::Optimizer;
     use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
-    use datafusion_common::DFSchema;
+    use datafusion_common::{DFSchema, DFSchemaRef};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
-        Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
+        Expr, Extension, LogicalPlanBuilder, Operator, TableSource, TableType,
+        UserDefinedLogicalNodeCore,
     };
+    use std::fmt::{Debug, Formatter};
     use std::sync::Arc;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimized_plan = PushDownFilter::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{optimized_plan:?}");
-        assert_eq!(plan.schema(), optimized_plan.schema());
-        assert_eq!(expected, formatted_plan);
-        Ok(())
+        crate::test::assert_optimized_plan_eq(
+            Arc::new(PushDownFilter::new()),
+            plan,
+            expected,
+        )
     }
 
     fn assert_optimized_plan_eq_with_rewrite_predicate(
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        let mut optimized_plan = RewriteDisjunctivePredicate::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        optimized_plan = PushDownFilter::new()
-            .try_optimize(&optimized_plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(PushDownFilter::new()),
+        ]);
+        let mut optimized_plan = optimizer
+            .optimize_recursively(
+                optimizer.rules.get(0).unwrap(),
+                plan,
+                &OptimizerContext::new(),
+            )?
+            .unwrap_or_else(|| plan.clone());
+        optimized_plan = optimizer
+            .optimize_recursively(
+                optimizer.rules.get(1).unwrap(),
+                &optimized_plan,
+                &OptimizerContext::new(),
+            )?
+            .unwrap_or_else(|| plan.clone());
         let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(plan.schema(), optimized_plan.schema());
         assert_eq!(expected, formatted_plan);
@@ -1029,6 +1151,127 @@ mod tests {
         \n  Projection: test.a * Int32(2) + test.c AS b, test.c\
         \n    Filter: (test.a * Int32(2) + test.c) * Int32(3) = Int64(1)\
         \n      TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct NoopPlan {
+        input: Vec<LogicalPlan>,
+        schema: DFSchemaRef,
+    }
+
+    impl UserDefinedLogicalNodeCore for NoopPlan {
+        fn name(&self) -> &str {
+            "NoopPlan"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            self.input.iter().collect()
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            self.input
+                .iter()
+                .flat_map(|child| child.expressions())
+                .collect()
+        }
+
+        fn prevent_predicate_push_down_columns(&self) -> HashSet<String> {
+            HashSet::from_iter(vec!["c".to_string()])
+        }
+
+        fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "NoopPlan")
+        }
+
+        fn from_template(&self, _exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
+            Self {
+                input: inputs.to_vec(),
+                schema: self.schema.clone(),
+            }
+        }
+    }
+
+    #[test]
+    fn user_defined_plan() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: table_scan.schema().clone(),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+
+        // Push filter below NoopPlan
+        let expected = "\
+            NoopPlan\
+            \n  Filter: test.a = Int64(1)\
+            \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: table_scan.schema().clone(),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(col("a").eq(lit(1i64)).and(col("c").eq(lit(2i64))))?
+            .build()?;
+
+        // Push only predicate on `a` below NoopPlan
+        let expected = "\
+            Filter: test.c = Int64(2)\
+            \n  NoopPlan\
+            \n    Filter: test.a = Int64(1)\
+            \n      TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone(), table_scan.clone()],
+                schema: table_scan.schema().clone(),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+
+        // Push filter below NoopPlan for each child branch
+        let expected = "\
+            NoopPlan\
+            \n  Filter: test.a = Int64(1)\
+            \n    TableScan: test\
+            \n  Filter: test.a = Int64(1)\
+            \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone(), table_scan.clone()],
+                schema: table_scan.schema().clone(),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(col("a").eq(lit(1i64)).and(col("c").eq(lit(2i64))))?
+            .build()?;
+
+        // Push only predicate on `a` below NoopPlan
+        let expected = "\
+            Filter: test.c = Int64(2)\
+            \n  NoopPlan\
+            \n    Filter: test.a = Int64(1)\
+            \n      TableScan: test\
+            \n    Filter: test.a = Int64(1)\
+            \n      TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -1329,7 +1572,7 @@ mod tests {
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
             )?
-            .filter(col("a").lt_eq(lit(1i64)))?
+            .filter(col("test.a").lt_eq(lit(1i64)))?
             .build()?;
 
         // not part of the test, just good to know:
@@ -1392,7 +1635,7 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected)
     }
 
-    /// post-join predicates with columns from both sides are not pushed
+    /// post-join predicates with columns from both sides are converted to join filterss
     #[test]
     fn filter_join_on_common_dependent() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1410,7 +1653,6 @@ mod tests {
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
             )?
-            // "b" and "c" are not shared by either side: they are only available together after the join
             .filter(col("c").lt_eq(col("b")))?
             .build()?;
 
@@ -1425,8 +1667,13 @@ mod tests {
             \n      TableScan: test2"
         );
 
-        // expected is equal: no push-down
-        let expected = &format!("{plan:?}");
+        // Filter is converted to Join Filter
+        let expected = "\
+        Inner Join: test.a = test2.a Filter: test.c <= test2.b\
+        \n  Projection: test.a, test.c\
+        \n    TableScan: test\
+        \n  Projection: test2.a, test2.b\
+        \n    TableScan: test2";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -1904,7 +2151,7 @@ mod tests {
 
         fn supports_filter_pushdown(
             &self,
-            _: &Expr,
+            _e: &Expr,
         ) -> Result<TableProviderFilterPushDown> {
             Ok(self.filter_support.clone())
         }
@@ -1920,7 +2167,7 @@ mod tests {
         let test_provider = PushDownProvider { filter_support };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".to_string(),
+            table_name: "test".into(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
@@ -1992,7 +2239,7 @@ mod tests {
         };
 
         let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name: "test".to_string(),
+            table_name: "test".into(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
@@ -2010,6 +2257,37 @@ mod tests {
         let expected = "Projection: a, b\
             \n  Filter: a = Int64(10) AND b > Int64(11)\
             \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn multi_combined_filter_exact() -> Result<()> {
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Exact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".into(),
+            filters: vec![],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let expected = r#"
+Projection: a, b
+  TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+        "#
+        .trim();
 
         assert_optimized_plan_eq(&plan, expected)
     }

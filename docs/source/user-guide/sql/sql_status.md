@@ -128,8 +128,12 @@
 
 ## Data Sources
 
+In addition to allowing arbitrary datasources via the `TableProvider`
+trait, DataFusion includes built in support for the following formats:
+
 - [x] CSV
 - [x] Parquet primitive types
-- [ ] Parquet nested types
+- [x] Parquet nested types
 - [x] JSON
 - [x] Avro
+- [x] Arrow

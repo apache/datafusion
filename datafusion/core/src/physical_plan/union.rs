@@ -32,8 +32,7 @@ use arrow::{
 use datafusion_common::{DFSchemaRef, DataFusionError};
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use log::debug;
-use log::warn;
+use log::{debug, trace, warn};
 
 use super::{
     expressions::PhysicalSortExpr,
@@ -41,12 +40,12 @@ use super::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::get_meet_of_orderings;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
+use datafusion_execution::TaskContext;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -94,8 +93,6 @@ pub struct UnionExec {
     metrics: ExecutionPlanMetricsSet,
     /// Schema of Union
     schema: SchemaRef,
-    /// Partition aware Union
-    partition_aware: bool,
 }
 
 impl UnionExec {
@@ -133,45 +130,12 @@ impl UnionExec {
 
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
-        let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
-            .map(|i| {
-                inputs
-                    .iter()
-                    .filter_map(|input| {
-                        if input.schema().fields().len() > i {
-                            Some(input.schema().field(i).clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .find_or_first(|f| f.is_nullable())
-                    .unwrap()
-            })
-            .collect();
-
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields,
-            inputs[0].schema().metadata().clone(),
-        ));
-
-        // If all the input partitions have the same Hash partition spec with the first_input_partition
-        // The UnionExec is partition aware.
-        //
-        // It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
-        // For example one input partition has the partition spec Hash('a','b','c') and
-        // other has the partition spec Hash('a'), It is safe to derive the out partition with the spec Hash('a','b','c').
-        let first_input_partition = inputs[0].output_partitioning();
-        let partition_aware = matches!(first_input_partition, Partitioning::Hash(_, _))
-            && inputs
-                .iter()
-                .map(|plan| plan.output_partitioning())
-                .all(|partition| partition == first_input_partition);
+        let schema = union_schema(&inputs);
 
         UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
             schema,
-            partition_aware,
         }
     }
 
@@ -192,7 +156,7 @@ impl ExecutionPlan for UnionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
@@ -204,28 +168,20 @@ impl ExecutionPlan for UnionExec {
 
     /// Output of the union is the combination of all output partitions of the inputs
     fn output_partitioning(&self) -> Partitioning {
-        if self.partition_aware {
-            self.inputs[0].output_partitioning()
-        } else {
-            // Output the combination of all output partitions of the inputs if the Union is not partition aware
-            let num_partitions = self
-                .inputs
-                .iter()
-                .map(|plan| plan.output_partitioning().partition_count())
-                .sum();
+        // Output the combination of all output partitions of the inputs if the Union is not partition aware
+        let num_partitions = self
+            .inputs
+            .iter()
+            .map(|plan| plan.output_partitioning().partition_count())
+            .sum();
 
-            Partitioning::UnknownPartitioning(num_partitions)
-        }
+        Partitioning::UnknownPartitioning(num_partitions)
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // If the Union is partition aware, there is no output ordering.
-        // Otherwise, the output ordering is the "meet" of its input orderings.
+        // The output ordering is the "meet" of its input orderings.
         // The meet is the finest ordering that satisfied by all the input
         // orderings, see https://en.wikipedia.org/wiki/Join_and_meet.
-        if self.partition_aware {
-            return None;
-        }
         get_meet_of_orderings(&self.inputs)
     }
 
@@ -266,41 +222,22 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer(); // record on drop
 
-        if self.partition_aware {
-            let mut input_stream_vec = vec![];
-            for input in self.inputs.iter() {
-                if partition < input.output_partitioning().partition_count() {
-                    input_stream_vec.push(input.execute(partition, context.clone())?);
-                } else {
-                    // Do not find a partition to execute
-                    break;
-                }
-            }
-            if input_stream_vec.len() == self.inputs.len() {
-                let stream = Box::pin(CombinedRecordBatchStream::new(
-                    self.schema(),
-                    input_stream_vec,
-                ));
+        // find partition to execute
+        for input in self.inputs.iter() {
+            // Calculate whether partition belongs to the current partition
+            if partition < input.output_partitioning().partition_count() {
+                let stream = input.execute(partition, context)?;
+                debug!("Found a Union partition to execute");
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
-            }
-        } else {
-            // find partition to execute
-            for input in self.inputs.iter() {
-                // Calculate whether partition belongs to the current partition
-                if partition < input.output_partitioning().partition_count() {
-                    let stream = input.execute(partition, context)?;
-                    debug!("Found a Union partition to execute");
-                    return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
-                } else {
-                    partition -= input.output_partitioning().partition_count();
-                }
+            } else {
+                partition -= input.output_partitioning().partition_count();
             }
         }
 
@@ -340,8 +277,224 @@ impl ExecutionPlan for UnionExec {
     }
 }
 
+/// Combines multiple input streams by interleaving them.
+///
+/// This only works if all inputs have the same hash-partitioning.
+///
+/// # Data Flow
+/// ```text
+/// +---------+
+/// |         |---+
+/// | Input 1 |   |
+/// |         |-------------+
+/// +---------+   |         |
+///               |         |         +---------+
+///               +------------------>|         |
+///                 +---------------->| Combine |-->
+///                 | +-------------->|         |
+///                 | |     |         +---------+
+/// +---------+     | |     |
+/// |         |-----+ |     |
+/// | Input 2 |       |     |
+/// |         |---------------+
+/// +---------+       |     | |
+///                   |     | |       +---------+
+///                   |     +-------->|         |
+///                   |       +------>| Combine |-->
+///                   |         +---->|         |
+///                   |         |     +---------+
+/// +---------+       |         |
+/// |         |-------+         |
+/// | Input 3 |                 |
+/// |         |-----------------+
+/// +---------+
+/// ```
+#[derive(Debug)]
+pub struct InterleaveExec {
+    /// Input execution plan
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
+    /// Schema of Interleave
+    schema: SchemaRef,
+}
+
+impl InterleaveExec {
+    /// Create a new InterleaveExec
+    pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
+        let schema = union_schema(&inputs);
+
+        if !can_interleave(&inputs) {
+            return Err(DataFusionError::Internal(String::from(
+                "Not all InterleaveExec children have a consistent hash partitioning",
+            )));
+        }
+
+        Ok(InterleaveExec {
+            inputs,
+            metrics: ExecutionPlanMetricsSet::new(),
+            schema,
+        })
+    }
+
+    /// Get inputs of the execution plan
+    pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
+        &self.inputs
+    }
+}
+
+impl ExecutionPlan for InterleaveExec {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children.iter().any(|x| *x))
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        self.inputs.clone()
+    }
+
+    /// All inputs must have the same partitioning. The output partioning of InterleaveExec is the same as the inputs
+    /// (NOT combined). E.g. if there are 10 inputs where each is `Hash(3)`-partitioned, InterleaveExec is also
+    /// `Hash(3)`-partitioned.
+    fn output_partitioning(&self) -> Partitioning {
+        self.inputs[0].output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![false; self.inputs().len()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(InterleaveExec::try_new(children)?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        trace!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        // record the tiny amount of work done in this function so
+        // elapsed_compute is reported as non zero
+        let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer(); // record on drop
+
+        let mut input_stream_vec = vec![];
+        for input in self.inputs.iter() {
+            if partition < input.output_partitioning().partition_count() {
+                input_stream_vec.push(input.execute(partition, context.clone())?);
+            } else {
+                // Do not find a partition to execute
+                break;
+            }
+        }
+        if input_stream_vec.len() == self.inputs.len() {
+            let stream = Box::pin(CombinedRecordBatchStream::new(
+                self.schema(),
+                input_stream_vec,
+            ));
+            return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+        }
+
+        warn!("Error in InterleaveExec: Partition {} not found", partition);
+
+        Err(crate::error::DataFusionError::Execution(format!(
+            "Partition {partition} not found in InterleaveExec"
+        )))
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "InterleaveExec")
+            }
+        }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.inputs
+            .iter()
+            .map(|ep| ep.statistics())
+            .reduce(stats_union)
+            .unwrap_or_default()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+}
+
+/// If all the input partitions have the same Hash partition spec with the first_input_partition
+/// The InterleaveExec is partition aware.
+///
+/// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
+/// For example one input partition has the partition spec Hash('a','b','c') and
+/// other has the partition spec Hash('a'), It is safe to derive the out partition with the spec Hash('a','b','c').
+pub fn can_interleave(inputs: &[Arc<dyn ExecutionPlan>]) -> bool {
+    if inputs.is_empty() {
+        return false;
+    }
+
+    let first_input_partition = inputs[0].output_partitioning();
+    matches!(first_input_partition, Partitioning::Hash(_, _))
+        && inputs
+            .iter()
+            .map(|plan| plan.output_partitioning())
+            .all(|partition| partition == first_input_partition)
+}
+
+fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> SchemaRef {
+    let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
+        .map(|i| {
+            inputs
+                .iter()
+                .filter_map(|input| {
+                    if input.schema().fields().len() > i {
+                        Some(input.schema().field(i).clone())
+                    } else {
+                        None
+                    }
+                })
+                .find_or_first(|f| f.is_nullable())
+                .unwrap()
+        })
+        .collect();
+
+    Arc::new(Schema::new_with_metadata(
+        fields,
+        inputs[0].schema().metadata().clone(),
+    ))
+}
+
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
-pub struct CombinedRecordBatchStream {
+struct CombinedRecordBatchStream {
     /// Schema wrapped by Arc
     schema: SchemaRef,
     /// Stream entries

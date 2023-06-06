@@ -20,12 +20,14 @@
 //! determined by the [`JoinType`].
 
 use crate::physical_plan::joins::utils::{
-    adjust_indices_by_join_type, adjust_right_output_partitioning,
-    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
-    check_join_is_valid, combine_join_equivalence_properties, estimate_join_statistics,
-    get_final_indices_from_bit_map, need_produce_result_in_final, ColumnIndex,
-    JoinFilter, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, append_right_indices, apply_join_filter_to_indices,
+    build_batch_from_indices, build_join_schema, check_join_is_valid,
+    combine_join_equivalence_properties, estimate_join_statistics, get_anti_indices,
+    get_anti_u64_indices, get_final_indices_from_bit_map, get_semi_indices,
+    get_semi_u64_indices, BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinSide,
+    OnceAsync, OnceFut,
 };
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
@@ -35,24 +37,42 @@ use arrow::array::{
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow::util::bit_util;
 use datafusion_common::{DataFusionError, Statistics};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use log::debug;
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::Instant;
 
 use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::coalesce_batches::concat_batches;
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
 
-/// Data of the left side
-type JoinLeftData = RecordBatch;
+/// Data of the inner table side
+type JoinLeftData = (RecordBatch, MemoryReservation);
 
+/// NestedLoopJoinExec executes partitions in parallel.
+/// One input will be collected to a single partition, call it inner-table.
+/// The other side of the input is treated as outer-table, and the output Partitioning is from it.
+/// Giving an output partition number x, the execution will be:
+///
+/// ```text
+/// for outer-table-batch in outer-table-partition-x
+///     check-join(outer-table-batch, inner-table-data)
+/// ```
+///
+/// One of the inputs will become inner table, and it is decided by the join type.
+/// Following is the relation table:
+///
+/// | JoinType                       | Distribution (left, right)                 | Inner-table |
+/// |--------------------------------|--------------------------------------------|-------------|
+/// | Inner/Left/LeftSemi/LeftAnti   | (UnspecifiedDistribution, SinglePartition) | right       |
+/// | Right/RightSemi/RightAnti/Full | (SinglePartition, UnspecifiedDistribution) | left        |
 ///
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
@@ -67,9 +87,11 @@ pub struct NestedLoopJoinExec {
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
-    left_fut: OnceAsync<JoinLeftData>,
+    inner_table: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
+    /// Execution metrics
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl NestedLoopJoinExec {
@@ -91,23 +113,10 @@ impl NestedLoopJoinExec {
             filter,
             join_type: *join_type,
             schema: Arc::new(schema),
-            left_fut: Default::default(),
+            inner_table: Default::default(),
             column_indices,
+            metrics: Default::default(),
         })
-    }
-
-    fn is_single_partition_for_left(&self) -> bool {
-        matches!(
-            self.required_input_distribution()[0],
-            Distribution::SinglePartition
-        )
-    }
-
-    fn is_single_partition_for_right(&self) -> bool {
-        matches!(
-            self.required_input_distribution()[1],
-            Distribution::SinglePartition
-        )
     }
 }
 
@@ -186,40 +195,57 @@ impl ExecutionPlan for NestedLoopJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // left side
-        let left_fut = if self.is_single_partition_for_left() {
-            // if the distribution of left is `SinglePartition`, just need to collect the left one
-            self.left_fut.once(|| {
-                // just one partition for the left side, and the first partition is all of data for left
-                load_left_specified_partition(0, self.left.clone(), context.clone())
-            })
+        let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+
+        // Initialization reservation for load of inner table
+        let load_reservation =
+            MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
+                .register(context.memory_pool());
+
+        // Initialization of stream-level reservation
+        let reservation =
+            MemoryConsumer::new(format!("NestedLoopJoinStream[{partition}]"))
+                .register(context.memory_pool());
+
+        let (outer_table, inner_table) = if left_is_build_side(self.join_type) {
+            // left must be single partition
+            let inner_table = self.inner_table.once(|| {
+                load_specified_partition_of_input(
+                    0,
+                    self.left.clone(),
+                    context.clone(),
+                    join_metrics.clone(),
+                    load_reservation,
+                )
+            });
+            let outer_table = self.right.execute(partition, context)?;
+            (outer_table, inner_table)
         } else {
-            // the distribution of left is not single partition, just need the specified partition for left
-            OnceFut::new(load_left_specified_partition(
-                partition,
-                self.left.clone(),
-                context.clone(),
-            ))
-        };
-        // right side
-        let right_side = if self.is_single_partition_for_right() {
-            // the distribution of right is `SinglePartition`
-            // if the distribution of right is `SinglePartition`, just need to collect the right one
-            self.right.execute(0, context)?
-        } else {
-            // the distribution of right is not single partition, just need the specified partition for right
-            self.right.execute(partition, context)?
+            // right must be single partition
+            let inner_table = self.inner_table.once(|| {
+                load_specified_partition_of_input(
+                    0,
+                    self.right.clone(),
+                    context.clone(),
+                    join_metrics.clone(),
+                    load_reservation,
+                )
+            });
+            let outer_table = self.left.execute(partition, context)?;
+            (outer_table, inner_table)
         };
 
         Ok(Box::pin(NestedLoopJoinStream {
             schema: self.schema.clone(),
             filter: self.filter.clone(),
             join_type: self.join_type,
-            left_fut,
-            right: right_side,
+            outer_table,
+            inner_table,
             is_exhausted: false,
             visited_left_side: None,
             column_indices: self.column_indices.clone(),
+            join_metrics,
+            reservation,
         }))
     }
 
@@ -237,6 +263,10 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 )
             }
         }
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Statistics {
@@ -274,36 +304,50 @@ fn distribution_from_join_type(join_type: &JoinType) -> Vec<Distribution> {
     }
 }
 
-/// Asynchronously collect the result of the left child for the specified partition
-async fn load_left_specified_partition(
+/// Asynchronously collect the specified partition data of the input
+async fn load_specified_partition_of_input(
     partition: usize,
-    left: Arc<dyn ExecutionPlan>,
+    input: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
+    join_metrics: BuildProbeJoinMetrics,
+    reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
-    let start = Instant::now();
-    let stream = left.execute(partition, context)?;
+    let stream = input.execute(partition, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows) = stream
-        .try_fold((Vec::new(), 0usize), |mut acc, batch| async {
-            acc.1 += batch.num_rows();
-            acc.0.push(batch);
-            Ok(acc)
-        })
+    let (batches, num_rows, _, reservation) = stream
+        .try_fold(
+            (Vec::new(), 0usize, join_metrics, reservation),
+            |mut acc, batch| async {
+                let batch_size = batch.get_array_memory_size();
+                // Reserve memory for incoming batch
+                acc.3.try_grow(batch_size)?;
+                // Update metrics
+                acc.2.build_mem_used.add(batch_size);
+                acc.2.build_input_batches.add(1);
+                acc.2.build_input_rows.add(batch.num_rows());
+                // Update rowcount
+                acc.1 += batch.num_rows();
+                // Push batch to output
+                acc.0.push(batch);
+                Ok(acc)
+            },
+        )
         .await?;
 
-    let merged_batch = concat_batches(&left.schema(), &batches, num_rows)?;
+    let merged_batch = concat_batches(&input.schema(), &batches, num_rows)?;
 
-    debug!(
-        "Built left-side of nested loop join containing {} rows in {} ms for partition {}",
-        num_rows,
-        start.elapsed().as_millis(),
-        partition
-    );
-
-    Ok(merged_batch)
+    Ok((merged_batch, reservation))
 }
 
+// BuildLeft means the left relation is the single patrition side.
+// For full join, both side are single partition, so it is BuildLeft and BuildRight, treat it as BuildLeft.
+pub fn left_is_build_side(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full
+    )
+}
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
 struct NestedLoopJoinStream {
     /// Input schema
@@ -312,11 +356,11 @@ struct NestedLoopJoinStream {
     filter: Option<JoinFilter>,
     /// type of the join
     join_type: JoinType,
-    /// future for data from left side
-    left_fut: OnceFut<JoinLeftData>,
-    /// right
-    right: SendableRecordBatchStream,
-    /// There is nothing to process anymore and left side is processed in case of left/left semi/left anti/full join
+    /// the outer table data of the nested loop join
+    outer_table: SendableRecordBatchStream,
+    /// the inner table data of the nested loop join
+    inner_table: OnceFut<JoinLeftData>,
+    /// There is nothing to process anymore and left side is processed in case of full join
     is_exhausted: bool,
     /// Keeps track of the left side rows whether they are visited
     visited_left_side: Option<BooleanBufferBuilder>,
@@ -324,27 +368,33 @@ struct NestedLoopJoinStream {
     column_indices: Vec<ColumnIndex>,
     // TODO: support null aware equal
     // null_equals_null: bool
+    /// Join execution metrics
+    join_metrics: BuildProbeJoinMetrics,
+    /// Memory reservation for visited_left_side
+    reservation: MemoryReservation,
 }
 
 fn build_join_indices(
-    left_index: usize,
-    batch: &RecordBatch,
-    left_data: &JoinLeftData,
+    left_row_index: usize,
+    right_batch: &RecordBatch,
+    left_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let right_row_count = batch.num_rows();
     // left indices: [left_index, left_index, ...., left_index]
     // right indices: [0, 1, 2, 3, 4,....,right_row_count]
-    let left_indices = UInt64Array::from(vec![left_index as u64; right_row_count]);
+
+    let right_row_count = right_batch.num_rows();
+    let left_indices = UInt64Array::from(vec![left_row_index as u64; right_row_count]);
     let right_indices = UInt32Array::from_iter_values(0..(right_row_count as u32));
     // in the nested loop join, the filter can contain non-equal and equal condition.
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
-            left_data,
-            batch,
+            left_batch,
+            right_batch,
             left_indices,
             right_indices,
             filter,
+            JoinSide::Left,
         )
     } else {
         Ok((left_indices, right_indices))
@@ -352,24 +402,32 @@ fn build_join_indices(
 }
 
 impl NestedLoopJoinStream {
-    fn poll_next_impl(
+    /// For Right/RightSemi/RightAnti/Full joins, left is the single partition side.
+    fn poll_next_impl_for_build_left(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Result<RecordBatch>>> {
         // all left row
-        let left_data = match ready!(self.left_fut.get(cx)) {
-            Ok(left_data) => left_data,
+        let build_timer = self.join_metrics.build_time.timer();
+        let (left_data, _) = match ready!(self.inner_table.get(cx)) {
+            Ok(data) => data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
+        build_timer.done();
 
+        if self.visited_left_side.is_none() && self.join_type == JoinType::Full {
+            // TODO: Replace `ceil` wrapper with stable `div_cell` after
+            // https://github.com/rust-lang/rust/issues/88581
+            let visited_bitmap_size = bit_util::ceil(left_data.num_rows(), 8);
+            self.reservation.try_grow(visited_bitmap_size)?;
+            self.join_metrics.build_mem_used.add(visited_bitmap_size);
+        }
+
+        // add a bitmap for full join.
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
             let left_num_rows = left_data.num_rows();
-            if need_produce_result_in_final(self.join_type) {
-                // these join type need the bitmap to identify which row has be matched or unmatched.
-                // For the `left semi` join, need to use the bitmap to produce the matched row in the left side
-                // For the `left` join, need to use the bitmap to produce the unmatched row in the left side with null
-                // For the `left anti` join, need to use the bitmap to produce the unmatched row in the left side
-                // For the `full` join, need to use the bitmap to produce the unmatched row in the left side with null
+            // only full join need bitmap
+            if self.join_type == JoinType::Full {
                 let mut buffer = BooleanBufferBuilder::new(left_num_rows);
                 buffer.append_n(left_num_rows, false);
                 buffer
@@ -378,89 +436,47 @@ impl NestedLoopJoinStream {
             }
         });
 
-        // iter the right batch
-        self.right
+        self.outer_table
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(right_batch)) => {
-                    // TODO: optimize this logic like the cross join, and just return a small batch for each loop
-                    // get the matched left and right indices
-                    // each left row will try to match every right row
-                    let indices_result = (0..left_data.num_rows())
-                        .map(|left_row_index| {
-                            build_join_indices(
-                                left_row_index,
-                                &right_batch,
-                                left_data,
-                                self.filter.as_ref(),
-                            )
-                        })
-                        .collect::<Result<Vec<(UInt64Array, UInt32Array)>>>();
-                    let mut left_indices_builder = UInt64Builder::new();
-                    let mut right_indices_builder = UInt32Builder::new();
-                    let left_right_indices = match indices_result {
-                        Err(_) => Err(DataFusionError::Execution(
-                            "Build left right indices error".to_string(),
-                        )),
-                        Ok(indices) => {
-                            for (left_side, right_side) in indices {
-                                left_indices_builder.append_values(
-                                    left_side.values(),
-                                    &vec![true; left_side.len()],
-                                );
-                                right_indices_builder.append_values(
-                                    right_side.values(),
-                                    &vec![true; right_side.len()],
-                                );
-                            }
-                            Ok((
-                                left_indices_builder.finish(),
-                                right_indices_builder.finish(),
-                            ))
-                        }
-                    };
-                    let result = match left_right_indices {
-                        Ok((left_side, right_side)) => {
-                            // set the left bitmap
-                            // and only left, full, left semi, left anti need the left bitmap
-                            if need_produce_result_in_final(self.join_type) {
-                                left_side.iter().flatten().for_each(|x| {
-                                    visited_left_side.set_bit(x as usize, true);
-                                });
-                            }
-                            // adjust the two side indices base on the join type
-                            let (left_side, right_side) = adjust_indices_by_join_type(
-                                left_side,
-                                right_side,
-                                right_batch.num_rows(),
-                                self.join_type,
-                            );
+                    // Setting up timer & updating input metrics
+                    self.join_metrics.input_batches.add(1);
+                    self.join_metrics.input_rows.add(right_batch.num_rows());
+                    let timer = self.join_metrics.join_time.timer();
 
-                            let result = build_batch_from_indices(
-                                &self.schema,
-                                left_data,
-                                &right_batch,
-                                left_side,
-                                right_side,
-                                &self.column_indices,
-                            );
-                            Some(result)
-                        }
-                        Err(e) => Some(Err(e)),
-                    };
-                    result
+                    let result = join_left_and_right_batch(
+                        left_data,
+                        &right_batch,
+                        self.join_type,
+                        self.filter.as_ref(),
+                        &self.column_indices,
+                        &self.schema,
+                        visited_left_side,
+                    );
+
+                    // Recording time & updating output metrics
+                    if let Ok(batch) = &result {
+                        timer.done();
+                        self.join_metrics.output_batches.add(1);
+                        self.join_metrics.output_rows.add(batch.num_rows());
+                    }
+
+                    Some(result)
                 }
                 Some(err) => Some(err),
                 None => {
-                    if need_produce_result_in_final(self.join_type) && !self.is_exhausted
-                    {
+                    if self.join_type == JoinType::Full && !self.is_exhausted {
+                        // Only setting up timer, input is exhausted
+                        let timer = self.join_metrics.join_time.timer();
+
                         // use the global left bitmap to produce the left indices and right indices
                         let (left_side, right_side) = get_final_indices_from_bit_map(
                             visited_left_side,
                             self.join_type,
                         );
                         let empty_right_batch =
-                            RecordBatch::new_empty(self.right.schema());
+                            RecordBatch::new_empty(self.outer_table.schema());
                         // use the left and right indices to produce the batch result
                         let result = build_batch_from_indices(
                             &self.schema,
@@ -469,8 +485,17 @@ impl NestedLoopJoinStream {
                             left_side,
                             right_side,
                             &self.column_indices,
+                            JoinSide::Left,
                         );
                         self.is_exhausted = true;
+
+                        // Recording time & updating output metrics
+                        if let Ok(batch) = &result {
+                            timer.done();
+                            self.join_metrics.output_batches.add(1);
+                            self.join_metrics.output_rows.add(batch.num_rows());
+                        }
+
                         Some(result)
                     } else {
                         // end of the join loop
@@ -478,6 +503,203 @@ impl NestedLoopJoinStream {
                     }
                 }
             })
+    }
+
+    /// For Inner/Left/LeftSemi/LeftAnti joins, right is the single partition side.
+    fn poll_next_impl_for_build_right(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        // all right row
+        let build_timer = self.join_metrics.build_time.timer();
+        let (right_data, _) = match ready!(self.inner_table.get(cx)) {
+            Ok(data) => data,
+            Err(e) => return Poll::Ready(Some(Err(e))),
+        };
+        build_timer.done();
+
+        // for build right, bitmap is not needed.
+        let mut empty_visited_left_side = BooleanBufferBuilder::new(0);
+        self.outer_table
+            .poll_next_unpin(cx)
+            .map(|maybe_batch| match maybe_batch {
+                Some(Ok(left_batch)) => {
+                    // Setting up timer & updating input metrics
+                    self.join_metrics.input_batches.add(1);
+                    self.join_metrics.input_rows.add(left_batch.num_rows());
+                    let timer = self.join_metrics.join_time.timer();
+
+                    // Actual join execution
+                    let result = join_left_and_right_batch(
+                        &left_batch,
+                        right_data,
+                        self.join_type,
+                        self.filter.as_ref(),
+                        &self.column_indices,
+                        &self.schema,
+                        &mut empty_visited_left_side,
+                    );
+
+                    // Recording time & updating output metrics
+                    if let Ok(batch) = &result {
+                        timer.done();
+                        self.join_metrics.output_batches.add(1);
+                        self.join_metrics.output_rows.add(batch.num_rows());
+                    }
+
+                    Some(result)
+                }
+                Some(err) => Some(err),
+                None => None,
+            })
+    }
+}
+
+fn join_left_and_right_batch(
+    left_batch: &RecordBatch,
+    right_batch: &RecordBatch,
+    join_type: JoinType,
+    filter: Option<&JoinFilter>,
+    column_indices: &[ColumnIndex],
+    schema: &Schema,
+    visited_left_side: &mut BooleanBufferBuilder,
+) -> Result<RecordBatch> {
+    let indices_result = (0..left_batch.num_rows())
+        .map(|left_row_index| {
+            build_join_indices(left_row_index, right_batch, left_batch, filter)
+        })
+        .collect::<Result<Vec<(UInt64Array, UInt32Array)>>>();
+
+    let mut left_indices_builder = UInt64Builder::new();
+    let mut right_indices_builder = UInt32Builder::new();
+    let left_right_indices = match indices_result {
+        Err(err) => Err(DataFusionError::Execution(format!(
+            "Fail to build join indices in NestedLoopJoinExec, error:{err}"
+        ))),
+        Ok(indices) => {
+            for (left_side, right_side) in indices {
+                left_indices_builder
+                    .append_values(left_side.values(), &vec![true; left_side.len()]);
+                right_indices_builder
+                    .append_values(right_side.values(), &vec![true; right_side.len()]);
+            }
+            Ok((
+                left_indices_builder.finish(),
+                right_indices_builder.finish(),
+            ))
+        }
+    };
+    match left_right_indices {
+        Ok((left_side, right_side)) => {
+            // set the left bitmap
+            // and only full join need the left bitmap
+            if join_type == JoinType::Full {
+                left_side.iter().flatten().for_each(|x| {
+                    visited_left_side.set_bit(x as usize, true);
+                });
+            }
+            // adjust the two side indices base on the join type
+            let (left_side, right_side) = adjust_indices_by_join_type(
+                left_side,
+                right_side,
+                left_batch.num_rows(),
+                right_batch.num_rows(),
+                join_type,
+            );
+
+            build_batch_from_indices(
+                schema,
+                left_batch,
+                right_batch,
+                left_side,
+                right_side,
+                column_indices,
+                JoinSide::Left,
+            )
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn adjust_indices_by_join_type(
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    count_left_batch: usize,
+    count_right_batch: usize,
+    join_type: JoinType,
+) -> (UInt64Array, UInt32Array) {
+    match join_type {
+        JoinType::Inner => (left_indices, right_indices),
+        JoinType::Left => {
+            // matched
+            // unmatched left row will be produced in this batch
+            let left_unmatched_indices =
+                get_anti_u64_indices(count_left_batch, &left_indices);
+            // combine the matched and unmatched left result together
+            append_left_indices(left_indices, right_indices, left_unmatched_indices)
+        }
+        JoinType::LeftSemi => {
+            // need to remove the duplicated record in the left side
+            let left_indices = get_semi_u64_indices(count_left_batch, &left_indices);
+            // the right_indices will not be used later for the `left semi` join
+            (left_indices, right_indices)
+        }
+        JoinType::LeftAnti => {
+            // need to remove the duplicated record in the left side
+            // get the anti index for the left side
+            let left_indices = get_anti_u64_indices(count_left_batch, &left_indices);
+            // the right_indices will not be used later for the `left anti` join
+            (left_indices, right_indices)
+        }
+        // right/right-semi/right-anti => right = outer_table, left = inner_table
+        JoinType::Right | JoinType::Full => {
+            // matched
+            // unmatched right row will be produced in this batch
+            let right_unmatched_indices =
+                get_anti_indices(count_right_batch, &right_indices);
+            // combine the matched and unmatched right result together
+            append_right_indices(left_indices, right_indices, right_unmatched_indices)
+        }
+        JoinType::RightSemi => {
+            // need to remove the duplicated record in the right side
+            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            // the left_indices will not be used later for the `right semi` join
+            (left_indices, right_indices)
+        }
+        JoinType::RightAnti => {
+            // need to remove the duplicated record in the right side
+            // get the anti index for the right side
+            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            // the left_indices will not be used later for the `right anti` join
+            (left_indices, right_indices)
+        }
+    }
+}
+
+/// Appends the `left_unmatched_indices` to the `left_indices`,
+/// and fills Null to tail of `right_indices` to
+/// keep the length of `left_indices` and `right_indices` consistent.
+fn append_left_indices(
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    left_unmatched_indices: UInt64Array,
+) -> (UInt64Array, UInt32Array) {
+    if left_unmatched_indices.is_empty() {
+        (left_indices, right_indices)
+    } else {
+        let unmatched_size = left_unmatched_indices.len();
+        // the new left indices: left_indices + null array
+        // the new right indices: right_indices + right_unmatched_indices
+        let new_left_indices = left_indices
+            .iter()
+            .chain(left_unmatched_indices.iter())
+            .collect::<UInt64Array>();
+        let new_right_indices = right_indices
+            .iter()
+            .chain(std::iter::repeat(None).take(unmatched_size))
+            .collect::<UInt32Array>();
+
+        (new_left_indices, new_right_indices)
     }
 }
 
@@ -488,7 +710,11 @@ impl Stream for NestedLoopJoinStream {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
+        if left_is_build_side(self.join_type) {
+            self.poll_next_impl_for_build_left(cx)
+        } else {
+            self.poll_next_impl_for_build_right(cx)
+        }
     }
 }
 
@@ -503,6 +729,11 @@ mod tests {
     use crate::physical_expr::expressions::BinaryExpr;
     use crate::{
         assert_batches_sorted_eq,
+        common::assert_contains,
+        execution::{
+            context::SessionConfig,
+            runtime_env::{RuntimeConfig, RuntimeEnv},
+        },
         physical_plan::{
             common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         },
@@ -883,6 +1114,58 @@ mod tests {
         ];
 
         assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overallocation() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
+            ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
+            ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+        let filter = prepare_join_filter();
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+        ];
+
+        for join_type in join_types {
+            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
+            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let session_ctx =
+                SessionContext::with_config_rt(SessionConfig::default(), runtime);
+            let task_ctx = session_ctx.task_ctx();
+
+            let err = multi_partitioned_join_collect(
+                left.clone(),
+                right.clone(),
+                &join_type,
+                Some(filter.clone()),
+                task_ctx,
+            )
+            .await
+            .unwrap_err();
+
+            assert_contains!(
+                err.to_string(),
+                "External error: Resources exhausted: Failed to allocate additional"
+            );
+            assert_contains!(err.to_string(), "NestedLoopJoinLoad[0]");
+        }
 
         Ok(())
     }

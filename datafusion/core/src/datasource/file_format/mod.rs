@@ -17,13 +17,15 @@
 
 //! Module containing helper methods for the various file formats
 
-/// default max records to scan to infer the schema
+/// Default max records to scan to infer the schema
 pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 
+pub mod arrow;
 pub mod avro;
 pub mod csv;
 pub mod file_type;
 pub mod json;
+pub mod options;
 pub mod parquet;
 
 use std::any::Any;
@@ -32,17 +34,19 @@ use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 
 /// This trait abstracts all the file format specific implementations
-/// from the `TableProvider`. This helps code re-utilization across
+/// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the the same file formats.
+///
+/// [`TableProvider`]: crate::datasource::datasource::TableProvider
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be
@@ -81,7 +85,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         state: &SessionState,
         conf: FileScanConfig,
-        filters: &[Expr],
+        filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
@@ -137,10 +141,10 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
-                    output_ordering: None,
+                    output_ordering: vec![],
                     infinite_source: false,
                 },
-                &[],
+                None,
             )
             .await?;
         Ok(exec)

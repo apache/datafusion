@@ -91,7 +91,7 @@ html_theme_options = {
 html_context = {
     "github_user": "apache",
     "github_repo": "arrow-datafusion",
-    "github_version": "master",
+    "github_version": "main",
     "doc_path": "docs/source",
 }
 

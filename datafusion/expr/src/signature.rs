@@ -37,7 +37,7 @@ pub enum Volatility {
 }
 
 /// A function's type signature, which defines the function's supported argument types.
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeSignature {
     /// arbitrary number of arguments of an common type out of a list of valid types
     // A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
@@ -46,6 +46,8 @@ pub enum TypeSignature {
     // A function such as `array` is `VariadicEqual`
     // The first argument decides the type used for coercion
     VariadicEqual,
+    /// arbitrary number of arguments with arbitrary types
+    VariadicAny,
     /// fixed number of arguments of an arbitrary but equal type out of a list of valid types
     // A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
     // A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
@@ -58,8 +60,9 @@ pub enum TypeSignature {
     OneOf(Vec<TypeSignature>),
 }
 
-///The Signature of a function defines its supported input types as well as its volatility.
-#[derive(Debug, Clone, PartialEq, Hash)]
+/// The signature of a function defines the supported argument types
+/// and its volatility.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Signature {
     /// type_signature - The types that the function accepts. See [TypeSignature] for more information.
     pub type_signature: TypeSignature,
@@ -86,6 +89,13 @@ impl Signature {
     pub fn variadic_equal(volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::VariadicEqual,
+            volatility,
+        }
+    }
+    /// variadic_any - Creates a variadic signature that represents an arbitrary number of arguments of any type.
+    pub fn variadic_any(volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::VariadicAny,
             volatility,
         }
     }

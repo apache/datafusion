@@ -26,9 +26,9 @@ use arrow_flight::sql::{
     ActionCreatePreparedStatementResult, Any, CommandGetCatalogs,
     CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
     CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-    CommandGetTableTypes, CommandGetTables, CommandPreparedStatementQuery,
-    CommandPreparedStatementUpdate, CommandStatementQuery, CommandStatementUpdate,
-    ProstMessageExt, SqlInfo, TicketStatementQuery,
+    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
+    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
+    CommandStatementUpdate, ProstMessageExt, SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
@@ -408,6 +408,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
         ))
     }
 
+    async fn get_flight_info_xdbc_type_info(
+        &self,
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        info!("get_flight_info_xdbc_type_info");
+        Err(Status::unimplemented(
+            "Implement get_flight_info_xdbc_type_info",
+        ))
+    }
+
     async fn do_get_statement(
         &self,
         _ticket: TicketStatementQuery,
@@ -505,6 +516,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         info!("do_get_cross_reference");
         Err(Status::unimplemented("Implement do_get_cross_reference"))
+    }
+
+    async fn do_get_xdbc_type_info(
+        &self,
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<Ticket>,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        info!("do_get_xdbc_type_info");
+        Err(Status::unimplemented("Implement do_get_xdbc_type_info"))
     }
 
     async fn do_put_statement_update(

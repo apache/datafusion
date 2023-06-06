@@ -18,15 +18,15 @@
 [package]
 name = "datafusion-common"
 description = "Common functionality for DataFusion query engine"
-version = "17.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = ["arrow", "query", "sql"]
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion_common"
@@ -35,16 +35,18 @@ path = "src/lib.rs"
 [features]
 avro = ["apache-avro"]
 default = []
-jit = ["cranelift-module"]
 pyarrow = ["pyo3", "arrow/pyarrow"]
 
 [dependencies]
 apache-avro = { version = "0.14", default-features = false, features = ["snappy"], optional = true }
-arrow = { version = "32.0.0", default-features = false }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
 chrono = { version = "0.4", default-features = false }
-cranelift-module = { version = "0.92.0", optional = true }
 num_cpus = "1.13.0"
-object_store = { version = "0.5.0", default-features = false, optional = true }
-parquet = { version = "32.0.0", default-features = false, optional = true }
+object_store = { version = "0.5.4", default-features = false, optional = true }
+parquet = { workspace = true, optional = true }
 pyo3 = { version = "0.18.0", optional = true }
-sqlparser = "0.30"
+sqlparser = "0.34"
+
+[dev-dependencies]
+rand = "0.8.4"

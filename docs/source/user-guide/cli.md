@@ -17,11 +17,11 @@
   under the License.
 -->
 
-# DataFusion Command-line SQL Utility
+# `datafusion-cli`
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
-try DataFusion out with your own data sources, and test out its SQL support.
+try DataFusion's SQL support with your own data.
 
 ## Example
 
@@ -100,8 +100,8 @@ this to work.
 
 ```bash
 git clone https://github.com/apache/arrow-datafusion
-git checkout 12.0.0
 cd arrow-datafusion
+git checkout 12.0.0
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
 docker run -it -v $(your_data_location):/data datafusion-cli
 ```
@@ -180,37 +180,38 @@ STORED AS CSV
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
-## Querying S3 Data Sources
+## Registering S3 Data Sources
 
-The CLI can query data in S3 if the following environment variables are defined:
+[AWS S3](https://aws.amazon.com/s3/) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
 
-- `AWS_DEFAULT_REGION`
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'access_key_id' '******',
+    'secret_access_key' '******',
+    'region' 'us-east-2'
+)
+LOCATION 's3://bucket/path/file.parquet';
+```
 
-Details of the environment variables that can be used are
+The supported OPTIONS are:
 
-- AWS_ACCESS_KEY_ID -> access_key_id
-- AWS_SECRET_ACCESS_KEY -> secret_access_key
-- AWS_DEFAULT_REGION -> region
-- AWS_ENDPOINT -> endpoint
-- AWS_SESSION_TOKEN -> token
-- AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
-- AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
+- access_key_id
+- secret_access_key
+- session_token
+- region
 
-Example:
+It is also possible to simplify sql statements by environment variables.
 
 ```bash
-$ aws s3 cp test.csv s3://my-bucket/
-upload: ./test.csv to s3://my-bucket/test.csv
-
 $ export AWS_DEFAULT_REGION=us-east-2
-$ export AWS_SECRET_ACCESS_KEY=***************************
-$ export AWS_ACCESS_KEY_ID=**************
+$ export AWS_SECRET_ACCESS_KEY=******
+$ export AWS_ACCESS_KEY_ID=******
 
 $ datafusion-cli
-DataFusion CLI v14.0.0
-❯ create external table test stored as csv location 's3://my-bucket/test.csv';
+DataFusion CLI v21.0.0
+❯ create external table test stored as parquet location 's3://bucket/path/file.parquet';
 0 rows in set. Query took 0.374 seconds.
 ❯ select * from test;
 +----------+----------+
@@ -220,6 +221,86 @@ DataFusion CLI v14.0.0
 +----------+----------+
 1 row in set. Query took 0.171 seconds.
 ```
+
+Details of the environment variables that can be used are:
+
+- AWS_ACCESS_KEY_ID -> access_key_id
+- AWS_SECRET_ACCESS_KEY -> secret_access_key
+- AWS_DEFAULT_REGION -> region
+- AWS_ENDPOINT -> endpoint
+- AWS_SESSION_TOKEN -> token
+- AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+- AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
+- AWS_PROFILE -> Support for using a [named profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) to supply credentials
+
+## Registering OSS Data Sources
+
+[Alibaba cloud OSS](https://www.alibabacloud.com/product/object-storage-service) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'access_key_id' '******',
+    'secret_access_key' '******',
+    'endpoint' 'https://bucket.oss-cn-hangzhou.aliyuncs.com'
+)
+LOCATION 'oss://bucket/path/file.parquet';
+```
+
+The supported OPTIONS are:
+
+- access_key_id
+- secret_access_key
+- endpoint
+
+Note that the `endpoint` format of oss needs to be: `https://{bucket}.{oss-region-endpoint}`
+
+## Registering GCS Data Sources
+
+[Google Cloud Storage](https://cloud.google.com/storage) data sources can be registered by executing a `CREATE EXTERNAL TABLE` SQL statement.
+
+```sql
+CREATE EXTERNAL TABLE test
+STORED AS PARQUET
+OPTIONS(
+    'service_account_path' '/tmp/gcs.json',
+)
+LOCATION 'gs://bucket/path/file.parquet';
+```
+
+The supported OPTIONS are:
+
+- service_account_path -> location of service account file
+- service_account_key -> JSON serialized service account key
+- application_credentials_path -> location of application credentials file
+
+It is also possible to simplify sql statements by environment variables.
+
+```bash
+$ export GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json
+
+$ datafusion-cli
+DataFusion CLI v21.0.0
+❯ create external table test stored as parquet location 'gs://bucket/path/file.parquet';
+0 rows in set. Query took 0.374 seconds.
+❯ select * from test;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+1 row in set. Query took 0.171 seconds.
+```
+
+Details of the environment variables that can be used are:
+
+- GOOGLE_SERVICE_ACCOUNT: location of service account file
+- GOOGLE_SERVICE_ACCOUNT_PATH: (alias) location of service account file
+- SERVICE_ACCOUNT: (alias) location of service account file
+- GOOGLE_SERVICE_ACCOUNT_KEY: JSON serialized service account key
+- GOOGLE_BUCKET: bucket name
+- GOOGLE_BUCKET_NAME: (alias) bucket name
 
 ## Commands
 
@@ -277,7 +358,6 @@ Available commands inside DataFusion CLI are:
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 8192    |
 | datafusion.execution.coalesce_batches           | true    |
-| datafusion.execution.coalesce_target_batch_size | 4096    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |
@@ -314,7 +394,6 @@ DataFusion CLI v12.0.0
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 1024    |
 | datafusion.execution.coalesce_batches           | true    |
-| datafusion.execution.coalesce_target_batch_size | 4096    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |

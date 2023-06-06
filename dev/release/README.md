@@ -19,22 +19,23 @@
 
 # Release Process
 
-## Branching
+DataFusion typically has major releases every two weeks, including breaking API changes.
 
-### Major Release
+Patch releases are made on an adhoc basis, but we try and avoid them given the frequent major releases.
 
-DataFusion typically has major releases from the `master` branch every 4 weeks, including breaking API changes.
+## Branching Policy
 
-### Minor Release
+- When we prepare a new release, we create a release branch, such as `branch-18` in the Apache repository (not in a fork)
+- We update the crate version and generate the changelog in this branch and create a PR against the main branch
+- Once the PR is approved and merged, we tag the rc in the release branch, and release from the release branch
+- Bug fixes can be merged to the release branch and patch releases can be created from the release branch
 
-Starting v7.0.0, we are experimenting with maintaining an active stable release branch (e.g. `maint-7.x`). Every month, we will review the `maint-*` branch and prepare a minor release (e.g. v7.1.0) when necessary. A patch release (v7.0.1) can be requested on demand if it is urgent bug/security fix.
+#### How to add changes to `branch-*` branch?
 
-#### How to add changes to `maint-*` branch?
+If you would like to propose your change for inclusion in a release branch
 
-If you would like to propose your change for inclusion in the maintenance branch
-
-1. follow normal workflow to create PR to `master` branch and wait for its approval and merges.
-2. after PR is squash merged to `master`, branch from most recent maintenance branch (e.g. `maint-7-x`), cherry-pick the commit and create a PR to maintenance branch (e.g. `maint-7-x`).
+1. follow normal workflow to create PR to `main` branch and wait for its approval and merges.
+2. after PR is squash merged to `main`, branch from most recent release branch (e.g. `branch-18`), cherry-pick the commit and create a PR to release branch.
 
 ## Prerequisite
 
@@ -75,14 +76,45 @@ PyPI.
 
 ### Change Log
 
-We maintain a `CHANGELOG.md` so our users know what has been
-changed between releases.
+We maintain a `CHANGELOG.md` so our users know what has been changed between releases.
 
-The CHANGELOG is managed automatically using
-[update_change_log.sh](https://github.com/apache/arrow-datafusion/blob/master/dev/release/update_change_log.sh)
+You will need a GitHub Personal Access Token for the following steps. Follow
+[these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
+to generate one if you do not already have one.
 
-This script creates a changelog using GitHub PRs and issues based on the labels
-associated with them.
+The changelog is generated using a Python script. There is a depency on `PyGitHub`, which can be installed using pip:
+
+```bash
+pip3 install PyGitHub
+```
+
+Run the following command to generate the changelog content.
+
+```bash
+$ GITHUB_TOKEN=<TOKEN> ./dev/release/generate-changelog.py apache/arrow-datafusion 24.0.0 HEAD > dev/changelog/25.0.0.md
+```
+
+This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
+titles starting with `feat:`, `fix:`, or `docs:` . The script will produce output similar to:
+
+```
+Fetching list of commits between 24.0.0 and HEAD
+Fetching pull requests
+Categorizing pull requests
+Generating changelog content
+```
+
+This process is not fully automated, so there are some additional manual steps:
+
+- Add the ASF header to the generated file
+- Add a link to this changelog from the top-level `/datafusion/CHANGELOG.md`
+- Add the following content (copy from the previous version's changelog and update as appropriate:
+
+```
+## [24.0.0](https://github.com/apache/arrow-datafusion/tree/24.0.0) (2023-05-06)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/23.0.0...24.0.0)
+```
 
 ## Prepare release commits and PR
 
@@ -95,11 +127,11 @@ Here are the commands that could be used to prepare the `5.1.0` release:
 
 ### Update Version
 
-Checkout the master commit to be released
+Checkout the main commit to be released
 
 ```
 git fetch apache
-git checkout apache/master
+git checkout apache/main
 ```
 
 Update datafusion version in `datafusion/Cargo.toml` to `5.1.0`:
@@ -113,34 +145,6 @@ Lastly commit the version change:
 ```
 git commit -a -m 'Update version'
 ```
-
-### Update CHANGELOG.md
-
-Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
-populate the changelog content.
-
-You will need a GitHub Personal Access Token for the following steps. Follow
-[these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
-to generate one if you do not already have one.
-
-```bash
-# create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-datafusion.sh master 8.0.0 7.0.0
-# review change log / edit issues and labels if needed, rerun until you are happy with the result
-git commit -a -m 'Create changelog for release'
-```
-
-_If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU
-allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the
-value of the `--cpus` argument in the `update_change_log.sh` script._
-
-You can add `invalid` or `development-process` label to exclude items from
-release notes.
-
-Send a PR to get these changes merged into `master` branch. If new commits that
-could change the change log content landed in the `master` branch before you
-could merge the PR, you need to rerun the changelog update script to regenerate
-the changelog and update the PR accordingly.
 
 ## Prepare release candidate artifacts
 
@@ -162,7 +166,7 @@ Using a string such as `5.1.0` as the `<version>`, create and push the tag by ru
 
 ```shell
 git fetch apache
-git tag <version>-<rc> apache/master
+git tag <version>-<rc> apache/main
 # push tag to Github remote
 git push apache <version>
 ```
@@ -232,7 +236,7 @@ The `dev/release/verify-release-candidate.sh` is a script in this repository tha
 #### If the release is not approved
 
 If the release is not approved, fix whatever the problem is, merge changelog
-changes into master if there is any and try again with the next RC number.
+changes into main if there is any and try again with the next RC number.
 
 ## Finalize the release
 
@@ -278,7 +282,6 @@ of the following crates:
 - [datafusion-cli](https://crates.io/crates/datafusion-cli)
 - [datafusion-common](https://crates.io/crates/datafusion-common)
 - [datafusion-expr](https://crates.io/crates/datafusion-expr)
-- [datafusion-jit](https://crates.io/crates/datafusion-jit)
 - [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-row](https://crates.io/crates/datafusion-row)
@@ -305,10 +308,10 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/sql && cargo publish)
-(cd datafusion/jit && cargo publish)
 (cd datafusion/row && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
 (cd datafusion/optimizer && cargo publish)
+(cd datafusion/execution && cargo publish)
 (cd datafusion/core && cargo publish)
 (cd datafusion/proto && cargo publish)
 (cd datafusion/substrait && cargo publish)
@@ -386,7 +389,6 @@ https://crates.io/crates/datafusion/8.0.0
 https://crates.io/crates/datafusion-cli/8.0.0
 https://crates.io/crates/datafusion-common/8.0.0
 https://crates.io/crates/datafusion-expr/8.0.0
-https://crates.io/crates/datafusion-jit/8.0.0
 https://crates.io/crates/datafusion-optimizer/8.0.0
 https://crates.io/crates/datafusion-physical-expr/8.0.0
 https://crates.io/crates/datafusion-proto/8.0.0

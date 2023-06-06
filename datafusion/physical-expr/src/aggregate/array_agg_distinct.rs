@@ -25,6 +25,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::Result;
@@ -65,13 +66,9 @@ impl AggregateExpr for DistinctArrayAgg {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(
+        Ok(Field::new_list(
             &self.name,
-            DataType::List(Box::new(Field::new(
-                "item",
-                self.input_data_type.clone(),
-                true,
-            ))),
+            Field::new("item", self.input_data_type.clone(), true),
             false,
         ))
     }
@@ -83,13 +80,9 @@ impl AggregateExpr for DistinctArrayAgg {
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
+        Ok(vec![Field::new_list(
             format_state_name(&self.name, "distinct_array_agg"),
-            DataType::List(Box::new(Field::new(
-                "item",
-                self.input_data_type.clone(),
-                true,
-            ))),
+            Field::new("item", self.input_data_type.clone(), true),
             false,
         )])
     }
@@ -100,6 +93,19 @@ impl AggregateExpr for DistinctArrayAgg {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for DistinctArrayAgg {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.input_data_type == x.input_data_type
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -245,7 +251,7 @@ mod tests {
                     DataType::Int32,
                 ),
             ]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         // [[6], [7, 8]]
@@ -260,7 +266,7 @@ mod tests {
                     DataType::Int32,
                 ),
             ]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         // [[9]]
@@ -269,12 +275,12 @@ mod tests {
                 Some(vec![ScalarValue::from(9i32)]),
                 DataType::Int32,
             )]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         let list = ScalarValue::new_list(
             Some(vec![l1.clone(), l2.clone(), l3.clone()]),
-            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         );
 
         // Duplicate l1 in the input array and check that it is deduped in the output.
@@ -283,9 +289,9 @@ mod tests {
         check_distinct_array_agg(
             array,
             list,
-            DataType::List(Box::new(Field::new(
+            DataType::List(Arc::new(Field::new_list(
                 "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+                Field::new("item", DataType::Int32, true),
                 true,
             ))),
         )

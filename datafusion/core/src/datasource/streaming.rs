@@ -44,6 +44,7 @@ pub trait PartitionStream: Send + Sync {
 pub struct StreamingTable {
     schema: SchemaRef,
     partitions: Vec<Arc<dyn PartitionStream>>,
+    infinite: bool,
 }
 
 impl StreamingTable {
@@ -58,7 +59,16 @@ impl StreamingTable {
             ));
         }
 
-        Ok(Self { schema, partitions })
+        Ok(Self {
+            schema,
+            partitions,
+            infinite: false,
+        })
+    }
+    /// Sets streaming table can be infinite.
+    pub fn with_infinite_table(mut self, infinite: bool) -> Self {
+        self.infinite = infinite;
+        self
     }
 }
 
@@ -88,6 +98,7 @@ impl TableProvider for StreamingTable {
             self.schema.clone(),
             self.partitions.clone(),
             projection,
+            self.infinite,
         )?))
     }
 }

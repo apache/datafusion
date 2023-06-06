@@ -52,13 +52,13 @@ impl TableSource for DefaultTableSource {
         self.table_provider.schema()
     }
 
-    /// Tests whether the table provider can make use of a filter expression
+    /// Tests whether the table provider can make use of any or all filter expressions
     /// to optimise data retrieval.
-    fn supports_filter_pushdown(
+    fn supports_filters_pushdown(
         &self,
-        filter: &Expr,
-    ) -> datafusion_common::Result<TableProviderFilterPushDown> {
-        self.table_provider.supports_filter_pushdown(filter)
+        filter: &[&Expr],
+    ) -> datafusion_common::Result<Vec<TableProviderFilterPushDown>> {
+        self.table_provider.supports_filters_pushdown(filter)
     }
 
     fn get_logical_plan(&self) -> Option<&datafusion_expr::LogicalPlan> {

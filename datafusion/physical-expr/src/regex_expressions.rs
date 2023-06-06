@@ -22,7 +22,7 @@
 //! Regex expressions
 
 use arrow::array::{
-    new_null_array, Array, ArrayData, ArrayRef, BufferBuilder, GenericStringArray,
+    new_null_array, Array, ArrayDataBuilder, ArrayRef, BufferBuilder, GenericStringArray,
     OffsetSizeTrait,
 };
 use arrow::compute;
@@ -262,17 +262,11 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         new_offsets.append(T::from_usize(vals.len()).unwrap());
     });
 
-    let data = ArrayData::try_new(
-        GenericStringArray::<T>::DATA_TYPE,
-        string_array.len(),
-        string_array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(string_array.offset(), string_array.len())),
-        0,
-        vec![new_offsets.finish(), vals.finish()],
-        vec![],
-    )?;
+    let data = ArrayDataBuilder::new(GenericStringArray::<T>::DATA_TYPE)
+        .len(string_array.len())
+        .nulls(string_array.nulls().cloned())
+        .buffers(vec![new_offsets.finish(), vals.finish()])
+        .build()?;
     let result_array = GenericStringArray::<T>::from(data);
     Ok(Arc::new(result_array) as ArrayRef)
 }

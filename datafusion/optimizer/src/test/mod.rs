@@ -15,22 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::analyzer::{Analyzer, AnalyzerRule};
 use crate::optimizer::Optimizer;
 use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{assert_contains, Result};
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
 use std::sync::Arc;
 
 pub mod user_defined;
 
-/// some tests share a common table with different names
-pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
-    let schema = Schema::new(vec![
+pub fn test_table_scan_fields() -> Vec<Field> {
+    vec![
         Field::new("a", DataType::UInt32, false),
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
-    ]);
+    ]
+}
+
+/// some tests share a common table with different names
+pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+    let schema = Schema::new(test_table_scan_fields());
     table_scan(Some(name), &schema, None)?.build()
 }
 
@@ -102,6 +108,48 @@ pub fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
+pub fn assert_analyzed_plan_eq(
+    rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    plan: &LogicalPlan,
+    expected: &str,
+) -> Result<()> {
+    let options = ConfigOptions::default();
+    let analyzed_plan =
+        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
+    let formatted_plan = format!("{analyzed_plan:?}");
+    assert_eq!(formatted_plan, expected);
+
+    Ok(())
+}
+pub fn assert_analyzed_plan_eq_display_indent(
+    rule: Arc<dyn AnalyzerRule + Send + Sync>,
+    plan: &LogicalPlan,
+    expected: &str,
+) -> Result<()> {
+    let options = ConfigOptions::default();
+    let analyzed_plan =
+        Analyzer::with_rules(vec![rule]).execute_and_check(plan, &options, |_, _| {})?;
+    let formatted_plan = analyzed_plan.display_indent_schema().to_string();
+    assert_eq!(formatted_plan, expected);
+
+    Ok(())
+}
+
+pub fn assert_analyzer_check_err(
+    rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
+    plan: &LogicalPlan,
+    expected: &str,
+) {
+    let options = ConfigOptions::default();
+    let analyzed_plan =
+        Analyzer::with_rules(rules).execute_and_check(plan, &options, |_, _| {});
+    match analyzed_plan {
+        Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
+        Err(e) => {
+            assert_contains!(e.to_string(), expected);
+        }
+    }
+}
 pub fn assert_optimized_plan_eq(
     rule: Arc<dyn OptimizerRule + Send + Sync>,
     plan: &LogicalPlan,
@@ -135,7 +183,24 @@ pub fn assert_optimized_plan_eq_display_indent(
         )
         .expect("failed to optimize plan")
         .unwrap_or_else(|| plan.clone());
-    let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+    let formatted_plan = optimized_plan.display_indent_schema().to_string();
+    assert_eq!(formatted_plan, expected);
+}
+
+pub fn assert_multi_rules_optimized_plan_eq_display_indent(
+    rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    plan: &LogicalPlan,
+    expected: &str,
+) {
+    let optimizer = Optimizer::with_rules(rules);
+    let mut optimized_plan = plan.clone();
+    for rule in &optimizer.rules {
+        optimized_plan = optimizer
+            .optimize_recursively(rule, &optimized_plan, &OptimizerContext::new())
+            .expect("failed to optimize plan")
+            .unwrap_or_else(|| optimized_plan.clone());
+    }
+    let formatted_plan = optimized_plan.display_indent_schema().to_string();
     assert_eq!(formatted_plan, expected);
 }
 

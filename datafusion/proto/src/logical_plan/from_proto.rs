@@ -18,34 +18,38 @@
 use crate::protobuf::{
     self,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
     },
-    CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
-    PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
-    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
+    DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit,
+    UnionFields, UnionMode,
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
-    abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
-    character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
-    date_part, date_trunc, digest, exp,
-    expr::{self, Sort, WindowFunction},
-    floor, from_unixtime, left, ln, log10, log2,
+    abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
+    cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
+    date_bin, date_part, date_trunc, degrees, digest, exp,
+    expr::{self, InList, Sort, WindowFunction},
+    factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
-    lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
-    regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
-    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
-    substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_seconds, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
-    GetIndexedField, GroupingSet,
+    lower, lpad, ltrim, md5, now, nullif, octet_length, pi, power, radians, random,
+    regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
+    sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
+    strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
+    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    window_frame::regularize,
+    AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
+    Case, Cast, Expr, GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
@@ -113,13 +117,13 @@ impl Error {
 pub trait FromOptionalField<T> {
     /// Converts an optional protobuf field to an option of a different type
     ///
-    /// Returns None if the option is None, otherwise calls [`FromField::field`]
+    /// Returns None if the option is None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn optional(self) -> Result<Option<T>, Error>;
 
     /// Converts an optional protobuf field to a different type, returning an error if None
     ///
-    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`FromField::field`]
+    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`TryInto::try_into`]
     /// on the contained data, returning any error encountered
     fn required(self, field: impl Into<String>) -> Result<T, Error>;
 }
@@ -144,10 +148,7 @@ impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
         let protobuf::Column { relation, name } = c;
 
-        Self {
-            relation: relation.map(|r| r.relation),
-            name,
-        }
+        Self::new(relation.map(|r| r.relation), name)
     }
 }
 
@@ -186,10 +187,10 @@ impl TryFrom<&protobuf::DfField> for DFField {
     type Error = Error;
 
     fn try_from(df_field: &protobuf::DfField) -> Result<Self, Self::Error> {
-        let field = df_field.field.as_ref().required("field")?;
+        let field: Field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
-            Some(q) => DFField::from_qualified(&q.relation, field),
+            Some(q) => DFField::from_qualified(q.relation.clone(), field),
             None => DFField::from(field),
         })
     }
@@ -216,21 +217,17 @@ impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
 
         match table_reference_enum {
             TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
-                Ok(OwnedTableReference::Bare { table })
+                Ok(OwnedTableReference::bare(table))
             }
             TableReferenceEnum::Partial(protobuf::PartialTableReference {
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Partial { schema, table }),
+            }) => Ok(OwnedTableReference::partial(schema, table)),
             TableReferenceEnum::Full(protobuf::FullTableReference {
                 catalog,
                 schema,
                 table,
-            }) => Ok(OwnedTableReference::Full {
-                catalog,
-                schema,
-                table,
-            }),
+            }) => Ok(OwnedTableReference::full(catalog, schema, table)),
         }
     }
 }
@@ -285,7 +282,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 parse_i32_to_time_unit(time_unit)?,
                 match timezone.len() {
                     0 => None,
-                    _ => Some(timezone.to_owned()),
+                    _ => Some(timezone.as_str().into()),
                 },
             ),
             arrow_type::ArrowTypeEnum::Time32(time_unit) => {
@@ -304,25 +301,25 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
-                DataType::List(Box::new(list_type))
+                DataType::List(Arc::new(list_type))
             }
             arrow_type::ArrowTypeEnum::LargeList(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
-                DataType::LargeList(Box::new(list_type))
+                DataType::LargeList(Arc::new(list_type))
             }
             arrow_type::ArrowTypeEnum::FixedSizeList(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
                 let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type), list_size)
+                DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 strct
                     .sub_field_types
                     .iter()
-                    .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?,
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
                 let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
@@ -331,24 +328,30 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
                 };
-                let union_types = union
+                let union_fields = union
                     .union_types
                     .iter()
                     .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<Field>, _>>()?;
 
                 // Default to index based type ids if not provided
-                let type_ids = match union.type_ids.is_empty() {
-                    true => (0..union_types.len() as i8).collect(),
+                let type_ids: Vec<_> = match union.type_ids.is_empty() {
+                    true => (0..union_fields.len() as i8).collect(),
                     false => union.type_ids.iter().map(|i| *i as i8).collect(),
                 };
 
-                DataType::Union(union_types, type_ids, union_mode)
+                DataType::Union(UnionFields::new(type_ids, union_fields), union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;
                 let value_datatype = dict.as_ref().value.as_deref().required("value")?;
                 DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
+            }
+            arrow_type::ArrowTypeEnum::Map(map) => {
+                let field: Field =
+                    map.as_ref().field_type.as_deref().required("field_type")?;
+                let keys_sorted = map.keys_sorted;
+                DataType::Map(Arc::new(field), keys_sorted)
             }
         })
     }
@@ -376,6 +379,12 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                     )
                 }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
+                AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
+                    PlanType::AnalyzedLogicalPlan {
+                        analyzer_name:analyzer_name.clone()
+                    }
+                }
+                FinalAnalyzedLogicalPlan(_) => PlanType::FinalAnalyzedLogicalPlan,
                 OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
                     PlanType::OptimizedLogicalPlan {
                         optimizer_name: optimizer_name.clone(),
@@ -400,16 +409,28 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
         use protobuf::ScalarFunction;
         match f {
             ScalarFunction::Sqrt => Self::Sqrt,
+            ScalarFunction::Cbrt => Self::Cbrt,
             ScalarFunction::Sin => Self::Sin,
             ScalarFunction::Cos => Self::Cos,
             ScalarFunction::Tan => Self::Tan,
             ScalarFunction::Asin => Self::Asin,
             ScalarFunction::Acos => Self::Acos,
             ScalarFunction::Atan => Self::Atan,
+            ScalarFunction::Sinh => Self::Sinh,
+            ScalarFunction::Cosh => Self::Cosh,
+            ScalarFunction::Tanh => Self::Tanh,
+            ScalarFunction::Asinh => Self::Asinh,
+            ScalarFunction::Acosh => Self::Acosh,
+            ScalarFunction::Atanh => Self::Atanh,
             ScalarFunction::Exp => Self::Exp,
             ScalarFunction::Log => Self::Log,
             ScalarFunction::Ln => Self::Ln,
             ScalarFunction::Log10 => Self::Log10,
+            ScalarFunction::Degrees => Self::Degrees,
+            ScalarFunction::Radians => Self::Radians,
+            ScalarFunction::Factorial => Self::Factorial,
+            ScalarFunction::Gcd => Self::Gcd,
+            ScalarFunction::Lcm => Self::Lcm,
             ScalarFunction::Floor => Self::Floor,
             ScalarFunction::Ceil => Self::Ceil,
             ScalarFunction::Round => Self::Round,
@@ -467,6 +488,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
+            ScalarFunction::Pi => Self::Pi,
             ScalarFunction::Power => Self::Power,
             ScalarFunction::StructFun => Self::Struct,
             ScalarFunction::FromUnixtime => Self::FromUnixtime,
@@ -483,6 +505,11 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Max => Self::Max,
             protobuf::AggregateFunction::Sum => Self::Sum,
             protobuf::AggregateFunction::Avg => Self::Avg,
+            protobuf::AggregateFunction::BitAnd => Self::BitAnd,
+            protobuf::AggregateFunction::BitOr => Self::BitOr,
+            protobuf::AggregateFunction::BitXor => Self::BitXor,
+            protobuf::AggregateFunction::BoolAnd => Self::BoolAnd,
+            protobuf::AggregateFunction::BoolOr => Self::BoolOr,
             protobuf::AggregateFunction::Count => Self::Count,
             protobuf::AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             protobuf::AggregateFunction::ArrayAgg => Self::ArrayAgg,
@@ -502,6 +529,8 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ApproxMedian => Self::ApproxMedian,
             protobuf::AggregateFunction::Grouping => Self::Grouping,
             protobuf::AggregateFunction::Median => Self::Median,
+            protobuf::AggregateFunction::FirstValueAgg => Self::FirstValue,
+            protobuf::AggregateFunction::LastValueAgg => Self::LastValue,
         }
     }
 }
@@ -581,7 +610,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 } = &scalar_list;
 
                 let field: Field = field.as_ref().required("field")?;
-                let field = Box::new(field);
+                let field = Arc::new(field);
 
                 let values: Result<Vec<ScalarValue>, Error> =
                     values.iter().map(|val| val.try_into()).collect();
@@ -636,7 +665,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let timezone = if v.timezone.is_empty() {
                     None
                 } else {
-                    Some(v.timezone.clone())
+                    Some(v.timezone.as_str().into())
                 };
 
                 let ts_value =
@@ -695,10 +724,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 let fields = v
                     .fields
                     .iter()
-                    .map(|f| f.try_into())
-                    .collect::<Result<Vec<Field>, _>>()?;
+                    .map(Field::try_from)
+                    .collect::<Result<_, _>>()?;
 
-                Self::Struct(values, Box::new(fields))
+                Self::Struct(values, fields)
             }
             Value::FixedSizeBinaryValue(v) => {
                 Self::FixedSizeBinary(v.length, Some(v.clone().values))
@@ -907,16 +936,15 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
-                    if WindowFrameUnits::Range == window_frame.units
-                        && order_by.len() != 1
-                    {
-                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                    } else {
-                        Ok(window_frame)
-                    }
+                    let window_frame = window_frame.clone().try_into()?;
+                    regularize(window_frame, order_by.len())
                 })
-                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
+                .transpose()?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "missing window frame during deserialization".to_string(),
+                    )
+                })?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
@@ -964,6 +992,7 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, _>>()?,
                 expr.distinct,
                 parse_optional_expr(expr.filter.as_deref(), registry)?.map(Box::new),
+                parse_vec_expr(&expr.order_by, registry)?,
             )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1101,19 +1130,19 @@ pub fn parse_expr(
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(negative.expr.as_deref(), registry, "expr")?,
         ))),
-        ExprType::InList(in_list) => Ok(Expr::InList {
-            expr: Box::new(parse_required_expr(
+        ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
+            Box::new(parse_required_expr(
                 in_list.expr.as_deref(),
                 registry,
                 "expr",
             )?),
-            list: in_list
+            in_list
                 .list
                 .iter()
                 .map(|expr| parse_expr(expr, registry))
                 .collect::<Result<Vec<_>, _>>()?,
-            negated: in_list.negated,
-        }),
+            in_list.negated,
+        ))),
         ExprType::Wildcard(_) => Ok(Expr::Wildcard),
         ExprType::ScalarFunction(expr) => {
             let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)
@@ -1123,6 +1152,8 @@ pub fn parse_expr(
             match scalar_function {
                 ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Acos => Ok(acos(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Asinh => Ok(asinh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Acosh => Ok(acosh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Array => Ok(array(
                     args.to_owned()
                         .iter()
@@ -1130,17 +1161,32 @@ pub fn parse_expr(
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Tan => Ok(tan(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Sinh => Ok(sinh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Cosh => Ok(cosh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Tanh => Ok(tanh(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Atanh => Ok(atanh(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Degrees => Ok(degrees(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Radians => Ok(radians(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Factorial => {
+                    Ok(factorial(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Round => Ok(round(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Round => Ok(round(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),
@@ -1187,6 +1233,14 @@ pub fn parse_expr(
                 }
                 ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], registry)?)),
                 ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Gcd => Ok(gcd(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Lcm => Ok(lcm(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
                 ScalarFunction::Left => Ok(left(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1299,7 +1353,12 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::Pi => Ok(pi()),
                 ScalarFunction::Power => Ok(power(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Log => Ok(log(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
@@ -1317,27 +1376,25 @@ pub fn parse_expr(
         }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = registry.udf(fun_name.as_str())?;
-            Ok(Expr::ScalarUDF {
-                fun: scalar_fn,
-                args: args
-                    .iter()
+            Ok(Expr::ScalarUDF(expr::ScalarUDF::new(
+                scalar_fn,
+                args.iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-            })
+            )))
         }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = registry.udaf(pb.fun_name.as_str())?;
 
-            Ok(Expr::AggregateUDF {
-                fun: agg_fn,
-                args: pb
-                    .args
+            Ok(Expr::AggregateUDF(expr::AggregateUDF::new(
+                agg_fn,
+                pb.args
                     .iter()
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
-                filter: parse_optional_expr(pb.filter.as_deref(), registry)?
-                    .map(Box::new),
-            })
+                parse_optional_expr(pb.filter.as_deref(), registry)?.map(Box::new),
+                parse_vec_expr(&pb.order_by, registry)?,
+            )))
         }
 
         ExprType::GroupingSet(GroupingSetNode { expr }) => {
@@ -1366,20 +1423,17 @@ pub fn parse_expr(
             )))
         }
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
-            None => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: None,
-            }),
-            Some(data_type) => Ok(Expr::Placeholder {
-                id: id.clone(),
-                data_type: Some(data_type.try_into()?),
-            }),
+            None => Ok(Expr::Placeholder(Placeholder::new(id.clone(), None))),
+            Some(data_type) => Ok(Expr::Placeholder(Placeholder::new(
+                id.clone(),
+                Some(data_type.try_into()?),
+            ))),
         },
     }
 }
 
 /// Parse an optional escape_char for Like, ILike, SimilarTo
-fn parse_escape_char(s: &str) -> Result<Option<char>, DataFusionError> {
+fn parse_escape_char(s: &str) -> Result<Option<char>> {
     match s.len() {
         0 => Ok(None),
         1 => Ok(s.chars().next()),
@@ -1427,6 +1481,20 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
             "Unsupported binary operator '{other:?}'"
         ))),
     }
+}
+
+fn parse_vec_expr(
+    p: &[protobuf::LogicalExprNode],
+    registry: &dyn FunctionRegistry,
+) -> Result<Option<Vec<Expr>>, Error> {
+    let res = p
+        .iter()
+        .map(|elem| {
+            parse_expr(elem, registry).map_err(|e| DataFusionError::Plan(e.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // Convert empty vector to None.
+    Ok((!res.is_empty()).then_some(res))
 }
 
 fn parse_optional_expr(

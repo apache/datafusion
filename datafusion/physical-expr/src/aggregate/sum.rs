@@ -37,6 +37,7 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
@@ -47,9 +48,10 @@ use datafusion_row::accessor::RowAccessor;
 #[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
-    data_type: DataType,
+    pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     nullable: bool,
+    pub pre_cast_to_sum_type: bool,
 }
 
 impl Sum {
@@ -64,6 +66,22 @@ impl Sum {
             expr,
             data_type,
             nullable: true,
+            pre_cast_to_sum_type: false,
+        }
+    }
+
+    pub fn new_with_pre_cast(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+        pre_cast_to_sum_type: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            expr,
+            data_type,
+            nullable: true,
+            pre_cast_to_sum_type,
         }
     }
 }
@@ -136,6 +154,20 @@ impl AggregateExpr for Sum {
     }
 }
 
+impl PartialEq<dyn Any> for Sum {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Debug)]
 struct SumAccumulator {
     sum: ScalarValue,
@@ -169,7 +201,13 @@ fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<Scal
 
 // sums the array and returns a ScalarValue of its corresponding type.
 pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<ScalarValue> {
-    let values = &cast(values, sum_type)?;
+    // TODO refine the cast kernel in arrow-rs
+    let cast_values = if values.data_type() != sum_type {
+        Some(cast(values, sum_type)?)
+    } else {
+        None
+    };
+    let values = cast_values.as_ref().unwrap_or(values);
     Ok(match values.data_type() {
         DataType::Decimal128(precision, scale) => {
             sum_decimal_batch(values, *precision, *scale)?
@@ -202,12 +240,26 @@ macro_rules! sum_row {
     }};
 }
 
+macro_rules! avg_row {
+    ($INDEX:ident, $ACC:ident, $DELTA:expr, $TYPE:ident) => {{
+        paste::item! {
+            if let Some(v) = $DELTA {
+                $ACC.add_u64($INDEX, 1);
+                $ACC.[<add_ $TYPE>]($INDEX + 1, *v)
+            }
+        }
+    }};
+}
+
 pub(crate) fn add_to_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
 ) -> Result<()> {
     match s {
+        ScalarValue::Null => {
+            // do nothing
+        }
         ScalarValue::Float64(rhs) => {
             sum_row!(index, accessor, rhs, f64)
         }
@@ -220,9 +272,53 @@ pub(crate) fn add_to_row(
         ScalarValue::Int64(rhs) => {
             sum_row!(index, accessor, rhs, i64)
         }
+        ScalarValue::Decimal128(rhs, _, _) => {
+            sum_row!(index, accessor, rhs, i128)
+        }
+        ScalarValue::Dictionary(_, value) => {
+            let value = value.as_ref();
+            return add_to_row(index, accessor, value);
+        }
         _ => {
             let msg =
                 format!("Row sum updater is not expected to receive a scalar {s:?}");
+            return Err(DataFusionError::Internal(msg));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn update_avg_to_row(
+    index: usize,
+    accessor: &mut RowAccessor,
+    s: &ScalarValue,
+) -> Result<()> {
+    match s {
+        ScalarValue::Null => {
+            // do nothing
+        }
+        ScalarValue::Float64(rhs) => {
+            avg_row!(index, accessor, rhs, f64)
+        }
+        ScalarValue::Float32(rhs) => {
+            avg_row!(index, accessor, rhs, f32)
+        }
+        ScalarValue::UInt64(rhs) => {
+            avg_row!(index, accessor, rhs, u64)
+        }
+        ScalarValue::Int64(rhs) => {
+            avg_row!(index, accessor, rhs, i64)
+        }
+        ScalarValue::Decimal128(rhs, _, _) => {
+            avg_row!(index, accessor, rhs, i128)
+        }
+        ScalarValue::Dictionary(_, value) => {
+            let value = value.as_ref();
+            return update_avg_to_row(index, accessor, value);
+        }
+        _ => {
+            let msg =
+                format!("Row avg updater is not expected to receive a scalar {s:?}");
             return Err(DataFusionError::Internal(msg));
         }
     }
@@ -236,7 +332,7 @@ impl Accumulator for SumAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.count += (values.len() - values.data().null_count()) as u64;
+        self.count += (values.len() - values.null_count()) as u64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.add(&delta)?;
         Ok(())
@@ -244,7 +340,7 @@ impl Accumulator for SumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.count -= (values.len() - values.data().null_count()) as u64;
+        self.count -= (values.len() - values.null_count()) as u64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.sub(&delta)?;
         Ok(())
@@ -290,8 +386,24 @@ impl RowAccumulator for SumRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = sum_batch(values, &self.datatype)?;
-        add_to_row(self.index, accessor, &delta)?;
-        Ok(())
+        add_to_row(self.index, accessor, &delta)
+    }
+
+    fn update_scalar_values(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let value = &values[0];
+        add_to_row(self.index, accessor, value)
+    }
+
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        add_to_row(self.index, accessor, value)
     }
 
     fn merge_batch(
@@ -315,11 +427,12 @@ impl RowAccumulator for SumRowAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
+    use crate::expressions::{col, Avg};
     use crate::generic_test_op;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+    use arrow_array::DictionaryArray;
     use datafusion_common::Result;
 
     #[test]
@@ -383,7 +496,6 @@ mod tests {
         let array: ArrayRef = Arc::new(
             std::iter::repeat::<Option<i128>>(None)
                 .take(6)
-                .into_iter()
                 .collect::<Decimal128Array>()
                 .with_precision_and_scale(10, 0)?,
         );
@@ -442,5 +554,76 @@ mod tests {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(a, DataType::Float64, Sum, ScalarValue::from(15_f64))
+    }
+
+    fn row_aggregate(
+        array: &ArrayRef,
+        agg: Arc<dyn AggregateExpr>,
+        row_accessor: &mut RowAccessor,
+        row_indexs: Vec<usize>,
+    ) -> Result<ScalarValue> {
+        let mut accum = agg.create_row_accumulator(0)?;
+
+        for row_index in row_indexs {
+            let scalar_value = ScalarValue::try_from_array(array, row_index)?;
+            accum.update_scalar(&scalar_value, row_accessor)?;
+        }
+        accum.evaluate(row_accessor)
+    }
+
+    #[test]
+    fn sum_dictionary_f64() -> Result<()> {
+        let keys = Int32Array::from(vec![2, 3, 1, 0, 1]);
+        let values = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64]));
+
+        let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+
+        let row_schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let mut row_accessor = RowAccessor::new(&row_schema);
+        let mut buffer: Vec<u8> = vec![0; 16];
+        row_accessor.point_to(0, &mut buffer);
+
+        let expected = ScalarValue::from(9_f64);
+
+        let agg = Arc::new(Sum::new(
+            col("a", &row_schema)?,
+            "bla".to_string(),
+            expected.get_datatype(),
+        ));
+
+        let actual = row_aggregate(&a, agg, &mut row_accessor, vec![0, 1, 2])?;
+        assert_eq!(expected, actual);
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_dictionary_f64() -> Result<()> {
+        let keys = Int32Array::from(vec![2, 1, 1, 3, 0]);
+        let values = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64]));
+
+        let a: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+
+        let row_schema = Schema::new(vec![
+            Field::new("count", DataType::UInt64, true),
+            Field::new("a", DataType::Float64, true),
+        ]);
+        let mut row_accessor = RowAccessor::new(&row_schema);
+        let mut buffer: Vec<u8> = vec![0; 24];
+        row_accessor.point_to(0, &mut buffer);
+
+        let expected = ScalarValue::from(2.3333333333333335_f64);
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let agg = Arc::new(Avg::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            expected.get_datatype(),
+        ));
+
+        let actual = row_aggregate(&a, agg, &mut row_accessor, vec![0, 1, 2])?;
+        assert_eq!(expected, actual);
+
+        Ok(())
     }
 }

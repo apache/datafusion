@@ -28,15 +28,16 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::PhysicalSortExpr;
 
 use crate::datasource::streaming::PartitionStream;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use datafusion_execution::TaskContext;
 
 /// An [`ExecutionPlan`] for [`PartitionStream`]
 pub struct StreamingTableExec {
     partitions: Vec<Arc<dyn PartitionStream>>,
     projection: Option<Arc<[usize]>>,
     projected_schema: SchemaRef,
+    infinite: bool,
 }
 
 impl StreamingTableExec {
@@ -45,6 +46,7 @@ impl StreamingTableExec {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
         projection: Option<&Vec<usize>>,
+        infinite: bool,
     ) -> Result<Self> {
         if !partitions.iter().all(|x| schema.contains(x.schema())) {
             return Err(DataFusionError::Plan(
@@ -61,6 +63,7 @@ impl StreamingTableExec {
             partitions,
             projected_schema,
             projection: projection.cloned().map(Into::into),
+            infinite,
         })
     }
 }
@@ -83,6 +86,10 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.partitions.len())
+    }
+
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(self.infinite)
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

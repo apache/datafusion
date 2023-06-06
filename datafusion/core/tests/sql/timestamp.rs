@@ -20,400 +20,6 @@ use datafusion::from_slice::FromSlice;
 use std::ops::Add;
 
 #[tokio::test]
-async fn query_cast_timestamp_millis() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
-            1235865600000,
-            1235865660000,
-            1238544000000,
-        ]))],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let sql = "SELECT to_timestamp_millis(ts) FROM t1 LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+--------------------------+",
-        "| totimestampmillis(t1.ts) |",
-        "+--------------------------+",
-        "| 2009-03-01T00:00:00      |",
-        "| 2009-03-01T00:01:00      |",
-        "| 2009-04-01T00:00:00      |",
-        "+--------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_cast_timestamp_micros() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
-            1235865600000000,
-            1235865660000000,
-            1238544000000000,
-        ]))],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let sql = "SELECT to_timestamp_micros(ts) FROM t1 LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+--------------------------+",
-        "| totimestampmicros(t1.ts) |",
-        "+--------------------------+",
-        "| 2009-03-01T00:00:00      |",
-        "| 2009-03-01T00:01:00      |",
-        "| 2009-04-01T00:00:00      |",
-        "+--------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_cast_timestamp_seconds() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
-            1235865600, 1235865660, 1238544000,
-        ]))],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let sql = "SELECT to_timestamp_seconds(ts) FROM t1 LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+---------------------------+",
-        "| totimestampseconds(t1.ts) |",
-        "+---------------------------+",
-        "| 2009-03-01T00:00:00       |",
-        "| 2009-03-01T00:01:00       |",
-        "| 2009-04-01T00:00:00       |",
-        "+---------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
-
-    // Original column is nanos, convert to millis and check timestamp
-    let sql = "SELECT to_timestamp_millis(ts) FROM ts_data LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmillis(ts_data.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08T13:42:29.190       |",
-        "| 2020-09-08T12:42:29.190       |",
-        "| 2020-09-08T11:42:29.190       |",
-        "+-------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT to_timestamp_micros(ts) FROM ts_data LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmicros(ts_data.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08T13:42:29.190855    |",
-        "| 2020-09-08T12:42:29.190855    |",
-        "| 2020-09-08T11:42:29.190855    |",
-        "+-------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_data LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------------------+",
-        "| totimestampseconds(ts_data.ts) |",
-        "+--------------------------------+",
-        "| 2020-09-08T13:42:29            |",
-        "| 2020-09-08T12:42:29            |",
-        "| 2020-09-08T11:42:29            |",
-        "+--------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
-
-    // Original column is seconds, convert to millis and check timestamp
-    let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmillis(ts_secs.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08T13:42:29           |",
-        "| 2020-09-08T12:42:29           |",
-        "| 2020-09-08T11:42:29           |",
-        "+-------------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-
-    // Original column is seconds, convert to micros and check timestamp
-    let sql = "SELECT to_timestamp_micros(ts) FROM ts_secs LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------------------+",
-        "| totimestampmicros(ts_secs.ts) |",
-        "+-------------------------------+",
-        "| 2020-09-08T13:42:29           |",
-        "| 2020-09-08T12:42:29           |",
-        "| 2020-09-08T11:42:29           |",
-        "+-------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // to nanos
-    let sql = "SELECT to_timestamp(ts) FROM ts_secs LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------------+",
-        "| totimestamp(ts_secs.ts) |",
-        "+-------------------------+",
-        "| 2020-09-08T13:42:29     |",
-        "| 2020-09-08T12:42:29     |",
-        "| 2020-09-08T11:42:29     |",
-        "+-------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_cast_timestamp_micros_to_others() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table(
-        "ts_micros",
-        make_timestamp_table::<TimestampMicrosecondType>()?,
-    )?;
-
-    // Original column is micros, convert to millis and check timestamp
-    let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------+",
-        "| totimestampmillis(ts_micros.ts) |",
-        "+---------------------------------+",
-        "| 2020-09-08T13:42:29.190         |",
-        "| 2020-09-08T12:42:29.190         |",
-        "| 2020-09-08T11:42:29.190         |",
-        "+---------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // Original column is micros, convert to seconds and check timestamp
-    let sql = "SELECT to_timestamp_seconds(ts) FROM ts_micros LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------+",
-        "| totimestampseconds(ts_micros.ts) |",
-        "+----------------------------------+",
-        "| 2020-09-08T13:42:29              |",
-        "| 2020-09-08T12:42:29              |",
-        "| 2020-09-08T11:42:29              |",
-        "+----------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // Original column is micros, convert to nanos and check timestamp
-    let sql = "SELECT to_timestamp(ts) FROM ts_micros LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------+",
-        "| totimestamp(ts_micros.ts)  |",
-        "+----------------------------+",
-        "| 2020-09-08T13:42:29.190855 |",
-        "| 2020-09-08T12:42:29.190855 |",
-        "| 2020-09-08T11:42:29.190855 |",
-        "+----------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_cast_timestamp_from_unixtime() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
-            1235865600, 1235865660, 1238544000,
-        ]))],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let sql = "SELECT from_unixtime(ts) FROM t1 LIMIT 3";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+---------------------+",
-        "| fromunixtime(t1.ts) |",
-        "+---------------------+",
-        "| 2009-03-01T00:00:00 |",
-        "| 2009-03-01T00:01:00 |",
-        "| 2009-04-01T00:00:00 |",
-        "+---------------------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
-
-    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-----------------+",
-        "| COUNT(UInt8(1)) |",
-        "+-----------------+",
-        "| 2               |",
-        "+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_millis() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampMillisecondType>()?,
-    )?;
-
-    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------+",
-        "| COUNT(UInt8(1)) |",
-        "+-----------------+",
-        "| 2               |",
-        "+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_micros() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampMicrosecondType>()?,
-    )?;
-
-    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-----------------+",
-        "| COUNT(UInt8(1)) |",
-        "+-----------------+",
-        "| 2               |",
-        "+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_seconds() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
-
-    let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-----------------+",
-        "| COUNT(UInt8(1)) |",
-        "+-----------------+",
-        "| 2               |",
-        "+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn from_unixtime() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
-
-    let sql = "SELECT COUNT(*) FROM ts_data where ts > from_unixtime(1599566400)"; // '2020-09-08T12:00:00+00:00'
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-----------------+",
-        "| COUNT(UInt8(1)) |",
-        "+-----------------+",
-        "| 2               |",
-        "+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn count_distinct_timestamps() -> Result<()> {
-    let ctx = SessionContext::new();
-    ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
-
-    let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+----------------------------+",
-        "| COUNT(DISTINCT ts_data.ts) |",
-        "+----------------------------+",
-        "| 3                          |",
-        "+----------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_current_timestamp_expressions() -> Result<()> {
     let t1 = chrono::Utc::now().timestamp();
     let ctx = SessionContext::new();
@@ -527,7 +133,7 @@ async fn timestamp_minmax() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
     let table_b =
-        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".to_owned()))?;
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".into()))?;
     ctx.register_table("table_a", table_a)?;
     ctx.register_table("table_b", table_b)?;
 
@@ -550,10 +156,9 @@ async fn timestamp_coercion() -> Result<()> {
     {
         let ctx = SessionContext::new();
         let table_a =
-            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".to_owned()))?;
-        let table_b = make_timestamp_tz_table::<TimestampMillisecondType>(Some(
-            "+00:00".to_owned(),
-        ))?;
+            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".into()))?;
+        let table_b =
+            make_timestamp_tz_table::<TimestampMillisecondType>(Some("+00:00".into()))?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -925,325 +530,6 @@ async fn group_by_timestamp_millis() -> Result<()> {
 }
 
 #[tokio::test]
-async fn interval_year() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select date '1994-01-01' + interval '1' year as date;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------+",
-        "| date       |",
-        "+------------+",
-        "| 1995-01-01 |",
-        "+------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn add_interval_month() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select date '1994-01-31' + interval '1' month as date;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------+",
-        "| date       |",
-        "+------------+",
-        "| 1994-02-28 |",
-        "+------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn sub_interval_month() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select date '1994-03-31' - interval '1' month as date;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------+",
-        "| date       |",
-        "+------------+",
-        "| 1994-02-28 |",
-        "+------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn sub_month_wrap() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select date '1994-01-15' - interval '1' month as date;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------+",
-        "| date       |",
-        "+------------+",
-        "| 1993-12-15 |",
-        "+------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn add_interval_day() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select date '1994-01-15' + interval '1' day as date;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------+",
-        "| date       |",
-        "+------------+",
-        "| 1994-01-16 |",
-        "+------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn sub_interval_day() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select date '1994-01-01' - interval '1' day as date;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------+",
-        "| date       |",
-        "+------------+",
-        "| 1993-12-31 |",
-        "+------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cast_string_to_time() {
-    let ctx = SessionContext::new();
-
-    let sql = "select \
-        time '08:09:10.123456789' as time_nano, \
-        time '13:14:15.123456'    as time_micro,\
-        time '13:14:15.123'       as time_milli,\
-        time '13:14:15'           as time;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+--------------------+-----------------+--------------+----------+",
-        "| time_nano          | time_micro      | time_milli   | time     |",
-        "+--------------------+-----------------+--------------+----------+",
-        "| 08:09:10.123456789 | 13:14:15.123456 | 13:14:15.123 | 13:14:15 |",
-        "+--------------------+-----------------+--------------+----------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    // Fallible cases
-
-    let sql = "SELECT TIME 'not a time' as time;";
-    let result = try_execute_to_batches(&ctx, sql).await;
-    assert_eq!(
-        result.err().unwrap().to_string(),
-        "Arrow error: Cast error: Cannot cast string 'not a time' to value of Time64(Nanosecond) type"
-    );
-
-    // An invalid time
-    let sql = "SELECT TIME '24:01:02' as time;";
-    let result = try_execute_to_batches(&ctx, sql).await;
-    assert_eq!(
-        result.err().unwrap().to_string(),
-        "Arrow error: Cast error: Cannot cast string '24:01:02' to value of Time64(Nanosecond) type"
-    );
-}
-
-#[tokio::test]
-async fn cast_to_timestamp_twice() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp(a) from (select to_timestamp(1) as a)A;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------------------------+",
-        "| totimestamp(a.a)              |",
-        "+-------------------------------+",
-        "| 1970-01-01T00:00:00.000000001 |",
-        "+-------------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cast_to_timestamp_seconds_twice() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql =
-        "select to_timestamp_seconds(a) from (select to_timestamp_seconds(1) as a)A;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------------------+",
-        "| totimestampseconds(a.a) |",
-        "+-------------------------+",
-        "| 1970-01-01T00:00:01     |",
-        "+-------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cast_to_timestamp_millis_twice() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp_millis(a) from (select to_timestamp_millis(1) as a)A;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------------------+",
-        "| totimestampmillis(a.a)  |",
-        "+-------------------------+",
-        "| 1970-01-01T00:00:00.001 |",
-        "+-------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cast_to_timestamp_micros_twice() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp_micros(a) from (select to_timestamp_micros(1) as a)A;";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+----------------------------+",
-        "| totimestampmicros(a.a)     |",
-        "+----------------------------+",
-        "| 1970-01-01T00:00:00.000001 |",
-        "+----------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_i32() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp(cast (1 as int));";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------------------------+",
-        "| totimestamp(Int64(1))         |",
-        "+-------------------------------+",
-        "| 1970-01-01T00:00:00.000000001 |",
-        "+-------------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_micros_i32() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp_micros(cast (1 as int));";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-----------------------------+",
-        "| totimestampmicros(Int64(1)) |",
-        "+-----------------------------+",
-        "| 1970-01-01T00:00:00.000001  |",
-        "+-----------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_millis_i32() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp_millis(cast (1 as int));";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-----------------------------+",
-        "| totimestampmillis(Int64(1)) |",
-        "+-----------------------------+",
-        "| 1970-01-01T00:00:00.001     |",
-        "+-----------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn to_timestamp_seconds_i32() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "select to_timestamp_seconds(cast (1 as int));";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+------------------------------+",
-        "| totimestampseconds(Int64(1)) |",
-        "+------------------------------+",
-        "| 1970-01-01T00:00:01          |",
-        "+------------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn timestamp_add_interval_second() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -1334,52 +620,52 @@ async fn timestamp_array_add_interval() -> Result<()> {
     let sql = "SELECT ts, ts - INTERVAL '8' MILLISECONDS FROM table_a";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------------------------+",
-        "| ts                         | table_a.ts - IntervalDayTime(\"8\") |",
-        "+----------------------------+-----------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:29.182855        |",
-        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:29.182855        |",
-        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:29.182855        |",
-        "+----------------------------+-----------------------------------+",
+        "+----------------------------+----------------------------------------------+",
+        "| ts                         | table_a.ts - IntervalMonthDayNano(\"8000000\") |",
+        "+----------------------------+----------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:29.182855                   |",
+        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:29.182855                   |",
+        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:29.182855                   |",
+        "+----------------------------+----------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts + INTERVAL '1' SECOND FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+--------------------------------------+",
-        "| ts                         | table_b.ts + IntervalDayTime(\"1000\") |",
-        "+----------------------------+--------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:30.190855           |",
-        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:30.190855           |",
-        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:30.190855           |",
-        "+----------------------------+--------------------------------------+",
+        "+----------------------------+-------------------------------------------------+",
+        "| ts                         | table_b.ts + IntervalMonthDayNano(\"1000000000\") |",
+        "+----------------------------+-------------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2020-09-08T13:42:30.190855                      |",
+        "| 2020-09-08T12:42:29.190855 | 2020-09-08T12:42:30.190855                      |",
+        "| 2020-09-08T11:42:29.190855 | 2020-09-08T11:42:30.190855                      |",
+        "+----------------------------+-------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts + INTERVAL '2' MONTH FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-------------------------------------+",
-        "| ts                         | table_b.ts + IntervalYearMonth(\"2\") |",
-        "+----------------------------+-------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2020-11-08T13:42:29.190855          |",
-        "| 2020-09-08T12:42:29.190855 | 2020-11-08T12:42:29.190855          |",
-        "| 2020-09-08T11:42:29.190855 | 2020-11-08T11:42:29.190855          |",
-        "+----------------------------+-------------------------------------+",
+        "+----------------------------+---------------------------------------------------------------------+",
+        "| ts                         | table_b.ts + IntervalMonthDayNano(\"158456325028528675187087900672\") |",
+        "+----------------------------+---------------------------------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2020-11-08T13:42:29.190855                                          |",
+        "| 2020-09-08T12:42:29.190855 | 2020-11-08T12:42:29.190855                                          |",
+        "| 2020-09-08T11:42:29.190855 | 2020-11-08T11:42:29.190855                                          |",
+        "+----------------------------+---------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT ts, ts - INTERVAL '16' YEAR FROM table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+---------------------------------------+",
-        "| ts                         | table_b.ts - IntervalYearMonth(\"192\") |",
-        "+----------------------------+---------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 | 2004-09-08T13:42:29.190855            |",
-        "| 2020-09-08T12:42:29.190855 | 2004-09-08T12:42:29.190855            |",
-        "| 2020-09-08T11:42:29.190855 | 2004-09-08T11:42:29.190855            |",
-        "+----------------------------+---------------------------------------+",
+        "+----------------------------+-----------------------------------------------------------------------+",
+        "| ts                         | table_b.ts - IntervalMonthDayNano(\"15211807202738752817960438464512\") |",
+        "+----------------------------+-----------------------------------------------------------------------+",
+        "| 2020-09-08T13:42:29.190855 | 2004-09-08T13:42:29.190855                                            |",
+        "| 2020-09-08T12:42:29.190855 | 2004-09-08T12:42:29.190855                                            |",
+        "| 2020-09-08T11:42:29.190855 | 2004-09-08T11:42:29.190855                                            |",
+        "+----------------------------+-----------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1418,6 +704,58 @@ async fn cast_timestamp_before_1970() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_arrow_typeof() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select arrow_typeof(date_trunc('minute', to_timestamp_seconds(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"minute\"),to_timestamp_seconds(Int64(61)))) |",
+        "+--------------------------------------------------------------------------+",
+        "| Timestamp(Second, None)                                                  |",
+        "+--------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select arrow_typeof(date_trunc('second', to_timestamp_millis(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"second\"),to_timestamp_millis(Int64(61)))) |",
+        "+-------------------------------------------------------------------------+",
+        "| Timestamp(Millisecond, None)                                            |",
+        "+-------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select arrow_typeof(date_trunc('millisecond', to_timestamp_micros(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"millisecond\"),to_timestamp_micros(Int64(61)))) |",
+        "+------------------------------------------------------------------------------+",
+        "| Timestamp(Microsecond, None)                                                 |",
+        "+------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select arrow_typeof(date_trunc('microsecond', to_timestamp(61)));";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------------------------------------------+",
+        "| arrow_typeof(date_trunc(Utf8(\"microsecond\"),to_timestamp(Int64(61)))) |",
+        "+-----------------------------------------------------------------------+",
+        "| Timestamp(Nanosecond, None)                                           |",
+        "+-----------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cast_timestamp_to_timestamptz() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
@@ -1429,7 +767,7 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
 
     let expected = vec![
         "+-----------------------------+---------------------------------------+",
-        "| table_a.ts                  | arrowtypeof(table_a.ts)               |",
+        "| table_a.ts                  | arrow_typeof(table_a.ts)              |",
         "+-----------------------------+---------------------------------------+",
         "| 2020-09-08T13:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
         "| 2020-09-08T12:42:29.190855Z | Timestamp(Nanosecond, Some(\"+00:00\")) |",
@@ -1638,14 +976,12 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let batch = &plan[0];
     let mut res: Option<String> = None;
     for row in 0..batch.num_rows() {
-        if &array_value_to_string(batch.column(0), row)?
-            == "logical_plan after type_coercion"
-        {
+        if &array_value_to_string(batch.column(0), row)? == "initial_logical_plan" {
             res = Some(array_value_to_string(batch.column(1), row)?);
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(res, Some("Projection: CAST(Utf8(\"2000-01-01\") AS Timestamp(Nanosecond, None)) >= CAST(Utf8(\"2000-01-01\") AS Date32)\n  EmptyRelation".to_string()));
 
     //test cast path timestamp date using function
     let sql = "select now() >= '2000-01-01'::date";
@@ -1655,14 +991,18 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let batch = &plan[0];
     let mut res: Option<String> = None;
     for row in 0..batch.num_rows() {
-        if &array_value_to_string(batch.column(0), row)?
-            == "logical_plan after type_coercion"
-        {
+        if &array_value_to_string(batch.column(0), row)? == "initial_logical_plan" {
             res = Some(array_value_to_string(batch.column(1), row)?);
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) >= CAST(CAST(Utf8(\"2000-01-01\") AS Date32) AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(
+        res,
+        Some(
+            "Projection: now() >= CAST(Utf8(\"2000-01-01\") AS Date32)\n  EmptyRelation"
+                .to_string()
+        )
+    );
 
     let sql = "select now() = current_date()";
     let df = ctx.sql(sql).await.unwrap();
@@ -1671,14 +1011,41 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
     let batch = &plan[0];
     let mut res: Option<String> = None;
     for row in 0..batch.num_rows() {
-        if &array_value_to_string(batch.column(0), row)?
-            == "logical_plan after type_coercion"
-        {
+        if &array_value_to_string(batch.column(0), row)? == "initial_logical_plan" {
             res = Some(array_value_to_string(batch.column(1), row)?);
             break;
         }
     }
-    assert_eq!(res, Some("Projection: CAST(now() AS Timestamp(Nanosecond, None)) = CAST(currentdate() AS Timestamp(Nanosecond, None))\n  EmptyRelation".to_string()));
+    assert_eq!(
+        res,
+        Some("Projection: now() = current_date()\n  EmptyRelation".to_string())
+    );
+
+    Ok(())
+}
+
+// Cannot remove to sqllogictest, timezone support is not ready there.
+#[tokio::test]
+async fn timestamp_sub_with_tz() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_timestamp_tz_sub_table::<TimestampMillisecondType>(
+        Some("America/Los_Angeles".into()),
+        Some("Europe/Istanbul".into()),
+    )?;
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT val, ts1 - ts2 AS ts_diff FROM table_a ORDER BY ts2 - ts1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+---------------------------------------------------+",
+        "| val | ts_diff                                           |",
+        "+-----+---------------------------------------------------+",
+        "| 3   | 0 years 0 mons 0 days 10 hours 0 mins 30.000 secs |",
+        "| 1   | 0 years 0 mons 0 days 10 hours 0 mins 20.000 secs |",
+        "| 2   | 0 years 0 mons 0 days 10 hours 0 mins 10.000 secs |",
+        "+-----+---------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 
     Ok(())
 }

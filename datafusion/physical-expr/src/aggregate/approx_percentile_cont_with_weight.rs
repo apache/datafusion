@@ -28,6 +28,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 
+use crate::aggregate::utils::down_cast_any_ref;
 use std::{any::Any, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT_WITH_WEIGTH aggregate expression
@@ -97,6 +98,20 @@ impl AggregateExpr for ApproxPercentileContWithWeight {
 
     fn name(&self) -> &str {
         self.approx_percentile_cont.name()
+    }
+}
+
+impl PartialEq<dyn Any> for ApproxPercentileContWithWeight {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.approx_percentile_cont == x.approx_percentile_cont
+                    && self.column_expr.eq(&x.column_expr)
+                    && self.weight_expr.eq(&x.weight_expr)
+                    && self.percentile_expr.eq(&x.percentile_expr)
+            })
+            .unwrap_or(false)
     }
 }
 

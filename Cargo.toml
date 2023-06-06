@@ -21,18 +21,36 @@ members = [
     "datafusion/common",
     "datafusion/core",
     "datafusion/expr",
-    "datafusion/jit",
+    "datafusion/execution",
     "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/proto",
+    "datafusion/proto/gen",
     "datafusion/row",
     "datafusion/sql",
     "datafusion/substrait",
     "datafusion-examples",
     "test-utils",
-    "parquet-test-utils",
     "benchmarks",
 ]
+
+[workspace.package]
+version = "26.0.0"
+edition = "2021"
+readme = "README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+rust-version = "1.64"
+
+[workspace.dependencies]
+arrow = { version = "40.0.0", features = ["prettyprint"] }
+arrow-flight = { version = "40.0.0", features = ["flight-sql-experimental"] }
+arrow-buffer = { version = "40.0.0", default-features = false }
+arrow-schema = { version = "40.0.0", default-features = false }
+arrow-array = { version = "40.0.0", default-features = false, features = ["chrono-tz"] }
+parquet = { version = "40.0.0", features = ["arrow", "async", "object_store"] }
 
 [profile.release]
 codegen-units = 1

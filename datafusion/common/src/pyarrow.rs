@@ -20,6 +20,7 @@
 use crate::{DataFusionError, ScalarValue};
 use arrow::array::ArrayData;
 use arrow::pyarrow::PyArrowConvert;
+use arrow_array::Array;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::PyErr;
 use pyo3::types::PyList;
@@ -52,7 +53,7 @@ impl PyArrowConvert for ScalarValue {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let array = self.to_array();
         // convert to pyarrow array using C data interface
-        let pyarray = array.data().to_pyarrow(py)?;
+        let pyarray = array.to_data().to_pyarrow(py)?;
         let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
 
         Ok(pyscalar)

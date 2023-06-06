@@ -16,6 +16,7 @@
 // under the License.
 
 //! Repartition optimizer that introduces repartition nodes to increase the level of parallelism available
+use datafusion_common::tree_node::Transformed;
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
@@ -170,12 +171,12 @@ fn optimize_partitions(
     would_benefit: bool,
     repartition_file_scans: bool,
     repartition_file_min_size: usize,
-) -> Result<Arc<dyn ExecutionPlan>> {
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
     // Recurse into children bottom-up (attempt to repartition as
     // early as possible)
     let new_plan = if plan.children().is_empty() {
         // leaf node - don't replace children
-        plan
+        Transformed::No(plan)
     } else {
         let children = plan
             .children()
@@ -205,10 +206,13 @@ fn optimize_partitions(
                     repartition_file_scans,
                     repartition_file_min_size,
                 )
+                .map(Transformed::into)
             })
             .collect::<Result<_>>()?;
         with_new_children_if_necessary(plan, children)?
     };
+
+    let (new_plan, transformed) = new_plan.into_pair();
 
     // decide if we should bother trying to repartition the output of this plan
     let mut could_repartition = match new_plan.output_partitioning() {
@@ -227,7 +231,7 @@ fn optimize_partitions(
             && stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
     }
 
-    // don't reparititon root of the plan
+    // don't repartition root of the plan
     if is_root {
         could_repartition = false;
     }
@@ -236,24 +240,28 @@ fn optimize_partitions(
 
     // If repartition is not allowed - return plan as it is
     if !repartition_allowed {
-        return Ok(new_plan);
+        return Ok(if transformed {
+            Transformed::Yes(new_plan)
+        } else {
+            Transformed::No(new_plan)
+        });
     }
 
     // For ParquetExec return internally repartitioned version of the plan in case `repartition_file_scans` is set
     if let Some(parquet_exec) = new_plan.as_any().downcast_ref::<ParquetExec>() {
         if repartition_file_scans {
-            return Ok(Arc::new(
+            return Ok(Transformed::Yes(Arc::new(
                 parquet_exec
                     .get_repartitioned(target_partitions, repartition_file_min_size),
-            ));
+            )));
         }
     }
 
     // Otherwise - return plan wrapped up in RepartitionExec
-    Ok(Arc::new(RepartitionExec::try_new(
+    Ok(Transformed::Yes(Arc::new(RepartitionExec::try_new(
         new_plan,
         RoundRobinBatch(target_partitions),
-    )?))
+    )?)))
 }
 
 /// Returns true if `plan` requires any of inputs to be sorted in some
@@ -290,6 +298,7 @@ impl PhysicalOptimizerRule for Repartition {
                 repartition_file_scans,
                 repartition_file_min_size,
             )
+            .map(Transformed::into)
         }
     }
 
@@ -330,6 +339,7 @@ mod tests {
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, DisplayFormatType, Statistics};
+    use datafusion_physical_expr::PhysicalSortRequirement;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]))
@@ -346,7 +356,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -368,7 +378,7 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             None,
@@ -392,7 +402,34 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: Some(sort_exprs),
+                output_ordering: vec![sort_exprs],
+                infinite_source: false,
+            },
+            None,
+            None,
+        ))
+    }
+
+    // Created a sorted parquet exec with multiple files
+    fn parquet_exec_multiple_sorted() -> Arc<ParquetExec> {
+        let sort_exprs = vec![PhysicalSortExpr {
+            expr: col("c1", &schema()).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        Arc::new(ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
+                file_schema: schema(),
+                file_groups: vec![
+                    vec![PartitionedFile::new("x".to_string(), 100)],
+                    vec![PartitionedFile::new("y".to_string(), 100)],
+                ],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: vec![sort_exprs],
                 infinite_source: false,
             },
             None,
@@ -423,12 +460,9 @@ mod tests {
             expr: col("c1", &schema()).unwrap(),
             options: SortOptions::default(),
         }];
-        Arc::new(SortExec::new_with_partitioning(
-            sort_exprs,
-            input,
-            preserve_partitioning,
-            None,
-        ))
+        let new_sort = SortExec::new(sort_exprs, input)
+            .with_preserve_partitioning(preserve_partitioning);
+        Arc::new(new_sort)
     }
 
     fn projection_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -443,10 +477,14 @@ mod tests {
                 AggregateMode::Final,
                 PhysicalGroupBy::default(),
                 vec![],
+                vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         PhysicalGroupBy::default(),
+                        vec![],
+                        vec![],
                         vec![],
                         input,
                         schema.clone(),
@@ -539,7 +577,7 @@ mod tests {
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -556,7 +594,7 @@ mod tests {
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -574,7 +612,7 @@ mod tests {
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -592,7 +630,7 @@ mod tests {
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -607,8 +645,8 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // data is sorted so can't repartition here
-            "SortExec: [c1@0 ASC]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "SortExec: expr=[c1@0 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -625,8 +663,8 @@ mod tests {
             "FilterExec: c1@0",
             // data is sorted so can't repartition here even though
             // filter would benefit from parallelism, the answers might be wrong
-            "SortExec: [c1@0 ASC]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "SortExec: expr=[c1@0 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -651,7 +689,7 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // Expect no repartition to happen for local limit
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -678,7 +716,7 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // Expect no repartition to happen for local limit
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -694,11 +732,11 @@ mod tests {
         let expected = &[
             "UnionExec",
             // Expect no repartition of ParquetExec
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -713,9 +751,9 @@ mod tests {
         // need repartiton and resort as the data was not sorted correctly
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            "SortExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -725,12 +763,12 @@ mod tests {
     #[test]
     fn repartition_ignores_sort_preserving_merge() -> Result<()> {
         // sort preserving merge already sorted input,
-        let plan = sort_preserving_merge_exec(parquet_exec_sorted());
+        let plan = sort_preserving_merge_exec(parquet_exec_multiple_sorted());
 
         // should not repartition / sort (as the data was already sorted)
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan);
@@ -747,8 +785,8 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             "UnionExec",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan);
@@ -765,7 +803,7 @@ mod tests {
         // should not repartition as doing so destroys the necessary sort order
         let expected = &[
             "SortRequiredExec",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan);
@@ -794,11 +832,11 @@ mod tests {
             "UnionExec",
             // union input 1: no repartitioning
             "SortRequiredExec",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
             // union input 2: should repartition
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -813,10 +851,10 @@ mod tests {
         // needs to repartition / sort as the data was not sorted correctly
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            "SortExec: [c1@0 ASC]",
-            "ProjectionExec: expr=[c1@0 as c1]",
+            "SortExec: expr=[c1@0 ASC]",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ProjectionExec: expr=[c1@0 as c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -826,13 +864,14 @@ mod tests {
     #[test]
     fn repartition_ignores_transitively_with_projection() -> Result<()> {
         // sorted input
-        let plan = sort_preserving_merge_exec(projection_exec(parquet_exec_sorted()));
+        let plan =
+            sort_preserving_merge_exec(projection_exec(parquet_exec_multiple_sorted()));
 
         // data should not be repartitioned / resorted
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan);
@@ -845,12 +884,9 @@ mod tests {
             sort_preserving_merge_exec(sort_exec(projection_exec(parquet_exec()), true));
 
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
-            // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -865,10 +901,10 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -885,12 +921,12 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "FilterExec: c1@0",
             // repartition is lowest down
             "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan);
@@ -905,7 +941,7 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
-            "ParquetExec: limit=None, partitions={2 groups: [[x:0..50], [x:50..100]]}, projection=[c1]",
+            "ParquetExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -921,7 +957,7 @@ mod tests {
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             // Plan already has two partitions
-            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, projection=[c1]",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -937,7 +973,7 @@ mod tests {
             "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             // Multiple source files splitted across partitions
-            "ParquetExec: limit=None, partitions={4 groups: [[x:0..75], [x:75..100, y:0..50], [y:50..125], [y:125..200]]}, projection=[c1]",
+            "ParquetExec: file_groups={4 groups: [[x:0..75], [x:75..100, y:0..50], [y:50..125], [y:125..200]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 4, true, 10);
@@ -952,9 +988,9 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             "LocalLimitExec: fetch=100",
             // data is sorted so can't repartition here
-            "SortExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
             // Doesn't parallelize for SortExec without preserve_partitioning
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -971,9 +1007,9 @@ mod tests {
             "FilterExec: c1@0",
             // data is sorted so can't repartition here even though
             // filter would benefit from parallelism, the answers might be wrong
-            "SortExec: [c1@0 ASC]",
+            "SortExec: expr=[c1@0 ASC]",
             // SortExec doesn't benefit from input partitioning
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -998,7 +1034,7 @@ mod tests {
             "GlobalLimitExec: skip=0, fetch=100",
             // Limit doesn't benefit from input partitionins - no parallelism
             "LocalLimitExec: fetch=100",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -1011,12 +1047,12 @@ mod tests {
 
         let expected = &[
             "UnionExec",
-            // Union doesn benefit from input partitioning - no parallelism
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
+            // Union doesn't benefit from input partitioning - no parallelism
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -1030,8 +1066,7 @@ mod tests {
 
         // parallelization potentially could break sort order
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -1048,8 +1083,8 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             "UnionExec",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -1066,7 +1101,7 @@ mod tests {
         // no parallelization to preserve sort order
         let expected = &[
             "SortRequiredExec",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -1080,9 +1115,8 @@ mod tests {
 
         // data should not be repartitioned / resorted
         let expected = &[
-            "SortPreservingMergeExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[c1@0 ASC], projection=[c1]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[c1], output_ordering=[c1@0 ASC]",
         ];
 
         assert_optimized!(expected, plan, 2, true, 10);
@@ -1124,8 +1158,10 @@ mod tests {
         }
 
         // model that it requires the output ordering of its input
-        fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-            vec![self.input.output_ordering()]
+        fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+            vec![self
+                .output_ordering()
+                .map(PhysicalSortRequirement::from_sort_exprs)]
         }
 
         fn with_new_children(

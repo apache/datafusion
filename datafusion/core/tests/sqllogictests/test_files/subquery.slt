@@ -60,3 +60,50 @@ where t1.t1_id + 12 not in (
                            )
 ----
 22 b 2
+
+# in subquery with two parentheses, see #5529
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id in ((
+                       select t2.t2_id from t2
+                  ))
+----
+11 a 1
+22 b 2
+44 d 4
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id in ((
+                       select t2.t2_id from t2
+                  ))
+and t1.t1_int < 3
+----
+11 a 1
+22 b 2
+
+query ITI rowsort
+select t1.t1_id,
+       t1.t1_name,
+       t1.t1_int
+from t1
+where t1.t1_id not in ((
+                            select t2.t2_id from t2 where t2.t2_int = 3
+                      ))
+----
+22 b 2
+33 c 3
+
+# VALUES in subqueries, see 6017
+query I
+select t1_id
+from t1
+where t1_int = (select max(i) from (values (1)) as s(i));
+----
+11

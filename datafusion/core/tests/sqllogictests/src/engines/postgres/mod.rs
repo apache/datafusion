@@ -22,10 +22,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use log::debug;
-use sqllogictest::{ColumnType, DBOutput};
+use sqllogictest::DBOutput;
 use tokio::task::JoinHandle;
 
 use super::conversion::*;
+use crate::engines::output::{DFColumnType, DFOutput};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use postgres_types::Type;
 use rust_decimal::Decimal;
@@ -131,7 +132,7 @@ impl Postgres {
     /// ```
     ///
     /// And read the file locally.
-    async fn run_copy_command(&mut self, sql: &str) -> Result<DBOutput> {
+    async fn run_copy_command(&mut self, sql: &str) -> Result<DFOutput> {
         let canonical_sql = sql.trim_start().to_ascii_lowercase();
 
         debug!("Handling COPY command: {sql}");
@@ -210,6 +211,88 @@ impl Drop for Postgres {
     }
 }
 
+#[async_trait]
+impl sqllogictest::AsyncDB for Postgres {
+    type Error = Error;
+    type ColumnType = DFColumnType;
+
+    async fn run(
+        &mut self,
+        sql: &str,
+    ) -> Result<DBOutput<Self::ColumnType>, Self::Error> {
+        println!(
+            "[{}] Running query: \"{}\"",
+            self.relative_path.display(),
+            sql
+        );
+
+        let lower_sql = sql.trim_start().to_ascii_lowercase();
+
+        let is_query_sql = {
+            lower_sql.starts_with("select")
+                || lower_sql.starts_with("values")
+                || lower_sql.starts_with("show")
+                || lower_sql.starts_with("with")
+                || lower_sql.starts_with("describe")
+                || ((lower_sql.starts_with("insert")
+                    || lower_sql.starts_with("update")
+                    || lower_sql.starts_with("delete"))
+                    && lower_sql.contains("returning"))
+        };
+
+        if lower_sql.starts_with("copy") {
+            return self.run_copy_command(sql).await;
+        }
+
+        if !is_query_sql {
+            self.client.execute(sql, &[]).await?;
+            return Ok(DBOutput::StatementComplete(0));
+        }
+        let rows = self.client.query(sql, &[]).await?;
+
+        let types: Vec<Type> = if rows.is_empty() {
+            self.client
+                .prepare(sql)
+                .await?
+                .columns()
+                .iter()
+                .map(|c| c.type_().clone())
+                .collect()
+        } else {
+            rows[0]
+                .columns()
+                .iter()
+                .map(|c| c.type_().clone())
+                .collect()
+        };
+
+        if rows.is_empty() && types.is_empty() {
+            Ok(DBOutput::StatementComplete(0))
+        } else {
+            Ok(DBOutput::Rows {
+                types: convert_types(types),
+                rows: convert_rows(rows),
+            })
+        }
+    }
+
+    fn engine_name(&self) -> &str {
+        "postgres"
+    }
+}
+
+fn convert_rows(rows: Vec<Row>) -> Vec<Vec<String>> {
+    rows.iter()
+        .map(|row| {
+            row.columns()
+                .iter()
+                .enumerate()
+                .map(|(idx, column)| cell_to_string(row, column, idx))
+                .collect::<Vec<String>>()
+        })
+        .collect::<Vec<_>>()
+}
+
 macro_rules! make_string {
     ($row:ident, $idx:ident, $t:ty) => {{
         let value: Option<$t> = $row.get($idx);
@@ -253,66 +336,17 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
     }
 }
 
-#[async_trait]
-impl sqllogictest::AsyncDB for Postgres {
-    type Error = Error;
-
-    async fn run(&mut self, sql: &str) -> Result<DBOutput, Self::Error> {
-        println!(
-            "[{}] Running query: \"{}\"",
-            self.relative_path.display(),
-            sql
-        );
-
-        let lower_sql = sql.trim_start().to_ascii_lowercase();
-
-        let is_query_sql = {
-            lower_sql.starts_with("select")
-                || lower_sql.starts_with("values")
-                || lower_sql.starts_with("show")
-                || lower_sql.starts_with("with")
-                || lower_sql.starts_with("describe")
-                || ((lower_sql.starts_with("insert")
-                    || lower_sql.starts_with("update")
-                    || lower_sql.starts_with("delete"))
-                    && lower_sql.contains("returning"))
-        };
-
-        if lower_sql.starts_with("copy") {
-            return self.run_copy_command(sql).await;
-        }
-
-        if !is_query_sql {
-            self.client.execute(sql, &[]).await?;
-            return Ok(DBOutput::StatementComplete(0));
-        }
-        let rows = self.client.query(sql, &[]).await?;
-        let output = rows
-            .iter()
-            .map(|row| {
-                row.columns()
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, column)| cell_to_string(row, column, idx))
-                    .collect::<Vec<String>>()
-            })
-            .collect::<Vec<_>>();
-
-        if output.is_empty() {
-            let stmt = self.client.prepare(sql).await?;
-            Ok(DBOutput::Rows {
-                types: vec![ColumnType::Any; stmt.columns().len()],
-                rows: vec![],
-            })
-        } else {
-            Ok(DBOutput::Rows {
-                types: vec![ColumnType::Any; output[0].len()],
-                rows: output,
-            })
-        }
-    }
-
-    fn engine_name(&self) -> &str {
-        "postgres"
-    }
+fn convert_types(types: Vec<Type>) -> Vec<DFColumnType> {
+    types
+        .into_iter()
+        .map(|t| match t {
+            Type::BOOL => DFColumnType::Boolean,
+            Type::INT2 | Type::INT4 | Type::INT8 => DFColumnType::Integer,
+            Type::BPCHAR | Type::VARCHAR | Type::TEXT => DFColumnType::Text,
+            Type::FLOAT4 | Type::FLOAT8 | Type::NUMERIC => DFColumnType::Float,
+            Type::DATE | Type::TIME => DFColumnType::DateTime,
+            Type::TIMESTAMP => DFColumnType::Timestamp,
+            _ => DFColumnType::Another,
+        })
+        .collect()
 }

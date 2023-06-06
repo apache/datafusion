@@ -18,15 +18,15 @@
 [package]
 name = "datafusion-physical-expr"
 description = "Physical expression implementation for DataFusion query engine"
-version = "17.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = ["arrow", "query", "sql"]
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion_physical_expr"
@@ -43,32 +43,35 @@ unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "32.0.0", features = ["prettyprint"] }
-arrow-buffer = "32.0.0"
-arrow-schema = "32.0.0"
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "17.0.0" }
-datafusion-expr = { path = "../expr", version = "17.0.0" }
-datafusion-row = { path = "../row", version = "17.0.0" }
+datafusion-common = { path = "../common", version = "26.0.0" }
+datafusion-expr = { path = "../expr", version = "26.0.0" }
+datafusion-row = { path = "../row", version = "26.0.0" }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "1.9.2"
 itertools = { version = "0.10", features = ["use_std"] }
 lazy_static = { version = "^1.4.0" }
+libc = "0.2.140"
 md-5 = { version = "^0.10.0", optional = true }
-num-traits = { version = "0.2", default-features = false }
 paste = "^1.0"
+petgraph = "0.6.2"
 rand = "0.8"
-regex = { version = "^1.4.3", optional = true }
+regex = { version = "1.8", optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5"
 rand = "0.8"
+rstest = "0.17.0"
 
 [[bench]]
 harness = false

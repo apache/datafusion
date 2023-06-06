@@ -32,7 +32,7 @@ use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 
 use super::optimizer::PhysicalOptimizerRule;
 use crate::error::Result;
-use crate::physical_plan::rewrite::TreeNodeRewritable;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 
 /// For hash join with the partition mode [PartitionMode::Auto], JoinSelection rule will make
 /// a cost based decision to select which PartitionMode mode(Partitioned/CollectLeft) is optimal
@@ -217,32 +217,32 @@ impl PhysicalOptimizerRule for JoinSelection {
         let config = &config.optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;
         plan.transform_up(&|plan| {
-            if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+            let transformed = if let Some(hash_join) =
+                plan.as_any().downcast_ref::<HashJoinExec>()
+            {
                 match hash_join.partition_mode() {
                     PartitionMode::Auto => {
                         try_collect_left(hash_join, Some(collect_left_threshold))?
                             .map_or_else(
-                                || Ok(Some(partitioned_hash_join(hash_join)?)),
+                                || partitioned_hash_join(hash_join).map(Some),
                                 |v| Ok(Some(v)),
-                            )
+                            )?
                     }
                     PartitionMode::CollectLeft => try_collect_left(hash_join, None)?
                         .map_or_else(
-                            || Ok(Some(partitioned_hash_join(hash_join)?)),
+                            || partitioned_hash_join(hash_join).map(Some),
                             |v| Ok(Some(v)),
-                        ),
+                        )?,
                     PartitionMode::Partitioned => {
                         let left = hash_join.left();
                         let right = hash_join.right();
                         if should_swap_join_order(&**left, &**right)
                             && supports_swap(*hash_join.join_type())
                         {
-                            Ok(Some(swap_hash_join(
-                                hash_join,
-                                PartitionMode::Partitioned,
-                            )?))
+                            swap_hash_join(hash_join, PartitionMode::Partitioned)
+                                .map(Some)?
                         } else {
-                            Ok(None)
+                            None
                         }
                     }
                 }
@@ -254,17 +254,23 @@ impl PhysicalOptimizerRule for JoinSelection {
                     let new_join =
                         CrossJoinExec::new(Arc::clone(right), Arc::clone(left));
                     // TODO avoid adding ProjectionExec again and again, only adding Final Projection
-                    let proj = ProjectionExec::try_new(
+                    let proj: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
                         swap_reverting_projection(&left.schema(), &right.schema()),
                         Arc::new(new_join),
-                    )?;
-                    Ok(Some(Arc::new(proj)))
+                    )?);
+                    Some(proj)
                 } else {
-                    Ok(None)
+                    None
                 }
             } else {
-                Ok(None)
-            }
+                None
+            };
+
+            Ok(if let Some(transformed) = transformed {
+                Transformed::Yes(transformed)
+            } else {
+                Transformed::No(plan)
+            })
         })
     }
 
@@ -488,7 +494,7 @@ mod tests {
             None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -536,7 +542,7 @@ mod tests {
             None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -587,7 +593,7 @@ mod tests {
                 None,
                 &join_type,
                 PartitionMode::Partitioned,
-                &false,
+                false,
             )
             .unwrap();
 
@@ -652,7 +658,7 @@ mod tests {
             None,
             &JoinType::Inner,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
         let child_schema = child_join.schema();
@@ -668,7 +674,7 @@ mod tests {
             None,
             &JoinType::Left,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -705,7 +711,7 @@ mod tests {
             None,
             &JoinType::Inner,
             PartitionMode::CollectLeft,
-            &false,
+            false,
         )
         .unwrap();
 
@@ -930,7 +936,7 @@ mod tests {
             None,
             &JoinType::Inner,
             PartitionMode::Auto,
-            &false,
+            false,
         )
         .unwrap();
 

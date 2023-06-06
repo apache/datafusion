@@ -25,6 +25,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::iter;
@@ -118,11 +119,10 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
-    fn get_range(&self, state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
-        Ok(Range {
-            start: state.last_calculated_index,
-            end: state.last_calculated_index + 1,
-        })
+    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
+        let start = idx;
+        let end = idx + 1;
+        Ok(Range { start, end })
     }
 
     fn state(&self) -> Result<BuiltinWindowState> {
@@ -132,22 +132,21 @@ impl PartitionEvaluator for RankEvaluator {
     fn update_state(
         &mut self,
         state: &WindowAggState,
+        idx: usize,
         range_columns: &[ArrayRef],
         sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
-        // find range inside `sort_partition_points` containing `state.last_calculated_index`
+        // find range inside `sort_partition_points` containing `idx`
         let chunk_idx = sort_partition_points
             .iter()
-            .position(|elem| {
-                elem.start <= state.last_calculated_index
-                    && state.last_calculated_index < elem.end
-            })
-            .ok_or_else(|| DataFusionError::Execution("Expects sort_partition_points to contain state.last_calculated_index".to_string()))?;
+            .position(|elem| elem.start <= idx && idx < elem.end)
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Expects sort_partition_points to contain idx".to_string(),
+                )
+            })?;
         let chunk = &sort_partition_points[chunk_idx];
-        let last_rank_data = range_columns
-            .iter()
-            .map(|c| ScalarValue::try_from_array(c, chunk.end - 1))
-            .collect::<Result<Vec<_>>>()?;
+        let last_rank_data = get_row_at_idx(range_columns, chunk.end - 1)?;
         let empty = self.state.last_rank_data.is_empty();
         if empty || self.state.last_rank_data != last_rank_data {
             self.state.last_rank_data = last_rank_data;
@@ -246,7 +245,7 @@ mod tests {
             .evaluate_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
-        assert_eq!(expected, result);
+        assert_eq!(expected, *result);
         Ok(())
     }
 
@@ -258,7 +257,7 @@ mod tests {
         let result = expr.create_evaluator()?.evaluate_with_rank(8, &ranks)?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
-        assert_eq!(expected, result);
+        assert_eq!(expected, *result);
         Ok(())
     }
 

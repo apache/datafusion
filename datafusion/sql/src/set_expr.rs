@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier};
 
@@ -25,15 +25,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         set_expr: SetExpr,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match set_expr {
-            SetExpr::Select(s) => {
-                self.select_to_plan(*s, planner_context, outer_query_schema)
-            }
-            SetExpr::Values(v) => {
-                self.sql_values_to_plan(v, &planner_context.prepare_param_data_types)
-            }
+            SetExpr::Select(s) => self.select_to_plan(*s, planner_context),
+            SetExpr::Values(v) => self.sql_values_to_plan(v, planner_context),
             SetExpr::SetOperation {
                 op,
                 left,
@@ -45,10 +40,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     SetQuantifier::Distinct | SetQuantifier::None => false,
                 };
 
-                let left_plan =
-                    self.set_expr_to_plan(*left, planner_context, outer_query_schema)?;
-                let right_plan =
-                    self.set_expr_to_plan(*right, planner_context, outer_query_schema)?;
+                let left_plan = self.set_expr_to_plan(*left, planner_context)?;
+                let right_plan = self.set_expr_to_plan(*right, planner_context)?;
                 match (op, all) {
                     (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
                         .union(right_plan)?

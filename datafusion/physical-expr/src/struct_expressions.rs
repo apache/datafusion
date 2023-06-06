@@ -34,7 +34,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     let vec: Vec<_> = args
         .iter()
         .enumerate()
-        .map(|(i, arg)| -> Result<(Field, ArrayRef)> {
+        .map(|(i, arg)| {
             let field_name = format!("c{i}");
             match arg.data_type() {
                 DataType::Utf8
@@ -50,7 +50,11 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64 => Ok((
-                    Field::new(field_name.as_str(), arg.data_type().clone(), true),
+                    Arc::new(Field::new(
+                        field_name.as_str(),
+                        arg.data_type().clone(),
+                        true,
+                    )),
                     arg.clone(),
                 )),
                 data_type => Err(DataFusionError::NotImplemented(format!(

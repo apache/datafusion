@@ -22,7 +22,9 @@ use crate::physical_plan::metrics::{
 /// Stores metrics about the parquet execution for a particular parquet file.
 ///
 /// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [ParquetFileReaderFactory].
+/// through [`ParquetFileReaderFactory`].
+///
+/// [`ParquetFileReaderFactory`]: super::ParquetFileReaderFactory
 #[derive(Debug, Clone)]
 pub struct ParquetFileMetrics {
     /// Number of times the predicate could not be evaluated

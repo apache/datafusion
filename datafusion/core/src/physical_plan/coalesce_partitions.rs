@@ -38,8 +38,8 @@ use crate::physical_plan::{
 };
 
 use super::SendableRecordBatchStream;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::spawn_execution;
+use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -81,7 +81,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])

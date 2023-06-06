@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Result};
 
-pub fn csv_delimiter_to_string(b: u8) -> Result<String, DataFusionError> {
+pub fn csv_delimiter_to_string(b: u8) -> Result<String> {
     let b = &[b];
     let b = std::str::from_utf8(b)
         .map_err(|_| DataFusionError::Internal("Invalid CSV delimiter".to_owned()))?;
     Ok(b.to_owned())
 }
 
-pub fn str_to_byte(s: &String) -> Result<u8, DataFusionError> {
+pub fn str_to_byte(s: &String) -> Result<u8> {
     if s.len() != 1 {
         return Err(DataFusionError::Internal(
             "Invalid CSV delimiter".to_owned(),
@@ -33,7 +33,7 @@ pub fn str_to_byte(s: &String) -> Result<u8, DataFusionError> {
     Ok(s.as_bytes()[0])
 }
 
-pub fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
+pub fn byte_to_string(b: u8) -> Result<String> {
     let b = &[b];
     let b = std::str::from_utf8(b)
         .map_err(|_| DataFusionError::Internal("Invalid CSV delimiter".to_owned()))?;

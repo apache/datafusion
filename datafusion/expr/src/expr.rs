@@ -21,21 +21,17 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::expr_to_columns;
+use crate::udaf;
+use crate::utils::{expr_to_columns, find_out_reference_exprs};
 use crate::window_frame;
 use crate::window_function;
-use crate::AggregateUDF;
 use crate::Operator;
-use crate::ScalarUDF;
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_common::{plan_err, Column};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::ops::Not;
 use std::sync::Arc;
 
 /// `Expr` is a central struct of DataFusion's query API, and
@@ -152,57 +148,21 @@ pub enum Expr {
     /// A sort expression, that can be used to sort values.
     Sort(Sort),
     /// Represents the call of a built-in scalar function with a set of arguments.
-    ScalarFunction {
-        /// The function
-        fun: built_in_function::BuiltinScalarFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-    },
+    ScalarFunction(ScalarFunction),
     /// Represents the call of a user-defined scalar function with arguments.
-    ScalarUDF {
-        /// The function
-        fun: Arc<ScalarUDF>,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-    },
+    ScalarUDF(ScalarUDF),
     /// Represents the call of an aggregate built-in function with arguments.
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
     /// aggregate function
-    AggregateUDF {
-        /// The function
-        fun: Arc<AggregateUDF>,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// Optional filter applied prior to aggregating
-        filter: Option<Box<Expr>>,
-    },
+    AggregateUDF(AggregateUDF),
     /// Returns whether the list contains the expr value.
-    InList {
-        /// The expression to compare
-        expr: Box<Expr>,
-        /// A list of values to compare against
-        list: Vec<Expr>,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    InList(InList),
     /// EXISTS subquery
-    Exists {
-        /// subquery that will produce a single column of data
-        subquery: Subquery,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    Exists(Exists),
     /// IN subquery
-    InSubquery {
-        /// The expression to compare
-        expr: Box<Expr>,
-        /// subquery that will produce a single column of data to compare against
-        subquery: Subquery,
-        /// Whether the expression is negated
-        negated: bool,
-    },
+    InSubquery(InSubquery),
     /// Scalar subquery
     ScalarSubquery(Subquery),
     /// Represents a reference to all fields in a schema.
@@ -214,12 +174,10 @@ pub enum Expr {
     GroupingSet(GroupingSet),
     /// A place holder for parameters in a prepared statement
     /// (e.g. `$foo` or `$1`)
-    Placeholder {
-        /// The identifier of the parameter (e.g, $1 or $foo)
-        id: String,
-        /// The type the parameter will be filled in with
-        data_type: Option<DataType>,
-    },
+    Placeholder(Placeholder),
+    /// A place holder which hold a reference to a qualified field
+    /// in the outer query, used for correlated sub queries.
+    OuterReferenceColumn(DataType, Column),
 }
 
 /// Binary expression
@@ -238,35 +196,6 @@ impl BinaryExpr {
     pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
         Self { left, op, right }
     }
-
-    /// Get the operator precedence
-    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
-    pub fn precedence(&self) -> u8 {
-        match self.op {
-            Operator::Or => 5,
-            Operator::And => 10,
-            Operator::NotEq
-            | Operator::Eq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq => 20,
-            Operator::Plus | Operator::Minus => 30,
-            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
-            Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-            | Operator::RegexMatch
-            | Operator::RegexNotMatch
-            | Operator::RegexIMatch
-            | Operator::RegexNotIMatch
-            | Operator::BitwiseAnd
-            | Operator::BitwiseOr
-            | Operator::BitwiseShiftLeft
-            | Operator::BitwiseShiftRight
-            | Operator::BitwiseXor
-            | Operator::StringConcat => 0,
-        }
-    }
 }
 
 impl Display for BinaryExpr {
@@ -283,7 +212,7 @@ impl Display for BinaryExpr {
         ) -> fmt::Result {
             match expr {
                 Expr::BinaryExpr(child) => {
-                    let p = child.precedence();
+                    let p = child.op.precedence();
                     if p == 0 || p < precedence {
                         write!(f, "({child})")?;
                     } else {
@@ -295,7 +224,7 @@ impl Display for BinaryExpr {
             Ok(())
         }
 
-        let precedence = self.precedence();
+        let precedence = self.op.precedence();
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
@@ -303,7 +232,7 @@ impl Display for BinaryExpr {
 }
 
 /// CASE expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Case {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     pub expr: Option<Box<Expr>>,
@@ -376,6 +305,38 @@ impl Between {
             low,
             high,
         }
+    }
+}
+
+/// ScalarFunction expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScalarFunction {
+    /// The function
+    pub fun: built_in_function::BuiltinScalarFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl ScalarFunction {
+    /// Create a new ScalarFunction expression
+    pub fn new(fun: built_in_function::BuiltinScalarFunction, args: Vec<Expr>) -> Self {
+        Self { fun, args }
+    }
+}
+
+/// ScalarUDF expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ScalarUDF {
+    /// The function
+    pub fun: Arc<crate::ScalarUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+}
+
+impl ScalarUDF {
+    /// Create a new ScalarUDF expression
+    pub fn new(fun: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
+        Self { fun, args }
     }
 }
 
@@ -460,6 +421,8 @@ pub struct AggregateFunction {
     pub distinct: bool,
     /// Optional filter
     pub filter: Option<Box<Expr>>,
+    /// Optional ordering
+    pub order_by: Option<Vec<Expr>>,
 }
 
 impl AggregateFunction {
@@ -468,12 +431,14 @@ impl AggregateFunction {
         args: Vec<Expr>,
         distinct: bool,
         filter: Option<Box<Expr>>,
+        order_by: Option<Vec<Expr>>,
     ) -> Self {
         Self {
             fun,
             args,
             distinct,
             filter,
+            order_by,
         }
     }
 }
@@ -509,6 +474,111 @@ impl WindowFunction {
             order_by,
             window_frame,
         }
+    }
+}
+
+// Exists expression.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Exists {
+    /// subquery that will produce a single column of data
+    pub subquery: Subquery,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl Exists {
+    // Create a new Exists expression.
+    pub fn new(subquery: Subquery, negated: bool) -> Self {
+        Self { subquery, negated }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AggregateUDF {
+    /// The function
+    pub fun: Arc<udaf::AggregateUDF>,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// Optional filter
+    pub filter: Option<Box<Expr>>,
+    /// Optional ORDER BY applied prior to aggregating
+    pub order_by: Option<Vec<Expr>>,
+}
+
+impl AggregateUDF {
+    /// Create a new AggregateUDF expression
+    pub fn new(
+        fun: Arc<udaf::AggregateUDF>,
+        args: Vec<Expr>,
+        filter: Option<Box<Expr>>,
+        order_by: Option<Vec<Expr>>,
+    ) -> Self {
+        Self {
+            fun,
+            args,
+            filter,
+            order_by,
+        }
+    }
+}
+
+/// InList expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct InList {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// The list of values to compare against
+    pub list: Vec<Expr>,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl InList {
+    /// Create a new InList expression
+    pub fn new(expr: Box<Expr>, list: Vec<Expr>, negated: bool) -> Self {
+        Self {
+            expr,
+            list,
+            negated,
+        }
+    }
+}
+
+/// IN subquery
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct InSubquery {
+    /// The expression to compare
+    pub expr: Box<Expr>,
+    /// Subquery that will produce a single column of data to compare against
+    pub subquery: Subquery,
+    /// Whether the expression is negated
+    pub negated: bool,
+}
+
+impl InSubquery {
+    /// Create a new InSubquery expression
+    pub fn new(expr: Box<Expr>, subquery: Subquery, negated: bool) -> Self {
+        Self {
+            expr,
+            subquery,
+            negated,
+        }
+    }
+}
+
+/// Placeholder
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Placeholder {
+    /// The identifier of the parameter (e.g, $1 or $foo)
+    pub id: String,
+    /// The type the parameter will be filled in with
+    pub data_type: Option<DataType>,
+}
+
+impl Placeholder {
+    /// Create a new Placeholder expression
+    pub fn new(id: String, data_type: Option<DataType>) -> Self {
+        Self { id, data_type }
     }
 }
 
@@ -596,11 +666,12 @@ impl Expr {
             Expr::Case { .. } => "Case",
             Expr::Cast { .. } => "Cast",
             Expr::Column(..) => "Column",
+            Expr::OuterReferenceColumn(_, _) => "Outer",
             Expr::Exists { .. } => "Exists",
             Expr::GetIndexedField { .. } => "GetIndexedField",
             Expr::GroupingSet(..) => "GroupingSet",
             Expr::InList { .. } => "InList",
-            Expr::InSubquery { .. } => "InSubquery",
+            Expr::InSubquery(..) => "InSubquery",
             Expr::IsNotNull(..) => "IsNotNull",
             Expr::IsNull(..) => "IsNull",
             Expr::Like { .. } => "Like",
@@ -615,11 +686,11 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
-            Expr::Placeholder { .. } => "Placeholder",
+            Expr::Placeholder(_) => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
-            Expr::ScalarFunction { .. } => "ScalarFunction",
+            Expr::ScalarFunction(..) => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
-            Expr::ScalarUDF { .. } => "ScalarUDF",
+            Expr::ScalarUDF(..) => "ScalarUDF",
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::Sort { .. } => "Sort",
             Expr::TryCast { .. } => "TryCast",
@@ -668,18 +739,6 @@ impl Expr {
         binary_expr(self, Operator::Or, other)
     }
 
-    /// Return `!self`
-    #[allow(clippy::should_implement_trait)]
-    pub fn not(self) -> Expr {
-        !self
-    }
-
-    /// Calculate the modulus of two expressions.
-    /// Return `self % other`
-    pub fn modulus(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::Modulo, other)
-    }
-
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
         Expr::Like(Like::new(false, Box::new(self), Box::new(other), None))
@@ -716,21 +775,15 @@ impl Expr {
     /// Return `self IN <list>` if `negated` is false, otherwise
     /// return `self NOT IN <list>`.a
     pub fn in_list(self, list: Vec<Expr>, negated: bool) -> Expr {
-        Expr::InList {
-            expr: Box::new(self),
-            list,
-            negated,
-        }
+        Expr::InList(InList::new(Box::new(self), list, negated))
     }
 
     /// Return `IsNull(Box(self))
-    #[allow(clippy::wrong_self_convention)]
     pub fn is_null(self) -> Expr {
         Expr::IsNull(Box::new(self))
     }
 
     /// Return `IsNotNull(Box(self))
-    #[allow(clippy::wrong_self_convention)]
     pub fn is_not_null(self) -> Expr {
         Expr::IsNotNull(Box::new(self))
     }
@@ -775,6 +828,26 @@ impl Expr {
         Expr::IsNotUnknown(Box::new(self))
     }
 
+    /// return `self BETWEEN low AND high`
+    pub fn between(self, low: Expr, high: Expr) -> Expr {
+        Expr::Between(Between::new(
+            Box::new(self),
+            false,
+            Box::new(low),
+            Box::new(high),
+        ))
+    }
+
+    /// return `self NOT BETWEEN low AND high`
+    pub fn not_between(self, low: Expr, high: Expr) -> Expr {
+        Expr::Between(Between::new(
+            Box::new(self),
+            true,
+            Box::new(low),
+            Box::new(high),
+        ))
+    }
+
     pub fn try_into_col(&self) -> Result<Column> {
         match self {
             Expr::Column(it) => Ok(it.clone()),
@@ -789,33 +862,10 @@ impl Expr {
 
         Ok(using_columns)
     }
-}
 
-impl Not for Expr {
-    type Output = Self;
-
-    fn not(self) -> Self::Output {
-        match self {
-            Expr::Like(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::ILike(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
-            Expr::SimilarTo(Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
-            _ => Expr::Not(Box::new(self)),
-        }
+    /// Return true when the expression contains out reference(correlated) expressions.
+    pub fn contains_outer(&self) -> bool {
+        !find_out_reference_exprs(self).is_empty()
     }
 }
 
@@ -834,6 +884,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{expr:?} AS {alias}"),
             Expr::Column(c) => write!(f, "{c}"),
+            Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{v:?}"),
             Expr::Case(case) => {
@@ -865,24 +916,24 @@ impl fmt::Debug for Expr {
             Expr::IsNotTrue(expr) => write!(f, "{expr:?} IS NOT TRUE"),
             Expr::IsNotFalse(expr) => write!(f, "{expr:?} IS NOT FALSE"),
             Expr::IsNotUnknown(expr) => write!(f, "{expr:?} IS NOT UNKNOWN"),
-            Expr::Exists {
+            Expr::Exists(Exists {
                 subquery,
                 negated: true,
-            } => write!(f, "NOT EXISTS ({subquery:?})"),
-            Expr::Exists {
+            }) => write!(f, "NOT EXISTS ({subquery:?})"),
+            Expr::Exists(Exists {
                 subquery,
                 negated: false,
-            } => write!(f, "EXISTS ({subquery:?})"),
-            Expr::InSubquery {
+            }) => write!(f, "EXISTS ({subquery:?})"),
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated: true,
-            } => write!(f, "{expr:?} NOT IN ({subquery:?})"),
-            Expr::InSubquery {
+            }) => write!(f, "{expr:?} NOT IN ({subquery:?})"),
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated: false,
-            } => write!(f, "{expr:?} IN ({subquery:?})"),
+            }) => write!(f, "{expr:?} IN ({subquery:?})"),
             Expr::ScalarSubquery(subquery) => write!(f, "({subquery:?})"),
             Expr::BinaryExpr(expr) => write!(f, "{expr}"),
             Expr::Sort(Sort {
@@ -901,10 +952,10 @@ impl fmt::Debug for Expr {
                     write!(f, " NULLS LAST")
                 }
             }
-            Expr::ScalarFunction { fun, args, .. } => {
-                fmt_function(f, &fun.to_string(), false, args, false)
+            Expr::ScalarFunction(func) => {
+                fmt_function(f, &func.fun.to_string(), false, &func.args, false)
             }
-            Expr::ScalarUDF { fun, ref args, .. } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 fmt_function(f, &fun.name, false, args, false)
             }
             Expr::WindowFunction(WindowFunction {
@@ -933,23 +984,31 @@ impl fmt::Debug for Expr {
                 distinct,
                 ref args,
                 filter,
+                order_by,
                 ..
             }) => {
                 fmt_function(f, &fun.to_string(), *distinct, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
+                if let Some(ob) = order_by {
+                    write!(f, " ORDER BY {:?}", ob)?;
+                }
                 Ok(())
             }
-            Expr::AggregateUDF {
+            Expr::AggregateUDF(AggregateUDF {
                 fun,
                 ref args,
                 filter,
+                order_by,
                 ..
-            } => {
+            }) => {
                 fmt_function(f, &fun.name, false, args, false)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
+                }
+                if let Some(ob) = order_by {
+                    write!(f, " ORDER BY {:?}", ob)?;
                 }
                 Ok(())
             }
@@ -1013,11 +1072,11 @@ impl fmt::Debug for Expr {
                     write!(f, " SIMILAR TO {pattern:?}")
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 if *negated {
                     write!(f, "{expr:?} NOT IN ({list:?})")
                 } else {
@@ -1074,7 +1133,7 @@ impl fmt::Debug for Expr {
                     )
                 }
             },
-            Expr::Placeholder { id, .. } => write!(f, "{id}"),
+            Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
         }
     }
 }
@@ -1114,6 +1173,7 @@ fn create_name(e: &Expr) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
+        Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(binary_expr) => {
@@ -1248,10 +1308,10 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{expr} IS NOT UNKNOWN"))
         }
-        Expr::Exists { negated: true, .. } => Ok("NOT EXISTS".to_string()),
-        Expr::Exists { negated: false, .. } => Ok("EXISTS".to_string()),
-        Expr::InSubquery { negated: true, .. } => Ok("NOT IN".to_string()),
-        Expr::InSubquery { negated: false, .. } => Ok("IN".to_string()),
+        Expr::Exists(Exists { negated: true, .. }) => Ok("NOT EXISTS".to_string()),
+        Expr::Exists(Exists { negated: false, .. }) => Ok("EXISTS".to_string()),
+        Expr::InSubquery(InSubquery { negated: true, .. }) => Ok("NOT IN".to_string()),
+        Expr::InSubquery(InSubquery { negated: false, .. }) => Ok("IN".to_string()),
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
@@ -1259,10 +1319,12 @@ fn create_name(e: &Expr) -> Result<String> {
             let expr = create_name(expr)?;
             Ok(format!("{expr}[{key}]"))
         }
-        Expr::ScalarFunction { fun, args, .. } => {
-            create_function_name(&fun.to_string(), false, args)
+        Expr::ScalarFunction(func) => {
+            create_function_name(&func.fun.to_string(), false, &func.args)
         }
-        Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
+            create_function_name(&fun.name, false, args)
+        }
         Expr::WindowFunction(WindowFunction {
             fun,
             args,
@@ -1286,25 +1348,35 @@ fn create_name(e: &Expr) -> Result<String> {
             distinct,
             args,
             filter,
+            order_by,
         }) => {
-            let name = create_function_name(&fun.to_string(), *distinct, args)?;
+            let mut name = create_function_name(&fun.to_string(), *distinct, args)?;
             if let Some(fe) = filter {
-                Ok(format!("{name} FILTER (WHERE {fe})"))
-            } else {
-                Ok(name)
-            }
+                name = format!("{name} FILTER (WHERE {fe})");
+            };
+            if let Some(order_by) = order_by {
+                name = format!("{name} ORDER BY {order_by:?}");
+            };
+            Ok(name)
         }
-        Expr::AggregateUDF { fun, args, filter } => {
+        Expr::AggregateUDF(AggregateUDF {
+            fun,
+            args,
+            filter,
+            order_by,
+        }) => {
             let mut names = Vec::with_capacity(args.len());
             for e in args {
                 names.push(create_name(e)?);
             }
-            let filter = if let Some(fe) = filter {
-                format!(" FILTER (WHERE {fe})")
-            } else {
-                "".to_string()
-            };
-            Ok(format!("{}({}){}", fun.name, names.join(","), filter))
+            let mut info = String::new();
+            if let Some(fe) = filter {
+                info += &format!(" FILTER (WHERE {fe})");
+            }
+            if let Some(ob) = order_by {
+                info += &format!(" ORDER BY ({:?})", ob);
+            }
+            Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }
         Expr::GroupingSet(grouping_set) => match grouping_set {
             GroupingSet::Rollup(exprs) => {
@@ -1321,11 +1393,11 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("GROUPING SETS ({})", list_of_names.join(", ")))
             }
         },
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => {
+        }) => {
             let expr = create_name(expr)?;
             let list = list.iter().map(create_name);
             if *negated {
@@ -1356,7 +1428,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder { id, .. } => Ok((*id).to_string()),
+        Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
     }
 }
 
@@ -1406,11 +1478,6 @@ mod test {
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.display_name()?);
         Ok(())
-    }
-
-    #[test]
-    fn test_not() {
-        assert_eq!(lit(1).not(), !lit(1));
     }
 
     #[test]

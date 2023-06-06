@@ -325,36 +325,42 @@ AS tbl(int_col, float_col, negative_col, summation);
 10 20 -30 4
 
 
-query IIRIII
+query IIRIIIIII
 SELECT
   count(*) AS count_all,
   count(c3) AS count_c3,
   avg(c3) AS avg,
   sum(c3) AS sum,
   max(c3) AS max,
-  min(c3) AS min
+  min(c3) AS min,
+  bit_and(c3) as bit_and,
+  bit_or(c3) as bit_or,
+  bit_xor(c3) as bit_xor
 FROM aggregate_test_100_by_sql;
 ----
-100 100 7.81 781 125 -117
+100 100 7.81 781 125 -117 0 -1 -61
 
 
-query IIRIII
+query IIRIIIIII
 select
   c2,
   sum(c3) sum_c3,
   avg(c3) avg_c3,
   max(c3) max_c3,
   min(c3) min_c3,
-  count(c3) count_c3
+  count(c3) count_c3,
+  bit_and(c3) bit_and_c3,
+  bit_or(c3) bit_or_c3,
+  bit_xor(c3) bit_xor_c3
 from aggregate_test_100_by_sql
 group by c2
 order by c2;
 ----
-1 367 16.681818181818 125 -99 22
-2 184 8.363636363636 122 -117 22
-3 395 20.789473684211 123 -101 19
-4 29 1.260869565217 123 -117 23
-5 -194 -13.857142857143 118 -101 14
+1 367 16.681818181818 125 -99 22 0 -1 -47
+2 184 8.363636363636 122 -117 22 0 -1 -2
+3 395 20.789473684211 123 -101 19 0 -1 101
+4 29 1.260869565217 123 -117 23 0 -1 15
+5 -194 -13.857142857143 118 -101 14 0 -1 -122
 
 
 query I
@@ -572,8 +578,38 @@ e 4 97 -13181 2047637360 6176835796788944083 158 53000 2042457019 97260165026400
 e 5 -86 32514 -467659022 -8012578250188146150 254 2684 2861911482 2126626171973341689 0.12559289 0.014793053078 gxfHWUF8XgY2KdFxigxvNEXe2V2XMl
 e 5 64 -26526 1689098844 8950618259486183091 224 45253 662099130 16127995415060805595 0.2897315 0.575945048386 56MZa5O1hVtX4c5sbnCfxuX5kDChqI
 
+# distinct_from logic for floats
+query BBBBBBBBBBB
+select 
+    'nan'::float is distinct from 'nan'::float v7,
+    'nan'::float is not distinct from 'nan'::float v8,
+    'nan'::float is not distinct from null v9,
+    'nan'::float is distinct from null v10,
+    null is distinct from 'nan'::float v11,
+    null is not distinct from 'nan'::float v12,
+    1::float is distinct from 2::float v13,
+    'nan'::float is distinct from 1::float v14,
+    'nan'::float is not distinct from 1::float v15,
+    1::float is not distinct from null v16,
+    1::float is distinct from null v17
+;
+----
+false true false true true false true true false false true
+
 ########
 # Clean up after the test
 ########
 statement ok
 DROP TABLE aggregate_test_100_by_sql
+
+
+statement ok
+CREATE TABLE empty_table (
+  c1  TEXT,
+  c2  INT
+);
+
+
+query TI
+select * from empty_table;
+----

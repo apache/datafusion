@@ -151,20 +151,15 @@ impl<'a, R: Read> Reader<'a, R> {
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-
-    /// Returns the next batch of results (defined by `self.batch_size`), or `None` if there
-    /// are no more results
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> ArrowResult<Option<RecordBatch>> {
-        self.array_reader.next_batch(self.batch_size)
-    }
 }
 
 impl<'a, R: Read> Iterator for Reader<'a, R> {
     type Item = ArrowResult<RecordBatch>;
 
+    /// Returns the next batch of results (defined by `self.batch_size`), or `None` if there
+    /// are no more results.
     fn next(&mut self) -> Option<Self::Item> {
-        self.next().transpose()
+        self.array_reader.next_batch(self.batch_size)
     }
 }
 

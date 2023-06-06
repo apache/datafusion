@@ -18,15 +18,15 @@
 [package]
 name = "datafusion-sql"
 description = "DataFusion SQL Query Planner"
-version = "17.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = ["datafusion", "sql", "parser", "planner"]
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion_sql"
@@ -37,11 +37,15 @@ default = ["unicode_expressions"]
 unicode_expressions = []
 
 [dependencies]
-arrow-schema = "32.0.0"
-datafusion-common = { path = "../common", version = "17.0.0" }
-datafusion-expr = { path = "../expr", version = "17.0.0" }
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+datafusion-common = { path = "../common", version = "26.0.0" }
+datafusion-expr = { path = "../expr", version = "26.0.0" }
 log = "^0.4"
-sqlparser = "0.30"
+sqlparser = "0.34"
 
 [dev-dependencies]
-rstest = "0.16"
+ctor = "0.2.0"
+env_logger = "0.10"
+paste = "^1.0"
+rstest = "0.17"

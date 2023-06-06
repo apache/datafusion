@@ -18,10 +18,10 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "17.0.0"
+version = "26.0.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-keywords = [ "arrow", "datafusion", "query", "sql" ]
+keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
@@ -29,15 +29,15 @@ rust-version = "1.62"
 readme = "README.md"
 
 [dependencies]
-arrow = "32.0.0"
+arrow = "40.0.0"
 async-trait = "0.1.41"
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "17.0.0" }
+datafusion = { path = "../datafusion/core", version = "26.0.0" }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "0.1", default-features = false }
-object_store = { version = "0.5.0", features = ["aws", "gcp"] }
+object_store = { version = "0.5.5", features = ["aws", "gcp", "aws_profile"] }
 parking_lot = { version = "0.12" }
-rustyline = "10.0"
+rustyline = "11.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 url = "2.2"

@@ -17,6 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, Result};
+use datafusion_expr::expr::Exists;
+use datafusion_expr::expr::InSubquery;
 use datafusion_expr::{Expr, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::ast::Query;
@@ -30,16 +32,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        Ok(Expr::Exists {
+        let old_outer_query_schema =
+            planner_context.set_outer_query_schema(Some(input_schema.clone()));
+        let sub_plan = self.query_to_plan(subquery, planner_context)?;
+        let outer_ref_columns = sub_plan.all_out_ref_exprs();
+        planner_context.set_outer_query_schema(old_outer_query_schema);
+        Ok(Expr::Exists(Exists {
             subquery: Subquery {
-                subquery: Arc::new(self.subquery_to_plan(
-                    subquery,
-                    planner_context,
-                    input_schema,
-                )?),
+                subquery: Arc::new(sub_plan),
+                outer_ref_columns,
             },
             negated,
-        })
+        }))
     }
 
     pub(super) fn parse_in_subquery(
@@ -50,17 +54,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        Ok(Expr::InSubquery {
-            expr: Box::new(self.sql_to_expr(expr, input_schema, planner_context)?),
-            subquery: Subquery {
-                subquery: Arc::new(self.subquery_to_plan(
-                    subquery,
-                    planner_context,
-                    input_schema,
-                )?),
+        let old_outer_query_schema =
+            planner_context.set_outer_query_schema(Some(input_schema.clone()));
+        let sub_plan = self.query_to_plan(subquery, planner_context)?;
+        let outer_ref_columns = sub_plan.all_out_ref_exprs();
+        planner_context.set_outer_query_schema(old_outer_query_schema);
+        let expr = Box::new(self.sql_to_expr(expr, input_schema, planner_context)?);
+        Ok(Expr::InSubquery(InSubquery::new(
+            expr,
+            Subquery {
+                subquery: Arc::new(sub_plan),
+                outer_ref_columns,
             },
             negated,
-        })
+        )))
     }
 
     pub(super) fn parse_scalar_subquery(
@@ -69,12 +76,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        let old_outer_query_schema =
+            planner_context.set_outer_query_schema(Some(input_schema.clone()));
+        let sub_plan = self.query_to_plan(subquery, planner_context)?;
+        let outer_ref_columns = sub_plan.all_out_ref_exprs();
+        planner_context.set_outer_query_schema(old_outer_query_schema);
         Ok(Expr::ScalarSubquery(Subquery {
-            subquery: Arc::new(self.subquery_to_plan(
-                subquery,
-                planner_context,
-                input_schema,
-            )?),
+            subquery: Arc::new(sub_plan),
+            outer_ref_columns,
         }))
     }
 }

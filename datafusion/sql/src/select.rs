@@ -17,24 +17,25 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::{
-    check_columns_satisfy_exprs, extract_aliases, normalize_ident, rebase_expr,
-    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
+    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
+    resolve_columns, resolve_positions_to_exprs,
 };
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::expr_rewriter::{normalize_col, normalize_col_with_schemas};
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::expr_rewriter::{
+    normalize_col, normalize_col_with_schemas_and_ambiguity_check,
+};
 use datafusion_expr::logical_plan::builder::project;
-use datafusion_expr::logical_plan::Join as HashJoin;
-use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_column_exprs, find_window_exprs,
+    find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
-use sqlparser::ast::{Select, SelectItem, TableWithJoins};
+
+use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
+use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -42,9 +43,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
-        select: Select,
+        mut select: Select,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
         if !select.cluster_by.is_empty() {
@@ -59,21 +59,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if select.top.is_some() {
             return Err(DataFusionError::NotImplemented("TOP".to_string()));
         }
+        if !select.sort_by.is_empty() {
+            return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
+        }
 
         // process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
-        // build from schema for unqualifier column ambiguous check
-        // we should get only one field for unqualifier column from schema.
-        let from_schema = self.build_schema_for_ambiguous_check(&plan)?;
 
         // process `where` clause
-        let plan = self.plan_selection(
-            select.selection,
-            plan,
-            outer_query_schema,
-            planner_context,
-        )?;
+        let plan = self.plan_selection(select.selection, plan, planner_context)?;
+
+        // handle named windows before processing the projection expression
+        check_conflicting_windows(&select.named_window)?;
+        match_window_definitions(&mut select.projection, &select.named_window)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
@@ -81,7 +80,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             select.projection,
             empty_from,
             planner_context,
-            &from_schema,
         )?;
 
         // having and group by clause may reference aliases defined in select projection
@@ -204,14 +202,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let plan = if select.distinct {
+        let distinct = select
+            .distinct
+            .map(|distinct| match distinct {
+                Distinct::Distinct => Ok(true),
+                Distinct::On(_) => Err(DataFusionError::NotImplemented(
+                    "DISTINCT ON Exprs not supported".to_string(),
+                )),
+            })
+            .transpose()?
+            .unwrap_or(false);
+
+        let plan = if distinct {
             LogicalPlanBuilder::from(plan).distinct()?.build()
         } else {
             Ok(plan)
         }?;
 
         // DISTRIBUTE BY
-        if !select.distribute_by.is_empty() {
+        let plan = if !select.distribute_by.is_empty() {
             let x = select
                 .distribute_by
                 .iter()
@@ -225,39 +234,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
-                .build()
+                .build()?
         } else {
-            Ok(plan)
-        }
+            plan
+        };
+
+        Ok(plan)
     }
 
     fn plan_selection(
         &self,
         selection: Option<SQLExpr>,
         plan: LogicalPlan,
-        outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
-                let mut join_schema = (**plan.schema()).clone();
-                let mut all_schemas: Vec<DFSchemaRef> = vec![];
-                for schema in plan.all_schemas() {
-                    all_schemas.push(schema.clone());
-                }
-                if let Some(outer) = outer_query_schema {
-                    all_schemas.push(Arc::new(outer.clone()));
-                    join_schema.merge(outer);
-                }
-                let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
+                let fallback_schemas = plan.fallback_normalize_schemas();
+                let outer_query_schema = planner_context.outer_query_schema().cloned();
+                let outer_query_schema_vec = outer_query_schema
+                    .as_ref()
+                    .map(|schema| vec![schema])
+                    .unwrap_or_else(Vec::new);
 
                 let filter_expr =
-                    self.sql_to_expr(predicate_expr, &join_schema, planner_context)?;
+                    self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
-                let filter_expr = normalize_col_with_schemas(
+                let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    x.as_slice(),
+                    &[&[plan.schema()], &fallback_schemas, &outer_query_schema_vec],
                     &[using_columns],
                 )?;
 
@@ -305,19 +311,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-        from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         projection
             .into_iter()
-            .map(|expr| {
-                self.sql_select_to_rex(
-                    expr,
-                    plan,
-                    empty_from,
-                    planner_context,
-                    from_schema,
-                )
-            })
+            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from, planner_context))
             .flat_map(|result| match result {
                 Ok(vec) => vec.into_iter().map(Ok).collect(),
                 Err(err) => vec![Err(err)],
@@ -332,26 +329,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-        from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
-                Ok(vec![normalize_col(expr, plan)?])
+                let col = normalize_col_with_schemas_and_ambiguity_check(
+                    expr,
+                    &[&[plan.schema()]],
+                    &plan.using_columns()?,
+                )?;
+                Ok(vec![col])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
                     self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                self.column_reference_ambiguous_check(
-                    from_schema,
-                    &[select_expr.clone()],
+                let col = normalize_col_with_schemas_and_ambiguity_check(
+                    select_expr,
+                    &[&[plan.schema()]],
+                    &plan.using_columns()?,
                 )?;
-                let expr = Alias(Box::new(select_expr), normalize_ident(alias));
-                Ok(vec![normalize_col(expr, plan)?])
+                let expr = Alias(Box::new(col), self.normalizer.normalize(alias));
+                Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
-                Self::check_wildcard_options(options)?;
+                Self::check_wildcard_options(&options)?;
 
                 if empty_from {
                     return Err(DataFusionError::Plan(
@@ -359,87 +360,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ));
                 }
                 // do not expand from outer schema
-                expand_wildcard(plan.schema().as_ref(), plan)
+                expand_wildcard(plan.schema().as_ref(), plan, Some(options))
             }
             SelectItem::QualifiedWildcard(ref object_name, options) => {
-                Self::check_wildcard_options(options)?;
-
+                Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(&qualifier, plan.schema().as_ref())
+                expand_qualified_wildcard(
+                    &qualifier,
+                    plan.schema().as_ref(),
+                    Some(options),
+                )
             }
         }
     }
 
-    /// ambiguous check for unqualifier column
-    fn column_reference_ambiguous_check(
-        &self,
-        schema: &DFSchema,
-        exprs: &[Expr],
-    ) -> Result<()> {
-        find_column_exprs(exprs)
-            .iter()
-            .try_for_each(|col| match col {
-                Expr::Column(col) => match &col.relation {
-                    None => {
-                        // should get only one field in from_schema.
-                        if schema.fields_with_unqualified_name(&col.name).len() != 1 {
-                            Err(DataFusionError::Internal(format!(
-                                "column reference {} is ambiguous",
-                                col.name
-                            )))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                    _ => Ok(()),
-                },
-                _ => Ok(()),
-            })
-    }
-
-    fn check_wildcard_options(options: WildcardAdditionalOptions) -> Result<()> {
+    fn check_wildcard_options(options: &WildcardAdditionalOptions) -> Result<()> {
         let WildcardAdditionalOptions {
-            opt_exclude,
-            opt_except,
+            // opt_exclude is handled
+            opt_exclude: _opt_exclude,
+            opt_except: _opt_except,
             opt_rename,
+            opt_replace,
         } = options;
 
-        if opt_exclude.is_some() || opt_except.is_some() || opt_rename.is_some() {
+        if opt_rename.is_some() || opt_replace.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with EXCLUDE, EXCEPT or RENAME not supported ".to_string(),
+                "wildcard * with RENAME or REPLACE not supported ".to_string(),
             ))
         } else {
             Ok(())
         }
-    }
-
-    /// build schema for unqualifier column ambiguous check
-    fn build_schema_for_ambiguous_check(&self, plan: &LogicalPlan) -> Result<DFSchema> {
-        let mut fields = plan.schema().fields().clone();
-
-        let metadata = plan.schema().metadata().clone();
-        if let LogicalPlan::Join(HashJoin {
-            join_constraint: HashJoinConstraint::Using,
-            ref on,
-            ref left,
-            ..
-        }) = plan
-        {
-            // For query: select id from t1 join t2 using(id), this is legal.
-            // We should dedup the fields for cols in using clause.
-            for join_keys in on.iter() {
-                let join_col = &join_keys.0.try_into_col()?;
-                let left_field = left.schema().field_from_column(join_col)?;
-                fields.retain(|field| {
-                    field.unqualified_column().name
-                        != left_field.unqualified_column().name
-                });
-                fields.push(left_field.clone());
-            }
-        }
-
-        DFSchema::new_with_metadata(fields, metadata)
     }
 
     /// Wrap a plan in a projection
@@ -557,4 +508,50 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+}
+
+// If there are any multiple-defined windows, we raise an error.
+fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()> {
+    for (i, window_def_i) in window_defs.iter().enumerate() {
+        for window_def_j in window_defs.iter().skip(i + 1) {
+            if window_def_i.0 == window_def_j.0 {
+                return Err(DataFusionError::Plan(format!(
+                    "The window {} is defined multiple times!",
+                    window_def_i.0
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+// If the projection is done over a named window, that window
+// name must be defined. Otherwise, it gives an error.
+fn match_window_definitions(
+    projection: &mut [SelectItem],
+    named_windows: &[NamedWindowDefinition],
+) -> Result<()> {
+    for proj in projection.iter_mut() {
+        if let SelectItem::ExprWithAlias {
+            expr: SQLExpr::Function(f),
+            alias: _,
+        }
+        | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
+        {
+            for NamedWindowDefinition(window_ident, window_spec) in named_windows.iter() {
+                if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                    if ident.eq(window_ident) {
+                        f.over = Some(WindowType::WindowSpec(window_spec.clone()))
+                    }
+                }
+            }
+            // All named windows must be defined with a WindowSpec.
+            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                return Err(DataFusionError::Plan(format!(
+                    "The window {ident} is not defined!"
+                )));
+            }
+        }
+    }
+    Ok(())
 }

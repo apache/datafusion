@@ -1,0 +1,101 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+###############
+# Error tests #
+###############
+
+# Missing `STORED AS` and `LOCATION` clauses
+statement error DataFusion error: SQL error: ParserError\("Missing STORED AS clause in CREATE EXTERNAL TABLE statement"\)
+CREATE EXTERNAL TABLE t
+
+# Missing `STORED AS` clause
+statement error DataFusion error: SQL error: ParserError\("Missing STORED AS clause in CREATE EXTERNAL TABLE statement"\)
+CREATE EXTERNAL TABLE t LOCATION 'foo.csv'
+
+# Missing `LOCATION` clause
+statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clause in CREATE EXTERNAL TABLE statement"\)
+CREATE EXTERNAL TABLE t STORED AS CSV
+
+# Option value is missing
+statement error DataFusion error: SQL error: ParserError\("Expected literal string, found: \)"\)
+CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
+
+# Missing `(` in WITH ORDER clause
+statement error DataFusion error: SQL error: ParserError\("Expected \(, found: c1"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'
+
+# Missing `)` in WITH ORDER clause
+statement error DataFusion error: SQL error: ParserError\("Expected \), found: LOCATION"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'
+
+# Missing `ROW` in WITH HEADER clause
+statement error DataFusion error: SQL error: ParserError\("Expected ROW, found: LOCATION"\)
+CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
+
+# Missing `BY` in PARTITIONED clause
+statement error DataFusion error: SQL error: ParserError\("Expected BY, found: LOCATION"\)
+CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
+
+# Missing `TYPE` in COMPRESSION clause
+statement error DataFusion error: SQL error: ParserError\("Expected TYPE, found: LOCATION"\)
+CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'
+
+# Invalid compression type
+statement error DataFusion error: SQL error: ParserError\("Unsupported file compression type ZZZ"\)
+CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'
+
+# Duplicate `STORED AS` clause
+statement error DataFusion error: SQL error: ParserError\("STORED AS specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'
+
+# Duplicate `LOCATION` clause
+statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
+
+# Duplicate `WITH HEADER ROW` clause
+statement error DataFusion error: SQL error: ParserError\("WITH HEADER ROW specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER ROW WITH HEADER ROW LOCATION 'foo.csv'
+
+# Duplicate `DELIMITER` clause
+statement error DataFusion error: SQL error: ParserError\("DELIMITER specified more than once"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '-' DELIMITER '+' LOCATION 'foo.csv'
+
+# Duplicate `COMPRESSION TYPE` clause
+statement error DataFusion error: SQL error: ParserError\("COMPRESSION TYPE specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE BZIP2 COMPRESSION TYPE XZ COMPRESSION TYPE ZSTD COMPRESSION TYPE GZIP LOCATION 'foo.csv'
+
+# Duplicate `PARTITIONED BY` clause
+statement error DataFusion error: SQL error: ParserError\("PARTITIONED BY specified more than once"\)
+create EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV PARTITIONED BY (c1) partitioned by (c2) LOCATION 'foo.csv'
+
+# Duplicate `OPTIONS` clause
+statement error DataFusion error: SQL error: ParserError\("OPTIONS specified more than once"\)
+CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('k1' 'v1', 'k2' 'v2') OPTIONS ('k3' 'v3') LOCATION 'foo.csv'
+
+# With typo error
+statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: HEAD"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEAD ROW LOCATION 'foo.csv';
+
+# Missing `anything` in WITH clause
+statement error DataFusion error: SQL error: ParserError\("Expected HEADER, found: LOCATION"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';
+
+# Unrecognized random clause
+statement error DataFusion error: SQL error: ParserError\("Unexpected token FOOBAR"\)
+CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV FOOBAR BARBAR BARFOO LOCATION 'foo.csv';

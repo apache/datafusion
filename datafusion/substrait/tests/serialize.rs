@@ -17,8 +17,10 @@
 
 #[cfg(test)]
 mod tests {
-
-    use datafusion_substrait::consumer::from_substrait_plan;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::logical_expr::LogicalPlanBuilder;
+    use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+    use datafusion_substrait::logical_plan::producer;
     use datafusion_substrait::serializer;
 
     use datafusion::error::Result;
@@ -41,13 +43,22 @@ mod tests {
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
-        // #[allow(deprecated)]
-        // let plan = ctx.optimize(&plan)?;
         let plan_str_ref = format!("{plan_ref:?}");
         let plan_str = format!("{plan:?}");
         assert_eq!(plan_str_ref, plan_str);
         // Delete test binary file
         fs::remove_file(path)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn table_scan_without_projection() -> Result<()> {
+        let ctx = create_context().await?;
+        let table = provider_as_source(ctx.table_provider("data").await?);
+        let table_scan = LogicalPlanBuilder::scan("data", table, None)?.build()?;
+        let convert_result = producer::to_substrait_plan(&table_scan, &ctx);
+        assert!(convert_result.is_ok());
 
         Ok(())
     }

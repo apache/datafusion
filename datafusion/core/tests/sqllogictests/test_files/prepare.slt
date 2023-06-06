@@ -22,7 +22,7 @@
 statement ok
 create table person (id int, first_name varchar, last_name varchar, age int, state varchar, salary double, birthday timestamp, "😀" int) as values (1, 'jane', 'smith', 20, 'MA', 100000.45, '2000-11-12T00:00:00'::timestamp, 99);
 
-query C rowsort
+query ITTITRPI rowsort
 select * from person;
 ----
 1 jane smith 20 MA 100000.45 2000-11-12T00:00:00 99

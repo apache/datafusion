@@ -473,7 +473,8 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("ParquetExec: limit=Some(10)"));
+        assert!(formatted.contains("ParquetExec: "));
+        assert!(formatted.contains("projection=[bool_col, int_col], limit=10"));
         Ok(())
     }
 
@@ -500,8 +501,7 @@ mod tests {
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Projection: abc.column1, abc.column2, abc.column3\
-        \n      TableScan: abc projection=[column1, column2, column3]";
+        \n    TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
 
         let dataframe = session_ctx
@@ -512,9 +512,8 @@ mod tests {
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Projection: abc.column1, abc.column2, abc.column3\
-        \n      Filter: abc.column2 = Int64(5)\
-        \n        TableScan: abc projection=[column1, column2, column3]";
+        \n    Filter: abc.column2 = Int64(5)\
+        \n      TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
 
         let dataframe = session_ctx
@@ -525,9 +524,8 @@ mod tests {
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Projection: abc.column1, abc.column2\
-        \n      Filter: abc.column2 = Int64(5)\
-        \n        TableScan: abc projection=[column1, column2]";
+        \n    Filter: abc.column2 = Int64(5)\
+        \n      TableScan: abc projection=[column1, column2]";
         assert_eq!(expected, actual);
 
         Ok(())

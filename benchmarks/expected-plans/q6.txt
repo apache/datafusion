@@ -1,4 +1,0 @@
-Projection: SUM(lineitem.l_extendedprice * lineitem.l_discount) AS revenue
-  Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice * lineitem.l_discount)]]
-    Filter: lineitem.l_shipdate >= Date32("8766") AND lineitem.l_shipdate < Date32("9131") AND lineitem.l_discount >= Decimal128(Some(5),15,2) AND lineitem.l_discount <= Decimal128(Some(7),15,2) AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-      TableScan: lineitem projection=[l_quantity, l_extendedprice, l_discount, l_shipdate]

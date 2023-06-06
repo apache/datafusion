@@ -21,9 +21,24 @@
 
 This crate includes several examples of how to use various DataFusion APIs and help you on your way.
 
-Prerequisites:
+## Prerequisites:
 
 Run `git submodule update --init` to init test files.
+
+## Running Examples
+
+To run the examples, use the `cargo run` command, such as:
+
+```bash
+git clone https://github.com/apache/arrow-datafusion
+cd arrow-datafusion
+# Download test data
+git submodule update --init
+
+# Run the `csv_sql` example:
+# ... use the equivalent for other examples
+cargo run --example csv_sql
+```
 
 ## Single Process
 
@@ -38,7 +53,7 @@ Run `git submodule update --init` to init test files.
 - [`memtable.rs`](examples/memtable.rs): Create an query data in memory using SQL and `RecordBatch`es
 - [`parquet_sql.rs`](examples/parquet_sql.rs): Build and run a query plan from a SQL statement against a local Parquet file
 - [`parquet_sql_multiple_files.rs`](examples/parquet_sql_multiple_files.rs): Build and run a query plan from a SQL statement against multiple local Parquet files
-- [`query-aws-s3.rs`](examples/query-aws-s3.rs): Confiure `object_store` and run a query against files stored in AWS S3
+- [`query-aws-s3.rs`](examples/query-aws-s3.rs): Configure `object_store` and run a query against files stored in AWS S3
 - [`rewrite_expr.rs`](examples/rewrite_expr.rs): Define and invoke a custom Query Optimizer pass
 - [`simple_udaf.rs`](examples/simple_udaf.rs): Define and invoke a User Defined Aggregate Function (UDAF)
 - [`simple_udf.rs`](examples/simple_udf.rs): Define and invoke a User Defined (scalar) Function (UDF)

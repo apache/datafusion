@@ -15,40 +15,63 @@
 .. specific language governing permissions and limitations
 .. under the License.
 
+.. image:: _static/images/DataFusion-Logo-Background-White.png
+  :alt: DataFusion Logo
+
 =======================
 Apache Arrow DataFusion
 =======================
 
-Table of Contents
-=================
+DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
+`Rust <http://rustlang.org>`_, using the `Apache Arrow <https://arrow.apache.org>`_
+in-memory format.
+
+DataFusion offers SQL and Dataframe APIs, excellent
+`performance <https://benchmark.clickhouse.com>`_, built-in support for
+CSV, Parquet, JSON, and Avro, extensive customization, and a great
+community.
+
+The `example usage`_ section in the user guide and the `datafusion-examples`_ code in the crate contain information on using DataFusion.
+
+The `developer’s guide`_ contains information on how to contribute.
+
+.. _example usage: user-guide/example-usage.html
+.. _datafusion-examples: https://github.com/apache/arrow-datafusion/tree/master/datafusion-examples
+.. _developer’s guide: contributor-guide/index.html#developer-s-guide
+
+.. _toc.links:
+.. toctree::
+   :maxdepth: 1
+   :caption: Links
+
+   Github and Issue Tracker <https://github.com/apache/arrow-datafusion>
+   crates.io <https://crates.io/crates/datafusion>
+   API Docs <https://docs.rs/datafusion/latest/datafusion/>
+   Code of conduct <https://github.com/apache/arrow-datafusion/blob/main/CODE_OF_CONDUCT.md>
 
 .. _toc.guide:
-
 .. toctree::
    :maxdepth: 1
    :caption: User Guide
 
    user-guide/introduction
    user-guide/example-usage
-   user-guide/library
    user-guide/cli
    user-guide/dataframe
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
    user-guide/faq
-   Rust Crate Documentation <https://docs.rs/crate/datafusion/>
 
 .. _toc.contributor-guide:
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Contributor Guide
 
    contributor-guide/index
    contributor-guide/communication
+   contributor-guide/architecture
    contributor-guide/roadmap
    contributor-guide/quarterly_roadmap
    contributor-guide/specification/index
-   Issue tracker <https://github.com/apache/arrow-datafusion/issues>
-   Code of conduct <https://github.com/apache/arrow-datafusion/blob/master/CODE_OF_CONDUCT.md>

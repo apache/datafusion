@@ -33,10 +33,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
+use datafusion::test_util::parquet::{ParquetScanOptions, TestParquetFile};
 use datafusion_optimizer::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
-use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use tempfile::TempDir;
 use test_utils::AccessLogGenerator;
 
@@ -61,13 +61,6 @@ fn generate_file(tempdir: &TempDir, props: WriterProperties) -> TestParquetFile 
         Instant::now() - start
     );
     test_parquet_file
-}
-
-#[cfg(test)]
-#[ctor::ctor]
-fn init() {
-    // enable logging so RUST_LOG works
-    let _ = env_logger::try_init();
 }
 
 #[cfg(not(target_family = "windows"))]
@@ -517,7 +510,7 @@ impl<'a> TestCase<'a> {
         let ctx = SessionContext::with_config(scan_options.config());
         let exec = self
             .test_parquet_file
-            .create_scan(filter.clone())
+            .create_scan(Some(filter.clone()))
             .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();

@@ -18,9 +18,13 @@
 //! This module contains interfaces and default implementations
 //! of table namespacing concepts, including catalogs and schemas.
 
+// TODO(clippy): Having a `catalog::catalog` module path is unclear and ambiguous.
+// The parent module should probably be renamed to something that more accurately
+// describes its content. Something along the lines of `database_meta`, `metadata`
+// or `meta`, perhaps?
 #![allow(clippy::module_inception)]
 pub mod catalog;
-pub(crate) mod information_schema;
+pub mod information_schema;
 pub mod listing_schema;
 pub mod schema;
 

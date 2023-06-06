@@ -38,6 +38,7 @@ DataFusion supports the following syntax for queries:
 [ [UNION](#union-clause) [ ALL | select ] <br/>
 [ [ORDER BY](#order-by-clause) expression [ ASC | DESC ][, ...] ] <br/>
 [ [LIMIT](#limit-clause) count ] <br/>
+[ [EXCLUDE | EXCEPT](#exclude-and-except-clause) ] <br/>
 
 </code>
 
@@ -83,7 +84,7 @@ SELECT a FROM table WHERE a > 10
 
 ## JOIN clause
 
-DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, and `CROSS JOIN`.
+DataFusion supports `INNER JOIN`, `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN` and `CROSS JOIN`.
 
 The following examples are based on this table:
 
@@ -153,6 +154,20 @@ either side of the join where there is not a match.
 +----------+----------+----------+----------+
 ```
 
+### NATURAL JOIN
+
+A natural join defines an inner join based on common column names found between the input tables. When no common
+column names are found, it behaves like a cross join.
+
+```sql
+❯ select * from x natural join x y;
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| 1        | 2        |
++----------+----------+
+```
+
 ### CROSS JOIN
 
 A cross join produces a cartesian product that matches every row in the left side of the join with every row in the
@@ -173,6 +188,15 @@ Example:
 
 ```sql
 SELECT a, b, MAX(c) FROM table GROUP BY a, b
+```
+
+Some aggregation functions accept optional ordering requirement, such as `ARRAY_AGG`. If a requirement is given,
+aggregation is calculated in the order of the requirement.
+
+Example:
+
+```sql
+SELECT a, b, ARRAY_AGG(c, ORDER BY d) FROM table GROUP BY a, b
 ```
 
 ## HAVING clause
@@ -223,4 +247,20 @@ Example:
 ```sql
 SELECT age, person FROM table
 LIMIT 10
+```
+
+## EXCLUDE and EXCEPT clause
+
+Excluded named columns from query results.
+
+Example selecting all columns except for `age` and `person`:
+
+```sql
+SELECT * EXCEPT(age, person)
+FROM table;
+```
+
+```sql
+SELECT * EXCLUDE(age, person)
+FROM table;
 ```

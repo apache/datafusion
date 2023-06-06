@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub(crate) mod arrow_cast;
 mod binary_op;
 mod function;
 mod grouping_set;
@@ -26,15 +27,16 @@ mod unary_op;
 mod value;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use crate::utils::normalize_ident;
 use arrow_schema::DataType;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::rewrite_expr;
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{InList, Placeholder};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, Interval, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -44,27 +46,56 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        // Workaround for https://github.com/apache/arrow-datafusion/issues/4065
-        //
-        // Minimize stack space required in debug builds to plan
-        // deeply nested binary operators by keeping the stack space
-        // needed for sql_expr_to_logical_expr minimal for BinaryOp
-        //
-        // The reason this reduces stack size in debug builds is
-        // explained in the "Technical Backstory" heading of
-        // https://github.com/apache/arrow-datafusion/pull/1047
-        //
-        // A likely better way to support deeply nested expressions
-        // would be to avoid recursion all together and use an
-        // iterative algorithm.
-        match sql {
-            SQLExpr::BinaryOp { left, op, right } => {
-                self.parse_sql_binary_op(*left, op, *right, schema, planner_context)
-            }
-            // since this function requires more space per frame
-            // avoid calling it for binary ops
-            _ => self.sql_expr_to_logical_expr_internal(sql, schema, planner_context),
+        enum StackEntry {
+            SQLExpr(Box<SQLExpr>),
+            Operator(Operator),
         }
+
+        // Virtual stack machine to convert SQLExpr to Expr
+        // This allows visiting the expr tree in a depth-first manner which
+        // produces expressions in postfix notations, i.e. `a + b` => `a b +`.
+        // See https://github.com/apache/arrow-datafusion/issues/1444
+        let mut stack = vec![StackEntry::SQLExpr(Box::new(sql))];
+        let mut eval_stack = vec![];
+
+        while let Some(entry) = stack.pop() {
+            match entry {
+                StackEntry::SQLExpr(sql_expr) => {
+                    match *sql_expr {
+                        SQLExpr::BinaryOp { left, op, right } => {
+                            // Note the order that we push the entries to the stack
+                            // is important. We want to visit the left node first.
+                            let op = self.parse_sql_binary_op(op)?;
+                            stack.push(StackEntry::Operator(op));
+                            stack.push(StackEntry::SQLExpr(right));
+                            stack.push(StackEntry::SQLExpr(left));
+                        }
+                        _ => {
+                            let expr = self.sql_expr_to_logical_expr_internal(
+                                *sql_expr,
+                                schema,
+                                planner_context,
+                            )?;
+                            eval_stack.push(expr);
+                        }
+                    }
+                }
+                StackEntry::Operator(op) => {
+                    let right = eval_stack.pop().unwrap();
+                    let left = eval_stack.pop().unwrap();
+                    let expr = Expr::BinaryExpr(BinaryExpr::new(
+                        Box::new(left),
+                        op,
+                        Box::new(right),
+                    ));
+                    eval_stack.push(expr);
+                }
+            }
+        }
+
+        assert_eq!(1, eval_stack.len());
+        let expr = eval_stack.pop().unwrap();
+        Ok(expr)
     }
 
     /// Generate a relational expression from a SQL expression
@@ -77,7 +108,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
-        let expr = infer_placeholder_types(expr, schema.clone())?;
+        let expr = infer_placeholder_types(expr, schema)?;
         Ok(expr)
     }
 
@@ -92,7 +123,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
                                 field.name() == &col.name
-                                    && field_q.ends_with(&format!(".{q}"))
+                                    && field_q.to_string().ends_with(&format!(".{q}"))
                             }
                             _ => false,
                         }) {
@@ -119,35 +150,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(value) => {
-                self.parse_value(value, &planner_context.prepare_param_data_types)
+                self.parse_value(value, planner_context.prepare_param_data_types())
             }
-            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: BuiltinScalarFunction::DatePart,
-                args: vec![
+            SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction (ScalarFunction::new(
+                BuiltinScalarFunction::DatePart,
+                 vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{field}")))),
                     self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ],
-            }),
+            ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-            SQLExpr::Interval {
+            SQLExpr::Interval(Interval {
                 value,
                 leading_field,
                 leading_precision,
                 last_field,
                 fractional_seconds_precision,
-            } => self.sql_interval_to_expr(
+            })=> self.sql_interval_to_expr(
                 *value,
+                schema,
+                planner_context,
                 leading_field,
                 leading_precision,
                 last_field,
                 fractional_seconds_precision,
             ),
-            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id),
+            SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(normalize_ident(id)), keys)
+                    plan_indexed(col(self.normalizer.normalize(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {column} instead"
@@ -160,7 +193,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan_indexed(expr, indexes)
             }
 
-            SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema),
+            SQLExpr::CompoundIdentifier(ids) => self.sql_compound_identifier_to_expr(ids, schema, planner_context),
 
             SQLExpr::Case {
                 operand,
@@ -317,11 +350,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             within_group,
         } = array_agg;
 
-        if let Some(order_by) = order_by {
-            return Err(DataFusionError::NotImplemented(format!(
-                "ORDER BY not supported in ARRAY_AGG: {order_by}"
-            )));
-        }
+        let order_by = if let Some(order_by) = order_by {
+            Some(self.order_by_to_sort_expr(&order_by, input_schema, planner_context)?)
+        } else {
+            None
+        };
 
         if let Some(limit) = limit {
             return Err(DataFusionError::NotImplemented(format!(
@@ -337,11 +370,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let args =
             vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
+
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
-
         Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
-            fun, args, distinct, None,
+            fun, args, distinct, None, order_by,
         )))
     }
 
@@ -358,15 +391,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Expr::InList {
-            expr: Box::new(self.sql_expr_to_logical_expr(
-                expr,
-                schema,
-                planner_context,
-            )?),
-            list: list_expr,
+        Ok(Expr::InList(InList::new(
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
+            list_expr,
             negated,
-        })
+        )))
     }
 
     fn sql_like_to_expr(
@@ -464,7 +493,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             None => vec![arg],
         };
-        Ok(Expr::ScalarFunction { fun, args })
+        Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args)))
     }
 
     fn sql_agg_with_filter_to_expr(
@@ -479,6 +508,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fun,
                 args,
                 distinct,
+                order_by,
                 ..
             }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
@@ -489,6 +519,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     schema,
                     planner_context,
                 )?)),
+                order_by,
             ))),
             _ => Err(DataFusionError::Internal(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
@@ -498,38 +529,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 }
 
-/// Find all `PlaceHolder` tokens in a logical plan, and try to infer their type from context
-fn infer_placeholder_types(expr: Expr, schema: DFSchema) -> Result<Expr> {
-    rewrite_expr(expr, |expr| {
-        let expr = match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let left = (*left).clone();
-                let right = (*right).clone();
-                let lt = left.get_type(&schema);
-                let rt = right.get_type(&schema);
-                let left = match (&left, rt) {
-                    (Expr::Placeholder { id, data_type }, Ok(dt)) => Expr::Placeholder {
-                        id: id.clone(),
-                        data_type: Some(data_type.clone().unwrap_or(dt)),
-                    },
-                    _ => left.clone(),
-                };
-                let right = match (&right, lt) {
-                    (Expr::Placeholder { id, data_type }, Ok(dt)) => Expr::Placeholder {
-                        id: id.clone(),
-                        data_type: Some(data_type.clone().unwrap_or(dt)),
-                    },
-                    _ => right.clone(),
-                };
-                Expr::BinaryExpr(BinaryExpr {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
-                })
+// modifies expr if it is a placeholder with datatype of right
+fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Result<()> {
+    if let Expr::Placeholder(Placeholder { id: _, data_type }) = expr {
+        if data_type.is_none() {
+            let other_dt = other.get_type(schema);
+            match other_dt {
+                Err(e) => {
+                    return Err(e.context(format!(
+                        "Can not find type of {other} needed to infer type of {expr}"
+                    )))?;
+                }
+                Ok(dt) => {
+                    *data_type = Some(dt);
+                }
             }
-            _ => expr.clone(),
         };
-        Ok(expr)
+    }
+    Ok(())
+}
+
+/// Find all [`Expr::Placeholder`] tokens in a logical plan, and try
+/// to infer their [`DataType`] from the context of their use.
+fn infer_placeholder_types(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    expr.transform(&|mut expr| {
+        // Default to assuming the arguments are the same type
+        if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = &mut expr {
+            rewrite_placeholder(left.as_mut(), right.as_ref(), schema)?;
+            rewrite_placeholder(right.as_mut(), left.as_ref(), schema)?;
+        };
+        Ok(Transformed::Yes(expr))
     })
 }
 
@@ -567,4 +596,125 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
         Box::new(expr),
         plan_key(key)?,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use sqlparser::dialect::GenericDialect;
+    use sqlparser::parser::Parser;
+
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::logical_plan::builder::LogicalTableSource;
+    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
+
+    use crate::TableReference;
+
+    struct TestSchemaProvider {
+        options: ConfigOptions,
+        tables: HashMap<String, Arc<dyn TableSource>>,
+    }
+
+    impl TestSchemaProvider {
+        pub fn new() -> Self {
+            let mut tables = HashMap::new();
+            tables.insert(
+                "table1".to_string(),
+                create_table_source(vec![Field::new(
+                    "column1".to_string(),
+                    DataType::Utf8,
+                    false,
+                )]),
+            );
+
+            Self {
+                options: Default::default(),
+                tables,
+            }
+        }
+    }
+
+    impl ContextProvider for TestSchemaProvider {
+        fn get_table_provider(
+            &self,
+            name: TableReference,
+        ) -> Result<Arc<dyn TableSource>> {
+            match self.tables.get(name.table()) {
+                Some(table) => Ok(table.clone()),
+                _ => Err(DataFusionError::Plan(format!(
+                    "Table not found: {}",
+                    name.table()
+                ))),
+            }
+        }
+
+        fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
+            None
+        }
+
+        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
+            None
+        }
+
+        fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+            None
+        }
+
+        fn options(&self) -> &ConfigOptions {
+            &self.options
+        }
+    }
+
+    fn create_table_source(fields: Vec<Field>) -> Arc<dyn TableSource> {
+        Arc::new(LogicalTableSource::new(Arc::new(
+            Schema::new_with_metadata(fields, HashMap::new()),
+        )))
+    }
+
+    macro_rules! test_stack_overflow {
+        ($num_expr:expr) => {
+            paste::item! {
+                #[test]
+                fn [<test_stack_overflow_ $num_expr>]() {
+                    let schema = DFSchema::empty();
+                    let mut planner_context = PlannerContext::default();
+
+                    let expr_str = (0..$num_expr)
+                        .map(|i| format!("column1 = 'value{:?}'", i))
+                        .collect::<Vec<String>>()
+                        .join(" OR ");
+
+                    let dialect = GenericDialect{};
+                    let mut parser = Parser::new(&dialect)
+                        .try_with_sql(expr_str.as_str())
+                        .unwrap();
+                    let sql_expr = parser.parse_expr().unwrap();
+
+                    let schema_provider = TestSchemaProvider::new();
+                    let sql_to_rel = SqlToRel::new(&schema_provider);
+
+                    // Should not stack overflow
+                    sql_to_rel.sql_expr_to_logical_expr(
+                        sql_expr,
+                        &schema,
+                        &mut planner_context,
+                    ).unwrap();
+                }
+            }
+        };
+    }
+
+    test_stack_overflow!(64);
+    test_stack_overflow!(128);
+    test_stack_overflow!(256);
+    test_stack_overflow!(512);
+    test_stack_overflow!(1024);
+    test_stack_overflow!(2048);
+    test_stack_overflow!(4096);
+    test_stack_overflow!(8192);
 }

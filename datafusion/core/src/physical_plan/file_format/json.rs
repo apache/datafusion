@@ -18,8 +18,7 @@
 //! Execution plan for reading line-delimited JSON files
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::SessionState;
-use crate::execution::context::TaskContext;
+use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -27,13 +26,16 @@ use crate::physical_plan::file_format::file_stream::{
 use crate::physical_plan::file_format::FileMeta;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::TaskContext;
+
+use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
 use bytes::{Buf, Bytes};
-
-use arrow::json::RawReaderBuilder;
 use futures::{ready, stream, StreamExt, TryStreamExt};
 use object_store::{GetResult, ObjectStore};
 use std::any::Any;
@@ -44,7 +46,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
 
-use super::{get_output_ordering, FileScanConfig};
+use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
@@ -52,6 +54,7 @@ pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
@@ -63,15 +66,22 @@ impl NdJsonExec {
         base_config: FileScanConfig,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        let (projected_schema, projected_statistics) = base_config.project();
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
             file_compression_type,
         }
+    }
+
+    /// Ref to the base configs
+    pub fn base_config(&self) -> &FileScanConfig {
+        &self.base_config
     }
 }
 
@@ -93,7 +103,16 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        get_output_ordering(&self.base_config)
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -113,7 +132,7 @@ impl ExecutionPlan for NdJsonExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let batch_size = context.session_config().batch_size();
-        let (projected_schema, _) = self.base_config.project();
+        let (projected_schema, ..) = self.base_config.project();
 
         let object_store = context
             .runtime_env()
@@ -138,12 +157,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "JsonExec: limit={:?}, files={}",
-                    self.base_config.limit,
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                )
+                write!(f, "JsonExec: {}", self.base_config)
             }
         }
     }
@@ -157,11 +171,29 @@ impl ExecutionPlan for NdJsonExec {
     }
 }
 
-struct JsonOpener {
+/// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
+pub struct JsonOpener {
     batch_size: usize,
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+}
+
+impl JsonOpener {
+    /// Returns a  [`JsonOpener`]
+    pub fn new(
+        batch_size: usize,
+        projected_schema: SchemaRef,
+        file_compression_type: FileCompressionType,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            batch_size,
+            projected_schema,
+            file_compression_type,
+            object_store,
+        }
+    }
 }
 
 impl FileOpener for JsonOpener {
@@ -175,18 +207,19 @@ impl FileOpener for JsonOpener {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let bytes = file_compression_type.convert_read(file)?;
-                    let reader = RawReaderBuilder::new(schema)
+                    let reader = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build(BufReader::new(bytes))?;
                     Ok(futures::stream::iter(reader).boxed())
                 }
                 GetResult::Stream(s) => {
-                    let mut decoder = RawReaderBuilder::new(schema)
+                    let mut decoder = ReaderBuilder::new(schema)
                         .with_batch_size(batch_size)
                         .build_decoder()?;
 
                     let s = s.map_err(DataFusionError::from);
-                    let mut input = file_compression_type.convert_stream(s)?.fuse();
+                    let mut input =
+                        file_compression_type.convert_stream(s.boxed())?.fuse();
                     let mut buffered = Bytes::new();
 
                     let s = stream::poll_fn(move |cx| {
@@ -223,51 +256,50 @@ impl FileOpener for JsonOpener {
 }
 
 pub async fn plan_to_json(
-    state: &SessionState,
+    task_ctx: Arc<TaskContext>,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
 ) -> Result<()> {
     let path = path.as_ref();
     // create directory to contain the CSV files (one per partition)
     let fs_path = Path::new(path);
-    match fs::create_dir(fs_path) {
-        Ok(()) => {
-            let mut tasks = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                let plan = plan.clone();
-                let filename = format!("part-{i}.json");
-                let path = fs_path.join(filename);
-                let file = fs::File::create(path)?;
-                let mut writer = json::LineDelimitedWriter::new(file);
-                let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx)?;
-                let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                    stream
-                        .map(|batch| writer.write(batch?))
-                        .try_collect()
-                        .await
-                        .map_err(DataFusionError::from)
-                });
-                tasks.push(handle);
-            }
-            futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-                })?;
-            Ok(())
-        }
-        Err(e) => Err(DataFusionError::Execution(format!(
+    if let Err(e) = fs::create_dir(fs_path) {
+        return Err(DataFusionError::Execution(format!(
             "Could not create directory {path}: {e:?}"
-        ))),
+        )));
     }
+
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let plan = plan.clone();
+        let filename = format!("part-{i}.json");
+        let path = fs_path.join(filename);
+        let file = fs::File::create(path)?;
+        let mut writer = json::LineDelimitedWriter::new(file);
+        let stream = plan.execute(i, task_ctx.clone())?;
+        let handle: JoinHandle<Result<()>> = task::spawn(async move {
+            stream
+                .map(|batch| writer.write(&batch?))
+                .try_collect()
+                .await
+                .map_err(DataFusionError::from)
+        });
+        tasks.push(AbortOnDropSingle::new(handle));
+    }
+
+    futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .try_for_each(|result| {
+            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use arrow::array::Array;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{Field, SchemaBuilder};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -276,18 +308,19 @@ mod tests {
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::execution::context::SessionState;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
-    use datafusion_common::cast::{as_int32_array, as_int64_array};
+    use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
 
     use super::*;
 
-    const TEST_DATA_BASE: &str = "tests/jsons";
+    const TEST_DATA_BASE: &str = "tests/data";
 
     async fn prepare_store(
         state: &SessionState,
@@ -326,8 +359,8 @@ mod tests {
         store: Arc<dyn ObjectStore>,
     ) {
         let ctx = SessionContext::new();
-        ctx.runtime_env()
-            .register_object_store("file", "", store.clone());
+        let url = Url::parse("file://").unwrap();
+        ctx.runtime_env().register_object_store(&url, store.clone());
         let filename = "1.json";
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
@@ -363,14 +396,14 @@ mod tests {
 
         assert_batches_eq!(
             &[
-                "+-----+----------------+---------------+------+",
-                "| a   | b              | c             | d    |",
-                "+-----+----------------+---------------+------+",
-                "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
-                "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
-                "| 2   | [2, , -6.1]    | [false, ]     | text |",
-                "|     |                |               |      |",
-                "+-----+----------------+---------------+------+",
+                "+-----+------------------+---------------+------+",
+                "| a   | b                | c             | d    |",
+                "+-----+------------------+---------------+------+",
+                "| 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |",
+                "| -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |",
+                "| 2   | [2.0, , -6.1]    | [false, ]     | text |",
+                "|     |                  |               |      |",
+                "+-----+------------------+---------------+------+",
             ],
             &results
         );
@@ -381,7 +414,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_without_projection(
@@ -404,7 +438,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -451,7 +485,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column(
@@ -464,11 +499,11 @@ mod tests {
         let (object_store_url, file_groups, actual_schema) =
             prepare_store(&state, file_compression_type.to_owned()).await;
 
-        let mut fields = actual_schema.fields().clone();
-        fields.push(Field::new("missing_col", DataType::Int32, true));
-        let missing_field_idx = fields.len() - 1;
+        let mut builder = SchemaBuilder::from(actual_schema.fields());
+        builder.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(builder.finish());
+        let missing_field_idx = file_schema.fields.len() - 1;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -479,7 +514,7 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -503,7 +538,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn nd_json_exec_file_projection(
@@ -524,7 +560,7 @@ mod tests {
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             file_compression_type.to_owned(),
@@ -542,6 +578,63 @@ mod tests {
 
         assert_eq!(batch.num_rows(), 4);
         let values = as_int64_array(batch.column(0))?;
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), -10);
+        assert_eq!(values.value(2), 2);
+        Ok(())
+    }
+
+    #[rstest(
+        file_compression_type,
+        case(FileCompressionType::UNCOMPRESSED),
+        case(FileCompressionType::GZIP),
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
+    )]
+    #[tokio::test]
+    async fn nd_json_exec_file_mixed_order_projection(
+        file_compression_type: FileCompressionType,
+    ) -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = session_ctx.task_ctx();
+        let (object_store_url, file_groups, file_schema) =
+            prepare_store(&state, file_compression_type.to_owned()).await;
+
+        let exec = NdJsonExec::new(
+            FileScanConfig {
+                object_store_url,
+                file_groups,
+                file_schema,
+                statistics: Statistics::default(),
+                projection: Some(vec![3, 0, 2]),
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: vec![],
+                infinite_source: false,
+            },
+            file_compression_type.to_owned(),
+        );
+        let inferred_schema = exec.schema();
+        assert_eq!(inferred_schema.fields().len(), 3);
+
+        inferred_schema.field_with_name("a").unwrap();
+        inferred_schema.field_with_name("b").unwrap_err();
+        inferred_schema.field_with_name("c").unwrap();
+        inferred_schema.field_with_name("d").unwrap();
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let batch = it.next().await.unwrap()?;
+
+        assert_eq!(batch.num_rows(), 4);
+
+        let values = as_string_array(batch.column(0))?;
+        assert_eq!(values.value(0), "4");
+        assert_eq!(values.value(1), "4");
+        assert_eq!(values.value(2), "text");
+
+        let values = as_int64_array(batch.column(1))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
@@ -601,7 +694,8 @@ mod tests {
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
         case(FileCompressionType::BZIP2),
-        case(FileCompressionType::XZ)
+        case(FileCompressionType::XZ),
+        case(FileCompressionType::ZSTD)
     )]
     #[tokio::test]
     async fn test_chunked_json(
@@ -624,7 +718,7 @@ mod tests {
         let options = CsvReadOptions::default()
             .schema_infer_max_records(2)
             .has_header(true);
-        let df = ctx.read_csv("tests/csv/corrupt.csv", options).await?;
+        let df = ctx.read_csv("tests/data/corrupt.csv", options).await?;
         let tmp_dir = TempDir::new()?;
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         let e = df

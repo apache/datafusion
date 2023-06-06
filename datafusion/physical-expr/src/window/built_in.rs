@@ -25,18 +25,19 @@ use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::window::window_expr::{
-    reverse_order_bys, BuiltinWindowState, NthValueKind, NthValueState, WindowFn,
+    BuiltinWindowState, NthValueKind, NthValueState, WindowFn,
 };
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{WindowFrame, WindowFrameUnits};
+use datafusion_common::utils::evaluate_partition_ranges;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a built in window function
 #[derive(Debug)]
@@ -104,25 +105,25 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut row_wise_results = vec![];
 
             let (values, order_bys) = self.get_values_orderbys(batch)?;
-            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
-            let range = Range { start: 0, end: 0 };
+            let mut window_frame_ctx =
+                WindowFrameContext::new(self.window_frame.clone(), sort_options);
+            let mut last_range = Range { start: 0, end: 0 };
             // We iterate on each row to calculate window frame range and and window function result
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
                     &order_bys,
-                    &sort_options,
+                    &last_range,
                     num_rows,
                     idx,
-                    &range,
                 )?;
                 let value = evaluator.evaluate_inside_range(&values, &range)?;
                 row_wise_results.push(value);
+                last_range = range;
             }
             ScalarValue::iter_to_array(row_wise_results.into_iter())
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
-            let sort_partition_points =
-                self.evaluate_partition_points(num_rows, &columns)?;
+            let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
             evaluator.evaluate_with_rank(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
@@ -141,26 +142,23 @@ impl WindowExpr for BuiltInWindowExpr {
         let out_type = field.data_type();
         let sort_options = self.order_by.iter().map(|o| o.options).collect::<Vec<_>>();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
-            if !window_agg_state.contains_key(partition_row) {
-                let evaluator = self.expr.create_evaluator()?;
-                window_agg_state.insert(
-                    partition_row.clone(),
-                    WindowState {
-                        state: WindowAggState::new(out_type)?,
-                        window_fn: WindowFn::Builtin(evaluator),
-                    },
-                );
-            };
             let window_state =
-                window_agg_state.get_mut(partition_row).ok_or_else(|| {
-                    DataFusionError::Execution("Cannot find state".to_string())
-                })?;
+                if let Some(window_state) = window_agg_state.get_mut(partition_row) {
+                    window_state
+                } else {
+                    let evaluator = self.expr.create_evaluator()?;
+                    window_agg_state
+                        .entry(partition_row.clone())
+                        .or_insert(WindowState {
+                            state: WindowAggState::new(out_type)?,
+                            window_fn: WindowFn::Builtin(evaluator),
+                        })
+                };
             let evaluator = match &mut window_state.window_fn {
                 WindowFn::Builtin(evaluator) => evaluator,
                 _ => unreachable!(),
             };
             let mut state = &mut window_state.state;
-            state.is_end = partition_batch_state.is_end;
 
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
@@ -168,47 +166,50 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let sort_partition_points = if evaluator.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
-                self.evaluate_partition_points(num_rows, &columns)?
+                evaluate_partition_ranges(num_rows, &columns)?
             } else {
                 vec![]
             };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
-            let mut last_range = state.window_frame_range.clone();
             for idx in state.last_calculated_index..num_rows {
-                state.window_frame_range = if self.expr.uses_window_frame() {
-                    window_frame_ctx.calculate_range(
-                        &order_bys,
-                        &sort_options,
-                        num_rows,
-                        idx,
-                        &state.window_frame_range,
-                    )
+                let frame_range = if self.expr.uses_window_frame() {
+                    state
+                        .window_frame_ctx
+                        .get_or_insert_with(|| {
+                            WindowFrameContext::new(
+                                self.window_frame.clone(),
+                                sort_options.clone(),
+                            )
+                        })
+                        .calculate_range(
+                            &order_bys,
+                            // Start search from the last range
+                            &state.window_frame_range,
+                            num_rows,
+                            idx,
+                        )
                 } else {
-                    evaluator.get_range(state, num_rows)
+                    evaluator.get_range(idx, num_rows)
                 }?;
-                evaluator.update_state(state, &order_bys, &sort_partition_points)?;
 
-                let frame_range = &state.window_frame_range;
                 // Exit if the range extends all the way:
-                if frame_range.end == num_rows && !state.is_end {
+                if frame_range.end == num_rows && !partition_batch_state.is_end {
                     break;
                 }
+                // Update last range
+                state.window_frame_range = frame_range;
+                evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
                 row_wise_results.push(evaluator.evaluate_stateful(&values)?);
-                last_range.clone_from(frame_range);
-                state.last_calculated_index += 1;
             }
-            state.window_frame_range = last_range;
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)
             } else {
                 ScalarValue::iter_to_array(row_wise_results.into_iter())?
             };
 
-            state.out_col = concat(&[&state.out_col, &out_col])?;
-            state.n_row_result_missing = num_rows - state.last_calculated_index;
+            state.update(&out_col, partition_batch_state)?;
             if self.window_frame.start_bound.is_unbounded() {
                 let mut evaluator_state = evaluator.state()?;
                 if let BuiltinWindowState::NthValue(nth_value_state) =
@@ -238,11 +239,9 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
-                || !(self.window_frame.end_bound.is_unbounded()
-                    || matches!(self.window_frame.units, WindowFrameUnits::Groups)))
+                || !self.window_frame.end_bound.is_unbounded())
     }
 }
 
@@ -273,9 +272,7 @@ fn memoize_nth_value(
             let result = ScalarValue::try_from_array(out, size - 1)?;
             nth_value_state.finalized_result = Some(result);
         }
-        if state.window_frame_range.end > 0 {
-            state.window_frame_range.start = state.window_frame_range.end - 1;
-        }
+        state.window_frame_range.start = state.window_frame_range.end.saturating_sub(1);
     }
     Ok(())
 }

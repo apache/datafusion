@@ -18,17 +18,20 @@
 //! Execution plan for reading line-delimited Avro files
 use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-};
-use arrow::datatypes::SchemaRef;
-
-use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::physical_plan::{
+    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
+};
+use datafusion_execution::TaskContext;
+
+use arrow::datatypes::SchemaRef;
+use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{get_output_ordering, FileScanConfig};
+use super::FileScanConfig;
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -37,6 +40,7 @@ pub struct AvroExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    projected_output_ordering: Vec<LexOrdering>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -44,12 +48,14 @@ pub struct AvroExec {
 impl AvroExec {
     /// Create a new Avro reader execution plan provided base configurations
     pub fn new(base_config: FileScanConfig) -> Self {
-        let (projected_schema, projected_statistics) = base_config.project();
+        let (projected_schema, projected_statistics, projected_output_ordering) =
+            base_config.project();
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            projected_output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -77,7 +83,16 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        get_output_ordering(&self.base_config)
+        self.projected_output_ordering
+            .first()
+            .map(|ordering| ordering.as_slice())
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        ordering_equivalence_properties_helper(
+            self.schema(),
+            &self.projected_output_ordering,
+        )
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -133,12 +148,7 @@ impl ExecutionPlan for AvroExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "AvroExec: files={}, limit={:?}",
-                    super::FileGroupsDisplay(&self.base_config.file_groups),
-                    self.base_config.limit,
-                )
+                write!(f, "AvroExec: {}", self.base_config)
             }
         }
     }
@@ -213,15 +223,15 @@ mod tests {
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::file_format::chunked_store::ChunkedStore;
-    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, SchemaBuilder};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::ObjectStore;
     use rstest::*;
+    use url::Url;
 
     use super::*;
 
@@ -246,9 +256,10 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
+        let url = Url::parse("file://").unwrap();
         state
             .runtime_env()
-            .register_object_store("file", "", store.clone());
+            .register_object_store(&url, store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
@@ -266,7 +277,7 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -323,10 +334,10 @@ mod tests {
             .infer_schema(&state, &object_store, &[meta.clone()])
             .await?;
 
-        let mut fields = actual_schema.fields().clone();
-        fields.push(Field::new("missing_col", DataType::Int32, true));
+        let mut builder = SchemaBuilder::from(actual_schema.fields());
+        builder.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(builder.finish());
         // Include the missing column in the projection
         let projection = Some(vec![0, 1, 2, actual_schema.fields().len()]);
 
@@ -338,7 +349,7 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -409,11 +420,8 @@ mod tests {
             file_schema,
             statistics: Statistics::default(),
             limit: None,
-            table_partition_cols: vec![(
-                "date".to_owned(),
-                partition_type_wrap(DataType::Utf8),
-            )],
-            output_ordering: None,
+            table_partition_cols: vec![("date".to_owned(), DataType::Utf8)],
+            output_ordering: vec![],
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);

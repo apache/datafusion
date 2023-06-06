@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! InList expression
+//! Implementation of `InList` expressions: [`InListExpr`]
 
 use ahash::RandomState;
 use std::any::Any;
@@ -47,8 +47,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<Box<dyn Set>>,
-    input_schema: Schema,
+    static_filter: Option<Arc<dyn Set>>,
 }
 
 impl Debug for InListExpr {
@@ -62,7 +61,7 @@ impl Debug for InListExpr {
 }
 
 /// A type-erased container of array elements
-trait Set: Send + Sync {
+pub trait Set: Send + Sync {
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
 }
 
@@ -86,7 +85,7 @@ where
 {
     fn new(array: &T, hash_set: ArrayHashSet) -> Self {
         Self {
-            array: T::from(array.data().clone()),
+            array: downcast_array(array),
             hash_set,
         }
     }
@@ -103,15 +102,14 @@ where
             v => {
                 let values_contains = self.contains(v.values().as_ref(), negated)?;
                 let result = take(&values_contains, v.keys(), None)?;
-                return Ok(BooleanArray::from(result.data().clone()))
+                return Ok(downcast_array(result.as_ref()))
             }
             _ => {}
         }
 
         let v = v.as_any().downcast_ref::<T>().unwrap();
-        let in_data = self.array.data();
         let in_array = &self.array;
-        let has_nulls = in_data.null_count() != 0;
+        let has_nulls = in_array.null_count() != 0;
 
         Ok(ArrayIter::new(v)
             .map(|v| {
@@ -135,8 +133,9 @@ where
     }
 }
 
-/// Computes an [`ArrayHashSet`] for the provided [`Array`] if there are nulls present
-/// or there are more than [`OPTIMIZER_INSET_THRESHOLD`] values
+/// Computes an [`ArrayHashSet`] for the provided [`Array`] if there
+/// are nulls present or there are more than the configured number of
+/// elements.
 ///
 /// Note: This is split into a separate function as higher-rank trait bounds currently
 /// cause type inference to misbehave
@@ -145,11 +144,9 @@ where
     T: ArrayAccessor,
     T::Item: PartialEq + HashValue,
 {
-    let data = array.data();
-
     let state = RandomState::new();
     let mut map: HashMap<usize, (), ()> =
-        HashMap::with_capacity_and_hasher(data.len(), ());
+        HashMap::with_capacity_and_hasher(array.len(), ());
 
     let insert_value = |idx| {
         let value = array.value(idx);
@@ -162,46 +159,48 @@ where
         }
     };
 
-    match data.null_buffer() {
-        Some(buffer) => BitIndexIterator::new(buffer.as_ref(), data.offset(), data.len())
-            .for_each(insert_value),
-        None => (0..data.len()).for_each(insert_value),
+    match array.nulls() {
+        Some(nulls) => {
+            BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                .for_each(insert_value)
+        }
+        None => (0..array.len()).for_each(insert_value),
     }
 
     ArrayHashSet { state, map }
 }
 
 /// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`
-fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
+fn make_set(array: &dyn Array) -> Result<Arc<dyn Set>> {
     Ok(downcast_primitive_array! {
-        array => Box::new(ArraySet::new(array, make_hash_set(array))),
+        array => Arc::new(ArraySet::new(array, make_hash_set(array))),
         DataType::Boolean => {
             let array = as_boolean_array(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         },
         DataType::Decimal128(_, _) => {
             let array = as_primitive_array::<Decimal128Type>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Decimal256(_, _) => {
             let array = as_primitive_array::<Decimal256Type>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Utf8 => {
             let array = as_string_array(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeUtf8 => {
             let array = as_largestring_array(array);
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Binary => {
             let array = as_generic_binary_array::<i32>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeBinary => {
             let array = as_generic_binary_array::<i64>(array)?;
-            Box::new(ArraySet::new(array, make_hash_set(array)))
+            Arc::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
         d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
@@ -233,7 +232,7 @@ fn evaluate_list(
 fn try_cast_static_filter_to_set(
     list: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
-) -> Result<Box<dyn Set>> {
+) -> Result<Arc<dyn Set>> {
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
     make_set(evaluate_list(list, &batch)?.as_ref())
 }
@@ -244,15 +243,13 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        schema: &Schema,
+        static_filter: Option<Arc<dyn Set>>,
     ) -> Self {
-        let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
         Self {
             expr,
             list,
             negated,
             static_filter,
-            input_schema: schema.clone(),
         }
     }
 
@@ -325,12 +322,13 @@ impl PhysicalExpr for InListExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        in_list(
+        // assume the static_filter will not change during the rewrite process
+        Ok(Arc::new(InListExpr::new(
             children[0].clone(),
             children[1..].to_vec(),
-            &self.negated,
-            &self.input_schema,
-        )
+            self.negated,
+            self.static_filter.clone(),
+        )))
     }
 }
 
@@ -364,7 +362,13 @@ pub fn in_list(
             )));
         }
     }
-    Ok(Arc::new(InListExpr::new(expr, list, *negated, schema)))
+    let static_filter = try_cast_static_filter_to_set(&list, schema).ok();
+    Ok(Arc::new(InListExpr::new(
+        expr,
+        list,
+        *negated,
+        static_filter,
+    )))
 }
 
 #[cfg(test)]
@@ -924,7 +928,7 @@ mod tests {
 
         // test the optimization: set
         // expression: "a in (99..300), the data type of list is INT32
-        let list = (99i32..300).into_iter().map(lit).collect::<Vec<_>>();
+        let list = (99i32..300).map(lit).collect::<Vec<_>>();
 
         in_list!(
             batch,

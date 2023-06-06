@@ -17,10 +17,12 @@
 
 //! Utility functions for expression simplification
 
+use crate::simplify_expressions::SimplifyInfo;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
-    expr::{Between, BinaryExpr},
-    expr_fn::{and, concat_ws, or},
+    expr::{Between, BinaryExpr, InList},
+    expr_fn::{and, bitwise_and, bitwise_or, concat_ws, or},
     lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
 
@@ -75,6 +77,61 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
         }
         _ => expr == needle,
     }
+}
+
+/// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
+/// expressions. Such as: A ^ (A ^ (B ^ A))
+pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> Expr {
+    /// Deletes recursively 'needles' in a chain of xor expressions
+    fn recursive_delete_xor_in_expr(
+        expr: &Expr,
+        needle: &Expr,
+        xor_counter: &mut i32,
+    ) -> Expr {
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if *op == Operator::BitwiseXor =>
+            {
+                let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
+                let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
+                if left_expr == *needle {
+                    *xor_counter += 1;
+                    return right_expr;
+                } else if right_expr == *needle {
+                    *xor_counter += 1;
+                    return left_expr;
+                }
+
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(left_expr),
+                    *op,
+                    Box::new(right_expr),
+                ))
+            }
+            _ => expr.clone(),
+        }
+    }
+
+    let mut xor_counter: i32 = 0;
+    let result_expr = recursive_delete_xor_in_expr(expr, needle, &mut xor_counter);
+    if result_expr == *needle {
+        return needle.clone();
+    } else if xor_counter % 2 == 0 {
+        if is_left {
+            return Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(needle.clone()),
+                Operator::BitwiseXor,
+                Box::new(result_expr),
+            ));
+        } else {
+            return Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(result_expr),
+                Operator::BitwiseXor,
+                Box::new(needle.clone()),
+            ));
+        }
+    }
+    result_expr
 }
 
 pub fn is_zero(s: &Expr) -> bool {
@@ -154,9 +211,14 @@ pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
     matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
-/// returns true if `not_expr` is !`expr`
+/// returns true if `not_expr` is !`expr` (not)
 pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())
+}
+
+/// returns true if `not_expr` is !`expr` (bitwise not)
+pub fn is_negative_of(not_expr: &Expr, expr: &Expr) -> bool {
+    matches!(not_expr, Expr::Negative(inner) if expr == inner.as_ref())
 }
 
 /// returns the contained boolean value in `expr` as
@@ -219,11 +281,11 @@ pub fn negate_clause(expr: Expr) -> Expr {
         Expr::IsNull(expr) => expr.is_not_null(),
         // not (A not in (..)) ===> A in (..)
         // not (A in (..)) ===> A not in (..)
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => expr.in_list(list, !negated),
+        }) => expr.in_list(list, !negated),
         // not (A between B and C) ===> (A not between B and C)
         // not (A not between B and C) ===> (A between B and C)
         Expr::Between(between) => Expr::Between(Between::new(
@@ -248,6 +310,116 @@ pub fn negate_clause(expr: Expr) -> Expr {
         )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),
+    }
+}
+
+/// bitwise negate a Negative clause
+/// input is the clause to be bitwise negated.(args for Negative clause)
+/// For BinaryExpr:
+///    ~(A & B) ===> ~A | ~B
+///    ~(A | B) ===> ~A & ~B
+/// For Negative:
+///    ~(~A) ===> A
+/// For others, use Negative clause
+pub fn distribute_negation(expr: Expr) -> Expr {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            match op {
+                // ~(A & B) ===> ~A | ~B
+                Operator::BitwiseAnd => {
+                    let left = distribute_negation(*left);
+                    let right = distribute_negation(*right);
+
+                    bitwise_or(left, right)
+                }
+                // ~(A | B) ===> ~A & ~B
+                Operator::BitwiseOr => {
+                    let left = distribute_negation(*left);
+                    let right = distribute_negation(*right);
+
+                    bitwise_and(left, right)
+                }
+                // use negative clause
+                _ => Expr::Negative(Box::new(Expr::BinaryExpr(BinaryExpr::new(
+                    left, op, right,
+                )))),
+            }
+        }
+        // ~(~A) ===> A
+        Expr::Negative(expr) => *expr,
+        // use negative clause
+        _ => Expr::Negative(Box::new(expr)),
+    }
+}
+
+/// Simplify the `log` function by the relevant rules:
+/// 1. Log(a, 1) ===> 0
+/// 2. Log(a, a) ===> 1
+/// 3. Log(a, Power(a, b)) ===> b
+pub fn simpl_log(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Expr> {
+    let mut number = &current_args[0];
+    let mut base = &Expr::Literal(ScalarValue::new_ten(&info.get_data_type(number)?)?);
+    if current_args.len() == 2 {
+        base = &current_args[0];
+        number = &current_args[1];
+    }
+
+    match number {
+        Expr::Literal(value)
+            if value == &ScalarValue::new_one(&info.get_data_type(number)?)? =>
+        {
+            Ok(Expr::Literal(ScalarValue::new_zero(
+                &info.get_data_type(base)?,
+            )?))
+        }
+        Expr::ScalarFunction(ScalarFunction {
+            fun: BuiltinScalarFunction::Power,
+            args,
+        }) if base == &args[0] => Ok(args[1].clone()),
+        _ => {
+            if number == base {
+                Ok(Expr::Literal(ScalarValue::new_one(
+                    &info.get_data_type(number)?,
+                )?))
+            } else {
+                Ok(Expr::ScalarFunction(ScalarFunction::new(
+                    BuiltinScalarFunction::Log,
+                    vec![base.clone(), number.clone()],
+                )))
+            }
+        }
+    }
+}
+
+/// Simplify the `power` function by the relevant rules:
+/// 1. Power(a, 0) ===> 0
+/// 2. Power(a, 1) ===> a
+/// 3. Power(a, Log(a, b)) ===> b
+pub fn simpl_power(current_args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<Expr> {
+    let base = &current_args[0];
+    let exponent = &current_args[1];
+
+    match exponent {
+        Expr::Literal(value)
+            if value == &ScalarValue::new_zero(&info.get_data_type(exponent)?)? =>
+        {
+            Ok(Expr::Literal(ScalarValue::new_one(
+                &info.get_data_type(base)?,
+            )?))
+        }
+        Expr::Literal(value)
+            if value == &ScalarValue::new_one(&info.get_data_type(exponent)?)? =>
+        {
+            Ok(base.clone())
+        }
+        Expr::ScalarFunction(ScalarFunction {
+            fun: BuiltinScalarFunction::Log,
+            args,
+        }) if base == &args[0] => Ok(args[1].clone()),
+        _ => Ok(Expr::ScalarFunction(ScalarFunction::new(
+            BuiltinScalarFunction::Power,
+            current_args,
+        ))),
     }
 }
 
@@ -292,10 +464,10 @@ pub fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
         new_args.push(lit(contiguous_scalar));
     }
 
-    Ok(Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::Concat,
-        args: new_args,
-    })
+    Ok(Expr::ScalarFunction(ScalarFunction::new(
+        BuiltinScalarFunction::Concat,
+        new_args,
+    )))
 }
 
 /// Simply the `concat_ws` function by
@@ -346,10 +518,10 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
                     if let Some(val) = contiguous_scalar {
                         new_args.push(lit(val));
                     }
-                    Ok(Expr::ScalarFunction {
-                        fun: BuiltinScalarFunction::ConcatWithSeparator,
-                        args: new_args,
-                    })
+                    Ok(Expr::ScalarFunction(ScalarFunction::new(
+                        BuiltinScalarFunction::ConcatWithSeparator,
+                        new_args,
+                    )))
                 }
                 // if the delimiter is null, then the value of the whole expression is null.
                 None => Ok(Expr::Literal(ScalarValue::Utf8(None))),

@@ -88,11 +88,6 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "CoalescePartitionsExec",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
         "UnionExec",
         "metrics=[output_rows=3, elapsed_compute="
     );
@@ -605,7 +600,7 @@ async fn test_physical_plan_display_indent() {
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
         "  SortPreservingMergeExec: [the_min@2 DESC]",
-        "    SortExec: [the_min@2 DESC]",
+        "    SortExec: fetch=10, expr=[the_min@2 DESC]",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",
         "          CoalesceBatchesExec: target_batch_size=4096",
@@ -614,7 +609,7 @@ async fn test_physical_plan_display_indent() {
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
         "                    RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "                      CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c12]",
+        "                      CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -654,14 +649,13 @@ async fn test_physical_plan_display_indent_multi_children() {
         "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c2\", index: 0 })]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000), input_partitions=9000",
-        "          ProjectionExec: expr=[c1@0 as c1]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
+        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000), input_partitions=9000",
-        "          ProjectionExec: expr=[c1@0 as c2]",
-        "            RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
+        "          RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
+        "            ProjectionExec: expr=[c1@0 as c2]",
+        "              CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -680,42 +674,6 @@ async fn test_physical_plan_display_indent_multi_children() {
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
-async fn csv_explain() {
-    // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
-    // then execute the physical plan and return the final explain results
-    let ctx = SessionContext::with_config(SessionConfig::new().with_batch_size(4096));
-    register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > cast(10 as int)";
-    let actual = execute(&ctx, sql).await;
-    let actual = normalize_vec_for_explain(actual);
-
-    // Note can't use `assert_batches_eq` as the plan needs to be
-    // normalized for filenames and number of cores
-    let expected = vec![
-        vec![
-            "logical_plan",
-            "Projection: aggregate_test_100.c1\
-             \n  Filter: aggregate_test_100.c2 > Int8(10)\
-             \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]",
-        ],
-        vec!["physical_plan",
-            "ProjectionExec: expr=[c1@0 as c1]\
-              \n  CoalesceBatchesExec: target_batch_size=4096\
-              \n    FilterExec: c2@1 > 10\
-              \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
-              \n        CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2]\
-              \n",
-        ]];
-    assert_eq!(expected, actual);
-
-    let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&ctx, sql).await;
-    let actual = normalize_vec_for_explain(actual);
-    assert_eq!(expected, actual);
-}
-
-#[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -729,11 +687,29 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "CoalescePartitionsExec, metrics=[output_rows=5, elapsed_compute=";
+    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
     assert_not_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
+async fn csv_explain_analyze_order_by() {
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
+    let sql = "EXPLAIN ANALYZE SELECT c1 FROM aggregate_test_100 order by c1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // Ensure that the ordering is not optimized away from the plan
+    // https://github.com/apache/arrow-datafusion/issues/6379
+    let needle =
+        "SortExec: expr=[c1@0 ASC NULLS LAST], metrics=[output_rows=100, elapsed_compute";
+    assert_contains!(&formatted, needle);
 }
 
 #[tokio::test]
@@ -798,10 +774,10 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Projection: COUNT(UInt8(1))\
-            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    SubqueryAlias: t\
-            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+            "Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n  SubqueryAlias: t\
+            \n    Projection: column1\
+            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
         ]];
     assert_eq!(expected, actual);
 }
@@ -817,25 +793,9 @@ async fn explain_physical_plan_only() {
 
     let expected = vec![vec![
         "physical_plan",
-        "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
-        \n  ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
-        \n    EmptyExec: produce_one_row=true\
+        "ProjectionExec: expr=[2 as COUNT(UInt8(1))]\
+        \n  EmptyExec: produce_one_row=true\
         \n",
     ]];
     assert_eq!(expected, actual);
-}
-
-#[tokio::test]
-async fn explain_nested() {
-    async fn test_nested_explain(explain_phy_plan_flag: bool) {
-        let mut config = ConfigOptions::new();
-        config.explain.physical_plan_only = explain_phy_plan_flag;
-        let ctx = SessionContext::with_config(config.into());
-        let sql = "EXPLAIN explain select 1";
-        let err = ctx.sql(sql).await.unwrap_err();
-        assert!(err.to_string().contains("Explain must be root of the plan"));
-    }
-
-    test_nested_explain(true).await;
-    test_nested_explain(false).await;
 }

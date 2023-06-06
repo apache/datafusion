@@ -19,7 +19,7 @@
 
 use crate::{DataFusionError, Result};
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 
 /// A macro that wraps a configuration struct and automatically derives
@@ -181,11 +181,15 @@ config_namespace! {
 config_namespace! {
     /// Options related to SQL parser
     pub struct SqlParserOptions {
-        /// When set to true, sql parser will parse float as decimal type
+        /// When set to true, SQL parser will parse float as decimal type
         pub parse_float_as_decimal: bool, default = false
 
-        /// When set to true, sql parser will normalize ident(convert ident to lowercase when not quoted)
+        /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
+
+        /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        pub dialect: String, default = "generic".to_string()
 
     }
 }
@@ -194,7 +198,7 @@ config_namespace! {
     /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
-        /// buffer-in-memory batches since creating tiny batches would results in too much
+        /// buffer-in-memory batches since creating tiny batches would result in too much
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
 
@@ -208,26 +212,39 @@ config_namespace! {
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of cpu cores on the system
+        /// concurrency.
+        ///
+        /// Defaults to the number of CPU cores on the system
         pub target_partitions: usize, default = num_cpus::get()
 
         /// The default time zone
         ///
-        /// Some functions, e.g. EXTRACT(HOUR from SOME_TIME), shift the underlying datetime
+        /// Some functions, e.g. `EXTRACT(HOUR from SOME_TIME)`, shift the underlying datetime
         /// according to this time zone, and then extract the hour
         pub time_zone: Option<String>, default = Some("+00:00".into())
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
+
+        /// Aggregate options
+        pub aggregate: AggregateOptions, default = Default::default()
+
+        /// Fan-out during initial physical planning.
+        ///
+        /// This is mostly use to plan `UNION` children in parallel.
+        ///
+        /// Defaults to the number of CPU cores on the system
+        pub planning_concurrency: usize, default = num_cpus::get()
     }
 }
 
 config_namespace! {
     /// Options related to reading of parquet files
     pub struct ParquetOptions {
-        /// If true, uses parquet data page level metadata (Page Index) statistics
-        /// to reduce the number of rows decoded.
-        pub enable_page_index: bool, default = false
+        /// If true, reads the Parquet data page level metadata (the
+        /// Page Index), if present, to reduce the I/O and number of
+        /// rows decoded.
+        pub enable_page_index: bool, default = true
 
         /// If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
@@ -240,7 +257,7 @@ config_namespace! {
         pub skip_metadata: bool, default = true
 
         /// If specified, the parquet reader will try and fetch the last `size_hint`
-        /// bytes of the parquet file optimistically. If not specified, two read are required:
+        /// bytes of the parquet file optimistically. If not specified, two reads are required:
         /// One read to fetch the 8-byte parquet footer and
         /// another to fetch the metadata length encoded in the footer
         pub metadata_size_hint: Option<usize>, default = None
@@ -257,10 +274,27 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to aggregate execution
+    pub struct AggregateOptions {
+        /// Specifies the threshold for using `ScalarValue`s to update
+        /// accumulators during high-cardinality aggregations for each input batch.
+        ///
+        /// The aggregation is considered high-cardinality if the number of affected groups
+        /// is greater than or equal to `batch_size / scalar_update_factor`. In such cases,
+        /// `ScalarValue`s are utilized for updating accumulators, rather than the default
+        /// batch-slice approach. This can lead to performance improvements.
+        ///
+        /// By adjusting the `scalar_update_factor`, you can balance the trade-off between
+        /// more efficient accumulator updates and the number of groups affected.
+        pub scalar_update_factor: usize, default = 10
+    }
+}
+
+config_namespace! {
     /// Options related to query optimization
     pub struct OptimizerOptions {
         /// When set to true, the physical plan optimizer will try to add round robin
-        /// repartition to increase parallelism to leverage more CPU cores
+        /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
         /// When set to true, the optimizer will insert filters before a join between
@@ -270,30 +304,57 @@ config_namespace! {
         pub filter_null_join_keys: bool, default = false
 
         /// Should DataFusion repartition data using the aggregate keys to execute aggregates
-        /// in parallel using the provided `target_partitions` level"
+        /// in parallel using the provided `target_partitions` level
         pub repartition_aggregations: bool, default = true
 
         /// Minimum total files size in bytes to perform file scan repartitioning.
         pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
-        /// using the provided `target_partitions` level"
+        /// using the provided `target_partitions` level
         pub repartition_joins: bool, default = true
+
+        /// Should DataFusion allow symmetric hash joins for unbounded data sources even when
+        /// its inputs do not have any ordering or filtering If the flag is not enabled,
+        /// the SymmetricHashJoin operator will be unable to prune its internal buffers,
+        /// resulting in certain join types - such as Full, Left, LeftAnti, LeftSemi, Right,
+        /// RightAnti, and RightSemi - being produced only at the end of the execution.
+        /// This is not typical in stream processing. Additionally, without proper design for
+        /// long runner execution, all types of joins may encounter out-of-memory errors.
+        pub allow_symmetric_joins_without_pruning: bool, default = true
 
         /// When set to true, file groups will be repartitioned to achieve maximum parallelism.
         /// Currently supported only for Parquet format in which case
         /// multiple row groups from the same file may be read concurrently. If false then each
         /// row group is read serially, though different files may be read in parallel.
-        pub repartition_file_scans: bool, default = false
+        pub repartition_file_scans: bool, default = true
 
         /// Should DataFusion repartition data using the partitions keys to execute window
-        /// functions in parallel using the provided `target_partitions` level"
+        /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true
+
+        /// Should DataFusion execute sorts in a per-partition fashion and merge
+        /// afterwards instead of coalescing first and sorting globally.
+        /// With this flag is enabled, plans in the form below
+        ///
+        /// ```text
+        ///      "SortExec: [a@0 ASC]",
+        ///      "  CoalescePartitionsExec",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        /// ```
+        /// would turn into the plan below which performs better in multithreaded environments
+        ///
+        /// ```text
+        ///      "SortPreservingMergeExec: [a@0 ASC]",
+        ///      "  SortExec: [a@0 ASC]",
+        ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        /// ```
+        pub repartition_sorts: bool, default = true
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail
-        pub skip_failed_rules: bool, default = true
+        pub skip_failed_rules: bool, default = false
 
         /// Number of times that the optimizer will attempt to optimize the plan
         pub max_passes: usize, default = 3
@@ -385,6 +446,12 @@ impl ConfigOptions {
         Self::default()
     }
 
+    /// Set extensions to provided value
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
@@ -443,6 +510,36 @@ impl ConfigOptions {
         Ok(ret)
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    ///
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        let mut keys = Visitor(vec![]);
+        let mut ret = Self::default();
+        ret.visit(&mut keys, "datafusion", "");
+
+        for key in keys.0 {
+            if let Some(var) = settings.get(&key) {
+                ret.set(&key, var)?;
+            }
+        }
+
+        Ok(ret)
+    }
+
     /// Returns the [`ConfigEntry`] stored within this [`ConfigOptions`]
     pub fn entries(&self) -> Vec<ConfigEntry> {
         struct Visitor(Vec<ConfigEntry>);
@@ -482,7 +579,10 @@ impl ConfigOptions {
         use std::fmt::Write as _;
 
         let mut s = Self::default();
-        s.execution.target_partitions = 0; // Normalize for display
+
+        // Normalize for display
+        s.execution.target_partitions = 0;
+        s.execution.planning_concurrency = 0;
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";
@@ -543,6 +643,11 @@ pub trait ExtensionOptions: Send + Sync + std::fmt::Debug + 'static {
 pub struct Extensions(BTreeMap<&'static str, ExtensionBox>);
 
 impl Extensions {
+    /// Create a new, empty [`Extensions`]
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
     /// Registers a [`ConfigExtension`] with this [`ConfigOptions`]
     pub fn insert<T: ConfigExtension>(&mut self, extension: T) {
         assert_ne!(T::PREFIX, "datafusion");
@@ -621,4 +726,130 @@ trait Visit {
     fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
 
     fn none(&mut self, key: &str, description: &'static str);
+}
+
+/// Convenience macro to create [`ExtensionsOptions`].
+///
+/// The created structure implements the following traits:
+///
+/// - [`Clone`]
+/// - [`Debug`]
+/// - [`Default`]
+/// - [`ExtensionOptions`]
+///
+/// # Usage
+/// The syntax is:
+///
+/// ```text
+/// extensions_options! {
+///      /// Struct docs (optional).
+///     [<vis>] struct <StructName> {
+///         /// Field docs (optional)
+///         [<vis>] <field_name>: <field_type>, default = <default_value>
+///
+///         ... more fields
+///     }
+/// }
+/// ```
+///
+/// The placeholders are:
+/// - `[<vis>]`: Optional visibility modifier like `pub` or `pub(crate)`.
+/// - `<StructName>`: Struct name like `MyStruct`.
+/// - `<field_name>`: Field name like `my_field`.
+/// - `<field_type>`: Field type like `u8`.
+/// - `<default_value>`: Default value matching the field type like `42`.
+///
+/// # Example
+/// ```
+/// use datafusion_common::extensions_options;
+///
+/// extensions_options! {
+///     /// My own config options.
+///     pub struct MyConfig {
+///         /// Should "foo" be replaced by "bar"?
+///         pub foo_to_bar: bool, default = true
+///
+///         /// How many "baz" should be created?
+///         pub baz_count: usize, default = 1337
+///     }
+/// }
+/// ```
+///
+///
+/// [`Debug`]: std::fmt::Debug
+/// [`ExtensionsOptions`]: crate::config::ExtensionOptions
+#[macro_export]
+macro_rules! extensions_options {
+    (
+     $(#[doc = $struct_d:tt])*
+     $vis:vis struct $struct_name:ident {
+        $(
+        $(#[doc = $d:tt])*
+        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        )*$(,)*
+    }
+    ) => {
+        $(#[doc = $struct_d])*
+        #[derive(Debug, Clone)]
+        #[non_exhaustive]
+        $vis struct $struct_name{
+            $(
+            $(#[doc = $d])*
+            $field_vis $field_name : $field_type,
+            )*
+        }
+
+        impl Default for $struct_name {
+            fn default() -> Self {
+                Self {
+                    $($field_name: $default),*
+                }
+            }
+        }
+
+        impl $crate::config::ExtensionOptions for $struct_name {
+            fn as_any(&self) -> &dyn ::std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn ::std::any::Any {
+                self
+            }
+
+            fn cloned(&self) -> Box<dyn $crate::config::ExtensionOptions> {
+                Box::new(self.clone())
+            }
+
+            fn set(&mut self, key: &str, value: &str) -> $crate::Result<()> {
+                match key {
+                    $(
+                       stringify!($field_name) => {
+                        self.$field_name = value.parse().map_err(|e| {
+                            $crate::DataFusionError::Context(
+                                format!(concat!("Error parsing {} as ", stringify!($t),), value),
+                                Box::new($crate::DataFusionError::External(Box::new(e))),
+                            )
+                        })?;
+                        Ok(())
+                       }
+                    )*
+                    _ => Err($crate::DataFusionError::Internal(
+                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
+                    ))
+                }
+            }
+
+            fn entries(&self) -> Vec<$crate::config::ConfigEntry> {
+                vec![
+                    $(
+                        $crate::config::ConfigEntry {
+                            key: stringify!($field_name).to_owned(),
+                            value: (self.$field_name != $default).then(|| self.$field_name.to_string()),
+                            description: concat!($($d),*).trim(),
+                        },
+                    )*
+                ]
+            }
+        }
+    }
 }

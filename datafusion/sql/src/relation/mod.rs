@@ -23,6 +23,7 @@ use sqlparser::ast::TableFactor;
 mod join;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+    /// Create a `LogicalPlan` that scans the named relation
     fn create_relation(
         &self,
         relation: TableFactor,
@@ -33,15 +34,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // normalize name and alias
                 let table_ref = self.object_name_to_table_reference(name)?;
                 let table_name = table_ref.to_string();
-                let cte = planner_context.ctes.get(&table_name);
+                let cte = planner_context.get_cte(&table_name);
                 (
                     match (
                         cte,
-                        self.schema_provider.get_table_provider((&table_ref).into()),
+                        self.schema_provider.get_table_provider(table_ref.clone()),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Ok(provider)) => {
-                            LogicalPlanBuilder::scan(&table_name, provider, None)?.build()
+                            LogicalPlanBuilder::scan(table_ref, provider, None)?.build()
                         }
                         (None, Err(e)) => Err(e),
                     }?,

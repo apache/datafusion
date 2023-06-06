@@ -33,6 +33,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 use crate::aggregate::stats::StatsType;
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 
 /// COVAR and COVAR_SAMP aggregate expression
@@ -117,6 +118,17 @@ impl AggregateExpr for Covariance {
     }
 }
 
+impl PartialEq<dyn Any> for Covariance {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name && self.expr1.eq(&x.expr1) && self.expr2.eq(&x.expr2)
+            })
+            .unwrap_or(false)
+    }
+}
+
 impl CovariancePop {
     /// Create a new COVAR_POP aggregate function
     pub fn new(
@@ -182,6 +194,17 @@ impl AggregateExpr for CovariancePop {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for CovariancePop {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name && self.expr1.eq(&x.expr1) && self.expr2.eq(&x.expr2)
+            })
+            .unwrap_or(false)
     }
 }
 

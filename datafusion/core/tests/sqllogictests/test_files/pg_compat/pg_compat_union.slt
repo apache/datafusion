@@ -67,7 +67,7 @@ STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
-query I
+query I rowsort
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1
@@ -76,13 +76,12 @@ SELECT * FROM (
     FROM aggregate_test_100_by_sql t2
     WHERE c2 IN (3, 4)
 ) s
-ORDER BY c2
 ----
 1
 2
 5
 
-query I
+query I rowsort
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1
@@ -91,7 +90,6 @@ SELECT * FROM (
     FROM aggregate_test_100_by_sql t2
     WHERE c2 IN (3, 4)
 ) s
-ORDER BY c2
 ----
 1
 1
@@ -153,7 +151,7 @@ ORDER BY c2
 5
 
 
-query I
+query I rowsort
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1
@@ -162,13 +160,12 @@ SELECT * FROM (
     FROM aggregate_test_100_by_sql t2
     WHERE c2 IN (3, 4)
 ) s
-ORDER BY c2
 ----
 3
 4
 
 
-query I
+query I rowsort
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1
@@ -177,7 +174,6 @@ SELECT * FROM (
     FROM aggregate_test_100_by_sql t2
     WHERE c2 IN (3, 4)
 ) s
-ORDER BY c2
 ----
 3
 3

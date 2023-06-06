@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-benchmarks"
 description = "DataFusion Benchmarks"
-version = "17.0.0"
+version = "26.0.0"
 edition = "2021"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
@@ -33,16 +33,13 @@ simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = "32.0.0"
-datafusion = { path = "../datafusion/core", version = "17.0.0", features = ["scheduler"] }
+arrow = { workspace = true }
+datafusion = { path = "../datafusion/core", version = "26.0.0" }
 env_logger = "0.10"
 futures = "0.3"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 num_cpus = "1.13.0"
-object_store = "0.5.0"
-parquet = "32.0.0"
-parquet-test-utils = { path = "../parquet-test-utils/", version = "0.1.0" }
-rand = "0.8.4"
+parquet = { workspace = true }
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.78"
 snmalloc-rs = { version = "0.3", optional = true }
@@ -51,4 +48,4 @@ test-utils = { path = "../test-utils/", version = "0.1.0" }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 
 [dev-dependencies]
-datafusion-proto = { path = "../datafusion/proto", version = "17.0.0" }
+datafusion-proto = { path = "../datafusion/proto", version = "26.0.0" }

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::expressions::{ArrayAgg, FirstValue, LastValue};
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
@@ -31,10 +32,13 @@ pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
 pub(crate) mod average;
+pub(crate) mod bit_and_or_xor;
+pub(crate) mod bool_and_or;
 pub(crate) mod correlation;
 pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
+pub(crate) mod first_last;
 pub(crate) mod grouping;
 pub(crate) mod median;
 #[macro_use]
@@ -56,7 +60,11 @@ pub(crate) mod variance;
 /// * knows how to create its accumulator
 /// * knows its accumulator's state's field
 /// * knows the expressions from whose its accumulator will receive values
-pub trait AggregateExpr: Send + Sync + Debug {
+///
+/// Any implementation of this trait also needs to implement the
+/// `PartialEq<dyn Any>` to allows comparing equality between the
+/// trait objects.
+pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -122,4 +130,14 @@ pub trait AggregateExpr: Send + Sync + Debug {
             "Retractable Accumulator hasn't been implemented for {self:?} yet"
         )))
     }
+}
+
+/// Checks whether the given aggregate expression is order-sensitive.
+/// For instance, a `SUM` aggregation doesn't depend on the order of its inputs.
+/// However, a `FirstValue` depends on the input ordering (if the order changes,
+/// the first value in the list would change).
+pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
+    aggr_expr.as_any().is::<FirstValue>()
+        || aggr_expr.as_any().is::<LastValue>()
+        || aggr_expr.as_any().is::<ArrayAgg>()
 }

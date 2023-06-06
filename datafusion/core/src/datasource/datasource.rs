@@ -21,7 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::Statistics;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
@@ -72,6 +72,7 @@ pub trait TableProvider: Sync + Send {
 
     /// Tests whether the table provider can make use of a filter expression
     /// to optimise data retrieval.
+    #[deprecated(since = "20.0.0", note = "use supports_filters_pushdown instead")]
     fn supports_filter_pushdown(
         &self,
         _filter: &Expr,
@@ -79,9 +80,51 @@ pub trait TableProvider: Sync + Send {
         Ok(TableProviderFilterPushDown::Unsupported)
     }
 
+    /// Tests whether the table provider can make use of any or all filter expressions
+    /// to optimise data retrieval.
+    #[allow(deprecated)]
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        filters
+            .iter()
+            .map(|f| self.supports_filter_pushdown(f))
+            .collect()
+    }
+
     /// Get statistics for this table, if available
     fn statistics(&self) -> Option<Statistics> {
         None
+    }
+
+    /// Return an [`ExecutionPlan`] to insert data into this table, if
+    /// supported.
+    ///
+    /// The returned plan should return a single row in a UInt64
+    /// column called "count" such as the following
+    ///
+    /// ```text
+    /// +-------+,
+    /// | count |,
+    /// +-------+,
+    /// | 6     |,
+    /// +-------+,
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// See [`InsertExec`] for the common pattern of inserting a
+    /// single stream of `RecordBatch`es.
+    ///
+    /// [`InsertExec`]: crate::physical_plan::insert::InsertExec
+    async fn insert_into(
+        &self,
+        _state: &SessionState,
+        _input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let msg = "Insertion not implemented for this table".to_owned();
+        Err(DataFusionError::NotImplemented(msg))
     }
 }
 

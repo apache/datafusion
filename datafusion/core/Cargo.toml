@@ -18,20 +18,16 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "17.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "../../README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = ["arrow", "query", "sql"]
-include = [
-    "benches/*.rs",
-    "src/**/*.rs",
-    "Cargo.toml",
-]
-edition = "2021"
-rust-version = "1.62"
+include = ["benches/*.rs", "src/**/*.rs", "Cargo.toml"]
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion"
@@ -40,40 +36,38 @@ path = "src/lib.rs"
 [features]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
-compression = ["xz2", "bzip2", "flate2", "async-compression"]
-crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
+compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression"]
+crypto_expressions = ["datafusion-physical-expr/crypto_expressions", "datafusion-optimizer/crypto_expressions"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
 # Enables support for non-scalar, binary operations on dictionaries
 # Note: this results in significant additional codegen
-dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
+dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions", "datafusion-optimizer/dictionary_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
-# Used to enable JIT code generation
-jit = ["datafusion-jit", "datafusion-row/jit"]
 pyarrow = ["datafusion-common/pyarrow"]
-regex_expressions = ["datafusion-physical-expr/regex_expressions"]
-# Used to enable scheduler
-scheduler = ["rayon"]
+regex_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-optimizer/regex_expressions"]
 simd = ["arrow/simd"]
-unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
+unicode_expressions = ["datafusion-physical-expr/unicode_expressions", "datafusion-optimizer/unicode_expressions", "datafusion-sql/unicode_expressions"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { version = "32.0.0", features = ["prettyprint"] }
-async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "futures-io", "tokio"], optional = true }
+arrow = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+async-compression = { version = "0.4.0", features = ["bzip2", "gzip", "xz", "zstd", "futures-io", "tokio"], optional = true }
 async-trait = "0.1.41"
-bytes = "1.1"
+bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "17.0.0", features = ["parquet", "object_store"] }
-datafusion-expr = { path = "../expr", version = "17.0.0" }
-datafusion-jit = { path = "../jit", version = "17.0.0", optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "17.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "17.0.0" }
-datafusion-row = { path = "../row", version = "17.0.0" }
-datafusion-sql = { path = "../sql", version = "17.0.0" }
+datafusion-common = { path = "../common", version = "26.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "26.0.0" }
+datafusion-expr = { path = "../expr", version = "26.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "26.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "26.0.0", default-features = false }
+datafusion-row = { path = "../row", version = "26.0.0" }
+datafusion-sql = { path = "../sql", version = "26.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
@@ -84,16 +78,14 @@ lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = "0.5.3"
+object_store = "0.5.4"
 parking_lot = "0.12"
-parquet = { version = "32.0.0", features = ["arrow", "async"] }
-paste = "^1.0"
+parquet = { workspace = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
-rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = { version = "0.30", features = ["visitor"] }
+sqlparser = { version = "0.34", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
@@ -101,23 +93,23 @@ tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
+zstd = { version = "0.12", optional = true, default-features = false }
 
 
 [dev-dependencies]
 async-trait = "0.1.53"
 bigdecimal = "0.3.0"
-criterion = "0.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
 csv = "1.1.6"
-ctor = "0.1.22"
+ctor = "0.2.0"
 doc-comment = "0.3"
 env_logger = "0.10"
 half = "2.2.1"
-parquet-test-utils = { path = "../../parquet-test-utils" }
 postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
-rstest = "0.16.0"
+rstest = "0.17.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-sqllogictest = "0.11.1"
+sqllogictest = "0.13.2"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"
@@ -155,7 +147,6 @@ name = "physical_plan"
 [[bench]]
 harness = false
 name = "parquet_query_sql"
-required-features = ["scheduler"]
 
 [[bench]]
 harness = false
@@ -163,12 +154,11 @@ name = "sql_planner"
 
 [[bench]]
 harness = false
-name = "jit"
-required-features = ["jit"]
+name = "sql_query_with_io"
 
 [[bench]]
 harness = false
-name = "merge"
+name = "sort"
 
 [[test]]
 harness = false

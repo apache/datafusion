@@ -33,16 +33,18 @@ use crate::physical_plan::{
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use log::debug;
+use datafusion_execution::TaskContext;
+use futures::stream::{Stream, StreamExt};
+use log::trace;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::execution::context::TaskContext;
-use datafusion_physical_expr::equivalence::project_equivalence_properties;
-use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
-use futures::stream::Stream;
-use futures::stream::StreamExt;
+
+use datafusion_physical_expr::{
+    normalize_out_expr_with_columns_map, project_equivalence_properties,
+    project_ordering_equivalence_properties, OrderingEquivalenceProperties,
+};
 
 /// Execution plan for a projection
 #[derive(Debug)]
@@ -55,9 +57,9 @@ pub struct ProjectionExec {
     input: Arc<dyn ExecutionPlan>,
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The columns map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
-    alias_map: HashMap<Column, Vec<Column>>,
+    columns_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -91,15 +93,23 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
-        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        // construct a map from the input columns to the output columns of the Projection
+        let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                // For some executors, logical and physical plan schema fields
+                // are not the same. The information in a `Column` comes from
+                // the logical plan schema. Therefore, to produce correct results
+                // we use the field in the input schema with the same index. This
+                // corresponds to the physical plan `Column`.
+                let idx = column.index();
+                let matching_input_field = input_schema.field(idx);
+                let matching_input_column = Column::new(matching_input_field.name(), idx);
                 let new_col_idx = schema.index_of(name)?;
-                // When the column name is the same, but index does not equal, treat it as Alias
-                if (column.name() != name) || (column.index() != new_col_idx) {
-                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
-                    entry.push(Column::new(name, new_col_idx));
-                }
+                let entry = columns_map
+                    .entry(matching_input_column)
+                    .or_insert_with(Vec::new);
+                entry.push(Column::new(name, new_col_idx));
             };
         }
 
@@ -110,10 +120,9 @@ impl ProjectionExec {
                 let normalized_exprs = sort_exprs
                     .iter()
                     .map(|sort_expr| {
-                        let expr = normalize_out_expr_with_alias_schema(
+                        let expr = normalize_out_expr_with_columns_map(
                             sort_expr.expr.clone(),
-                            &alias_map,
-                            &schema,
+                            &columns_map,
                         );
                         PhysicalSortExpr {
                             expr,
@@ -131,7 +140,7 @@ impl ProjectionExec {
             schema,
             input: input.clone(),
             output_ordering,
-            alias_map,
+            columns_map,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -159,7 +168,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
@@ -178,13 +187,10 @@ impl ExecutionPlan for ProjectionExec {
                 let normalized_exprs = exprs
                     .into_iter()
                     .map(|expr| {
-                        normalize_out_expr_with_alias_schema(
-                            expr,
-                            &self.alias_map,
-                            &self.schema,
-                        )
+                        normalize_out_expr_with_columns_map(expr, &self.columns_map)
                     })
                     .collect::<Vec<_>>();
+
                 Partitioning::Hash(normalized_exprs, part)
             }
             _ => input_partition,
@@ -204,7 +210,17 @@ impl ExecutionPlan for ProjectionExec {
         let mut new_properties = EquivalenceProperties::new(self.schema());
         project_equivalence_properties(
             self.input.equivalence_properties(),
-            &self.alias_map,
+            &self.columns_map,
+            &mut new_properties,
+        );
+        new_properties
+    }
+
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        let mut new_properties = OrderingEquivalenceProperties::new(self.schema());
+        project_ordering_equivalence_properties(
+            self.input.ordering_equivalence_properties(),
+            &self.columns_map,
             &mut new_properties,
         );
         new_properties
@@ -220,12 +236,22 @@ impl ExecutionPlan for ProjectionExec {
         )?))
     }
 
+    fn benefits_from_input_partitioning(&self) -> bool {
+        let all_column_expr = self
+            .expr
+            .iter()
+            .all(|(e, _)| e.as_any().downcast_ref::<Column>().is_some());
+        // If expressions are all column_expr, then all computations in this projection are reorder or rename,
+        // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
+        !all_column_expr
+    }
+
     fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         Ok(Box::pin(ProjectionStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
@@ -384,7 +410,20 @@ mod tests {
     use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::binary;
     use futures::future;
+
+    // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
+    // to valid types. Usage can result in an execution (after plan) error.
+    fn binary_simple(
+        l: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        r: Arc<dyn PhysicalExpr>,
+        input_schema: &Schema,
+    ) -> Arc<dyn PhysicalExpr> {
+        binary(l, op, r, input_schema).unwrap()
+    }
 
     #[tokio::test]
     async fn project_first_column() -> Result<()> {
@@ -422,6 +461,38 @@ mod tests {
         assert_eq!(partitions, partition_count);
         assert_eq!(100, row_count);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_input_not_partitioning() -> Result<()> {
+        let schema = test_util::aggr_test_schema();
+
+        let partitions = 4;
+        let csv = test::scan_partitioned_csv(partitions)?;
+
+        // pick column c1 and name it column c1 in the output schema
+        let projection =
+            ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
+        assert!(!projection.benefits_from_input_partitioning());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_input_partitioning() -> Result<()> {
+        let schema = test_util::aggr_test_schema();
+
+        let partitions = 4;
+        let csv = test::scan_partitioned_csv(partitions)?;
+
+        let c1 = col("c2", &schema).unwrap();
+        let c2 = col("c9", &schema).unwrap();
+        let c1_plus_c2 = binary_simple(c1, Operator::Plus, c2, &schema);
+
+        let projection =
+            ProjectionExec::try_new(vec![(c1_plus_c2, "c2 + c9".to_string())], csv)?;
+
+        assert!(projection.benefits_from_input_partitioning());
         Ok(())
     }
 

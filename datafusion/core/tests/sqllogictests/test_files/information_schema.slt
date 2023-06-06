@@ -30,7 +30,7 @@ statement ok
 set datafusion.catalog.information_schema = true;
 
 # Verify the information schema now does exist and is empty
-query CCC rowsort
+query TTTT rowsort
 SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
@@ -61,7 +61,7 @@ set datafusion.catalog.information_schema = true
 statement ok
 create table t as values (1);
 
-query CCC rowsort
+query TTTT rowsort
 SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
@@ -74,7 +74,7 @@ datafusion public t BASE TABLE
 statement ok
 create table t2 as values (1);
 
-query CCC rowsort
+query TTTT rowsort
 SELECT * from information_schema.tables;
 ----
 datafusion information_schema columns VIEW
@@ -83,6 +83,30 @@ datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 datafusion public t BASE TABLE
 datafusion public t2 BASE TABLE
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE information_schema.tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+query TTTT rowsort
+SELECT * from information_schema.tables WHERE datafusion.information_schema.tables.table_schema='information_schema';
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
 
 # Cleanup
 statement ok
@@ -101,8 +125,14 @@ drop table t2
 statement ok
 SET datafusion.execution.target_partitions=7
 
+# planning_concurrency defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.planning_concurrency=13
+
 # show all variables
-query R rowsort
+query TT rowsort
 SHOW ALL
 ----
 datafusion.catalog.create_default_catalog_and_schema true
@@ -112,19 +142,22 @@ datafusion.catalog.format NULL
 datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
+datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
-datafusion.execution.parquet.enable_page_index false
+datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
+datafusion.execution.planning_concurrency 13
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
+datafusion.optimizer.allow_symmetric_joins_without_pruning true
 datafusion.optimizer.enable_round_robin_repartition true
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
@@ -132,30 +165,32 @@ datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_hash_join true
 datafusion.optimizer.repartition_aggregations true
 datafusion.optimizer.repartition_file_min_size 10485760
-datafusion.optimizer.repartition_file_scans false
+datafusion.optimizer.repartition_file_scans true
 datafusion.optimizer.repartition_joins true
+datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
-datafusion.optimizer.skip_failed_rules true
+datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
+datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
 datafusion.sql_parser.parse_float_as_decimal false
 
 # show_variable_in_config_options
-query R
+query TT
 SHOW datafusion.execution.batch_size
 ----
 datafusion.execution.batch_size 8192
 
 # show_time_zone_default_utc
 # https://github.com/apache/arrow-datafusion/issues/3255
-query R
+query TT
 SHOW TIME ZONE
 ----
 datafusion.execution.time_zone +00:00
 
 # show_timezone_default_utc
 # https://github.com/apache/arrow-datafusion/issues/3255
-query R
+query TT
 SHOW TIMEZONE
 ----
 datafusion.execution.time_zone +00:00
@@ -167,7 +202,7 @@ datafusion.execution.time_zone +00:00
 statement ok
 CREATE OR REPLACE TABLE some_table AS VALUES (1,2),(3,4);
 
-query R rowsort
+query TTT rowsort
 DESCRIBE some_table
 ----
 column1 Int64 YES
@@ -181,7 +216,7 @@ DROP TABLE public.some_table;
 statement ok
 CREATE OR REPLACE TABLE public.some_table AS VALUES (1,2),(3,4);
 
-query R rowsort
+query TTT rowsort
 DESCRIBE public.some_table
 ----
 column1 Int64 YES
@@ -195,7 +230,7 @@ DROP TABLE public.some_table;
 statement ok
 CREATE OR REPLACE TABLE datafusion.public.some_table AS VALUES (1,2),(3,4);
 
-query R rowsort
+query TTT rowsort
 DESCRIBE datafusion.public.some_table
 ----
 column1 Int64 YES
@@ -211,7 +246,7 @@ describe table;
 
 
 # information_schema_show_tables
-query CCCC rowsort
+query TTTT rowsort
 SHOW TABLES
 ----
 datafusion information_schema columns VIEW
@@ -242,7 +277,7 @@ SHOW COLUMNS FROM t LIKE 'f';
 statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
 SHOW COLUMNS FROM t WHERE column_name = 'bar';
 
-query CCCCCC
+query TTTTTT
 SHOW COLUMNS FROM t;
 ----
 datafusion public t i Int32 NO
@@ -252,13 +287,13 @@ statement error Error during planning: table 'datafusion.public.T' not found
 SHOW columns from "T"
 
 # information_schema_show_columns_full_extended
-query CCCCCC
+query TTTTITTTIIIIIIT
 SHOW FULL COLUMNS FROM t;
 ----
 datafusion public t i 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
 
 # expect same as above
-query CCCCCC
+query TTTTITTTIIIIIIT
 SHOW EXTENDED COLUMNS FROM t;
 ----
 datafusion public t i 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
@@ -276,12 +311,12 @@ set datafusion.catalog.information_schema = true;
 
 
 # information_schema_show_columns_names()
-query CCCCCC
+query TTTTTT
 SHOW columns from public.t
 ----
 datafusion public t i Int32 NO
 
-query CCCCCC
+query TTTTTT
 SHOW columns from datafusion.public.t
 ----
 datafusion public t i Int32 NO
@@ -296,9 +331,8 @@ SHOW columns from datafusion.public.t2
 # show_non_existing_variable
 # FIXME
 # currently we cannot know whether a variable exists, this will output 0 row instead
-query C
+statement ok
 SHOW SOMETHING_UNKNOWN;
-----
 
 statement ok
 DROP TABLE t;
@@ -323,7 +357,7 @@ CREATE TABLE abc AS VALUES (1,2,3), (4,5,6);
 statement ok
 CREATE VIEW xyz AS SELECT * FROM abc
 
-query CCCC
+query TTTT
 SHOW CREATE TABLE xyz
 ----
 datafusion public xyz CREATE VIEW xyz AS SELECT * FROM abc
@@ -344,12 +378,12 @@ CREATE SCHEMA test;
 statement ok
 CREATE VIEW test.xyz AS SELECT * FROM abc;
 
-query CCCC
+query TTTT
 SHOW CREATE TABLE test.xyz
 ----
 datafusion test xyz CREATE VIEW test.xyz AS SELECT * FROM abc
 
-statement error DataFusion error: This feature is not implemented: Only `DROP TABLE/VIEW
+statement error DataFusion error: Execution error: Cannot drop schema test because other tables depend on it: xyz
 DROP SCHEMA test;
 
 statement ok
@@ -365,7 +399,7 @@ CREATE EXTERNAL TABLE abc
 STORED AS CSV
 WITH HEADER ROW LOCATION '../../testing/data/csv/aggregate_test_100.csv';
 
-query CCCC
+query TTTT
 SHOW CREATE TABLE abc;
 ----
 datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv

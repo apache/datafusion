@@ -37,6 +37,18 @@ the `arrow_typeof` function. For example:
 +-------------------------------------+
 ```
 
+You can cast a SQL expression to a specific Arrow type using the `arrow_cast` function
+For example, to cast the output of `now()` to a `Timestamp` with second precision:
+
+```sql
+❯ select arrow_cast(now(), 'Timestamp(Second, None)');
++---------------------+
+| now()               |
++---------------------+
+| 2023-03-03T17:19:21 |
++---------------------+
+```
+
 ## Character Types
 
 | SQL DataType | Arrow DataType |
@@ -48,29 +60,29 @@ the `arrow_typeof` function. For example:
 
 ## Numeric Types
 
-| SQL DataType                         | Arrow DataType                | Notes                                                                                                       |
-| ------------------------------------ | :---------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `TINYINT`                            | `Int8`                        |                                                                                                             |
-| `SMALLINT`                           | `Int16`                       |                                                                                                             |
-| `INT` or `INTEGER`                   | `Int32`                       |                                                                                                             |
-| `BIGINT`                             | `Int64`                       |                                                                                                             |
-| `TINYINT UNSIGNED`                   | `UInt8`                       |                                                                                                             |
-| `SMALLINT UNSIGNED`                  | `UInt16`                      |                                                                                                             |
-| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                      |                                                                                                             |
-| `BIGINT UNSIGNED`                    | `UInt64`                      |                                                                                                             |
-| `FLOAT`                              | `Float32`                     |                                                                                                             |
-| `REAL`                               | `Float32`                     |                                                                                                             |
-| `DOUBLE`                             | `Float64`                     |                                                                                                             |
-| `DECIMAL(precision,scale)`           | `Decimal128(precision,scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
+| SQL DataType                         | Arrow DataType                 | Notes                                                                                                       |
+| ------------------------------------ | :----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `TINYINT`                            | `Int8`                         |                                                                                                             |
+| `SMALLINT`                           | `Int16`                        |                                                                                                             |
+| `INT` or `INTEGER`                   | `Int32`                        |                                                                                                             |
+| `BIGINT`                             | `Int64`                        |                                                                                                             |
+| `TINYINT UNSIGNED`                   | `UInt8`                        |                                                                                                             |
+| `SMALLINT UNSIGNED`                  | `UInt16`                       |                                                                                                             |
+| `INT UNSIGNED` or `INTEGER UNSIGNED` | `UInt32`                       |                                                                                                             |
+| `BIGINT UNSIGNED`                    | `UInt64`                       |                                                                                                             |
+| `FLOAT`                              | `Float32`                      |                                                                                                             |
+| `REAL`                               | `Float32`                      |                                                                                                             |
+| `DOUBLE`                             | `Float64`                      |                                                                                                             |
+| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                                                           |
-| ------------ | :----------------------------------------------------------------------- |
-| `DATE`       | `Date32`                                                                 |
-| `TIME`       | `Time64(TimeUnit::Nanosecond)`                                           |
-| `TIMESTAMP`  | `Timestamp(TimeUnit::Nanosecond, None)`                                  |
-| `INTERVAL`   | `Interval(IntervalUnit::YearMonth)` or `Interval(IntervalUnit::DayTime)` |
+| SQL DataType | Arrow DataType                   |
+| ------------ | :------------------------------- |
+| `DATE`       | `Date32`                         |
+| `TIME`       | `Time64(Nanosecond)`             |
+| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`    |
+| `INTERVAL`   | `Interval(IntervalMonthDayNano)` |
 
 ## Boolean Types
 
@@ -84,7 +96,7 @@ the `arrow_typeof` function. For example:
 | ------------ | :------------- |
 | `BYTEA`      | `Binary`       |
 
-## Unsupported Types
+## Unsupported SQL Types
 
 | SQL Data Type | Arrow DataType      |
 | ------------- | :------------------ |
@@ -100,3 +112,43 @@ the `arrow_typeof` function. For example:
 | `ENUM`        | _Not yet supported_ |
 | `SET`         | _Not yet supported_ |
 | `DATETIME`    | _Not yet supported_ |
+
+## Supported Arrow Types
+
+The following types are supported by the `arrow_typeof` function:
+
+| Arrow Type                                                  |
+| ----------------------------------------------------------- |
+| `Null`                                                      |
+| `Boolean`                                                   |
+| `Int8`                                                      |
+| `Int16`                                                     |
+| `Int32`                                                     |
+| `Int64`                                                     |
+| `UInt8`                                                     |
+| `UInt16`                                                    |
+| `UInt32`                                                    |
+| `UInt64`                                                    |
+| `Float16`                                                   |
+| `Float32`                                                   |
+| `Float64`                                                   |
+| `Utf8`                                                      |
+| `LargeUtf8`                                                 |
+| `Binary`                                                    |
+| `Timestamp(Second, None)`                                   |
+| `Timestamp(Millisecond, None)`                              |
+| `Timestamp(Microsecond, None)`                              |
+| `Timestamp(Nanosecond, None)`                               |
+| `Time32`                                                    |
+| `Time64`                                                    |
+| `Duration(Second)`                                          |
+| `Duration(Millisecond)`                                     |
+| `Duration(Microsecond)`                                     |
+| `Duration(Nanosecond)`                                      |
+| `Interval(YearMonth)`                                       |
+| `Interval(DayTime)`                                         |
+| `Interval(MonthDayNano)`                                    |
+| `Interval(MonthDayNano)`                                    |
+| `FixedSizeBinary(<len>)` (e.g. `FixedSizeBinary(16)`)       |
+| `Decimal128(<precision>, <scale>)` e.g. `Decimal128(3, 10)` |
+| `Decimal256(<precision>, <scale>)` e.g. `Decimal256(3, 10)` |

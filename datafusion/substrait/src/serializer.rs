@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::producer;
+use crate::logical_plan::producer;
 
 use datafusion::common::DataFusionError;
 use datafusion::error::Result;
@@ -37,7 +37,7 @@ pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()
 pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = producer::to_substrait_plan(&plan)?;
+    let proto = producer::to_substrait_plan(&plan, ctx)?;
 
     let mut protobuf_out = Vec::<u8>::new();
     proto.encode(&mut protobuf_out).map_err(|e| {

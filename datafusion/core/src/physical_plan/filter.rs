@@ -39,9 +39,9 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{split_conjunction, AnalysisContext};
 
-use log::debug;
+use log::trace;
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -107,7 +107,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
@@ -147,7 +147,7 @@ impl ExecutionPlan for FilterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start FilterExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema(),
@@ -235,7 +235,7 @@ struct FilterExecStream {
     baseline_metrics: BaselineMetrics,
 }
 
-fn batch_filter(
+pub(crate) fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
 ) -> Result<RecordBatch> {
@@ -341,6 +341,7 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use crate::test_util;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::utils::DataPtr;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -378,7 +379,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::vtable_address_comparisons)]
     async fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
@@ -391,10 +391,11 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input.clone())?);
 
         let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
-        assert!(!Arc::ptr_eq(&filter, &new_filter));
+        assert!(!Arc::data_ptr_eq(&filter, &new_filter));
 
-        let new_filter2 = with_new_children_if_necessary(filter.clone(), vec![input])?;
-        assert!(Arc::ptr_eq(&filter, &new_filter2));
+        let new_filter2 =
+            with_new_children_if_necessary(filter.clone(), vec![input])?.into();
+        assert!(Arc::data_ptr_eq(&filter, &new_filter2));
 
         Ok(())
     }
