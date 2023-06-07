@@ -809,9 +809,9 @@ pub fn create_physical_fun(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
     use crate::from_slice::FromSlice;
-    use crate::type_coercion::coerce;
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
@@ -822,6 +822,8 @@ mod tests {
     };
     use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::type_coercion::functions::data_types;
+    use datafusion_expr::Signature;
 
     /// $FUNC function to test
     /// $ARGS arguments (vec) to pass to function
@@ -2885,7 +2887,33 @@ mod tests {
         Ok(())
     }
 
-    // Helper function
+    // Helper function just for testing.
+    // Returns `expressions` coerced to types compatible with
+    // `signature`, if possible.
+    pub fn coerce(
+        expressions: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+        signature: &Signature,
+    ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        if expressions.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let current_types = expressions
+            .iter()
+            .map(|e| e.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_types = data_types(&current_types, signature)?;
+
+        expressions
+            .iter()
+            .enumerate()
+            .map(|(i, expr)| try_cast(expr.clone(), schema, new_types[i].clone()))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    // Helper function just for testing.
     // The type coercion will be done in the logical phase, should do the type coercion for the test
     fn create_physical_expr_with_type_coercion(
         fun: &BuiltinScalarFunction,
