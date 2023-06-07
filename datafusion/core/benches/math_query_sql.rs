@@ -35,7 +35,6 @@ use arrow::{
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::from_slice::FromSlice;
 
 fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
@@ -61,8 +60,8 @@ fn create_context(
             RecordBatch::try_new(
                 schema.clone(),
                 vec![
-                    Arc::new(Float32Array::from_slice(vec![i as f32; batch_size])),
-                    Arc::new(Float64Array::from_slice(vec![i as f64; batch_size])),
+                    Arc::new(Float32Array::from(vec![i as f32; batch_size])),
+                    Arc::new(Float64Array::from(vec![i as f64; batch_size])),
                 ],
             )
             .unwrap()

@@ -933,7 +933,6 @@ pub(crate) enum StatisticsType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
     use crate::logical_expr::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::array::Decimal128Array;
@@ -1298,7 +1297,7 @@ mod tests {
 
         // Note the statistics return an invalid UTF-8 sequence which will be converted to null
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from_slice([&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::from(vec![&[255u8] as &[u8]]))),
             max_values: None,
             num_containers: 1,
         };

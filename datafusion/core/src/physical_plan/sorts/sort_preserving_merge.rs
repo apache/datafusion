@@ -234,7 +234,6 @@ mod tests {
     use futures::{FutureExt, StreamExt};
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -253,7 +252,7 @@ mod tests {
     async fn test_merge_interleave() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("c"),
@@ -264,7 +263,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("b"),
             Some("d"),
@@ -302,7 +301,7 @@ mod tests {
     async fn test_merge_some_overlap() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -313,7 +312,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([70, 90, 30, 100, 110]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![70, 90, 30, 100, 110]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("c"),
             Some("d"),
@@ -351,7 +350,7 @@ mod tests {
     async fn test_merge_no_overlap() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -362,7 +361,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("f"),
             Some("g"),
@@ -400,7 +399,7 @@ mod tests {
     async fn test_merge_three_partitions() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -411,7 +410,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("e"),
             Some("g"),
@@ -423,7 +422,7 @@ mod tests {
             Arc::new(TimestampNanosecondArray::from(vec![40, 60, 20, 20, 60]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([100, 200, 700, 900, 300]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 700, 900, 300]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("f"),
             Some("g"),
@@ -696,7 +695,7 @@ mod tests {
     async fn test_nulls() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
             Some("a"),
@@ -713,7 +712,7 @@ mod tests {
         ]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
             Some("b"),
@@ -841,11 +840,11 @@ mod tests {
     async fn test_merge_metrics() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"), Some("c")]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("b"), Some("d")]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 

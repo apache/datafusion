@@ -206,7 +206,7 @@ impl ExecutionPlan for InsertExec {
 /// +-------+,
 /// ```
 fn make_count_batch(count: u64) -> RecordBatch {
-    let array = Arc::new(UInt64Array::from_iter_values(vec![count])) as ArrayRef;
+    let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
 
     RecordBatch::try_from_iter_with_nullable(vec![("count", array, false)]).unwrap()
 }

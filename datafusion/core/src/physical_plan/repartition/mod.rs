@@ -685,7 +685,6 @@ impl RecordBatchStream for RepartitionStream {
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use crate::{
@@ -852,7 +851,7 @@ mod tests {
         // have to send at least one batch through to provoke error
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -909,7 +908,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -943,13 +942,13 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch2 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["frob", "baz"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["frob", "baz"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -1095,25 +1094,25 @@ mod tests {
     fn make_barrier_exec() -> BarrierExec {
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["foo", "bar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch2 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["frob", "baz"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["frob", "baz"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch3 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["goo", "gar"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["goo", "gar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch4 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(["grob", "gaz"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["grob", "gaz"])) as ArrayRef,
         )])
         .unwrap();
 
@@ -1153,7 +1152,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
-            Arc::new(StringArray::from_slice(["foo"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
         )])
         .unwrap();
         let partitioning = Partitioning::Hash(

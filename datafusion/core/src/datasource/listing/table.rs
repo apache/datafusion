@@ -903,7 +903,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
-    use datafusion_common::from_slice::FromSlice;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::fs::File;
@@ -1527,7 +1526,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         // Filename with extension

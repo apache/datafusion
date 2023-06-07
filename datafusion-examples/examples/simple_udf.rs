@@ -24,7 +24,6 @@ use datafusion::{
     logical_expr::Volatility,
 };
 
-use datafusion::from_slice::FromSlice;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use datafusion_common::cast::as_float64_array;
@@ -43,8 +42,8 @@ fn create_context() -> Result<SessionContext> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(Float32Array::from_slice([2.1, 3.1, 4.1, 5.1])),
-            Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
+            Arc::new(Float32Array::from(vec![2.1, 3.1, 4.1, 5.1])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
         ],
     )?;
 
