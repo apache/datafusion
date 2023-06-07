@@ -29,7 +29,6 @@ use datafusion_expr::Accumulator;
 
 use std::any::Any;
 use std::sync::Arc;
-use petgraph::visit::Walker;
 use datafusion_common::utils::get_row_at_idx;
 
 /// FIRST_VALUE aggregate expression
@@ -85,6 +84,7 @@ impl AggregateExpr for FirstValue {
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
+            vec![],
             vec![],
             self.data_type.clone(),
         )))
@@ -156,11 +156,12 @@ pub struct LastValue {
     pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     orderings: Vec<Field>,
+    ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 impl LastValue {
     /// Creates a new LAST_VALUE aggregation function.
-    pub fn new(expr: Arc<dyn PhysicalExpr>, orderings: Vec<Field>, data_type: DataType) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, orderings: Vec<Field>, ordering_exprs: Vec<Arc<dyn PhysicalExpr>>, data_type: DataType) -> Self {
         let name = format!("LAST_VALUE({})", expr);
         println!("expr: {:?}", expr);
         println!("orderings: {:?}", orderings);
@@ -169,6 +170,7 @@ impl LastValue {
             data_type,
             expr,
             orderings,
+            ordering_exprs
         }
     }
 }
@@ -184,7 +186,8 @@ impl AggregateExpr for LastValue {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(LastValueAccumulator::try_new(&self.data_type)?))
+        let ordering_dtypes = self.orderings.iter().map(|field| field.data_type().clone()).collect::<Vec<_>>();
+        Ok(Box::new(LastValueAccumulator::try_new(&self.data_type, &ordering_dtypes)?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -200,7 +203,9 @@ impl AggregateExpr for LastValue {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        let mut res = vec![self.expr.clone()];
+        res.extend(self.ordering_exprs.clone());
+        res
     }
 
     fn name(&self) -> &str {
@@ -215,7 +220,8 @@ impl AggregateExpr for LastValue {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(LastValueAccumulator::try_new(&self.data_type)?))
+        let ordering_dtypes = self.orderings.iter().map(|field| field.data_type().clone()).collect::<Vec<_>>();
+        Ok(Box::new(LastValueAccumulator::try_new(&self.data_type, &ordering_dtypes)?))
     }
 }
 
@@ -240,17 +246,24 @@ struct LastValueAccumulator {
 
 impl LastValueAccumulator {
     /// Creates a new `LastValueAccumulator` for the given `data_type`.
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
+    pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
+        let mut orderings = vec![];
+        for dtype in ordering_dtypes{
+            orderings.push(ScalarValue::try_from(dtype)?);
+        }
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
-            orderings: vec![],
+            orderings,
         })
     }
 }
 
 impl Accumulator for LastValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.last.clone()])
+        let mut res = vec![self.last.clone()];
+        res.extend(self.orderings.clone());
+        println!("res len: {:?}", res.len());
+        Ok(res)
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -258,7 +271,8 @@ impl Accumulator for LastValueAccumulator {
             println!("idx:{:?}, elem:{:?}", idx, elem);
         }
         if !values[0].is_empty() {
-            let row = get_row_at_idx(values, values.len() - 1)?;
+            let row = get_row_at_idx(values, values[0].len() - 1)?;
+            println!("row:{:?}", row);
             // Update with last value in the array.
             self.last = row[0].clone();
             self.orderings = row[1..].to_vec();

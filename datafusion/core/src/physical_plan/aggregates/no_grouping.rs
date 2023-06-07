@@ -77,6 +77,7 @@ impl AggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
 
+        println!("agg.aggr_expr:{:?}", agg.aggr_expr);
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
             AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
@@ -201,6 +202,7 @@ fn aggregate_batch(
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
+    println!("expressions:{:?}", expressions);
     // 1.1
     accumulators
         .iter_mut()

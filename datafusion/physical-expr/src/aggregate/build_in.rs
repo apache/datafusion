@@ -60,7 +60,8 @@ pub fn create_aggregate_expr(
         let field = Field::new(
             format_state_name(expr.to_string().as_str(), "last_value"),
             expr.data_type(input_schema)?,
-            expr.nullable(input_schema)?,
+            // Multi partitions may be empty hence field should be nullable.
+            true,
         );
         ordering_fields.push(field);
     }
@@ -328,6 +329,7 @@ pub fn create_aggregate_expr(
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             ordering_fields,
+            orderings.to_vec(),
             input_phy_types[0].clone(),
         )),
     })
