@@ -25,7 +25,6 @@ use datafusion_expr::{
     aggregate_function, count, expr, lit, window_function, Aggregate, Expr, Filter,
     LogicalPlan, Projection, Sort, Subquery, Window,
 };
-use itertools::izip;
 use std::string::ToString;
 use std::sync::Arc;
 
@@ -98,45 +97,36 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 fetch,
             })))
         }
-        LogicalPlan::Projection(projection)
-            if matches!(
-                projection.input.as_ref(),
-                LogicalPlan::Aggregate(..) | LogicalPlan::Window(..)
-            ) =>
-        {
-            let (new_exprs, new_fields): (Vec<_>, Vec<_>) =
-                izip!(projection.expr.iter(), projection.schema.fields().iter())
-                    .map(|(expr, field)| {
-                        let new_field = match expr {
-                            Expr::Alias(_, _) => field.clone(),
-                            _ => {
-                                let mut name = field.field().name().clone();
-                                if name.contains(COUNT_STAR) {
-                                    name = name.replace(
-                                        COUNT_STAR,
-                                        count(lit(COUNT_STAR_EXPANSION))
-                                            .to_string()
-                                            .as_str(),
-                                    );
-                                }
-                                DFField::new(
-                                    field.qualifier().cloned(),
-                                    &name,
-                                    field.data_type().clone(),
-                                    field.is_nullable(),
-                                )
-                            }
-                        };
-                        (expr.clone().rewrite(&mut rewriter).unwrap(), new_field)
-                    })
-                    .unzip();
-            let new_schema = DFSchemaRef::new(DFSchema::new_with_metadata(
-                new_fields,
-                projection.schema.metadata().clone(),
-            )?);
-            Ok(Transformed::Yes(LogicalPlan::Projection(
-                Projection::try_new_with_schema(new_exprs, projection.input, new_schema)?,
-            )))
+        LogicalPlan::Projection(projection) => {
+            let input = projection
+                .input
+                .as_ref()
+                .clone()
+                .transform_down(&analyze_internal)?;
+
+            if input != *projection.input {
+                let projection_expr = projection
+                    .expr
+                    .iter()
+                    .map(|expr| expr.clone().rewrite(&mut rewriter))
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Transformed::Yes(LogicalPlan::Projection(
+                    Projection::try_new_with_schema(
+                        projection_expr,
+                        projection.input,
+                        rewrite_schema(&projection.schema),
+                    )?,
+                )))
+            } else {
+                Ok(Transformed::Yes(LogicalPlan::Projection(
+                    Projection::try_new_with_schema(
+                        projection.expr,
+                        projection.input,
+                        projection.schema,
+                    )?,
+                )))
+            }
         }
         LogicalPlan::Filter(Filter {
             predicate, input, ..
