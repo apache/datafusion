@@ -251,10 +251,10 @@ pub fn propagate_arithmetic(
 }
 
 /// This function provides a target parent interval for comparison operators.
-/// If we have expression > 0, expression must have the range [0, ∞].
-/// If we have expression < 0, expression must have the range [-∞, 0].
-/// Currently, we only support strict inequalities since open/closed intervals
-/// are not implemented yet.
+/// If we have expression > 0, expression must have the range (0, ∞).
+/// If we have expression >= 0, expression must have the range [0, ∞).
+/// If we have expression < 0, expression must have the range (-∞, 0).
+/// If we have expression <= 0, expression must have the range (-∞, 0].
 fn comparison_operator_target(
     left_datatype: &DataType,
     op: &Operator,
@@ -268,6 +268,10 @@ fn comparison_operator_target(
         Operator::Gt => Interval::new(IntervalBound::new(zero, true), unbounded),
         Operator::LtEq => Interval::new(unbounded, IntervalBound::new(zero, false)),
         Operator::Lt => Interval::new(unbounded, IntervalBound::new(zero, true)),
+        Operator::Eq => Interval::new(
+            IntervalBound::new(zero.clone(), false),
+            IntervalBound::new(zero, false),
+        ),
         _ => unreachable!(),
     })
 }

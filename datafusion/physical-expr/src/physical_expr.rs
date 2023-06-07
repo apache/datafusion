@@ -25,7 +25,6 @@ use datafusion_common::{
 };
 use datafusion_expr::ColumnarValue;
 
-use std::cmp::Ordering;
 use std::fmt::{Debug, Display};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
@@ -194,16 +193,15 @@ impl ExprBoundaries {
         distinct_count: Option<usize>,
         selectivity: Option<f64>,
     ) -> Result<Self> {
-        if interval.min_val().partial_cmp(&interval.max_val()) == Some(Ordering::Greater)
-        {
+        if interval.lower.value > interval.upper.value {
             return Err(DataFusionError::Internal(
                 "Min value of the interval cannot be larger than max value".to_string(),
             ));
         }
         Ok(Self {
             interval: Interval::new(
-                IntervalBound::new(interval.min_val(), false),
-                IntervalBound::new(interval.max_val(), false),
+                IntervalBound::new(interval.lower.value, false),
+                IntervalBound::new(interval.upper.value, false),
             ),
             distinct_count,
             selectivity,
@@ -226,24 +224,6 @@ impl ExprBoundaries {
             distinct_count: column.distinct_count,
             selectivity: None,
         })
-    }
-
-    /// Try to reduce the boundaries into a single scalar value, if possible.
-    pub fn reduce(&self) -> Option<ScalarValue> {
-        // TODO: should we check distinct_count is `Some(1) | None`?
-        if self.min_val() == self.max_val() {
-            Some(self.min_val())
-        } else {
-            None
-        }
-    }
-
-    pub fn min_val(&self) -> ScalarValue {
-        self.interval.min_val()
-    }
-
-    pub fn max_val(&self) -> ScalarValue {
-        self.interval.max_val()
     }
 }
 
@@ -425,7 +405,7 @@ mod tests {
             ),
             None,
         )?;
-        assert_eq!(different_boundaries.reduce(), None);
+        assert_eq!(different_boundaries.interval.reduce(), None);
 
         let scalar_boundaries = ExprBoundaries::try_new(
             Interval::new(
@@ -435,7 +415,7 @@ mod tests {
             None,
         )?;
         assert_eq!(
-            scalar_boundaries.reduce(),
+            scalar_boundaries.interval.reduce(),
             Some(ScalarValue::Int32(Some(1)))
         );
 
@@ -447,7 +427,10 @@ mod tests {
             ),
             None,
         )?;
-        assert_eq!(no_boundaries.reduce(), Some(ScalarValue::Int32(None)));
+        assert_eq!(
+            no_boundaries.interval.reduce(),
+            Some(ScalarValue::Int32(None))
+        );
 
         Ok(())
     }

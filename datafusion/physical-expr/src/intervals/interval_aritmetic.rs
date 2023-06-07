@@ -23,6 +23,7 @@ use std::fmt::{Display, Formatter};
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
+use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
@@ -452,53 +453,72 @@ impl Interval {
         upper: IntervalBound::new(ScalarValue::Boolean(Some(true)), false),
     };
 
-    pub fn min_val(&self) -> ScalarValue {
-        self.lower.value.clone()
-    }
-
-    pub fn max_val(&self) -> ScalarValue {
-        self.upper.value.clone()
-    }
-
-    pub fn width(&self) -> Result<ScalarValue> {
-        self.max_val().sub(self.min_val())
-    }
-
-    // Cardinality is applicable for discrete datatypes.
+    // Cardinality is the number of all points included by the interval, considering its bounds.
     pub fn cardinality(&self) -> Result<u64> {
-        if let Ok(data_type) = self.get_datatype() {
-            if data_type.is_integer() {
-                if let Some(diff) = self.max_val().distance(&self.min_val()) {
-                    return Ok(match (self.lower.open, self.upper.open) {
-                        (false, false) => diff as u64 + 1,
-                        (true, true) => diff as u64 - 1,
-                        _ => diff as u64,
-                    });
-                }
-            } else if data_type.is_floating() {
-                match (self.max_val(), self.min_val()) {
-                    (
-                        ScalarValue::Float32(Some(upper)),
-                        ScalarValue::Float32(Some(lower)),
-                    ) => return Ok((upper.to_bits() - lower.to_bits()) as u64),
-                    (
-                        ScalarValue::Float64(Some(upper)),
-                        ScalarValue::Float64(Some(lower)),
-                    ) => return Ok(upper.to_bits() - lower.to_bits()),
-                    _ => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Cardinality cannot be calculated for the datatype {:?}",
-                            data_type
-                        )))
-                    }
+        match self.get_datatype() {
+            Ok(data_type) if data_type.is_integer() => {
+                if let Some(diff) = self.upper.value.distance(&self.lower.value) {
+                    Ok(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        diff as u64,
+                    ))
+                } else {
+                    Err(DataFusionError::Execution(format!(
+                        "Cardinality cannot be calculated for {:?}",
+                        self
+                    )))
                 }
             }
+            Ok(data_type) if data_type.is_floating() => {
+                // If the min value is a negative number, we need to
+                // switch the sides to always have an unsigned result.
+                let (min, max) = if self.lower.value
+                    < ScalarValue::new_zero(&self.lower.value.get_datatype())?
+                {
+                    (self.upper.value.clone(), self.lower.value.clone())
+                } else {
+                    (self.lower.value.clone(), self.upper.value.clone())
+                };
+
+                match (min, max) {
+                    (
+                        ScalarValue::Float32(Some(lower)),
+                        ScalarValue::Float32(Some(upper)),
+                    ) => Ok(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        (upper.to_bits().sub_checked(lower.to_bits()))? as u64,
+                    )),
+                    (
+                        ScalarValue::Float64(Some(lower)),
+                        ScalarValue::Float64(Some(upper)),
+                    ) => Ok(calculate_cardinality_based_on_bounds(
+                        self.lower.open,
+                        self.upper.open,
+                        upper.to_bits().sub_checked(lower.to_bits())?,
+                    )),
+                    _ => Err(DataFusionError::Execution(format!(
+                        "Cardinality cannot be calculated for the datatype {:?}",
+                        data_type
+                    ))),
+                }
+            }
+            // If the cardinality cannot be calculated anywise, give an error.
+            _ => Err(DataFusionError::Execution(format!(
+                "Cardinality cannot be calculated for {:?}",
+                self
+            ))),
         }
-        // If the cardinality cannot be calculated anywise, give an error.
-        Err(DataFusionError::Execution(format!(
-            "Cardinality cannot be calculated for {:?}",
-            self
-        )))
+    }
+
+    /// Try to reduce the boundaries into a single scalar value, if possible.
+    pub fn reduce(&self) -> Option<ScalarValue> {
+        if self.lower.value == self.upper.value && !self.lower.open && !self.upper.open {
+            Some(self.lower.value.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -555,6 +575,19 @@ fn cast_scalar_value(
 ) -> Result<ScalarValue> {
     let cast_array = cast_with_options(&value.to_array(), data_type, cast_options)?;
     ScalarValue::try_from_array(&cast_array, 0)
+}
+
+/// This function calculates the final cardinality result by inspecting the endpoints of the interval.
+fn calculate_cardinality_based_on_bounds(
+    lower_open: bool,
+    upper_open: bool,
+    diff: u64,
+) -> u64 {
+    match (lower_open, upper_open) {
+        (false, false) => diff + 1,
+        (true, true) => diff - 1,
+        _ => diff,
+    }
 }
 
 #[cfg(test)]
@@ -1220,5 +1253,71 @@ mod tests {
         let lower = 1.5;
         let upper = 1.5;
         capture_mode_change_f32((lower, upper), true, true);
+    }
+
+    #[test]
+    fn test_cardinality_of_intervals() -> Result<()> {
+        // In IEEE 754 standard for floating-point arithmetic, if we keep the sign and exponent fields same,
+        // we can represent 4503599627370496 different numbers by changing the mantissa
+        // (4503599627370496 = 2^52, since there are 52 bits in mantissa, and 2^23 = 8388608 for f32).
+        let distinct_f64 = 4503599627370496;
+        let distinct_f32 = 8388608;
+        let intervals = [
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(0.25), false),
+                IntervalBound::new(ScalarValue::from(0.50), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(0.5), false),
+                IntervalBound::new(ScalarValue::from(1.0), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(1.0), false),
+                IntervalBound::new(ScalarValue::from(2.0), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(32.0), false),
+                IntervalBound::new(ScalarValue::from(64.0), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(-0.50), false),
+                IntervalBound::new(ScalarValue::from(-0.25), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(-32.0), false),
+                IntervalBound::new(ScalarValue::from(-16.0), true),
+            ),
+        ];
+        for interval in intervals {
+            assert_eq!(interval.cardinality()?, distinct_f64);
+        }
+
+        let intervals = [
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(0.25_f32), false),
+                IntervalBound::new(ScalarValue::from(0.50_f32), true),
+            ),
+            Interval::new(
+                IntervalBound::new(ScalarValue::from(-1_f32), false),
+                IntervalBound::new(ScalarValue::from(-0.5_f32), true),
+            ),
+        ];
+        for interval in intervals {
+            assert_eq!(interval.cardinality()?, distinct_f32);
+        }
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(-0.0625), false),
+            IntervalBound::new(ScalarValue::from(0.0625), true),
+        );
+        assert_eq!(interval.cardinality()?, distinct_f64 * 2_048);
+
+        let interval = Interval::new(
+            IntervalBound::new(ScalarValue::from(-0.0625_f32), false),
+            IntervalBound::new(ScalarValue::from(0.0625_f32), true),
+        );
+        assert_eq!(interval.cardinality()?, distinct_f32 * 256);
+
+        Ok(())
     }
 }

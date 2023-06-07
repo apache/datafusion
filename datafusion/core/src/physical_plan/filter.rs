@@ -180,8 +180,7 @@ impl ExecutionPlan for FilterExec {
         let starter_ctx =
             AnalysisContext::from_statistics(self.input.schema().as_ref(), &input_stats);
 
-        let analysis_ctx = self.predicate.analyze(starter_ctx);
-        let analysis_ctx = match analysis_ctx {
+        let analysis_ctx = match self.predicate.analyze(starter_ctx) {
             Ok(analysis_ctx) => analysis_ctx,
             Err(_) => return Statistics::default(),
         };
@@ -196,8 +195,8 @@ impl ExecutionPlan for FilterExec {
                     .iter()
                     .map(|boundary| match boundary {
                         Some(boundary) => ColumnStatistics {
-                            min_value: Some(boundary.min_val()),
-                            max_value: Some(boundary.max_val()),
+                            min_value: Some(boundary.interval.lower.value.clone()),
+                            max_value: Some(boundary.interval.upper.value.clone()),
                             ..Default::default()
                         },
                         None => ColumnStatistics::default(),
