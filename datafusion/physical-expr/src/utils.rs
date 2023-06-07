@@ -721,7 +721,7 @@ pub fn get_finer_ordering<
 mod tests {
     use super::*;
     use crate::expressions::{binary, cast, col, in_list, lit, Column, Literal};
-    use crate::{OrderedColumn, PhysicalSortExpr};
+    use crate::PhysicalSortExpr;
     use arrow::compute::SortOptions;
     use datafusion_common::{Result, ScalarValue};
     use std::fmt::{Display, Formatter};
@@ -809,17 +809,35 @@ mod tests {
         let mut ordering_eq_properties =
             OrderingEquivalenceProperties::new(test_schema.clone());
         ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), option1)],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()),
+                options: option1,
+            }],
             &vec![
-                OrderedColumn::new(col_d.clone(), option1),
-                OrderedColumn::new(col_b.clone(), option1),
+                PhysicalSortExpr {
+                    expr: Arc::new(col_d.clone()),
+                    options: option1,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(col_b.clone()),
+                    options: option1,
+                },
             ],
         ));
         ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), option1)],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()),
+                options: option1,
+            }],
             &vec![
-                OrderedColumn::new(col_e.clone(), option2),
-                OrderedColumn::new(col_b.clone(), option1),
+                PhysicalSortExpr {
+                    expr: Arc::new(col_e.clone()),
+                    options: option2,
+                },
+                PhysicalSortExpr {
+                    expr: Arc::new(col_b.clone()),
+                    options: option1,
+                },
             ],
         ));
         Ok((test_schema, eq_properties, ordering_eq_properties))
@@ -1326,8 +1344,14 @@ mod tests {
         // Column a and e are ordering equivalent (e.g global ordering of the table can be described both as a ASC and e ASC.)
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), option1)],
-            &vec![OrderedColumn::new(col_e.clone(), option1)],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()),
+                options: option1,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_e.clone()),
+                options: option1,
+            }],
         ));
         let sort_req_a = PhysicalSortExpr {
             expr: Arc::new((col_a).clone()) as _,

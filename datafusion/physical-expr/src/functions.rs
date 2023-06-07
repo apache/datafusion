@@ -384,8 +384,30 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
 
-        // string functions
+        // array functions
+        BuiltinScalarFunction::ArrayAppend => Arc::new(array_expressions::array_append),
+        BuiltinScalarFunction::ArrayConcat => Arc::new(array_expressions::array_concat),
+        BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
+        BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
+        BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
+        BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
+        BuiltinScalarFunction::ArrayPosition => {
+            Arc::new(array_expressions::array_position)
+        }
+        BuiltinScalarFunction::ArrayPositions => {
+            Arc::new(array_expressions::array_positions)
+        }
+        BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
+        BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
+        BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
+        BuiltinScalarFunction::ArrayToString => {
+            Arc::new(array_expressions::array_to_string)
+        }
+        BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
+
+        // string functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -793,12 +815,12 @@ mod tests {
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-            Int32Array, StringArray, UInt32Array, UInt64Array,
+            Int32Array, StringArray, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::{as_fixed_size_list_array, as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{Result, ScalarValue};
 
     /// $FUNC function to test
@@ -2783,73 +2805,6 @@ mod tests {
             create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;
         }
         Ok(())
-    }
-
-    fn generic_test_array(
-        value1: ArrayRef,
-        value2: ArrayRef,
-        expected_type: DataType,
-        expected: &str,
-    ) -> Result<()> {
-        // any type works here: we evaluate against a literal of `value`
-        let schema = Schema::new(vec![
-            Field::new("a", value1.data_type().clone(), false),
-            Field::new("b", value2.data_type().clone(), false),
-        ]);
-        let columns: Vec<ArrayRef> = vec![value1, value2];
-        let execution_props = ExecutionProps::new();
-
-        let expr = create_physical_expr_with_type_coercion(
-            &BuiltinScalarFunction::MakeArray,
-            &[col("a", &schema)?, col("b", &schema)?],
-            &schema,
-            &execution_props,
-        )?;
-
-        // type is correct
-        assert_eq!(
-            expr.data_type(&schema)?,
-            // type equals to a common coercion
-            DataType::FixedSizeList(Arc::new(Field::new("item", expected_type, true)), 2)
-        );
-
-        // evaluate works
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-
-        // downcast works
-        let result = as_fixed_size_list_array(&result)?;
-
-        // value is correct
-        assert_eq!(format!("{:?}", result.value(0)), expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_array() -> Result<()> {
-        generic_test_array(
-            Arc::new(StringArray::from_slice(["aa"])),
-            Arc::new(StringArray::from_slice(["bb"])),
-            DataType::Utf8,
-            "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
-        )?;
-
-        // different types, to validate that casting happens
-        generic_test_array(
-            Arc::new(UInt32Array::from_slice([1u32])),
-            Arc::new(UInt64Array::from_slice([1u64])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
-        )?;
-
-        // different types (another order), to validate that casting happens
-        generic_test_array(
-            Arc::new(UInt64Array::from_slice([1u64])),
-            Arc::new(UInt32Array::from_slice([1u32])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
-        )
     }
 
     #[test]
