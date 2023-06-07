@@ -32,8 +32,28 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// A window expression that:
-/// * knows its resulting field
+/// Common trait for [window function] implementations,
+///
+/// Aggregate Window Expressions that have the form
+///
+/// ```text
+/// OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)
+/// ```
+///
+/// e.g cumulative window frames uses `PlainAggregateWindowExpr`.
+///
+/// Aggregate Window Expressions that have the form
+///
+/// ```text
+/// OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)
+/// ```
+///
+/// e.g sliding window frames use [`SlidingAggregateWindowExpr`].
+///
+///
+/// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
+/// [`PlainAggregateWindowExpr`]: crate::window::PlainAggregateWindowExpr
+/// [`SlidingAggregateWindowExpr`]: crate::window::SlidingAggregateWindowExpr
 pub trait WindowExpr: Send + Sync + Debug {
     /// Returns the window expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -123,7 +143,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
-/// Trait for different `AggregateWindowExpr`s (`PlainAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
+/// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
     /// window expressions may return distinct accumulators; e.g. sliding

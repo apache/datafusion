@@ -39,7 +39,7 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::WindowFrame;
 
-/// A window expr that takes the form of a built in window function
+/// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,

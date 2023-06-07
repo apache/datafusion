@@ -25,24 +25,70 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
 
-/// Partition evaluator
+/// Partition evaluator for Window Functions
+///
+/// An implementation of this trait is created and used for each
+/// partition defined by the OVER clause.
+///
+/// For example, evaluating `window_func(val) OVER (PARTITION BY col)`
+/// on the following data:
+///
+/// ```text
+/// col | val
+/// --- + ----
+///  A  | 1
+///  A  | 1
+///  C  | 2
+///  D  | 3
+///  D  | 3
+/// ```
+///
+/// Will instantiate three `PartitionEvaluator`s, one each for the
+/// partitions defined by `col=A`, `col=B`, and `col=C`.
+///
+/// There are two types of `PartitionEvaluator`:
+///
+/// # Stateless `PartitionEvaluator`
+///
+/// In this case, [`PartitionEvaluator::evaluate`] is called for the
+/// entire partition / window function.
+///
+/// # Stateful `PartitionEvaluator`
+///
+/// This is used for XXXX. In this case YYYYY
+///
 pub trait PartitionEvaluator: Debug + Send {
     /// Whether the evaluator should be evaluated with rank
+    ///
+    /// If `include_rank` is true, then [`Self::evaluate_with_rank`]
+    /// will be called for each partition, which includes the
+    /// `rank`. For example:
+    ///
+    /// ```text
+    /// col | rank
+    /// --- + ----
+    ///  A  | 1
+    ///  A  | 1
+    ///  C  | 2
+    ///  D  | 3
+    ///  D  | 3
+    /// ```
     fn include_rank(&self) -> bool {
         false
     }
 
-    /// Returns state of the Built-in Window Function
+    /// Returns state of the Built-in Window Function (only used for stateful evaluation)
     fn state(&self) -> Result<BuiltinWindowState> {
         // If we do not use state we just return Default
         Ok(BuiltinWindowState::Default)
     }
 
-    /// Updates the internal state for Built-in window function
-    // state is useful to update internal state for Built-in window function.
-    // idx is the index of last row for which result is calculated.
-    // range_columns is the result of order by column values. It is used to calculate rank boundaries
-    // sort_partition_points is the boundaries of each rank in the range_column. It is used to update rank.
+    /// Updates the internal state for Built-in window function, if desired.
+    ///
+    /// `state`: is useful to update internal state for Built-in window function.
+    /// `idx`: is the index of last row for which result is calculated.
+    /// `range_columns`: is the result of order by column values. It is used to calculate rank boundaries
+    /// `sort_partition_points`: is the boundaries of each rank in the range_column. It is used to update rank.
     fn update_state(
         &mut self,
         _state: &WindowAggState,
@@ -54,6 +100,7 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
+    /// Sets the internal state for Built-in window function, if supported
     fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "set_state is not implemented for this window function".to_string(),
@@ -61,8 +108,9 @@ pub trait PartitionEvaluator: Debug + Send {
     }
 
     /// Gets the range where Built-in window function result is calculated.
-    // idx is the index of last row for which result is calculated.
-    // n_rows is the number of rows of the input record batch (Used during bound check)
+    ///
+    /// `idx`: is the index of last row for which result is calculated.
+    /// `n_rows`: is the number of rows of the input record batch (Used during bound check)
     fn get_range(&self, _idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         Err(DataFusionError::NotImplemented(
             "get_range is not implemented for this window function".to_string(),
@@ -83,7 +131,9 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// evaluate the partition evaluator against the partition but with rank
+    /// Evaluate the partition evaluator against the partition but with rank
+    ///
+    /// See [`Self::include_rank`] for more details
     fn evaluate_with_rank(
         &self,
         _num_rows: usize,
