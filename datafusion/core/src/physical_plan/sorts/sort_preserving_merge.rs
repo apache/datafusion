@@ -165,7 +165,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         let schema = self.schema();
         for elem in &self.expr {
-            println!("SortPreservingMergeExec print, elem: {:?}, options: {:?}", elem, elem.options);
+            println!(
+                "SortPreservingMergeExec print, elem: {:?}, options: {:?}",
+                elem, elem.options
+            );
         }
         match input_partitions {
             0 => Err(DataFusionError::Internal(

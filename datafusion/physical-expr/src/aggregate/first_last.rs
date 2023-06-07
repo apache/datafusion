@@ -27,11 +27,11 @@ use arrow_array::Array;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
+use arrow::compute;
+use arrow_array::cast::AsArray;
 use datafusion_common::utils::get_row_at_idx;
 use std::any::Any;
 use std::sync::Arc;
-use arrow::compute;
-use arrow_array::cast::AsArray;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug)]
@@ -198,17 +198,17 @@ impl Accumulator for FirstValueAccumulator {
             self.is_set = true;
         }
         Ok(())
-
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
         println!("states:{:?}", states);
-        let last_idx = states.len() -1;
+        let last_idx = states.len() - 1;
         let is_set_flags = &states[last_idx];
         let mut filtered_first_vals = vec![];
-        for idx in 0..last_idx-1{
-            filtered_first_vals.push(compute::filter(&states[idx], is_set_flags.as_boolean())?)
+        for idx in 0..last_idx - 1 {
+            filtered_first_vals
+                .push(compute::filter(&states[idx], is_set_flags.as_boolean())?)
         }
         self.update_batch(&filtered_first_vals)
     }
@@ -395,11 +395,12 @@ impl Accumulator for LastValueAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
         println!("states:{:?}", states);
-        let last_idx = states.len() -1;
+        let last_idx = states.len() - 1;
         let is_set_flags = &states[last_idx];
         let mut filtered_first_vals = vec![];
-        for idx in 0..last_idx-1{
-            filtered_first_vals.push(compute::filter(&states[idx], is_set_flags.as_boolean())?)
+        for idx in 0..last_idx - 1 {
+            filtered_first_vals
+                .push(compute::filter(&states[idx], is_set_flags.as_boolean())?)
         }
         self.update_batch(&filtered_first_vals)
     }
