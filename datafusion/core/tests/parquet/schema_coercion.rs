@@ -21,8 +21,8 @@ use arrow_array::types::Int32Type;
 use arrow_array::{ArrayRef, DictionaryArray, Float32Array, Int64Array, StringArray};
 use arrow_schema::DataType;
 use datafusion::assert_batches_sorted_eq;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_common::Statistics;
@@ -192,5 +192,6 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len() as usize,
+        e_tag: None,
     }
 }

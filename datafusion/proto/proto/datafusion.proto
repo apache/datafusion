@@ -549,6 +549,20 @@ enum ScalarFunction {
   Factorial = 83;
   Lcm = 84;
   Gcd = 85;
+  ArrayAppend = 86;
+  ArrayConcat = 87;
+  ArrayDims = 88;
+  ArrayFill = 89;
+  ArrayLength = 90;
+  ArrayNdims = 91;
+  ArrayPosition = 92;
+  ArrayPositions = 93;
+  ArrayPrepend = 94;
+  ArrayRemove = 95;
+  ArrayReplace = 96;
+  ArrayToString = 97;
+  Cardinality = 98;
+  TrimArray = 99;
 }
 
 message ScalarFunctionNode {

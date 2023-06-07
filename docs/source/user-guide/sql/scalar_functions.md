@@ -1376,6 +1376,234 @@ from_unixtime(expression)
 - **expression**: Expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
 
+## Array Functions
+
+- [array_append](#array_append)
+- [array_concat](#array_concat)
+- [array_dims](#array_dims)
+- [array_fill](#array_fill)
+- [array_length](#array_length)
+- [array_ndims](#array_ndims)
+- [array_position](#array_position)
+- [array_positions](#array_positions)
+- [array_prepend](#array_prepend)
+- [array_remove](#array_remove)
+- [array_replace](#array_replace)
+- [array_to_string](#array_to_string)
+- [cardinality](#cardinality)
+- [make_array](#make_array)
+- [trim_array](#trim_array)
+
+### `array_append`
+
+Appends an element to the end of an array.
+
+```
+array_append(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to append to the array.
+
+### `array_concat`
+
+Concatenates arrays.
+
+```
+array_concat(array[, ..., array_n])
+```
+
+#### Arguments
+
+- **array**: Array expression to concatenate.
+  Can be a constant, column, or function, and any combination of array operators.
+- **array_n**: Subsequent array column or literal array to concatenate.
+
+### `array_dims`
+
+Returns an array of the array's dimensions.
+
+```
+array_dims(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+### `array_fill`
+
+Returns an array filled with copies of the given value.
+
+```
+array_fill(element, array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to copy to the array.
+
+### `array_length`
+
+Returns the length of the array dimension.
+
+```
+array_length(array, dimension)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **dimension**: Array dimension.
+
+### `array_ndims`
+
+Returns the number of dimensions of the array.
+
+```
+array_ndims(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+### `array_position`
+
+Returns a string with an input string repeated a specified number.
+
+```
+array_position(array, element)
+array_position(array, element, index)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to search for position in the array.
+- **index**: Index at which to start searching.
+
+### `array_positions`
+
+Searches for an element in the array, returns all occurrences.
+
+```
+array_positions(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to search for positions in the array.
+
+### `array_prepend`
+
+Prepends an element to the beginning of an array.
+
+```
+array_prepend(element, array)
+```
+
+#### Arguments
+
+- **element**: Element to prepend to the array.
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+### `array_remove`
+
+Removes all elements equal to the given value from the array.
+
+```
+array_remove(array, element)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **element**: Element to be removed from the array.
+
+### `array_replace`
+
+Replaces a specified element with another specified element.
+
+```
+array_replace(array, from, to)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **from**: Initial element.
+- **to**: Final element.
+
+### `array_to_string`
+
+Converts each element to its text representation.
+
+```
+array_to_string(array, delimeter)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **delimeter**: Array element separator.
+
+### `cardinality`
+
+Returns the total number of elements in the array.
+
+```
+cardinality(array)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+
+### `make_array`
+
+Returns an Arrow array using the specified input expressions.
+
+```
+make_array(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression_n**: Expression to include in the output array.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
+
+### `trim_array`
+
+Removes the last n elements from the array.
+
+```
+trim_array(array, n)
+```
+
+#### Arguments
+
+- **array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **n**: Element to trim the array.
+
 ## Hashing Functions
 
 - [digest](#digest)
@@ -1476,24 +1704,9 @@ sha512(expression)
 
 ## Other Functions
 
-- [make_array](#make_array)
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
 - [struct](#struct)
-
-### `make_array`
-
-Returns an Arrow array using the specified input expressions.
-
-```
-make_array(expression1[, ..., expression_n])
-```
-
-#### Arguments
-
-- **expression_n**: Expression to include in the output array.
-  Can be a constant, column, or function, and any combination of arithmetic or
-  string operators.
 
 ### `arrow_cast`
 

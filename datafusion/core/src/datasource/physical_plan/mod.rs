@@ -31,10 +31,11 @@ pub use self::csv::{CsvConfig, CsvExec, CsvOpener};
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
-    array::{ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
+    array::{new_null_array, ArrayData, ArrayRef, BufferBuilder, DictionaryArray},
     buffer::Buffer,
+    compute::can_cast_types,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
-    record_batch::RecordBatch,
+    record_batch::{RecordBatch, RecordBatchOptions},
 };
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
@@ -43,6 +44,7 @@ pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
+use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
@@ -52,19 +54,18 @@ use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
-use arrow::array::new_null_array;
-use arrow::compute::{can_cast_types, cast};
-use arrow::record_batch::RecordBatchOptions;
+
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
+
+use arrow::compute::cast;
 use log::{debug, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use std::fmt::Debug;
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fmt::{Display, Formatter, Result as FmtResult},
+    fmt::{Debug, Display, Formatter, Result as FmtResult},
     marker::PhantomData,
     sync::Arc,
     vec,
@@ -238,6 +239,30 @@ impl FileScanConfig {
     }
 }
 
+/// The base configurations to provide when creating a physical plan for
+/// writing to any given file format.
+#[derive(Debug, Clone)]
+pub struct FileSinkConfig {
+    /// Object store URL, used to get an ObjectStore instance
+    pub object_store_url: ObjectStoreUrl,
+    /// A vector of [`PartitionedFile`] structs, each representing a file partition
+    pub file_groups: Vec<PartitionedFile>,
+    /// The schema of the output file
+    pub output_schema: SchemaRef,
+    /// A vector of column names and their corresponding data types,
+    /// representing the partitioning columns for the file
+    pub table_partition_cols: Vec<(String, DataType)>,
+    /// A writer mode that determines how data is written to the file
+    pub writer_mode: FileWriterMode,
+}
+
+impl FileSinkConfig {
+    /// Get output schema
+    pub fn output_schema(&self) -> &SchemaRef {
+        &self.output_schema
+    }
+}
+
 impl Debug for FileScanConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
@@ -287,37 +312,49 @@ struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
 impl<'a> Display for FileGroupsDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let mut first_group = true;
-        let groups = if self.0.len() == 1 { "group" } else { "groups" };
-        write!(f, "{{{} {}: [", self.0.len(), groups)?;
+        let n_group = self.0.len();
+        let groups = if n_group == 1 { "group" } else { "groups" };
+        write!(f, "{{{n_group} {groups}: [")?;
         // To avoid showing too many partitions
         let max_groups = 5;
-        for group in self.0.iter().take(max_groups) {
-            if !first_group {
+        for (idx, group) in self.0.iter().take(max_groups).enumerate() {
+            if idx > 0 {
                 write!(f, ", ")?;
             }
-            first_group = false;
-            write!(f, "[")?;
-
-            let mut first_file = true;
-            for pf in group {
-                if !first_file {
-                    write!(f, ", ")?;
-                }
-                first_file = false;
-
-                write!(f, "{}", pf.object_meta.location.as_ref())?;
-
-                if let Some(range) = pf.range.as_ref() {
-                    write!(f, ":{}..{}", range.start, range.end)?;
-                }
-            }
-            write!(f, "]")?;
+            write!(f, "{}", FileGroupDisplay(group))?;
         }
-        if self.0.len() > max_groups {
+        // Remaining elements are showed as `...` (to indicate there is more)
+        if n_group > max_groups {
             write!(f, ", ...")?;
         }
         write!(f, "]}}")?;
+        Ok(())
+    }
+}
+
+/// A wrapper to customize partitioned file display
+///
+/// Prints in the format:
+/// ```text
+/// [file1, file2,...]
+/// ```
+#[derive(Debug)]
+pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
+
+impl<'a> Display for FileGroupDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let group = self.0;
+        write!(f, "[")?;
+        for (idx, pf) in group.iter().enumerate() {
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", pf.object_meta.location.as_ref())?;
+            if let Some(range) = pf.range.as_ref() {
+                write!(f, ":{}..{}", range.start, range.end)?;
+            }
+        }
+        write!(f, "]")?;
         Ok(())
     }
 }
@@ -1261,12 +1298,21 @@ mod tests {
         assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
     }
 
+    #[test]
+    fn file_group_display_many() {
+        let files = vec![partitioned_file("foo"), partitioned_file("bar")];
+
+        let expected = "[foo, bar]";
+        assert_eq!(&FileGroupDisplay(&files).to_string(), expected);
+    }
+
     /// create a PartitionedFile for testing
     fn partitioned_file(path: &str) -> PartitionedFile {
         let object_meta = ObjectMeta {
             location: object_store::path::Path::parse(path).unwrap(),
             last_modified: Utc::now(),
             size: 42,
+            e_tag: None,
         };
 
         PartitionedFile {

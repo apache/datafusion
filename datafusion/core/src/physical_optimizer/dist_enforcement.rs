@@ -977,12 +977,12 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::joins::{
         utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
     };

@@ -17,18 +17,12 @@
 
 //! Execution plan for reading Parquet files
 
-use fmt::Debug;
-use std::any::Any;
-use std::cmp::min;
-use std::fmt;
-use std::fs;
-use std::ops::Range;
-use std::sync::Arc;
-
-use crate::physical_plan::file_format::file_stream::{
+use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
+use crate::datasource::physical_plan::{
+    parquet::page_filter::PagePruningPredicate, FileMeta, FileScanConfig, SchemaAdapter,
+};
 use crate::{
     config::ConfigOptions,
     datasource::listing::FileRange,
@@ -37,13 +31,19 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         common::AbortOnDropSingle,
-        expressions::PhysicalSortExpr,
-        file_format::{FileMeta, FileScanConfig, SchemaAdapter},
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_physical_expr::PhysicalSortExpr;
+use fmt::Debug;
+use std::any::Any;
+use std::cmp::min;
+use std::fmt;
+use std::fs;
+use std::ops::Range;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
@@ -1724,6 +1724,7 @@ mod tests {
                 location,
                 last_modified: Utc.timestamp_nanos(0),
                 size: 1337,
+                e_tag: None,
             },
             partition_values: vec![],
             range: None,
