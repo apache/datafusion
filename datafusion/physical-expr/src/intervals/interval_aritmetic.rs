@@ -475,8 +475,26 @@ impl Interval {
                         _ => diff as u64,
                     });
                 }
+            } else if data_type.is_floating() {
+                match (self.max_val(), self.min_val()) {
+                    (
+                        ScalarValue::Float32(Some(upper)),
+                        ScalarValue::Float32(Some(lower)),
+                    ) => return Ok((upper.to_bits() - lower.to_bits()) as u64),
+                    (
+                        ScalarValue::Float64(Some(upper)),
+                        ScalarValue::Float64(Some(lower)),
+                    ) => return Ok(upper.to_bits() - lower.to_bits()),
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Cardinality cannot be calculated for the datatype {:?}",
+                            data_type
+                        )))
+                    }
+                }
             }
         }
+        // If the cardinality cannot be calculated anywise, give an error.
         Err(DataFusionError::Execution(format!(
             "Cardinality cannot be calculated for {:?}",
             self

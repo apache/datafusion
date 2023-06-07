@@ -966,9 +966,7 @@ fn calculate_selectivity(
             && !left_interval.upper.open
             && left_interval.max_val() == right.clone())
     {
-        // Selectivity is selected as minimum floating point number to distinguish
-        // non-selective cases of floating datatypes from equality cases.
-        return Ok(f64::MIN_POSITIVE);
+        return Ok(1.0 / left_interval.cardinality()? as f64);
     };
     let err = || {
         Err(DataFusionError::Execution(
@@ -4704,13 +4702,24 @@ mod tests {
             ((Operator::LtEq, 50.0), (1.0, 0.0, 50.0)),
             ((Operator::Gt, -0.0001), (1.0, 0.0, 50.0)),
             ((Operator::GtEq, 0.0), (1.0, 0.0, 50.0)),
-            // Partial selection (the x in 'x/distance' is basically the rounded version of
-            // the bound distance, as per the implementation).
-            ((Operator::Eq, 27.8), (f64::MIN_POSITIVE, 27.8, 27.8)),
+            // Partial selection (the x in 'x/distance' is basically 
+            // the rounded version of the bound distance, as per the implementation).
+            // 4632233691727265792 is the number of how many floating point 
+            // exist in the interval of 0.0 and 50.0.
+            (
+                (Operator::Eq, 27.8),
+                (1.0 / 4632233691727265792.0, 27.8, 27.8),
+            ),
             ((Operator::Lt, 5.2), (5.2 / distance, 0.0, 5.2)),
-            ((Operator::LtEq, 0.0), (f64::MIN_POSITIVE, 0.0, 0.0)),
+            (
+                (Operator::LtEq, 0.0),
+                (1.0 / 4632233691727265792.0, 0.0, 0.0),
+            ),
             ((Operator::Gt, 45.5), (4.5 / distance, 45.5, 50.0)),
-            ((Operator::GtEq, 50.0), (f64::MIN_POSITIVE, 50.0, 50.0)),
+            (
+                (Operator::GtEq, 50.0),
+                (1.0 / 4632233691727265792.0, 50.0, 50.0),
+            ),
         ];
 
         for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
