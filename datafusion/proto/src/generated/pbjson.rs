@@ -13080,6 +13080,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if !self.expr.is_empty() {
             len += 1;
         }
+        if !self.ordering_expr.is_empty() {
+            len += 1;
+        }
         if self.distinct {
             len += 1;
         }
@@ -13089,6 +13092,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalAggregateExprNode", len)?;
         if !self.expr.is_empty() {
             struct_ser.serialize_field("expr", &self.expr)?;
+        }
+        if !self.ordering_expr.is_empty() {
+            struct_ser.serialize_field("orderingExpr", &self.ordering_expr)?;
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
@@ -13116,6 +13122,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "ordering_expr",
+            "orderingExpr",
             "distinct",
             "aggr_function",
             "aggrFunction",
@@ -13126,6 +13134,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
+            OrderingExpr,
             Distinct,
             AggrFunction,
             UserDefinedAggrFunction,
@@ -13151,6 +13160,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
+                            "orderingExpr" | "ordering_expr" => Ok(GeneratedField::OrderingExpr),
                             "distinct" => Ok(GeneratedField::Distinct),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
@@ -13174,6 +13184,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut expr__ = None;
+                let mut ordering_expr__ = None;
                 let mut distinct__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map.next_key()? {
@@ -13183,6 +13194,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
                             expr__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::OrderingExpr => {
+                            if ordering_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orderingExpr"));
+                            }
+                            ordering_expr__ = Some(map.next_value()?);
                         }
                         GeneratedField::Distinct => {
                             if distinct__.is_some() {
@@ -13206,6 +13223,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 }
                 Ok(PhysicalAggregateExprNode {
                     expr: expr__.unwrap_or_default(),
+                    ordering_expr: ordering_expr__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
                     aggregate_function: aggregate_function__,
                 })

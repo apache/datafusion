@@ -1107,6 +1107,7 @@ message PhysicalAggregateExprNode {
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
+  repeated PhysicalExprNode ordering_expr = 5;
   bool distinct = 3;
 }
 

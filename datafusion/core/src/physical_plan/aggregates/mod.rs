@@ -1929,8 +1929,7 @@ mod tests {
             Arc::new(col_a.clone()),
             "first1",
             vec![],
-            vec![],
-            DataType::Int32,
+            vec![DataType::Int32],
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(

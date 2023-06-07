@@ -37,9 +37,9 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct FirstValue {
     name: String,
-    pub data_type: DataType,
+    pub data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
-    orderings: Vec<Field>,
+    // orderings: Vec<Field>,
     ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
@@ -48,15 +48,15 @@ impl FirstValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        orderings: Vec<Field>,
         ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
-        data_type: DataType,
+        data_types: Vec<DataType>,
     ) -> Self {
+        println!("ordering_exprs: {:?}", ordering_exprs);
+        println!("data_types: {:?}", data_types);
         Self {
             name: name.into(),
-            data_type,
+            data_types,
             expr,
-            orderings,
             ordering_exprs,
         }
     }
@@ -69,29 +69,36 @@ impl AggregateExpr for FirstValue {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(&self.name, self.data_types[0].clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let ordering_dtypes = self
-            .orderings
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Box::new(FirstValueAccumulator::try_new(
-            &self.data_type,
-            &ordering_dtypes,
+            &self.data_types[0],
+            &self.data_types[1..],
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
             format_state_name(&self.name, "first_value"),
-            self.data_type.clone(),
+            self.data_types[0].clone(),
             true,
         )];
-        for field in &self.orderings {
-            fields.push(field.clone());
+        println!("self.ordering_exprs len:{:?}", self.ordering_exprs.len());
+        println!("self.data_types len:{:?}", self.data_types.len());
+        for (expr, dtype) in self
+            .ordering_exprs
+            .iter()
+            .zip(self.data_types.iter().skip(1))
+        {
+            let field = Field::new(
+                format_state_name(expr.to_string().as_str(), "first_value_nn"),
+                dtype.clone(),
+                // Multi partitions may be empty hence field should be nullable.
+                true,
+            );
+            fields.push(field);
         }
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
@@ -120,21 +127,15 @@ impl AggregateExpr for FirstValue {
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
             name,
-            self.orderings.clone(),
             self.ordering_exprs.clone(),
-            self.data_type.clone(),
+            self.data_types.clone(),
         )))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let ordering_dtypes = self
-            .orderings
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Box::new(FirstValueAccumulator::try_new(
-            &self.data_type,
-            &ordering_dtypes,
+            &self.data_types[0],
+            &self.data_types[1..],
         )?))
     }
 }
@@ -145,7 +146,7 @@ impl PartialEq<dyn Any> for FirstValue {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.data_type == x.data_type
+                    && self.data_types == x.data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)
@@ -165,7 +166,7 @@ impl FirstValueAccumulator {
     /// Creates a new `FirstValueAccumulator` for the given `data_type`.
     pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
         let mut orderings = vec![];
-        for dtype in ordering_dtypes {
+        for dtype in ordering_dtypes.iter() {
             orderings.push(ScalarValue::try_from(dtype)?);
         }
         ScalarValue::try_from(data_type).map(|value| Self {
@@ -227,9 +228,8 @@ impl Accumulator for FirstValueAccumulator {
 #[derive(Debug)]
 pub struct LastValue {
     name: String,
-    pub data_type: DataType,
+    pub data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
-    orderings: Vec<Field>,
     ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
@@ -238,17 +238,13 @@ impl LastValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        orderings: Vec<Field>,
         ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
-        data_type: DataType,
+        data_types: Vec<DataType>,
     ) -> Self {
-        println!("expr: {:?}", expr);
-        println!("orderings: {:?}", orderings);
         Self {
             name: name.into(),
-            data_type,
+            data_types,
             expr,
-            orderings,
             ordering_exprs,
         }
     }
@@ -261,29 +257,36 @@ impl AggregateExpr for LastValue {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(&self.name, self.data_types[0].clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let ordering_dtypes = self
-            .orderings
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Box::new(LastValueAccumulator::try_new(
-            &self.data_type,
-            &ordering_dtypes,
+            &self.data_types[0],
+            &self.data_types[1..],
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
             format_state_name(&self.name, "last_value"),
-            self.data_type.clone(),
+            self.data_types[0].clone(),
             true,
         )];
-        for field in &self.orderings {
-            fields.push(field.clone());
+        println!("self.ordering_exprs len:{:?}", self.ordering_exprs.len());
+        println!("self.data_types len:{:?}", self.data_types.len());
+        for (expr, dtype) in self
+            .ordering_exprs
+            .iter()
+            .zip(self.data_types.iter().skip(1))
+        {
+            let field = Field::new(
+                format_state_name(expr.to_string().as_str(), "last_value_nn"),
+                dtype.clone(),
+                // Multi partitions may be empty hence field should be nullable.
+                true,
+            );
+            fields.push(field);
         }
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
@@ -312,21 +315,15 @@ impl AggregateExpr for LastValue {
         Some(Arc::new(FirstValue::new(
             self.expr.clone(),
             name,
-            self.orderings.clone(),
             self.ordering_exprs.clone(),
-            self.data_type.clone(),
+            self.data_types.clone(),
         )))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let ordering_dtypes = self
-            .orderings
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
         Ok(Box::new(LastValueAccumulator::try_new(
-            &self.data_type,
-            &ordering_dtypes,
+            &self.data_types[0],
+            &self.data_types[1..],
         )?))
     }
 }
@@ -337,7 +334,7 @@ impl PartialEq<dyn Any> for LastValue {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.data_type == x.data_type
+                    && self.data_types == x.data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)
@@ -425,8 +422,9 @@ mod tests {
 
     #[test]
     fn test_first_last_value_value() -> Result<()> {
-        let mut first_accumulator = FirstValueAccumulator::try_new(&DataType::Int64)?;
-        let mut last_accumulator = LastValueAccumulator::try_new(&DataType::Int64)?;
+        let mut first_accumulator =
+            FirstValueAccumulator::try_new(&DataType::Int64, &[])?;
+        let mut last_accumulator = LastValueAccumulator::try_new(&DataType::Int64, &[])?;
         // first value in the tuple is start of the range (inclusive),
         // second value in the tuple is end of the range (exclusive)
         let ranges: Vec<(i64, i64)> = vec![(0, 10), (1, 11), (2, 13)];

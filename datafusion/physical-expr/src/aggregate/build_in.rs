@@ -47,24 +47,19 @@ pub fn create_aggregate_expr(
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
     // get the result data type for this aggregate function
-    let input_phy_types = input_phy_exprs
+    let mut input_phy_types = input_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let rt_type = return_type(fun, &input_phy_types)?;
+    let ordering_types = orderings
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+    input_phy_types.extend(ordering_types);
     let input_phy_exprs = input_phy_exprs.to_vec();
     println!("input_phy_exprs: {:?}", input_phy_exprs);
     println!("orderings: {:?}", orderings);
-    let mut ordering_fields = vec![];
-    for expr in orderings {
-        let field = Field::new(
-            format_state_name(expr.to_string().as_str(), "last_value"),
-            expr.data_type(input_schema)?,
-            // Multi partitions may be empty hence field should be nullable.
-            true,
-        );
-        ordering_fields.push(field);
-    }
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, rt_type),
@@ -325,16 +320,14 @@ pub fn create_aggregate_expr(
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
             name,
-            ordering_fields,
             orderings.to_vec(),
-            input_phy_types[0].clone(),
+            input_phy_types.clone(),
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
-            ordering_fields,
             orderings.to_vec(),
-            input_phy_types[0].clone(),
+            input_phy_types.clone(),
         )),
     })
 }
@@ -1238,7 +1231,7 @@ mod tests {
                 "Invalid or wrong number of arguments passed to aggregate: '{name}'",
             )));
         }
-        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, input_schema, name)
+        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, &[], input_schema, name)
     }
 
     // Returns the coerced exprs for each `input_exprs`.

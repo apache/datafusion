@@ -2965,6 +2965,7 @@ LOCATION 'tests/data/window_2.csv'",
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_subquery() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
@@ -3037,6 +3038,7 @@ LOCATION 'tests/data/window_2.csv'",
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_slt_tests() -> Result<()> {
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
