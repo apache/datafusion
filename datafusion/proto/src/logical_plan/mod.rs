@@ -353,7 +353,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .with_has_header(*has_header)
                                 .with_delimiter(str_to_byte(delimiter)?),
                         ),
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
+                        FileFormatType::Avro(..) => Arc::new(AvroFormat),
                     };
 
                 let table_paths = &scan
