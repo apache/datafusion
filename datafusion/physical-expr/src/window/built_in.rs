@@ -158,7 +158,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 WindowFn::Builtin(evaluator) => evaluator,
                 _ => unreachable!(),
             };
-            let mut state = &mut window_state.state;
+            let state = &mut window_state.state;
 
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
