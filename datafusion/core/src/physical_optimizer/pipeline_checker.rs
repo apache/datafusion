@@ -158,6 +158,9 @@ pub fn check_finiteness_requirements(
 /// data pruning. For this to be possible, it needs to have a filter where
 /// all involved [`PhysicalExpr`]s, [`Operator`]s and data types support
 /// interval calculations.
+///
+/// [`PhysicalExpr`]: crate::physical_plan::PhysicalExpr
+/// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().map_or(false, |filter| {
         check_support(filter.expression())
@@ -384,7 +387,7 @@ mod sql_tests {
         };
         let test2 = UnaryTestCase {
             source_type: SourceType::Unbounded,
-            expect_fail: true,
+            expect_fail: false,
         };
         let case = QueryCase {
             sql: "EXPLAIN ANALYZE SELECT * FROM test".to_string(),

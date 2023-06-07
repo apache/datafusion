@@ -51,17 +51,12 @@ use std::task::Poll;
 use std::{any::Any, usize, vec};
 
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
+use datafusion_execution::memory_pool::MemoryReservation;
 
 use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
 use crate::error::{DataFusionError, Result};
-use crate::execution::{
-    context::TaskContext,
-    memory_pool::{
-        MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
-    },
-};
-use crate::logical_expr::JoinType;
+use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
@@ -82,6 +77,7 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::JoinType;
 
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -89,7 +85,7 @@ use super::{
 };
 use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 
-type JoinLeftData = (JoinHashMap, RecordBatch);
+type JoinLeftData = (JoinHashMap, RecordBatch, MemoryReservation);
 
 /// Join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -113,8 +109,6 @@ pub struct HashJoinExec {
     schema: SchemaRef,
     /// Build-side data
     left_fut: OnceAsync<JoinLeftData>,
-    /// Operator-level memory reservation for left data
-    reservation: SharedOptionalMemoryReservation,
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
@@ -163,7 +157,6 @@ impl HashJoinExec {
             join_type: *join_type,
             schema: Arc::new(schema),
             left_fut: Default::default(),
-            reservation: Default::default(),
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -247,7 +240,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         let (left, right) = (children[0], children[1]);
@@ -362,26 +355,10 @@ impl ExecutionPlan for HashJoinExec {
         }
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
-
-        // Initialization of operator-level reservation
-        self.reservation
-            .initialize("HashJoinExec", context.memory_pool());
-
-        // Inititalization of stream-level reservation
-        let reservation = SharedMemoryReservation::from(
-            MemoryConsumer::new(format!("HashJoinStream[{partition}]"))
-                .register(context.memory_pool()),
-        );
-
-        // Memory reservation for left-side data depends on PartitionMode:
-        // - operator-level for `CollectLeft` mode
-        // - stream-level for partitioned mode
-        //
-        // This approach allows to avoid cases when left data could potentially
-        // outlive its memory reservation and rely on `MemoryReservation` destructors
-        // for releasing memory in pool.
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
+                let reservation =
+                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
                 collect_left_input(
                     None,
                     self.random_state.clone(),
@@ -389,18 +366,24 @@ impl ExecutionPlan for HashJoinExec {
                     on_left.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    Arc::new(self.reservation.clone()),
+                    reservation,
                 )
             }),
-            PartitionMode::Partitioned => OnceFut::new(collect_left_input(
-                Some(partition),
-                self.random_state.clone(),
-                self.left.clone(),
-                on_left.clone(),
-                context.clone(),
-                join_metrics.clone(),
-                Arc::new(reservation.clone()),
-            )),
+            PartitionMode::Partitioned => {
+                let reservation =
+                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
+                        .register(context.memory_pool());
+
+                OnceFut::new(collect_left_input(
+                    Some(partition),
+                    self.random_state.clone(),
+                    self.left.clone(),
+                    on_left.clone(),
+                    context.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                ))
+            }
             PartitionMode::Auto => {
                 return Err(DataFusionError::Plan(format!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
@@ -408,6 +391,9 @@ impl ExecutionPlan for HashJoinExec {
                 )));
             }
         };
+
+        let reservation = MemoryConsumer::new(format!("HashJoinStream[{partition}]"))
+            .register(context.memory_pool());
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -436,7 +422,7 @@ impl ExecutionPlan for HashJoinExec {
             DisplayFormatType::Default => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
-                    |f| format!(", filter={:?}", f.expression()),
+                    |f| format!(", filter={}", f.expression()),
                 );
                 write!(
                     f,
@@ -471,7 +457,7 @@ async fn collect_left_input(
     on_left: Vec<Column>,
     context: Arc<TaskContext>,
     metrics: BuildProbeJoinMetrics,
-    reservation: Arc<dyn TryGrow>,
+    reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
 
@@ -496,7 +482,7 @@ async fn collect_left_input(
     // 1. creates a [JoinHashMap] of all batches from the stream
     // 2. stores the batches in a vector.
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, reservation) = stream
+    let (batches, num_rows, metrics, mut reservation) = stream
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = batch.get_array_memory_size();
             // Reserve memory for incoming batch
@@ -552,7 +538,7 @@ async fn collect_left_input(
     // can directly index into the arrays
     let single_batch = concat_batches(&schema, &batches, num_rows)?;
 
-    Ok((hashmap, single_batch))
+    Ok((hashmap, single_batch, reservation))
 }
 
 /// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
@@ -621,7 +607,7 @@ struct HashJoinStream {
     /// If null_equals_null is true, null == null else null != null
     null_equals_null: bool,
     /// Memory reservation
-    reservation: SharedMemoryReservation,
+    reservation: MemoryReservation,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -3054,7 +3040,7 @@ mod tests {
             );
 
             // Asserting that operator-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinExec");
+            assert_contains!(err.to_string(), "HashJoinInput");
         }
 
         Ok(())
@@ -3132,7 +3118,7 @@ mod tests {
             );
 
             // Asserting that stream-level reservation attempting to overallocate
-            assert_contains!(err.to_string(), "HashJoinStream[1]");
+            assert_contains!(err.to_string(), "HashJoinInput[1]");
         }
 
         Ok(())

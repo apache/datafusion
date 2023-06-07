@@ -38,7 +38,6 @@ use crate::{
     logical_expr::Operator,
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
-use arrow::compute::DEFAULT_CAST_OPTIONS;
 use arrow::record_batch::RecordBatchOptions;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
@@ -549,7 +548,7 @@ fn rewrite_expr_to_prunable(
         let left = Arc::new(phys_expr::CastExpr::new(
             left,
             cast.cast_type().clone(),
-            DEFAULT_CAST_OPTIONS,
+            None,
         ));
         Ok((left, op, right))
     } else if let Some(try_cast) =
@@ -736,7 +735,7 @@ fn build_is_null_column_expr(
 /// expression that will evaluate to FALSE if it can be determined no
 /// rows between the min/max values could pass the predicates.
 ///
-/// Returns the pruning predicate as an [`Expr`]
+/// Returns the pruning predicate as an [`PhysicalExpr`]
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &Schema,
@@ -943,10 +942,12 @@ mod tests {
         datatypes::{DataType, TimeUnit},
     };
     use datafusion_common::{ScalarValue, ToDFSchema};
+    use datafusion_expr::expr::InList;
     use datafusion_expr::{cast, is_null, try_cast, Expr};
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use std::collections::HashMap;
+    use std::ops::{Not, Rem};
 
     #[derive(Debug)]
     /// Mock statistic provider for tests
@@ -1523,9 +1524,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test OR operator joining supported c1 < 1 expression and unsupported c2 % 2 = 0 expression
-        let expr = col("c1")
-            .lt(lit(1))
-            .or(col("c2").modulus(lit(2)).eq(lit(0)));
+        let expr = col("c1").lt(lit(1)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expected_expr = "true";
         let predicate_expr = test_build_predicate_expression(
             &expr,
@@ -1660,11 +1659,11 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 in(1, 2, 3)
-        let expr = Expr::InList {
-            expr: Box::new(col("c1")),
-            list: vec![lit(1), lit(2), lit(3)],
-            negated: false,
-        };
+        let expr = Expr::InList(InList::new(
+            Box::new(col("c1")),
+            vec![lit(1), lit(2), lit(3)],
+            false,
+        ));
         let expected_expr = "c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_min@0 <= 2 AND 2 <= c1_max@1 OR c1_min@0 <= 3 AND 3 <= c1_max@1";
         let predicate_expr = test_build_predicate_expression(
             &expr,
@@ -1683,11 +1682,7 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 in()
-        let expr = Expr::InList {
-            expr: Box::new(col("c1")),
-            list: vec![],
-            negated: false,
-        };
+        let expr = Expr::InList(InList::new(Box::new(col("c1")), vec![], false));
         let expected_expr = "true";
         let predicate_expr = test_build_predicate_expression(
             &expr,
@@ -1706,11 +1701,11 @@ mod tests {
             Field::new("c2", DataType::Int32, false),
         ]);
         // test c1 not in(1, 2, 3)
-        let expr = Expr::InList {
-            expr: Box::new(col("c1")),
-            list: vec![lit(1), lit(2), lit(3)],
-            negated: true,
-        };
+        let expr = Expr::InList(InList::new(
+            Box::new(col("c1")),
+            vec![lit(1), lit(2), lit(3)],
+            true,
+        ));
         let expected_expr = "(c1_min@0 != 1 OR 1 != c1_max@1) \
         AND (c1_min@0 != 2 OR 2 != c1_max@1) \
         AND (c1_min@0 != 3 OR 3 != c1_max@1)";
@@ -1777,15 +1772,15 @@ mod tests {
     fn row_group_predicate_cast_list() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         // test cast(c1 as int64) in int64(1, 2, 3)
-        let expr = Expr::InList {
-            expr: Box::new(cast(col("c1"), DataType::Int64)),
-            list: vec![
+        let expr = Expr::InList(InList::new(
+            Box::new(cast(col("c1"), DataType::Int64)),
+            vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
                 lit(ScalarValue::Int64(Some(3))),
             ],
-            negated: false,
-        };
+            false,
+        ));
         let expected_expr = "CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64) OR CAST(c1_min@0 AS Int64) <= 2 AND 2 <= CAST(c1_max@1 AS Int64) OR CAST(c1_min@0 AS Int64) <= 3 AND 3 <= CAST(c1_max@1 AS Int64)";
         let predicate_expr = test_build_predicate_expression(
             &expr,
@@ -1794,15 +1789,15 @@ mod tests {
         );
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
-        let expr = Expr::InList {
-            expr: Box::new(cast(col("c1"), DataType::Int64)),
-            list: vec![
+        let expr = Expr::InList(InList::new(
+            Box::new(cast(col("c1"), DataType::Int64)),
+            vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
                 lit(ScalarValue::Int64(Some(3))),
             ],
-            negated: true,
-        };
+            true,
+        ));
         let expected_expr =
             "(CAST(c1_min@0 AS Int64) != 1 OR 1 != CAST(c1_max@1 AS Int64)) \
         AND (CAST(c1_min@0 AS Int64) != 2 OR 2 != CAST(c1_max@1 AS Int64)) \

@@ -29,10 +29,10 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortOptions;
+use crate::physical_plan::union::{can_interleave, InterleaveExec, UnionExec};
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode, VisitRecursion};
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -40,8 +40,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
-    PhysicalExpr,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, PhysicalExpr,
 };
 use std::sync::Arc;
 
@@ -248,26 +247,13 @@ fn adjust_input_keys_ordering(
             sort_options.clone(),
             &join_constructor,
         )?)
-    } else if let Some(AggregateExec {
-        mode,
-        group_by,
-        aggr_expr,
-        filter_expr,
-        input,
-        input_schema,
-        ..
-    }) = plan_any.downcast_ref::<AggregateExec>()
-    {
+    } else if let Some(aggregate_exec) = plan_any.downcast_ref::<AggregateExec>() {
         if !parent_required.is_empty() {
-            match mode {
+            match aggregate_exec.mode {
                 AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
                     requirements.plan.clone(),
                     &parent_required,
-                    group_by,
-                    aggr_expr,
-                    filter_expr,
-                    input.clone(),
-                    input_schema,
+                    aggregate_exec,
                 )?),
                 _ => Some(PlanWithKeyRequirements::new(requirements.plan.clone())),
             }
@@ -369,13 +355,10 @@ where
 fn reorder_aggregate_keys(
     agg_plan: Arc<dyn ExecutionPlan>,
     parent_required: &[Arc<dyn PhysicalExpr>],
-    group_by: &PhysicalGroupBy,
-    aggr_expr: &[Arc<dyn AggregateExpr>],
-    filter_expr: &[Option<Arc<dyn PhysicalExpr>>],
-    agg_input: Arc<dyn ExecutionPlan>,
-    input_schema: &SchemaRef,
+    agg_exec: &AggregateExec,
 ) -> Result<PlanWithKeyRequirements> {
-    let out_put_columns = group_by
+    let out_put_columns = agg_exec
+        .group_by
         .expr()
         .iter()
         .enumerate()
@@ -388,7 +371,7 @@ fn reorder_aggregate_keys(
         .collect::<Vec<_>>();
 
     if parent_required.len() != out_put_exprs.len()
-        || !group_by.null_expr().is_empty()
+        || !agg_exec.group_by.null_expr().is_empty()
         || expr_list_eq_strict_order(&out_put_exprs, parent_required)
     {
         Ok(PlanWithKeyRequirements::new(agg_plan))
@@ -402,11 +385,12 @@ fn reorder_aggregate_keys(
                     group_by,
                     aggr_expr,
                     filter_expr,
+                    order_by_expr,
                     input,
                     input_schema,
                     ..
                 }) =
-                    agg_input.as_any().downcast_ref::<AggregateExec>()
+                    agg_exec.input.as_any().downcast_ref::<AggregateExec>()
                 {
                     if matches!(mode, AggregateMode::Partial) {
                         let mut new_group_exprs = vec![];
@@ -421,6 +405,7 @@ fn reorder_aggregate_keys(
                             new_partial_group_by,
                             aggr_expr.clone(),
                             filter_expr.clone(),
+                            order_by_expr.clone(),
                             input.clone(),
                             input_schema.clone(),
                         )?))
@@ -450,10 +435,11 @@ fn reorder_aggregate_keys(
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
-                        aggr_expr.to_vec(),
-                        filter_expr.to_vec(),
+                        agg_exec.aggr_expr.to_vec(),
+                        agg_exec.filter_expr.to_vec(),
+                        agg_exec.order_by_expr.to_vec(),
                         partial_agg,
-                        input_schema.clone(),
+                        agg_exec.input_schema.clone(),
                     )?);
 
                     // Need to create a new projection to change the expr ordering back
@@ -825,6 +811,35 @@ fn ensure_distribution(
         return Ok(Transformed::No(plan));
     }
 
+    // special case for UnionExec: We want to "bubble up" hash-partitioned data. So instead of:
+    //
+    // Agg:
+    //   Repartition (hash):
+    //     Union:
+    //       - Agg:
+    //           Repartition (hash):
+    //             Data
+    //       - Agg:
+    //           Repartition (hash):
+    //             Data
+    //
+    // We can use:
+    //
+    // Agg:
+    //   Interleave:
+    //     - Agg:
+    //         Repartition (hash):
+    //           Data
+    //     - Agg:
+    //         Repartition (hash):
+    //           Data
+    if let Some(union_exec) = plan.as_any().downcast_ref::<UnionExec>() {
+        if can_interleave(union_exec.inputs()) {
+            let plan = InterleaveExec::try_new(union_exec.inputs().clone())?;
+            return Ok(Transformed::Yes(Arc::new(plan)));
+        }
+    }
+
     let required_input_distributions = plan.required_input_distribution();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
     assert_eq!(children.len(), required_input_distributions.len());
@@ -962,12 +977,12 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::joins::{
         utils::JoinOn, HashJoinExec, PartitionMode, SortMergeJoinExec,
     };
@@ -985,11 +1000,11 @@ mod tests {
     }
 
     fn parquet_exec() -> Arc<ParquetExec> {
-        parquet_exec_with_sort(None)
+        parquet_exec_with_sort(vec![])
     }
 
     fn parquet_exec_with_sort(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
@@ -1010,7 +1025,7 @@ mod tests {
 
     // Created a sorted parquet exec with multiple files
     fn parquet_exec_multiple_sorted(
-        output_ordering: Option<Vec<PhysicalSortExpr>>,
+        output_ordering: Vec<Vec<PhysicalSortExpr>>,
     ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
@@ -1074,10 +1089,12 @@ mod tests {
                 final_grouping,
                 vec![],
                 vec![],
+                vec![],
                 Arc::new(
                     AggregateExec::try_new(
                         AggregateMode::Partial,
                         group_by,
+                        vec![],
                         vec![],
                         vec![],
                         input,
@@ -1243,12 +1260,12 @@ mod tests {
                             top_join_plan.as_str(),
                             join_plan.as_str(),
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs
                         _ => vec![
@@ -1256,12 +1273,12 @@ mod tests {
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=10",
                             join_plan.as_str(),
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
                     assert_optimized!(expected, top_join);
@@ -1299,12 +1316,12 @@ mod tests {
                                 top_join_plan.as_str(),
                                 join_plan.as_str(),
                                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                         // Should include 4 RepartitionExecs
                         _ =>
@@ -1313,12 +1330,12 @@ mod tests {
                                 "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 6 }], 10), input_partitions=10",
                                 join_plan.as_str(),
                                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                     };
                     assert_optimized!(expected, top_join);
@@ -1368,11 +1385,11 @@ mod tests {
             "ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, top_join);
 
@@ -1390,11 +1407,11 @@ mod tests {
             "ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
         assert_optimized!(expected, top_join);
@@ -1441,11 +1458,11 @@ mod tests {
             "ProjectionExec: expr=[c@2 as c1]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
         assert_optimized!(expected, top_join);
@@ -1478,11 +1495,11 @@ mod tests {
             "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 0 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
         Ok(())
@@ -1527,11 +1544,11 @@ mod tests {
             "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 0 }, Column { name: \"a\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
         Ok(())
@@ -1633,16 +1650,16 @@ mod tests {
             "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }, Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }, Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }, Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }, Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, filter_top_join);
         Ok(())
@@ -1755,16 +1772,16 @@ mod tests {
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             ];
 
             assert_plan_txt!(expected, reordered);
@@ -1876,16 +1893,16 @@ mod tests {
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }], 10), input_partitions=1",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             ];
 
             assert_plan_txt!(expected, reordered);
@@ -1950,14 +1967,14 @@ mod tests {
                         join_plan.as_str(),
                         "SortExec: expr=[a@0 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[b1@1 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[c@2 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
                 // Should include 4 RepartitionExecs
                 _ => vec![
@@ -1967,14 +1984,14 @@ mod tests {
                         join_plan.as_str(),
                         "SortExec: expr=[a@0 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[b1@1 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: expr=[c@2 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
             assert_optimized!(expected, top_join);
@@ -2003,14 +2020,14 @@ mod tests {
                             join_plan.as_str(),
                             "SortExec: expr=[a@0 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[b1@1 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[c@2 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs and 4 SortExecs
                         _ => vec![
@@ -2020,14 +2037,14 @@ mod tests {
                             join_plan.as_str(),
                             "SortExec: expr=[a@0 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[b1@1 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10), input_partitions=1",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: expr=[c@2 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10), input_partitions=1",
-                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+                            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
                     assert_optimized!(expected, top_join);
@@ -2094,13 +2111,13 @@ mod tests {
             "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "SortExec: expr=[b2@1 ASC,a2@0 ASC]",
             "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 0 }, Column { name: \"a\", index: 1 }], 10), input_partitions=1",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
         Ok(())
@@ -2116,7 +2133,7 @@ mod tests {
         }];
 
         // Scan some sorted parquet files
-        let exec = parquet_exec_multiple_sorted(Some(sort_key.clone()));
+        let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
 
         // CoalesceBatchesExec to mimic behavior after a filter
         let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
@@ -2129,9 +2146,47 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [a@0 ASC]",
             "CoalesceBatchesExec: target_batch_size=4096",
-            "ParquetExec: limit=None, partitions={2 groups: [[x], [y]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
+            "ParquetExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC]",
         ];
         assert_optimized!(expected, exec);
+        Ok(())
+    }
+
+    #[test]
+    fn union_to_interleave() -> Result<()> {
+        // group by (a as a1)
+        let left = aggregate_exec_with_alias(
+            parquet_exec(),
+            vec![("a".to_string(), "a1".to_string())],
+        );
+        // group by (a as a2)
+        let right = aggregate_exec_with_alias(
+            parquet_exec(),
+            vec![("a".to_string(), "a1".to_string())],
+        );
+
+        //  Union
+        let plan = Arc::new(UnionExec::new(vec![left, right]));
+
+        // final agg
+        let plan =
+            aggregate_exec_with_alias(plan, vec![("a1".to_string(), "a2".to_string())]);
+
+        // Only two RepartitionExecs added, no final RepartionExec required
+        let expected = &[
+            "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[a1@0 as a2], aggr=[]",
+            "InterleaveExec",
+            "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
+            "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+            "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
+            "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }], 10), input_partitions=1",
+            "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
+            "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected, plan);
         Ok(())
     }
 }

@@ -37,6 +37,7 @@ pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod field_util;
 pub mod function;
+pub mod function_err;
 mod literal;
 pub mod logical_plan;
 mod nullif;
@@ -66,20 +67,7 @@ pub use function::{
     StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
-pub use logical_plan::{
-    builder::{
-        build_join_schema, union, wrap_projection_for_join_if_necessary, UNNAMED_TABLE,
-    },
-    Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, CrossJoin, DescribeTable, Distinct, DmlStatement,
-    DropTable, DropView, EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint,
-    JoinType, Limit, LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, Prepare,
-    Projection, Repartition, SetVariable, Sort, Statement, StringifiedPlan, Subquery,
-    SubqueryAlias, TableScan, ToStringifiedPlan, TransactionAccessMode,
-    TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
-    Union, Unnest, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Values, Window,
-    WriteOp,
-};
+pub use logical_plan::*;
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};
@@ -88,3 +76,10 @@ pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}

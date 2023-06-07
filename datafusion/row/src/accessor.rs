@@ -23,6 +23,7 @@ use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx};
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{get_bit_raw, set_bit_raw};
 use datafusion_common::ScalarValue;
+use std::ops::{BitAnd, BitOr, BitXor};
 use std::sync::Arc;
 
 //TODO: DRY with reader and writer
@@ -71,6 +72,7 @@ macro_rules! fn_add_idx {
     ($NATIVE: ident) => {
         paste::item! {
             /// add field at `idx` with `value`
+            #[inline(always)]
             pub fn [<add_ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 if self.is_valid_at(idx) {
                     self.[<set_ $NATIVE>](idx, value + self.[<get_ $NATIVE>](idx));
@@ -87,6 +89,25 @@ macro_rules! fn_max_min_idx {
     ($NATIVE: ident, $OP: ident) => {
         paste::item! {
             /// check max then update
+            #[inline(always)]
+            pub fn [<$OP _ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
+                if self.is_valid_at(idx) {
+                    let v = value.$OP(self.[<get_ $NATIVE>](idx));
+                    self.[<set_ $NATIVE>](idx, v);
+                } else {
+                    self.set_non_null_at(idx);
+                    self.[<set_ $NATIVE>](idx, value);
+                }
+            }
+        }
+    };
+}
+
+macro_rules! fn_bit_and_or_xor_idx {
+    ($NATIVE: ident, $OP: ident) => {
+        paste::item! {
+            /// check bit_and then update
+            #[inline(always)]
             pub fn [<$OP _ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 if self.is_valid_at(idx) {
                     let v = value.$OP(self.[<get_ $NATIVE>](idx));
@@ -103,6 +124,7 @@ macro_rules! fn_max_min_idx {
 macro_rules! fn_get_idx_scalar {
     ($NATIVE: ident, $SCALAR:ident) => {
         paste::item! {
+            #[inline(always)]
             pub fn [<get_ $NATIVE _scalar>](&self, idx: usize) -> ScalarValue {
                 if self.is_valid_at(idx) {
                     ScalarValue::$SCALAR(Some(self.[<get_ $NATIVE>](idx)))
@@ -261,6 +283,12 @@ impl<'a> RowAccessor<'a> {
         }
     }
 
+    fn set_bool(&mut self, idx: usize, value: bool) {
+        self.assert_index_valid(idx);
+        let offset = self.field_offsets()[idx];
+        self.data[offset] = u8::from(value);
+    }
+
     fn set_u8(&mut self, idx: usize, value: u8) {
         self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
@@ -299,6 +327,7 @@ impl<'a> RowAccessor<'a> {
     fn_add_idx!(f64);
     fn_add_idx!(i128);
 
+    fn_max_min_idx!(bool, max);
     fn_max_min_idx!(u8, max);
     fn_max_min_idx!(u16, max);
     fn_max_min_idx!(u32, max);
@@ -311,6 +340,7 @@ impl<'a> RowAccessor<'a> {
     fn_max_min_idx!(f64, max);
     fn_max_min_idx!(i128, max);
 
+    fn_max_min_idx!(bool, min);
     fn_max_min_idx!(u8, min);
     fn_max_min_idx!(u16, min);
     fn_max_min_idx!(u32, min);
@@ -322,4 +352,33 @@ impl<'a> RowAccessor<'a> {
     fn_max_min_idx!(f32, min);
     fn_max_min_idx!(f64, min);
     fn_max_min_idx!(i128, min);
+
+    fn_bit_and_or_xor_idx!(bool, bitand);
+    fn_bit_and_or_xor_idx!(u8, bitand);
+    fn_bit_and_or_xor_idx!(u16, bitand);
+    fn_bit_and_or_xor_idx!(u32, bitand);
+    fn_bit_and_or_xor_idx!(u64, bitand);
+    fn_bit_and_or_xor_idx!(i8, bitand);
+    fn_bit_and_or_xor_idx!(i16, bitand);
+    fn_bit_and_or_xor_idx!(i32, bitand);
+    fn_bit_and_or_xor_idx!(i64, bitand);
+
+    fn_bit_and_or_xor_idx!(bool, bitor);
+    fn_bit_and_or_xor_idx!(u8, bitor);
+    fn_bit_and_or_xor_idx!(u16, bitor);
+    fn_bit_and_or_xor_idx!(u32, bitor);
+    fn_bit_and_or_xor_idx!(u64, bitor);
+    fn_bit_and_or_xor_idx!(i8, bitor);
+    fn_bit_and_or_xor_idx!(i16, bitor);
+    fn_bit_and_or_xor_idx!(i32, bitor);
+    fn_bit_and_or_xor_idx!(i64, bitor);
+
+    fn_bit_and_or_xor_idx!(u8, bitxor);
+    fn_bit_and_or_xor_idx!(u16, bitxor);
+    fn_bit_and_or_xor_idx!(u32, bitxor);
+    fn_bit_and_or_xor_idx!(u64, bitxor);
+    fn_bit_and_or_xor_idx!(i8, bitxor);
+    fn_bit_and_or_xor_idx!(i16, bitxor);
+    fn_bit_and_or_xor_idx!(i32, bitxor);
+    fn_bit_and_or_xor_idx!(i64, bitxor);
 }

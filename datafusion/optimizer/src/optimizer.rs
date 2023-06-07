@@ -18,11 +18,11 @@
 //! Query optimizer traits
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
-use crate::decorrelate_where_exists::DecorrelateWhereExists;
-use crate::decorrelate_where_in::DecorrelateWhereIn;
+use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
+use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::eliminate_project::EliminateProjection;
@@ -211,8 +211,8 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
-            Arc::new(DecorrelateWhereExists::new()),
-            Arc::new(DecorrelateWhereIn::new()),
+            Arc::new(EliminateJoin::new()),
+            Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             // simplify expressions does not simplify expressions in subqueries, so we
@@ -293,7 +293,7 @@ impl Optimizer {
                             i
                         );
                     }
-                    Err(ref e) => {
+                    Err(e) => {
                         if options.optimizer.skip_failed_rules {
                             // Note to future readers: if you see this warning it signals a
                             // bug in the DataFusion optimizer. Please consider filing a ticket
@@ -304,13 +304,8 @@ impl Optimizer {
                             e
                         );
                         } else {
-                            let e = DataFusionError::Internal(format!(
-                                "Optimizer rule '{}' failed due to unexpected error: {}",
-                                rule.name(),
-                                e
-                            ));
                             return Err(DataFusionError::Context(
-                                rule.name().to_string(),
+                                format!("Optimizer rule '{}' failed", rule.name(),),
                                 Box::new(e),
                             ));
                         }
@@ -468,10 +463,8 @@ mod tests {
         });
         let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "bad rule\ncaused by\n\
-            Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
-            Error during planning: rule failed. This was likely caused by a bug in \
-            DataFusion's code and we would welcome that you file an bug report in our issue tracker",
+            "Optimizer rule 'bad rule' failed\ncaused by\n\
+            Error during planning: rule failed",
             err.to_string()
         );
     }

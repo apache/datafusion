@@ -32,13 +32,8 @@ rust-version = { workspace = true }
 name = "datafusion_row"
 path = "src/lib.rs"
 
-[features]
-# Used to enable JIT code generation
-jit = ["datafusion-jit"]
-
 [dependencies]
 arrow = { workspace = true }
-datafusion-common = { path = "../common", version = "22.0.0" }
-datafusion-jit = { path = "../jit", version = "22.0.0", optional = true }
+datafusion-common = { path = "../common", version = "26.0.0" }
 paste = "^1.0"
 rand = "0.8"

@@ -19,7 +19,7 @@
 
 use crate::{DataFusionError, Result};
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 
 /// A macro that wraps a configuration struct and automatically derives
@@ -212,7 +212,9 @@ config_namespace! {
         pub collect_statistics: bool, default = false
 
         /// Number of partitions for query execution. Increasing partitions can increase
-        /// concurrency. Defaults to the number of CPU cores on the system
+        /// concurrency.
+        ///
+        /// Defaults to the number of CPU cores on the system
         pub target_partitions: usize, default = num_cpus::get()
 
         /// The default time zone
@@ -223,15 +225,26 @@ config_namespace! {
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
+
+        /// Aggregate options
+        pub aggregate: AggregateOptions, default = Default::default()
+
+        /// Fan-out during initial physical planning.
+        ///
+        /// This is mostly use to plan `UNION` children in parallel.
+        ///
+        /// Defaults to the number of CPU cores on the system
+        pub planning_concurrency: usize, default = num_cpus::get()
     }
 }
 
 config_namespace! {
     /// Options related to reading of parquet files
     pub struct ParquetOptions {
-        /// If true, uses parquet data page level metadata (Page Index) statistics
-        /// to reduce the number of rows decoded.
-        pub enable_page_index: bool, default = false
+        /// If true, reads the Parquet data page level metadata (the
+        /// Page Index), if present, to reduce the I/O and number of
+        /// rows decoded.
+        pub enable_page_index: bool, default = true
 
         /// If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
@@ -257,6 +270,23 @@ config_namespace! {
         /// will be reordered heuristically to minimize the cost of evaluation. If false,
         /// the filters are applied in the same order as written in the query
         pub reorder_filters: bool, default = false
+    }
+}
+
+config_namespace! {
+    /// Options related to aggregate execution
+    pub struct AggregateOptions {
+        /// Specifies the threshold for using `ScalarValue`s to update
+        /// accumulators during high-cardinality aggregations for each input batch.
+        ///
+        /// The aggregation is considered high-cardinality if the number of affected groups
+        /// is greater than or equal to `batch_size / scalar_update_factor`. In such cases,
+        /// `ScalarValue`s are utilized for updating accumulators, rather than the default
+        /// batch-slice approach. This can lead to performance improvements.
+        ///
+        /// By adjusting the `scalar_update_factor`, you can balance the trade-off between
+        /// more efficient accumulator updates and the number of groups affected.
+        pub scalar_update_factor: usize, default = 10
     }
 }
 
@@ -306,19 +336,25 @@ config_namespace! {
         /// Should DataFusion execute sorts in a per-partition fashion and merge
         /// afterwards instead of coalescing first and sorting globally.
         /// With this flag is enabled, plans in the form below
+        ///
+        /// ```text
         ///      "SortExec: [a@0 ASC]",
         ///      "  CoalescePartitionsExec",
         ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        /// ```
         /// would turn into the plan below which performs better in multithreaded environments
+        ///
+        /// ```text
         ///      "SortPreservingMergeExec: [a@0 ASC]",
         ///      "  SortExec: [a@0 ASC]",
         ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        /// ```
         pub repartition_sorts: bool, default = true
 
         /// When set to true, the logical plan optimizer will produce warning
         /// messages if any optimization rules produce errors and then proceed to the next
         /// rule. When set to false, any rules that produce errors will cause the query to fail
-        pub skip_failed_rules: bool, default = true
+        pub skip_failed_rules: bool, default = false
 
         /// Number of times that the optimizer will attempt to optimize the plan
         pub max_passes: usize, default = 3
@@ -474,6 +510,36 @@ impl ConfigOptions {
         Ok(ret)
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    ///
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        let mut keys = Visitor(vec![]);
+        let mut ret = Self::default();
+        ret.visit(&mut keys, "datafusion", "");
+
+        for key in keys.0 {
+            if let Some(var) = settings.get(&key) {
+                ret.set(&key, var)?;
+            }
+        }
+
+        Ok(ret)
+    }
+
     /// Returns the [`ConfigEntry`] stored within this [`ConfigOptions`]
     pub fn entries(&self) -> Vec<ConfigEntry> {
         struct Visitor(Vec<ConfigEntry>);
@@ -513,7 +579,10 @@ impl ConfigOptions {
         use std::fmt::Write as _;
 
         let mut s = Self::default();
-        s.execution.target_partitions = 0; // Normalize for display
+
+        // Normalize for display
+        s.execution.target_partitions = 0;
+        s.execution.planning_concurrency = 0;
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";

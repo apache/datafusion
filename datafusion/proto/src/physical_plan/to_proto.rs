@@ -32,21 +32,26 @@ use datafusion::physical_plan::{
 };
 
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
-use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::datasource::physical_plan::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 
 use datafusion::physical_plan::expressions::{
-    Avg, BinaryExpr, Column, LikeExpr, Max, Min, Sum,
+    Avg, BinaryExpr, BitAnd, BitOr, BitXor, BoolAnd, BoolOr, Column, LikeExpr, Max, Min,
+    Sum,
 };
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
-use crate::protobuf::{PhysicalSortExprNode, ScalarValue};
+use crate::protobuf::{
+    physical_aggregate_expr_node, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
+    ScalarValue,
+};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::{DateTimeIntervalExpr, GetIndexedFieldExpr};
-use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::joins::utils::JoinSide;
+use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_common::{DataFusionError, Result};
 
 impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
@@ -56,6 +61,12 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         use datafusion::physical_plan::expressions;
         use protobuf::AggregateFunction;
 
+        let expressions: Vec<protobuf::PhysicalExprNode> = a
+            .expressions()
+            .iter()
+            .map(|e| e.clone().try_into())
+            .collect::<Result<Vec<_>>>()?;
+
         let mut distinct = false;
         let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
             Ok(AggregateFunction::Avg.into())
@@ -63,6 +74,16 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             Ok(AggregateFunction::Sum.into())
         } else if a.as_any().downcast_ref::<Count>().is_some() {
             Ok(AggregateFunction::Count.into())
+        } else if a.as_any().downcast_ref::<BitAnd>().is_some() {
+            Ok(AggregateFunction::BitAnd.into())
+        } else if a.as_any().downcast_ref::<BitOr>().is_some() {
+            Ok(AggregateFunction::BitOr.into())
+        } else if a.as_any().downcast_ref::<BitXor>().is_some() {
+            Ok(AggregateFunction::BitXor.into())
+        } else if a.as_any().downcast_ref::<BoolAnd>().is_some() {
+            Ok(AggregateFunction::BoolAnd.into())
+        } else if a.as_any().downcast_ref::<BoolOr>().is_some() {
+            Ok(AggregateFunction::BoolOr.into())
         } else if a.as_any().downcast_ref::<DistinctCount>().is_some() {
             distinct = true;
             Ok(AggregateFunction::Count.into())
@@ -131,19 +152,31 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         {
             Ok(AggregateFunction::ApproxMedian.into())
         } else {
+            if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
+                return Ok(protobuf::PhysicalExprNode {
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
+                        protobuf::PhysicalAggregateExprNode {
+                            aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
+                            expr: expressions,
+                            distinct,
+                        },
+                    )),
+                });
+            }
+
             Err(DataFusionError::NotImplemented(format!(
                 "Aggregate function not supported: {a:?}"
             )))
         }?;
-        let expressions: Vec<protobuf::PhysicalExprNode> = a
-            .expressions()
-            .iter()
-            .map(|e| e.clone().try_into())
-            .collect::<Result<Vec<_>>>()?;
+
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
                 protobuf::PhysicalAggregateExprNode {
-                    aggr_function,
+                    aggregate_function: Some(
+                        physical_aggregate_expr_node::AggregateFunction::AggrFunction(
+                            aggr_function,
+                        ),
+                    ),
                     expr: expressions,
                     distinct,
                 },
@@ -451,21 +484,21 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             .map(|p| p.as_slice().try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
-        let output_ordering = if let Some(output_ordering) = &conf.output_ordering {
-            output_ordering
+        let mut output_orderings = vec![];
+        for order in &conf.output_ordering {
+            let expr_node_vec = order
                 .iter()
-                .map(|o| {
-                    let expr = o.expr.clone().try_into()?;
+                .map(|sort_expr| {
+                    let expr = sort_expr.expr.clone().try_into()?;
                     Ok(PhysicalSortExprNode {
                         expr: Some(Box::new(expr)),
-                        asc: !o.options.descending,
-                        nulls_first: o.options.nulls_first,
+                        asc: !sort_expr.options.descending,
+                        nulls_first: sort_expr.options.nulls_first,
                     })
                 })
-                .collect::<Result<Vec<PhysicalSortExprNode>>>()?
-        } else {
-            vec![]
-        };
+                .collect::<Result<Vec<PhysicalSortExprNode>>>()?;
+            output_orderings.push(expr_node_vec)
+        }
 
         Ok(protobuf::FileScanExecConf {
             file_groups,
@@ -485,7 +518,12 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .map(|x| x.0.clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
-            output_ordering,
+            output_ordering: output_orderings
+                .into_iter()
+                .map(|e| PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: e,
+                })
+                .collect::<Vec<_>>(),
         })
     }
 }
@@ -509,5 +547,33 @@ impl TryFrom<Option<Arc<dyn PhysicalExpr>>> for protobuf::MaybeFilter {
                 expr: Some(expr.try_into()?),
             }),
         }
+    }
+}
+
+impl TryFrom<Option<Vec<PhysicalSortExpr>>> for protobuf::MaybePhysicalSortExprs {
+    type Error = DataFusionError;
+
+    fn try_from(sort_exprs: Option<Vec<PhysicalSortExpr>>) -> Result<Self, Self::Error> {
+        match sort_exprs {
+            None => Ok(protobuf::MaybePhysicalSortExprs { sort_expr: vec![] }),
+            Some(sort_exprs) => Ok(protobuf::MaybePhysicalSortExprs {
+                sort_expr: sort_exprs
+                    .into_iter()
+                    .map(|sort_expr| sort_expr.try_into())
+                    .collect::<Result<Vec<_>>>()?,
+            }),
+        }
+    }
+}
+
+impl TryFrom<PhysicalSortExpr> for protobuf::PhysicalSortExprNode {
+    type Error = DataFusionError;
+
+    fn try_from(sort_expr: PhysicalSortExpr) -> std::result::Result<Self, Self::Error> {
+        Ok(PhysicalSortExprNode {
+            expr: Some(Box::new(sort_expr.expr.try_into()?)),
+            asc: !sort_expr.options.descending,
+            nulls_first: sort_expr.options.nulls_first,
+        })
     }
 }

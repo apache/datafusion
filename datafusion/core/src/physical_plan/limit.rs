@@ -19,7 +19,7 @@
 
 use futures::stream::Stream;
 use futures::stream::StreamExt;
-use log::debug;
+use log::trace;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -39,7 +39,7 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Limit execution plan
 #[derive(Debug)]
@@ -136,7 +136,7 @@ impl ExecutionPlan for GlobalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!(
+        trace!(
             "Start GlobalLimitExec::execute for partition: {}",
             partition
         );
@@ -320,7 +320,7 @@ impl ExecutionPlan for LocalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(LimitStream::new(

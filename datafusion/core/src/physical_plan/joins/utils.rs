@@ -42,8 +42,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
+use datafusion_common::JoinType;
 
 use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
@@ -735,14 +735,15 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-/// In the end of join execution, need to use bit map of the matched indices to generate the final left and
-/// right indices.
+/// In the end of join execution, need to use bit map of the matched
+/// indices to generate the final left and right indices.
 ///
 /// For example:
-/// left_bit_map: [true, false, true, true, false]
-/// join_type: `Left`
 ///
-/// The result is: ([1,4], [null, null])
+/// 1. left_bit_map: `[true, false, true, true, false]`
+/// 2. join_type: `Left`
+///
+/// The result is: `([1,4], [null, null])`
 pub(crate) fn get_final_indices_from_bit_map(
     left_bit_map: &BooleanBufferBuilder,
     join_type: JoinType,

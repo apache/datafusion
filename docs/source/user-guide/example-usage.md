@@ -81,6 +81,37 @@ async fn main() -> datafusion::error::Result<()> {
 +---+--------+
 ```
 
+## Arrow Versions
+
+Many of DataFusion's public APIs use types from the
+[`arrow`] and [`parquet`] crates, so if you use
+`arrow` in your project, the `arrow` version must match that used by
+DataFusion. You can check the required version on [DataFusion's
+crates.io] page.
+
+The easiest way to ensure the versions match is to use the `arrow`
+exported by DataFusion, for example:
+
+```rust
+use datafusion::arrow::datatypes::Schema;
+```
+
+For example, [DataFusion `25.0.0` dependencies] require `arrow`
+`39.0.0`. If instead you used `arrow` `40.0.0` in your project you may
+see errors such as:
+
+```text
+mismatched types [E0308] expected `Schema`, found `arrow_schema::Schema` Note: `arrow_schema::Schema` and `Schema` have similar names, but are actually distinct types Note: `arrow_schema::Schema` is defined in crate `arrow_schema` Note: `Schema` is defined in crate `arrow_schema` Note: perhaps two different versions of crate `arrow_schema` are being used? Note: associated function defined here
+```
+
+Or calling `downcast_ref` on an `ArrayRef` may return `None`
+unexpectedly.
+
+[`arrow`]: https://docs.rs/arrow/latest/arrow/
+[`parquet`]: https://docs.rs/parquet/latest/parquet/
+[datafusion's crates.io]: https://crates.io/crates/datafusion
+[datafusion `25.0.0` dependencies]: https://crates.io/crates/datafusion/25.0.0/dependencies
+
 ## Identifiers and Capitalization
 
 Please be aware that all identifiers are effectively made lower-case in SQL, so if your csv file has capital letters (ex: `Name`) you must put your column name in double quotes or the examples won't work.
@@ -166,7 +197,7 @@ worth noting that using the settings in the `[profile.release]` section will sig
 [dependencies]
 datafusion = { version = "22.0" , features = ["simd"]}
 tokio = { version = "^1.0", features = ["rt-multi-thread"] }
-snmalloc-rs = "0.2"
+snmalloc-rs = "0.3"
 
 [profile.release]
 lto = true

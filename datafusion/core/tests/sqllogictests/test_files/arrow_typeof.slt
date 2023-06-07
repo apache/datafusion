@@ -303,7 +303,7 @@ select arrow_cast('30 minutes', 'Interval(MonthDayNano)');
 
 ## Duration
 
-query error DataFusion error: Error during planning: Cannot automatically convert Interval\(MonthDayNano\) to Duration\(Second\)
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nThis feature is not implemented: Can't create a scalar from array of type "Duration\(Second\)"
 ---
 select arrow_cast(interval '30 minutes', 'Duration(Second)');
 
@@ -321,13 +321,12 @@ select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( 
 query P
 select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+08:00" ))');
 ----
-2000-01-01T08:00:00+08:00
+2000-01-01T00:00:00+08:00
 
-# once https://github.com/apache/arrow-rs/issues/1936 fixed, please update this query
 query P
 select arrow_cast(timestamp '2000-01-01T00:00:00Z', 'Timestamp(Nanosecond, Some( "+08:00" ))');
 ----
-2000-01-01T08:00:00+08:00
+2000-01-01T00:00:00+08:00
 
 statement error Arrow error: Parser error: Invalid timezone "\+25:00": '\+25:00' is not a valid timezone
 select arrow_cast(timestamp '2000-01-01T00:00:00', 'Timestamp(Nanosecond, Some( "+25:00" ))');

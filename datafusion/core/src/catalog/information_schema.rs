@@ -17,7 +17,7 @@
 
 //! Implements the SQL [Information Schema] for DataFusion.
 //!
-//! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
+//! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
 use async_trait::async_trait;
 use std::{any::Any, sync::Arc};
@@ -81,15 +81,18 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        builder.add_table(
-                            &catalog_name,
-                            &schema_name,
-                            &table_name,
-                            table.table_type(),
-                        );
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            if let Some(table) = schema.table(&table_name).await {
+                                builder.add_table(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    table.table_type(),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -118,15 +121,18 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        builder.add_view(
-                            &catalog_name,
-                            &schema_name,
-                            &table_name,
-                            table.get_table_definition(),
-                        )
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            if let Some(table) = schema.table(&table_name).await {
+                                builder.add_view(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    table.get_table_definition(),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -140,19 +146,22 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        for (i, field) in table.schema().fields().iter().enumerate() {
-                            builder.add_column(
-                                &catalog_name,
-                                &schema_name,
-                                &table_name,
-                                field.name(),
-                                i,
-                                field.is_nullable(),
-                                field.data_type(),
-                            )
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            if let Some(table) = schema.table(&table_name).await {
+                                for (field_position, field) in
+                                    table.schema().fields().iter().enumerate()
+                                {
+                                    builder.add_column(
+                                        &catalog_name,
+                                        &schema_name,
+                                        &table_name,
+                                        field_position,
+                                        field,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -486,37 +495,35 @@ struct InformationSchemaColumnsBuilder {
 }
 
 impl InformationSchemaColumnsBuilder {
-    #[allow(clippy::too_many_arguments)]
     fn add_column(
         &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-        column_name: impl AsRef<str>,
-        column_position: usize,
-        is_nullable: bool,
-        data_type: &DataType,
+        catalog_name: &str,
+        schema_name: &str,
+        table_name: &str,
+        field_position: usize,
+        field: &Field,
     ) {
         use DataType::*;
 
         // Note: append_value is actually infallable.
-        self.catalog_names.append_value(catalog_name.as_ref());
-        self.schema_names.append_value(schema_name.as_ref());
-        self.table_names.append_value(table_name.as_ref());
+        self.catalog_names.append_value(catalog_name);
+        self.schema_names.append_value(schema_name);
+        self.table_names.append_value(table_name);
 
-        self.column_names.append_value(column_name.as_ref());
+        self.column_names.append_value(field.name());
 
-        self.ordinal_positions.append_value(column_position as u64);
+        self.ordinal_positions.append_value(field_position as u64);
 
         // DataFusion does not support column default values, so null
         self.column_defaults.append_null();
 
         // "YES if the column is possibly nullable, NO if it is known not nullable. "
-        let nullable_str = if is_nullable { "YES" } else { "NO" };
+        let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
         self.is_nullables.append_value(nullable_str);
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types.append_value(format!("{data_type:?}"));
+        self.data_types
+            .append_value(format!("{:?}", field.data_type()));
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -528,7 +535,7 @@ impl InformationSchemaColumnsBuilder {
 
         // "Maximum length, in bytes, for binary data, character data,
         // or text and image data."
-        let char_len: Option<u64> = match data_type {
+        let char_len: Option<u64> = match field.data_type() {
             Utf8 | Binary => Some(i32::MAX as u64),
             LargeBinary | LargeUtf8 => Some(i64::MAX as u64),
             _ => None,
@@ -557,7 +564,7 @@ impl InformationSchemaColumnsBuilder {
         // terms, as specified in the column
         // numeric_precision_radix. For all other data types, this
         // column is null.
-        let (numeric_precision, numeric_radix, numeric_scale) = match data_type {
+        let (numeric_precision, numeric_radix, numeric_scale) = match field.data_type() {
             Int8 | UInt8 => (Some(8), Some(2), None),
             Int16 | UInt16 => (Some(16), Some(2), None),
             Int32 | UInt32 => (Some(32), Some(2), None),

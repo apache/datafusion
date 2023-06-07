@@ -39,6 +39,7 @@ use test_utils::AccessLogGenerator;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
+    // Enable RUST_LOG logging configuration for test
     let _ = env_logger::try_init();
 }
 
@@ -101,7 +102,7 @@ async fn join_by_key_multiple_partitions() {
         "select t1.* from t t1 JOIN t t2 ON t1.service = t2.service",
         vec![
             "Resources exhausted: Failed to allocate additional",
-            "HashJoinStream",
+            "HashJoinInput[0]",
         ],
         1_000,
         config,
@@ -116,7 +117,7 @@ async fn join_by_key_single_partition() {
         "select t1.* from t t1 JOIN t t2 ON t1.service = t2.service",
         vec![
             "Resources exhausted: Failed to allocate additional",
-            "HashJoinExec",
+            "HashJoinInput",
         ],
         1_000,
         config,
@@ -130,7 +131,7 @@ async fn join_by_expression() {
         "select t1.* from t t1 JOIN t t2 ON t1.service != t2.service",
         vec![
             "Resources exhausted: Failed to allocate additional",
-            "NestedLoopJoinExec",
+            "NestedLoopJoinLoad[0]",
         ],
         1_000,
     )

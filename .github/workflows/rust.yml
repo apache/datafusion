@@ -67,8 +67,7 @@ jobs:
 
       # Note: this does not include dictionary_expressions to reduce codegen
       - name: Check workspace with all features
-        run: cargo check --workspace --benches --features avro,jit,scheduler,json
-
+        run: cargo check --workspace --benches --features avro,json
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
@@ -97,7 +96,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
+        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -136,9 +135,9 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  # Run doc tests
+  # Run `cargo test doc` (test documentation examples)
   linux-test-doc:
-    name: cargo doctest (amd64)
+    name: cargo test doc (amd64)
     needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
@@ -153,9 +152,27 @@ jobs:
           rust-version: stable
       # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run doctests
-        run: cargo test --doc --features avro,jit,scheduler,json
+        run: cargo test --doc --features avro,json
       - name: Verify Working Directory Clean
         run: git diff --exit-code
+
+  # Run `cargo doc` to ensure the rustdoc is clean
+  linux-rustdoc:
+    name: cargo doc
+    needs: [ linux-build-lib ]
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Run cargo doc
+        run: |
+          export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
+          cargo doc --document-private-items --no-deps --workspace
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -180,18 +197,17 @@ jobs:
           rust-version: stable
       - name: Generate benchmark data and expected query results
         run: |
-          mkdir -p benchmarks/data/answers
+          mkdir -p datafusion/core/tests/sqllogictests/test_files/tpch/data
           git clone https://github.com/databricks/tpch-dbgen.git
           cd tpch-dbgen
           make
-          ./dbgen -f -s 1
-          mv *.tbl ../benchmarks/data
-          mv ./answers/* ../benchmarks/data/answers/
+          ./dbgen -f -s 0.1
+          mv *.tbl ../datafusion/core/tests/sqllogictests/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
-          export TPCH_DATA=`pwd`/benchmarks/data
-          cargo test verify_q --profile release-nonlto --features=ci -- --test-threads=1
+          export TPCH_DATA=`realpath datafusion/core/tests/sqllogictests/test_files/tpch/data`
           cargo test serde_q --profile release-nonlto --features=ci -- --test-threads=1
+          INCLUDE_TPCH=true cargo test -p datafusion --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -254,7 +270,7 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -287,7 +303,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --lib --tests --bins --features avro,jit,scheduler,json,dictionary_expressions
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -444,7 +460,7 @@ jobs:
       - name: Run tests
         run: |
           cd datafusion
-          cargo test --lib --tests --features=force_hash_collisions
+          cargo test --lib --tests --features=force_hash_collisions,avro
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::file_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
@@ -32,7 +33,6 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
-use datafusion::physical_plan::file_format::{AvroExec, CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::CrossJoinExec;
@@ -45,7 +45,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
-    AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
+    udaf, AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{DataFusionError, Result};
 use prost::bytes::BufMut;
@@ -54,13 +54,14 @@ use prost::Message;
 use crate::common::proto_error;
 use crate::common::{csv_delimiter_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_protobuf_file_scan_config,
+    parse_physical_expr, parse_physical_sort_expr, parse_protobuf_file_scan_config,
 };
+use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
 use crate::protobuf::{self, PhysicalPlanNode};
-use crate::{convert_required, into_physical_plan, into_required};
+use crate::{convert_required, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -85,7 +86,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
@@ -108,11 +108,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 explain.verbose,
             ))),
             PhysicalPlanType::Projection(projection) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    projection.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &projection.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let exprs = projection
                     .expr
@@ -128,11 +128,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    filter.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &filter.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let predicate = filter
                     .expr
@@ -183,11 +183,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?)))
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    coalesce_batches.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &coalesce_batches.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
@@ -196,15 +196,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&merge.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    repart.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &repart.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
@@ -247,7 +247,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
                 let fetch = if limit.fetch >= 0 {
                     Some(limit.fetch as usize)
                 } else {
@@ -261,15 +261,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::LocalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&limit.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    window_agg.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &window_agg.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let input_schema = window_agg
                     .input_schema
@@ -337,11 +337,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hash_agg.input,
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hash_agg.input,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(
                     || {
@@ -408,13 +408,25 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .filter_expr
                     .iter()
                     .map(|expr| {
-                        let x = expr
-                            .expr
+                        expr.expr
                             .as_ref()
-                            .map(|e| parse_physical_expr(e, registry, &physical_schema));
-                        x.transpose()
+                            .map(|e| parse_physical_expr(e, registry, &physical_schema))
+                            .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let physical_order_by_expr = hash_agg
+                    .order_by_expr
+                    .iter()
+                    .map(|expr| {
+                        expr.sort_expr
+                            .iter()
+                            .map(|e| {
+                                parse_physical_sort_expr(e, registry, &physical_schema)
+                            })
+                            .collect::<Result<Vec<_>>>()
+                            .map(|exprs| (!exprs.is_empty()).then_some(exprs))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 let physical_aggr_expr: Vec<Arc<dyn AggregateExpr>> = hash_agg
                     .aggr_expr
@@ -427,29 +439,37 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
                         match expr_type {
                             ExprType::AggregateExpr(agg_node) => {
-                                let aggr_function =
-                                    protobuf::AggregateFunction::from_i32(
-                                        agg_node.aggr_function,
-                                    )
-                                        .ok_or_else(
-                                            || {
-                                                proto_error(format!(
-                                                    "Received an unknown aggregate function: {}",
-                                                    agg_node.aggr_function
-                                                ))
-                                            },
-                                        )?;
-
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
 
-                                Ok(create_aggregate_expr(
-                                    &aggr_function.into(),
-                                    agg_node.distinct,
-                                    input_phy_expr.as_slice(),
-                                    &physical_schema,
-                                    name.to_string(),
-                                )?)
+                                agg_node.aggregate_function.as_ref().map(|func| {
+                                    match func {
+                                        AggregateFunction::AggrFunction(i) => {
+                                            let aggr_function = protobuf::AggregateFunction::from_i32(*i)
+                                                .ok_or_else(
+                                                    || {
+                                                        proto_error(format!(
+                                                            "Received an unknown aggregate function: {i}"
+                                                        ))
+                                                    },
+                                                )?;
+
+                                            create_aggregate_expr(
+                                                &aggr_function.into(),
+                                                agg_node.distinct,
+                                                input_phy_expr.as_slice(),
+                                                &physical_schema,
+                                                name.to_string(),
+                                            )
+                                        }
+                                        AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
+                                            let agg_udf = registry.udaf(udaf_name)?;
+                                            udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, &physical_schema, name)
+                                        }
+                                    }
+                                }).transpose()?.ok_or_else(|| {
+                                    proto_error("Invalid AggregateExpr, missing aggregate_function")
+                                })
                             }
                             _ => Err(DataFusionError::Internal(
                                 "Invalid aggregate expression for AggregateExec"
@@ -464,22 +484,23 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     PhysicalGroupBy::new(group_expr, null_expr, groups),
                     physical_aggr_expr,
                     physical_filter_expr,
+                    physical_order_by_expr,
                     input,
                     Arc::new((&input_schema).try_into()?),
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hashjoin.left,
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hashjoin.left,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    hashjoin.right,
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &hashjoin.right,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
@@ -568,17 +589,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(UnionExec::new(inputs)))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
-                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    crossjoin.left,
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &crossjoin.left,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
-                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
-                    crossjoin.right,
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan(
+                    &crossjoin.right,
                     registry,
                     runtime,
-                    extension_codec
+                    extension_codec,
                 )?;
                 Ok(Arc::new(CrossJoinExec::new(left, right)))
             }
@@ -588,7 +609,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -635,7 +656,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::SortPreservingMerge(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
+                    into_physical_plan(&sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -884,6 +905,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .map(|expr| expr.to_owned().try_into())
                 .collect::<Result<Vec<_>>>()?;
 
+            let order_by = exec
+                .order_by_expr()
+                .iter()
+                .map(|expr| expr.to_owned().try_into())
+                .collect::<Result<Vec<_>>>()?;
+
             let agg = exec
                 .aggr_expr()
                 .iter()
@@ -933,6 +960,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         group_expr_name: group_names,
                         aggr_expr: agg,
                         filter_expr: filter,
+                        order_by_expr: order_by,
                         aggr_expr_name: agg_names,
                         mode: agg_mode as i32,
                         input: Some(Box::new(input)),
@@ -1208,17 +1236,17 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
     }
 }
 
-#[macro_export]
-macro_rules! into_physical_plan {
-    ($PB:expr, $REG:expr, $RUNTIME:expr, $CODEC:expr) => {{
-        if let Some(field) = $PB.as_ref() {
-            field
-                .as_ref()
-                .try_into_physical_plan($REG, $RUNTIME, $CODEC)
-        } else {
-            Err(proto_error("Missing required field in protobuf"))
-        }
-    }};
+fn into_physical_plan(
+    node: &Option<Box<PhysicalPlanNode>>,
+    registry: &dyn FunctionRegistry,
+    runtime: &RuntimeEnv,
+    extension_codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+    if let Some(field) = node {
+        field.try_into_physical_plan(registry, runtime, extension_codec)
+    } else {
+        Err(proto_error("Missing required field in protobuf"))
+    }
 }
 
 #[cfg(test)]
@@ -1234,26 +1262,30 @@ mod roundtrip_tests {
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
     use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-    use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
+    use datafusion::physical_expr::expressions::in_list;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
-    use datafusion::physical_plan::expressions::{like, BinaryExpr, GetIndexedFieldExpr};
-    use datafusion::physical_plan::functions;
+    use datafusion::physical_plan::expressions::{
+        date_time_interval_expr, like, BinaryExpr, GetIndexedFieldExpr,
+    };
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::physical_plan::{functions, udaf};
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        datasource::listing::PartitionedFile,
+        datasource::{
+            listing::PartitionedFile,
+            physical_plan::{FileScanConfig, ParquetExec},
+        },
         logical_expr::{JoinType, Operator},
         physical_plan::{
             aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
-            expressions::{binary, col, lit, InListExpr, NotExpr},
+            expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
-            file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
             joins::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
@@ -1264,6 +1296,10 @@ mod roundtrip_tests {
         scalar::ScalarValue,
     };
     use datafusion_common::Result;
+    use datafusion_expr::{
+        Accumulator, AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction,
+        Signature, StateTypeFunction,
+    };
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = SessionContext::new();
@@ -1313,12 +1349,8 @@ mod roundtrip_tests {
         let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
         let date_expr = col("some_date", &schema)?;
         let literal_expr = col("some_interval", &schema)?;
-        let date_time_interval_expr = Arc::new(DateTimeIntervalExpr::try_new(
-            date_expr,
-            Operator::Plus,
-            literal_expr,
-            &schema,
-        )?);
+        let date_time_interval_expr =
+            date_time_interval_expr(date_expr, Operator::Plus, literal_expr, &schema)?;
         let plan = Arc::new(ProjectionExec::try_new(
             vec![(date_time_interval_expr, "result".to_string())],
             input,
@@ -1414,9 +1446,82 @@ mod roundtrip_tests {
             PhysicalGroupBy::new_single(groups.clone()),
             aggregates.clone(),
             vec![None],
+            vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
+    }
+
+    #[test]
+    fn roundtrip_aggregate_udaf() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        #[derive(Debug)]
+        struct Example;
+        impl Accumulator for Example {
+            fn state(&self) -> Result<Vec<ScalarValue>> {
+                Ok(vec![ScalarValue::Int64(Some(0))])
+            }
+
+            fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+                Ok(())
+            }
+
+            fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+                Ok(())
+            }
+
+            fn evaluate(&self) -> Result<ScalarValue> {
+                Ok(ScalarValue::Int64(Some(0)))
+            }
+
+            fn size(&self) -> usize {
+                0
+            }
+        }
+
+        let rt_func: ReturnTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(|_| Ok(Box::new(Example)));
+        let st_func: StateTypeFunction =
+            Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
+
+        let udaf = AggregateUDF::new(
+            "example",
+            &Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            &rt_func,
+            &accumulator,
+            &st_func,
+        );
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(udaf.clone());
+
+        let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
+            vec![(col("a", &schema)?, "unused".to_string())];
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![udaf::create_aggregate_expr(
+            &udaf,
+            &[col("b", &schema)?],
+            &schema,
+            "example_agg",
+        )?];
+
+        roundtrip_test_with_context(
+            Arc::new(AggregateExec::try_new(
+                AggregateMode::Final,
+                PhysicalGroupBy::new_single(groups.clone()),
+                aggregates.clone(),
+                vec![None],
+                vec![None],
+                Arc::new(EmptyExec::new(false, schema.clone())),
+                schema,
+            )?),
+            ctx,
+        )
     }
 
     #[test]
@@ -1426,15 +1531,15 @@ mod roundtrip_tests {
         let field_c = Field::new("c", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b, field_c]));
         let not = Arc::new(NotExpr::new(col("a", &schema)?));
-        let in_list = Arc::new(InListExpr::new(
+        let in_list = in_list(
             col("b", &schema)?,
             vec![
                 lit(ScalarValue::Int64(Some(1))),
                 lit(ScalarValue::Int64(Some(2))),
             ],
-            false,
+            &false,
             schema.as_ref(),
-        ));
+        )?;
         let and = binary(not, Operator::And, in_list, &schema)?;
         roundtrip_test(Arc::new(FilterExec::try_new(
             and,
@@ -1524,7 +1629,7 @@ mod roundtrip_tests {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         };
 
@@ -1624,6 +1729,7 @@ mod roundtrip_tests {
             AggregateMode::Final,
             PhysicalGroupBy::new_single(groups),
             aggregates.clone(),
+            vec![None],
             vec![None],
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,

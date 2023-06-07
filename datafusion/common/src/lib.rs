@@ -22,10 +22,12 @@ pub mod delta;
 mod dfschema;
 mod error;
 pub mod from_slice;
+mod join_type;
 pub mod parsers;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 pub mod scalar;
+mod schema_reference;
 pub mod stats;
 mod table_reference;
 pub mod test_util;
@@ -38,7 +40,9 @@ pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,
     SharedResult,
 };
+pub use join_type::{JoinConstraint, JoinType};
 pub use scalar::{ScalarType, ScalarValue};
+pub use schema_reference::{OwnedSchemaReference, SchemaReference};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
 

@@ -253,19 +253,6 @@ pub trait AggregateWindowExpr: WindowExpr {
     }
 }
 
-/// Reverses the ORDER BY expression, which is useful during equivalent window
-/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
-/// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
-    order_bys
-        .iter()
-        .map(|e| PhysicalSortExpr {
-            expr: e.expr.clone(),
-            options: !e.options,
-        })
-        .collect()
-}
-
 #[derive(Debug)]
 pub enum WindowFn {
     Builtin(Box<dyn PartitionEvaluator>),
@@ -400,6 +387,8 @@ pub struct PartitionBatchState {
     pub record_batch: RecordBatch,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
+    /// Number of rows emitted for each partition
+    pub n_out_row: usize,
 }
 
 /// Key for IndexMap for each unique partition

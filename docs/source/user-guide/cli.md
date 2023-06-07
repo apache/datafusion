@@ -21,7 +21,7 @@
 
 The DataFusion CLI is a command-line interactive SQL utility for executing
 queries against any supported data files. It is a convenient way to
-try DataFusion out with your own data sources, and test out its SQL support.
+try DataFusion's SQL support with your own data.
 
 ## Example
 
@@ -100,8 +100,8 @@ this to work.
 
 ```bash
 git clone https://github.com/apache/arrow-datafusion
-git checkout 12.0.0
 cd arrow-datafusion
+git checkout 12.0.0
 docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
 docker run -it -v $(your_data_location):/data datafusion-cli
 ```
@@ -231,6 +231,7 @@ Details of the environment variables that can be used are:
 - AWS_SESSION_TOKEN -> token
 - AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
 - AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
+- AWS_PROFILE -> Support for using a [named profile](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html) to supply credentials
 
 ## Registering OSS Data Sources
 
@@ -357,7 +358,6 @@ Available commands inside DataFusion CLI are:
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 8192    |
 | datafusion.execution.coalesce_batches           | true    |
-| datafusion.execution.coalesce_target_batch_size | 4096    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |
@@ -394,7 +394,6 @@ DataFusion CLI v12.0.0
 +-------------------------------------------------+---------+
 | datafusion.execution.batch_size                 | 1024    |
 | datafusion.execution.coalesce_batches           | true    |
-| datafusion.execution.coalesce_target_batch_size | 4096    |
 | datafusion.execution.time_zone                  | UTC     |
 | datafusion.explain.logical_plan_only            | false   |
 | datafusion.explain.physical_plan_only           | false   |

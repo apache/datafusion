@@ -21,17 +21,18 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
+use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use tokio_stream::StreamExt;
 
 async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -46,6 +47,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len() as usize,
+        e_tag: None,
     };
 
     let schema = ParquetFormat::default()
@@ -75,7 +77,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         },
         Some(predicate),
@@ -713,4 +715,42 @@ async fn prune_decimal_in_list() {
         6,
     )
     .await;
+}
+
+#[tokio::test]
+async fn without_pushdown_filter() {
+    let mut context = ContextWithParquet::new(Scenario::Timestamps, Page).await;
+
+    let output1 = context.query("SELECT * FROM t").await;
+
+    let mut context = ContextWithParquet::new(Scenario::Timestamps, Page).await;
+
+    let output2 = context
+        .query("SELECT * FROM t where nanos < to_timestamp('2023-01-02 01:01:11Z')")
+        .await;
+
+    let bytes_scanned_without_filter = cast_count_metric(
+        output1
+            .parquet_metrics
+            .sum_by_name("bytes_scanned")
+            .unwrap(),
+    )
+    .unwrap();
+    let bytes_scanned_with_filter = cast_count_metric(
+        output2
+            .parquet_metrics
+            .sum_by_name("bytes_scanned")
+            .unwrap(),
+    )
+    .unwrap();
+
+    // Without filter will not read pageIndex.
+    assert!(bytes_scanned_with_filter > bytes_scanned_without_filter);
+}
+
+fn cast_count_metric(metric: MetricValue) -> Option<usize> {
+    match metric {
+        MetricValue::Count { count, .. } => Some(count.value()),
+        _ => None,
+    }
 }

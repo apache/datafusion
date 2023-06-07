@@ -28,21 +28,24 @@ use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::JoinType;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use datafusion::test_util::parquet_test_data;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::Wildcard;
 use datafusion_expr::{
-    avg, col, count, exists, expr, in_subquery, lit, max, scalar_subquery, sum,
-    AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
+    avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col, scalar_subquery,
+    sum, AggregateFunction, Expr, ExprSchemable, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunction,
 };
+use datafusion_physical_expr::var_provider::{VarProvider, VarType};
 
 #[tokio::test]
 async fn test_count_wildcard_on_sort() -> Result<()> {
@@ -241,7 +244,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
             scalar_subquery(Arc::new(
                 ctx.table("t2")
                     .await?
-                    .filter(col("t1.a").eq(col("t2.a")))?
+                    .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
                     .aggregate(vec![], vec![count(lit(COUNT_STAR_EXPANSION))])?
                     .select(vec![count(lit(COUNT_STAR_EXPANSION))])?
                     .into_unoptimized_plan(),
@@ -1228,5 +1231,41 @@ pub async fn register_alltypes_tiny_pages_parquet(ctx: &SessionContext) -> Resul
         ParquetReadOptions::default(),
     )
     .await?;
+    Ok(())
+}
+#[derive(Debug)]
+struct HardcodedIntProvider {}
+
+impl VarProvider for HardcodedIntProvider {
+    fn get_value(&self, _var_names: Vec<String>) -> Result<ScalarValue, DataFusionError> {
+        Ok(ScalarValue::Int64(Some(1234)))
+    }
+
+    fn get_type(&self, _: &[String]) -> Option<DataType> {
+        Some(DataType::Int64)
+    }
+}
+
+#[tokio::test]
+async fn use_var_provider() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("foo", DataType::Int64, false),
+        Field::new("bar", DataType::Int64, false),
+    ]));
+
+    let mem_table = Arc::new(MemTable::try_new(schema, vec![])?);
+
+    let config = SessionConfig::new()
+        .with_target_partitions(4)
+        .set_bool("datafusion.optimizer.skip_failed_rules", false);
+    let ctx = SessionContext::with_config(config);
+
+    ctx.register_table("csv_table", mem_table)?;
+    ctx.register_variable(VarType::UserDefined, Arc::new(HardcodedIntProvider {}));
+
+    let dataframe = ctx
+        .sql("SELECT foo FROM csv_table WHERE bar > @var")
+        .await?;
+    dataframe.collect().await?;
     Ok(())
 }

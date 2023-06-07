@@ -36,7 +36,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
+    Placeholder, ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -365,6 +366,11 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Max => Self::Max,
             AggregateFunction::Sum => Self::Sum,
             AggregateFunction::Avg => Self::Avg,
+            AggregateFunction::BitAnd => Self::BitAnd,
+            AggregateFunction::BitOr => Self::BitOr,
+            AggregateFunction::BitXor => Self::BitXor,
+            AggregateFunction::BoolAnd => Self::BoolAnd,
+            AggregateFunction::BoolOr => Self::BoolOr,
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
@@ -382,6 +388,8 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ApproxMedian => Self::ApproxMedian,
             AggregateFunction::Grouping => Self::Grouping,
             AggregateFunction::Median => Self::Median,
+            AggregateFunction::FirstValue => Self::FirstValueAgg,
+            AggregateFunction::LastValue => Self::LastValueAgg,
         }
     }
 }
@@ -616,6 +624,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref args,
                 ref distinct,
                 ref filter,
+                ref order_by,
             }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -631,6 +640,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
                     AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
+                    AggregateFunction::BitAnd => protobuf::AggregateFunction::BitAnd,
+                    AggregateFunction::BitOr => protobuf::AggregateFunction::BitOr,
+                    AggregateFunction::BitXor => protobuf::AggregateFunction::BitXor,
+                    AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
+                    AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
                     AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
@@ -655,6 +669,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                     AggregateFunction::Median => protobuf::AggregateFunction::Median,
+                    AggregateFunction::FirstValue => {
+                        protobuf::AggregateFunction::FirstValueAgg
+                    }
+                    AggregateFunction::LastValue => {
+                        protobuf::AggregateFunction::LastValueAgg
+                    }
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {
@@ -668,6 +688,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
+                    order_by: match order_by {
+                        Some(e) => e
+                            .iter()
+                            .map(|expr| expr.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => vec![],
+                    },
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
@@ -679,7 +706,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .to_string(),
                 ))
             }
-            Expr::ScalarFunction { ref fun, ref args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
                     .iter()
@@ -694,7 +721,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { fun, args } => Self {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
                     fun_name: fun.name.clone(),
                     args: args
@@ -703,7 +730,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args, filter } => Self {
+            Expr::AggregateUDF(expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            }) => Self {
                 expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
                     protobuf::AggregateUdfExprNode {
                         fun_name: fun.name.clone(),
@@ -715,6 +747,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         filter: match filter {
                             Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                             None => None,
+                        },
+                        order_by: match order_by {
+                            Some(e) => e
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            None => vec![],
                         },
                     },
                 ))),
@@ -873,11 +912,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Negative(expr)),
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::InListNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     list: list
@@ -894,12 +933,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Wildcard(true)),
             },
             Expr::ScalarSubquery(_)
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::Exists { .. }
             | Expr::OuterReferenceColumn { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
             }
             Expr::GetIndexedField(GetIndexedField { key, expr }) => Self {
                 expr_type: Some(ExprType::GetIndexedField(Box::new(
@@ -943,7 +982,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
             },
-            Expr::Placeholder { id, data_type } => {
+            Expr::Placeholder(Placeholder { id, data_type }) => {
                 let data_type = match data_type {
                     Some(data_type) => Some(data_type.try_into()?),
                     None => None,
@@ -1276,6 +1315,9 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Acosh => Self::Acosh,
             BuiltinScalarFunction::Atanh => Self::Atanh,
             BuiltinScalarFunction::Exp => Self::Exp,
+            BuiltinScalarFunction::Factorial => Self::Factorial,
+            BuiltinScalarFunction::Gcd => Self::Gcd,
+            BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Ln => Self::Ln,
             BuiltinScalarFunction::Log10 => Self::Log10,
@@ -1294,7 +1336,21 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
+            BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
+            BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
+            BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
+            BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
+            BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
+            BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
+            BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
+            BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
+            BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
+            BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
+            BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
+            BuiltinScalarFunction::TrimArray => Self::TrimArray,
             BuiltinScalarFunction::NullIf => Self::NullIf,
             BuiltinScalarFunction::DatePart => Self::DatePart,
             BuiltinScalarFunction::DateTrunc => Self::DateTrunc,

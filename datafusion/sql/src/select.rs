@@ -33,8 +33,9 @@ use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
     Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
-use sqlparser::ast::{Expr as SQLExpr, WildcardAdditionalOptions};
-use sqlparser::ast::{Select, SelectItem, TableWithJoins};
+
+use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
+use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -42,7 +43,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
-        select: Select,
+        mut select: Select,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
@@ -61,9 +62,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if !select.sort_by.is_empty() {
             return Err(DataFusionError::NotImplemented("SORT BY".to_string()));
         }
-        if select.into.is_some() {
-            return Err(DataFusionError::NotImplemented("INTO".to_string()));
-        }
 
         // process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
@@ -71,6 +69,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // process `where` clause
         let plan = self.plan_selection(select.selection, plan, planner_context)?;
+
+        // handle named windows before processing the projection expression
+        check_conflicting_windows(&select.named_window)?;
+        match_window_definitions(&mut select.projection, &select.named_window)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
@@ -200,14 +202,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let plan = if select.distinct {
+        let distinct = select
+            .distinct
+            .map(|distinct| match distinct {
+                Distinct::Distinct => Ok(true),
+                Distinct::On(_) => Err(DataFusionError::NotImplemented(
+                    "DISTINCT ON Exprs not supported".to_string(),
+                )),
+            })
+            .transpose()?
+            .unwrap_or(false);
+
+        let plan = if distinct {
             LogicalPlanBuilder::from(plan).distinct()?.build()
         } else {
             Ok(plan)
         }?;
 
         // DISTRIBUTE BY
-        if !select.distribute_by.is_empty() {
+        let plan = if !select.distribute_by.is_empty() {
             let x = select
                 .distribute_by
                 .iter()
@@ -221,10 +234,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
-                .build()
+                .build()?
         } else {
-            Ok(plan)
-        }
+            plan
+        };
+
+        Ok(plan)
     }
 
     fn plan_selection(
@@ -337,7 +352,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(vec![expr])
             }
             SelectItem::Wildcard(options) => {
-                Self::check_wildcard_options(options)?;
+                Self::check_wildcard_options(&options)?;
 
                 if empty_from {
                     return Err(DataFusionError::Plan(
@@ -345,34 +360,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ));
                 }
                 // do not expand from outer schema
-                expand_wildcard(plan.schema().as_ref(), plan)
+                expand_wildcard(plan.schema().as_ref(), plan, Some(options))
             }
             SelectItem::QualifiedWildcard(ref object_name, options) => {
-                Self::check_wildcard_options(options)?;
-
+                Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(&qualifier, plan.schema().as_ref())
+                expand_qualified_wildcard(
+                    &qualifier,
+                    plan.schema().as_ref(),
+                    Some(options),
+                )
             }
         }
     }
 
-    fn check_wildcard_options(options: WildcardAdditionalOptions) -> Result<()> {
+    fn check_wildcard_options(options: &WildcardAdditionalOptions) -> Result<()> {
         let WildcardAdditionalOptions {
-            opt_exclude,
-            opt_except,
+            // opt_exclude is handled
+            opt_exclude: _opt_exclude,
+            opt_except: _opt_except,
             opt_rename,
             opt_replace,
         } = options;
 
-        if opt_exclude.is_some()
-            || opt_except.is_some()
-            || opt_rename.is_some()
-            || opt_replace.is_some()
-        {
+        if opt_rename.is_some() || opt_replace.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with EXCLUDE, EXCEPT, RENAME or REPLACE not supported "
-                    .to_string(),
+                "wildcard * with RENAME or REPLACE not supported ".to_string(),
             ))
         } else {
             Ok(())
@@ -494,4 +508,50 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+}
+
+// If there are any multiple-defined windows, we raise an error.
+fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()> {
+    for (i, window_def_i) in window_defs.iter().enumerate() {
+        for window_def_j in window_defs.iter().skip(i + 1) {
+            if window_def_i.0 == window_def_j.0 {
+                return Err(DataFusionError::Plan(format!(
+                    "The window {} is defined multiple times!",
+                    window_def_i.0
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+// If the projection is done over a named window, that window
+// name must be defined. Otherwise, it gives an error.
+fn match_window_definitions(
+    projection: &mut [SelectItem],
+    named_windows: &[NamedWindowDefinition],
+) -> Result<()> {
+    for proj in projection.iter_mut() {
+        if let SelectItem::ExprWithAlias {
+            expr: SQLExpr::Function(f),
+            alias: _,
+        }
+        | SelectItem::UnnamedExpr(SQLExpr::Function(f)) = proj
+        {
+            for NamedWindowDefinition(window_ident, window_spec) in named_windows.iter() {
+                if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                    if ident.eq(window_ident) {
+                        f.over = Some(WindowType::WindowSpec(window_spec.clone()))
+                    }
+                }
+            }
+            // All named windows must be defined with a WindowSpec.
+            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                return Err(DataFusionError::Plan(format!(
+                    "The window {ident} is not defined!"
+                )));
+            }
+        }
+    }
+    Ok(())
 }

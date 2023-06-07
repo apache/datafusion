@@ -39,8 +39,6 @@ pub use layout::row_supported;
 use std::sync::Arc;
 
 pub mod accessor;
-#[cfg(feature = "jit")]
-pub mod jit;
 pub mod layout;
 pub mod reader;
 mod validity;
@@ -101,6 +99,7 @@ fn get_columns(mut arrays: Vec<Box<dyn ArrayBuilder>>) -> Vec<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::RowLayout;
     use crate::reader::read_as_batch;
     use crate::writer::write_batch_unchecked;
     use arrow::record_batch::RecordBatch;
@@ -115,9 +114,10 @@ mod tests {
                 #[allow(non_snake_case)]
                 fn [<test _single_ $TYPE>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
+                    let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
                     let a = $ARRAY::from($VEC);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-                    let mut vector = vec![0; 1024];
+                    let mut vector = vec![0; record_width * batch.num_rows()];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
                     let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
@@ -129,10 +129,11 @@ mod tests {
                 #[allow(non_snake_case)]
                 fn [<test_single_ $TYPE _null_free>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
+                    let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
                     let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
                     let a = $ARRAY::from(v);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-                    let mut vector = vec![0; 1024];
+                    let mut vector = vec![0; record_width * batch.num_rows()];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
                     let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
@@ -220,6 +221,56 @@ mod tests {
         Date64,
         vec![Some(5), Some(7), None, Some(0), Some(111)]
     );
+
+    #[test]
+    fn test_single_decimal128() -> Result<()> {
+        let v = vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(-1),
+            Some(i128::MIN),
+            Some(i128::MAX),
+        ];
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", Decimal128(38, 10), true)]));
+        let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
+        let a = Decimal128Array::from(v);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; record_width * batch.num_rows()];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
+    fn test_single_decimal128_null_free() -> Result<()> {
+        let v = vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(-1),
+            Some(i128::MIN),
+            Some(i128::MAX),
+        ];
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            Decimal128(38, 10),
+            false,
+        )]));
+        let record_width = RowLayout::new(schema.as_ref()).fixed_part_width();
+        let v = v.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
+        let a = Decimal128Array::from(v);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; record_width * batch.num_rows()];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
 
     #[test]
     #[should_panic(expected = "not supported yet")]

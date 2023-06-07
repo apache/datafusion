@@ -65,6 +65,13 @@ pub struct AggregateFunctionExpr {
     name: String,
 }
 
+impl AggregateFunctionExpr {
+    /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
+    pub fn fun(&self) -> &AggregateUDF {
+        &self.fun
+    }
+}
+
 impl AggregateExpr for AggregateFunctionExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {

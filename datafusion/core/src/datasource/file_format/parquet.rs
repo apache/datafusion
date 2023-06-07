@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
 use datafusion_physical_expr::PhysicalExpr;
+use futures::{StreamExt, TryStreamExt};
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -41,15 +42,18 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
+use crate::datasource::physical_plan::{ParquetExec, SchemaAdapter};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
 /// The default file extension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
+
+/// The number of files to read in parallel when inferring schema
+const SCHEMA_INFERENCE_CONCURRENCY: usize = 32;
 
 /// The Apache Parquet `FileFormat` implementation
 ///
@@ -151,12 +155,12 @@ impl FileFormat for ParquetFormat {
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let mut schemas = Vec::with_capacity(objects.len());
-        for object in objects {
-            let schema =
-                fetch_schema(store.as_ref(), object, self.metadata_size_hint).await?;
-            schemas.push(schema)
-        }
+        let schemas: Vec<_> = futures::stream::iter(objects)
+            .map(|object| fetch_schema(store.as_ref(), object, self.metadata_size_hint))
+            .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
+            .buffered(SCHEMA_INFERENCE_CONCURRENCY)
+            .try_collect()
+            .await?;
 
         let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
@@ -375,7 +379,7 @@ fn summarize_min_max(
 /// This component is a subject to **change** in near future and is exposed for low level integrations
 /// through [`ParquetFileReaderFactory`].
 ///
-/// [`ParquetFileReaderFactory`]: crate::physical_plan::file_format::ParquetFileReaderFactory
+/// [`ParquetFileReaderFactory`]: crate::datasource::physical_plan::ParquetFileReaderFactory
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
@@ -595,7 +599,7 @@ pub(crate) mod test_util {
     }
 
     //// write batches chunk_size rows at a time
-    fn write_in_chunks<W: std::io::Write>(
+    fn write_in_chunks<W: std::io::Write + Send>(
         writer: &mut ArrowWriter<W>,
         batch: &RecordBatch,
         chunk_size: usize,
@@ -614,13 +618,12 @@ mod tests {
     use super::super::test_util::scan_format;
     use crate::physical_plan::collect;
     use std::fmt::{Display, Formatter};
-    use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
-    use crate::physical_plan::file_format::get_scan_files;
+    use crate::datasource::physical_plan::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
@@ -637,7 +640,7 @@ mod tests {
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetResult, ListResult, MultipartId};
+    use object_store::{GetOptions, GetResult, ListResult, MultipartId};
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
@@ -735,17 +738,13 @@ mod tests {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn get_range(
+        async fn get_opts(
             &self,
             location: &Path,
-            range: Range<usize>,
-        ) -> object_store::Result<Bytes> {
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
-            self.inner.get_range(location, range).await
+            self.inner.get_opts(location, options).await
         }
 
         async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
@@ -1201,7 +1200,7 @@ mod tests {
                 .unwrap()
                 .metadata()
                 .clone();
-        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+        check_page_index_validation(builder.column_index(), builder.offset_index());
 
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await.unwrap();
@@ -1211,7 +1210,7 @@ mod tests {
             .unwrap()
             .metadata()
             .clone();
-        check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
+        check_page_index_validation(builder.column_index(), builder.offset_index());
 
         Ok(())
     }

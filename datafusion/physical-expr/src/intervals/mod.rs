@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Interval calculations
-//!
+//! Interval arithmetic and constraint propagation library
 
 pub mod cp_solver;
 pub mod interval_aritmetic;
+pub mod rounding;
 
 pub mod test_utils;
 pub use cp_solver::{check_support, ExprIntervalGraph};

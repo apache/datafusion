@@ -17,7 +17,10 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{AggregateFunction, BinaryExpr, Cast, GroupingSet, TryCast};
+use crate::expr::{
+    AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
+    ScalarFunction, TryCast,
+};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -45,6 +48,12 @@ use std::sync::Arc;
 /// ```
 pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
+}
+
+/// Create an out reference column which hold a reference that has been resolved to a field
+/// outside of the current plan.
+pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
+    Expr::OuterReferenceColumn(dt, ident.into())
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing
@@ -99,6 +108,7 @@ pub fn min(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
+        None,
     ))
 }
 
@@ -108,6 +118,7 @@ pub fn max(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Max,
         vec![expr],
         false,
+        None,
         None,
     ))
 }
@@ -119,6 +130,7 @@ pub fn sum(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
+        None,
     ))
 }
 
@@ -129,6 +141,7 @@ pub fn avg(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
+        None,
     ))
 }
 
@@ -138,6 +151,7 @@ pub fn count(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Count,
         vec![expr],
         false,
+        None,
         None,
     ))
 }
@@ -194,24 +208,21 @@ pub fn count_distinct(expr: Expr) -> Expr {
         vec![expr],
         true,
         None,
+        None,
     ))
 }
 
 /// Create an in_list expression
 pub fn in_list(expr: Expr, list: Vec<Expr>, negated: bool) -> Expr {
-    Expr::InList {
-        expr: Box::new(expr),
-        list,
-        negated,
-    }
+    Expr::InList(InList::new(Box::new(expr), list, negated))
 }
 
 /// Concatenates the text representations of all the arguments. NULL arguments are ignored.
 pub fn concat(args: &[Expr]) -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Concat,
-        args: args.to_vec(),
-    }
+    Expr::ScalarFunction(ScalarFunction::new(
+        BuiltinScalarFunction::Concat,
+        args.to_vec(),
+    ))
 }
 
 /// Concatenates all but the first argument, with separators.
@@ -220,26 +231,20 @@ pub fn concat(args: &[Expr]) -> Expr {
 pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
     let mut args = values;
     args.insert(0, sep);
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::ConcatWithSeparator,
+    Expr::ScalarFunction(ScalarFunction::new(
+        BuiltinScalarFunction::ConcatWithSeparator,
         args,
-    }
+    ))
 }
 
 /// Returns an approximate value of π
 pub fn pi() -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Pi,
-        args: vec![],
-    }
+    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Pi, vec![]))
 }
 
 /// Returns a random value in the range 0.0 <= x < 1.0
 pub fn random() -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Random,
-        args: vec![],
-    }
+    Expr::ScalarFunction(ScalarFunction::new(BuiltinScalarFunction::Random, vec![]))
 }
 
 /// Returns the approximate number of distinct input values.
@@ -255,6 +260,7 @@ pub fn approx_distinct(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
+        None,
     ))
 }
 
@@ -264,6 +270,7 @@ pub fn median(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Median,
         vec![expr],
         false,
+        None,
         None,
     ))
 }
@@ -275,6 +282,7 @@ pub fn approx_median(expr: Expr) -> Expr {
         vec![expr],
         false,
         None,
+        None,
     ))
 }
 
@@ -284,6 +292,7 @@ pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
         aggregate_function::AggregateFunction::ApproxPercentileCont,
         vec![expr, percentile],
         false,
+        None,
         None,
     ))
 }
@@ -299,60 +308,66 @@ pub fn approx_percentile_cont_with_weight(
         vec![expr, weight_expr, percentile],
         false,
         None,
+        None,
     ))
 }
 
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::Exists {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
+    Expr::Exists(Exists {
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: false,
-    }
+    })
 }
 
 /// Create a NOT EXISTS subquery expression
 pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::Exists {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
+    Expr::Exists(Exists {
         subquery: Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
         negated: true,
-    }
+    })
 }
 
 /// Create an IN subquery expression
 pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::InSubquery {
-        expr: Box::new(expr),
-        subquery: Subquery {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
+    Expr::InSubquery(InSubquery::new(
+        Box::new(expr),
+        Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
-        negated: false,
-    }
+        false,
+    ))
 }
 
 /// Create a NOT IN subquery expression
 pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::InSubquery {
-        expr: Box::new(expr),
-        subquery: Subquery {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
+    Expr::InSubquery(InSubquery::new(
+        Box::new(expr),
+        Subquery {
             subquery,
-            outer_ref_columns: vec![],
+            outer_ref_columns,
         },
-        negated: true,
-    }
+        true,
+    ))
 }
 
 /// Create a scalar subquery expression
 pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
+    let outer_ref_columns = subquery.all_out_ref_exprs();
     Expr::ScalarSubquery(Subquery {
         subquery,
-        outer_ref_columns: vec![],
+        outer_ref_columns,
     })
 }
 
@@ -362,6 +377,7 @@ pub fn stddev(expr: Expr) -> Expr {
         aggregate_function::AggregateFunction::Stddev,
         vec![expr],
         false,
+        None,
         None,
     ))
 }
@@ -430,10 +446,10 @@ macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
         #[doc = $DOC ]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
-            Expr::ScalarFunction {
-                fun: built_in_function::BuiltinScalarFunction::$ENUM,
-                args: vec![$($arg),*],
-            }
+            Expr::ScalarFunction(ScalarFunction::new(
+                built_in_function::BuiltinScalarFunction::$ENUM,
+                vec![$($arg),*],
+            ))
         }
     };
 }
@@ -442,10 +458,10 @@ macro_rules! nary_scalar_expr {
     ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
         #[doc = $DOC ]
         pub fn $FUNC(args: Vec<Expr>) -> Expr {
-            Expr::ScalarFunction {
-                fun: built_in_function::BuiltinScalarFunction::$ENUM,
+            Expr::ScalarFunction(ScalarFunction::new(
+                built_in_function::BuiltinScalarFunction::$ENUM,
                 args,
-            }
+            ))
         }
     };
 }
@@ -467,6 +483,7 @@ scalar_expr!(Atan, atan, num, "inverse tangent");
 scalar_expr!(Asinh, asinh, num, "inverse hyperbolic sine");
 scalar_expr!(Acosh, acosh, num, "inverse hyperbolic cosine");
 scalar_expr!(Atanh, atanh, num, "inverse hyperbolic tangent");
+scalar_expr!(Factorial, factorial, num, "factorial");
 scalar_expr!(
     Floor,
     floor,
@@ -486,6 +503,8 @@ scalar_expr!(Trunc, trunc, num, "truncate toward zero");
 scalar_expr!(Abs, abs, num, "absolute value");
 scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
 scalar_expr!(Exp, exp, num, "exponential");
+scalar_expr!(Gcd, gcd, arg_1 arg_2, "greatest common divisor");
+scalar_expr!(Lcm, lcm, arg_1 arg_2, "least common multiple");
 scalar_expr!(Log2, log2, num, "base 2 logarithm");
 scalar_expr!(Log10, log10, num, "base 10 logarithm");
 scalar_expr!(Ln, ln, num, "natural logarithm");
@@ -500,6 +519,92 @@ scalar_expr!(
 );
 scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
 scalar_expr!(Log, log, base x, "logarithm of a `x` for a particular `base`");
+
+// array functions
+scalar_expr!(
+    ArrayAppend,
+    array_append,
+    array element,
+    "appends an element to the end of an array."
+);
+nary_scalar_expr!(ArrayConcat, array_concat, "concatenates arrays.");
+scalar_expr!(
+    ArrayDims,
+    array_dims,
+    array,
+    "returns an array of the array's dimensions."
+);
+scalar_expr!(
+    ArrayFill,
+    array_fill,
+    element array,
+    "returns an array filled with copies of the given value."
+);
+scalar_expr!(
+    ArrayLength,
+    array_length,
+    array dimension,
+    "returns the length of the array dimension."
+);
+scalar_expr!(
+    ArrayNdims,
+    array_ndims,
+    array,
+    "returns the number of dimensions of the array."
+);
+scalar_expr!(
+    ArrayPosition,
+    array_position,
+    array element index,
+    "searches for an element in the array, returns first occurrence."
+);
+scalar_expr!(
+    ArrayPositions,
+    array_positions,
+    array element,
+    "searches for an element in the array, returns all occurrences."
+);
+scalar_expr!(
+    ArrayPrepend,
+    array_prepend,
+    array element,
+    "prepends an element to the beginning of an array."
+);
+scalar_expr!(
+    ArrayRemove,
+    array_remove,
+    array element,
+    "removes all elements equal to the given value from the array."
+);
+scalar_expr!(
+    ArrayReplace,
+    array_replace,
+    array from to,
+    "replaces a specified element with another specified element."
+);
+scalar_expr!(
+    ArrayToString,
+    array_to_string,
+    array delimeter,
+    "converts each element to its text representation."
+);
+scalar_expr!(
+    Cardinality,
+    cardinality,
+    array,
+    "returns the total number of elements in the array."
+);
+nary_scalar_expr!(
+    MakeArray,
+    array,
+    "returns an Arrow array using the specified input expressions."
+);
+scalar_expr!(
+    TrimArray,
+    trim_array,
+    array n,
+    "removes the last n elements from the array."
+);
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
@@ -591,11 +696,6 @@ nary_scalar_expr!(
     btrim,
     "removes all characters, spaces by default, from both sides of a string"
 );
-nary_scalar_expr!(
-    MakeArray,
-    array,
-    "returns an array of fixed size with each argument on it."
-);
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(
@@ -672,7 +772,6 @@ pub fn create_udf(
 
 /// Creates a new UDAF with a specific signature, state type and return type.
 /// The signature and state type must match the `Accumulator's implementation`.
-#[allow(clippy::rc_buffer)]
 pub fn create_udaf(
     name: &str,
     input_type: DataType,
@@ -701,7 +800,7 @@ pub fn create_udaf(
 /// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<BuiltinScalarFunction>() {
-        Ok(fun) => Ok(Expr::ScalarFunction { fun, args }),
+        Ok(fun) => Ok(Expr::ScalarFunction(ScalarFunction::new(fun, args))),
         Err(e) => Err(e),
     }
 }
@@ -724,7 +823,9 @@ mod test {
 
     macro_rules! test_unary_scalar_expr {
         ($ENUM:ident, $FUNC:ident) => {{
-            if let Expr::ScalarFunction { fun, args } = $FUNC(col("tableA.a")) {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+                $FUNC(col("tableA.a"))
+            {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(1, args.len());
@@ -742,7 +843,7 @@ mod test {
                     col(stringify!($arg.to_string()))
                 ),*
             );
-            if let Expr::ScalarFunction { fun, args } = result {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(expected.len(), args.len());
@@ -762,7 +863,7 @@ mod test {
                     ),*
                 ]
             );
-            if let Expr::ScalarFunction { fun, args } = result {
+            if let Expr::ScalarFunction(ScalarFunction { fun, args }) = result {
                 let name = built_in_function::BuiltinScalarFunction::$ENUM;
                 assert_eq!(name, fun);
                 assert_eq!(expected.len(), args.len());
@@ -788,6 +889,7 @@ mod test {
         test_unary_scalar_expr!(Asinh, asinh);
         test_unary_scalar_expr!(Acosh, acosh);
         test_unary_scalar_expr!(Atanh, atanh);
+        test_unary_scalar_expr!(Factorial, factorial);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
         test_unary_scalar_expr!(Degrees, degrees);
@@ -810,6 +912,8 @@ mod test {
         test_scalar_expr!(CharacterLength, character_length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
+        test_scalar_expr!(Gcd, gcd, arg_1, arg_2);
+        test_scalar_expr!(Lcm, lcm, arg_1, arg_2);
         test_scalar_expr!(InitCap, initcap, string);
         test_scalar_expr!(Left, left, string, count);
         test_scalar_expr!(Lower, lower, string);
@@ -861,13 +965,28 @@ mod test {
         test_scalar_expr!(DateBin, date_bin, stride, source, origin);
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
+        test_scalar_expr!(ArrayAppend, array_append, array, element);
+        test_unary_scalar_expr!(ArrayDims, array_dims);
+        test_scalar_expr!(ArrayFill, array_fill, element, array);
+        test_scalar_expr!(ArrayLength, array_length, array, dimension);
+        test_unary_scalar_expr!(ArrayNdims, array_ndims);
+        test_scalar_expr!(ArrayPosition, array_position, array, element, index);
+        test_scalar_expr!(ArrayPositions, array_positions, array, element);
+        test_scalar_expr!(ArrayPrepend, array_prepend, array, element);
+        test_scalar_expr!(ArrayRemove, array_remove, array, element);
+        test_scalar_expr!(ArrayReplace, array_replace, array, from, to);
+        test_scalar_expr!(ArrayToString, array_to_string, array, delimiter);
+        test_unary_scalar_expr!(Cardinality, cardinality);
+        test_nary_scalar_expr!(MakeArray, array, input);
+        test_scalar_expr!(TrimArray, trim_array, array, n);
+
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
     }
 
     #[test]
     fn uuid_function_definitions() {
-        if let Expr::ScalarFunction { fun, args } = uuid() {
-            let name = built_in_function::BuiltinScalarFunction::Uuid;
+        if let Expr::ScalarFunction(ScalarFunction { fun, args }) = uuid() {
+            let name = BuiltinScalarFunction::Uuid;
             assert_eq!(name, fun);
             assert_eq!(0, args.len());
         } else {
@@ -877,7 +996,9 @@ mod test {
 
     #[test]
     fn digest_function_definitions() {
-        if let Expr::ScalarFunction { fun, args } = digest(col("tableA.a"), lit("md5")) {
+        if let Expr::ScalarFunction(ScalarFunction { fun, args }) =
+            digest(col("tableA.a"), lit("md5"))
+        {
             let name = BuiltinScalarFunction::Digest;
             assert_eq!(name, fun);
             assert_eq!(2, args.len());

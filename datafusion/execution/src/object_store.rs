@@ -117,7 +117,9 @@ impl std::fmt::Display for ObjectStoreUrl {
 /// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
 /// lazily by providing a custom implementation of [`ObjectStoreRegistry`]
 ///
-/// [`ListingTableUrl`]: crate::datasource::listing::ListingTableUrl
+/// <!-- is in a different crate so normal rustdoc links don't work -->
+/// [`ListingTableUrl`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTableUrl.html
+/// [`ObjectStore`]: object_store::ObjectStore
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(

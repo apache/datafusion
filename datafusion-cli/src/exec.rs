@@ -19,7 +19,7 @@
 
 use crate::{
     command::{Command, OutputFormat},
-    helper::CliHelper,
+    helper::{unescape_input, CliHelper},
     object_storage::{
         get_gcs_object_store_builder, get_oss_object_store_builder,
         get_s3_object_store_builder,
@@ -29,7 +29,7 @@ use crate::{
 use datafusion::{
     datasource::listing::ListingTableUrl,
     error::{DataFusionError, Result},
-    logical_expr::CreateExternalTable,
+    logical_expr::{CreateExternalTable, DdlStatement},
 };
 use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
 use object_store::ObjectStore;
@@ -58,9 +58,12 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options, query).await {
-                        Ok(_) => {}
-                        Err(err) => println!("{err}"),
+                    match unescape_input(line) {
+                        Ok(sql) => match exec_and_print(ctx, print_options, sql).await {
+                            Ok(_) => {}
+                            Err(err) => eprintln!("{err}"),
+                        },
+                        Err(err) => eprintln!("{err}"),
                     }
                     query = "".to_owned();
                 } else {
@@ -102,7 +105,7 @@ pub async fn exec_from_repl(
     ctx: &mut SessionContext,
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
-    let mut rl = Editor::<CliHelper>::new()?;
+    let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::default()));
     rl.load_history(".history").ok();
 
@@ -111,7 +114,7 @@ pub async fn exec_from_repl(
     loop {
         match rl.readline("❯ ") {
             Ok(line) if line.starts_with('\\') => {
-                rl.add_history_entry(line.trim_end());
+                rl.add_history_entry(line.trim_end())?;
                 let command = line.split_whitespace().collect::<Vec<_>>().join(" ");
                 if let Ok(cmd) = &command[1..].parse::<Command>() {
                     match cmd {
@@ -145,9 +148,12 @@ pub async fn exec_from_repl(
                 }
             }
             Ok(line) => {
-                rl.add_history_entry(line.trim_end());
-                match exec_and_print(ctx, &print_options, line).await {
-                    Ok(_) => {}
+                rl.add_history_entry(line.trim_end())?;
+                match unescape_input(&line) {
+                    Ok(sql) => match exec_and_print(ctx, &print_options, sql).await {
+                        Ok(_) => {}
+                        Err(err) => eprintln!("{err}"),
+                    },
                     Err(err) => eprintln!("{err}"),
                 }
             }
@@ -178,8 +184,8 @@ async fn exec_and_print(
 
     let plan = ctx.state().create_logical_plan(&sql).await?;
     let df = match &plan {
-        LogicalPlan::CreateExternalTable(cmd) => {
-            create_external_table(&ctx, cmd)?;
+        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+            create_external_table(ctx, cmd).await?;
             ctx.execute_logical_plan(plan).await?
         }
         _ => ctx.execute_logical_plan(plan).await?,
@@ -191,7 +197,10 @@ async fn exec_and_print(
     Ok(())
 }
 
-fn create_external_table(ctx: &SessionContext, cmd: &CreateExternalTable) -> Result<()> {
+async fn create_external_table(
+    ctx: &SessionContext,
+    cmd: &CreateExternalTable,
+) -> Result<()> {
     let table_path = ListingTableUrl::parse(&cmd.location)?;
     let scheme = table_path.scheme();
     let url: &Url = table_path.as_ref();
@@ -199,7 +208,7 @@ fn create_external_table(ctx: &SessionContext, cmd: &CreateExternalTable) -> Res
     // registering the cloud object store dynamically using cmd.options
     let store = match scheme {
         "s3" => {
-            let builder = get_s3_object_store_builder(url, cmd)?;
+            let builder = get_s3_object_store_builder(url, cmd).await?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "oss" => {
@@ -238,8 +247,8 @@ mod tests {
         let plan = ctx.state().create_logical_plan(&sql).await?;
 
         match &plan {
-            LogicalPlan::CreateExternalTable(cmd) => {
-                create_external_table(&ctx, cmd)?;
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+                create_external_table(&ctx, cmd).await?;
             }
             _ => assert!(false),
         };
@@ -318,7 +327,7 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("A configuration file was passed"));
+        assert!(err.to_string().contains("No such file or directory"));
 
         Ok(())
     }

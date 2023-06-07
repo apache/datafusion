@@ -18,14 +18,13 @@
 //! Stream and channel implementations for window function expressions.
 
 use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::transpose;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::windows::{
-    calc_requirements, get_ordered_partition_by_indices,
+    calc_requirements, get_ordered_partition_by_indices, window_ordering_equivalence,
 };
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
@@ -42,7 +41,8 @@ use arrow::{
 };
 use datafusion_common::utils::{evaluate_partition_ranges, get_at_indices};
 use datafusion_common::DataFusionError;
-use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
@@ -144,8 +144,8 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
@@ -189,6 +189,11 @@ impl ExecutionPlan for WindowAggExec {
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input().equivalence_properties()
+    }
+
+    /// Get the OrderingEquivalenceProperties within the plan
+    fn ordering_equivalence_properties(&self) -> OrderingEquivalenceProperties {
+        window_ordering_equivalence(&self.schema, &self.input, &self.window_expr)
     }
 
     fn with_new_children(

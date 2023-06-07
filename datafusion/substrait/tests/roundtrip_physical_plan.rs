@@ -20,8 +20,8 @@ mod tests {
     use datafusion::arrow::datatypes::Schema;
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::object_store::ObjectStoreUrl;
+    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use datafusion::error::Result;
-    use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use datafusion::physical_plan::{displayable, ExecutionPlan};
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::physical_plan::{consumer, producer};
@@ -48,7 +48,7 @@ mod tests {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         };
         let parquet_exec: Arc<dyn ExecutionPlan> =

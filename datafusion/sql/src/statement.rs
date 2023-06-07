@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::parser::{
-    CreateExternalTable, DFParser, DescribeTableStmt, Statement as DFStatement,
+    CopyToStatement, CreateExternalTable, DFParser, DescribeTableStmt, LexOrdering,
+    Statement as DFStatement,
 };
 use crate::planner::{
     object_name_to_qualifier, ContextProvider, PlannerContext, SqlToRel,
@@ -26,27 +27,29 @@ use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, TableReference, ToDFSchema,
+    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
+use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DescribeTable, DmlStatement, DropTable, DropView, EmptyRelation, Explain,
-    ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropTable, DropView, EmptyRelation,
+    Explain, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, PlanType, Prepare,
     SetVariable, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
-    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, OrderByExpr, Query,
-    SchemaName, SetExpr, ShowCreateObject, ShowStatementFilter, Statement,
-    TableConstraint, TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query, SchemaName,
+    SetExpr, ShowCreateObject, ShowStatementFilter, Statement, TableConstraint,
+    TableFactor, TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 
+use datafusion_expr::expr::Placeholder;
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -83,6 +86,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::DescribeTableStmt(s) => self.describe_table_to_plan(s),
+            DFStatement::CopyTo(s) => self.copy_to_plan(s),
         }
     }
 
@@ -159,13 +163,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         plan
                     };
 
-                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name: self.object_name_to_table_reference(name)?,
-                        primary_key,
-                        input: Arc::new(plan),
-                        if_not_exists,
-                        or_replace,
-                    }))
+                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        CreateMemoryTable {
+                            name: self.object_name_to_table_reference(name)?,
+                            primary_key,
+                            input: Arc::new(plan),
+                            if_not_exists,
+                            or_replace,
+                        },
+                    )))
                 }
 
                 None => {
@@ -178,13 +184,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     };
                     let plan = LogicalPlan::EmptyRelation(plan);
 
-                    Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name: self.object_name_to_table_reference(name)?,
-                        primary_key,
-                        input: Arc::new(plan),
-                        if_not_exists,
-                        or_replace,
-                    }))
+                    Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                        CreateMemoryTable {
+                            name: self.object_name_to_table_reference(name)?,
+                            primary_key,
+                            input: Arc::new(plan),
+                            if_not_exists,
+                            or_replace,
+                        },
+                    )))
                 }
             },
 
@@ -199,12 +207,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
-                Ok(LogicalPlan::CreateView(CreateView {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: self.object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
-                }))
+                })))
             }
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
                 ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
@@ -215,25 +223,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::CreateSchema {
                 schema_name,
                 if_not_exists,
-            } => Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name: get_schema_name(&schema_name),
-                if_not_exists,
-                schema: Arc::new(DFSchema::empty()),
-            })),
+            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name: get_schema_name(&schema_name),
+                    if_not_exists,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            ))),
             Statement::CreateDatabase {
                 db_name,
                 if_not_exists,
                 ..
-            } => Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                catalog_name: object_name_to_string(&db_name),
-                if_not_exists,
-                schema: Arc::new(DFSchema::empty()),
-            })),
+            } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                CreateCatalog {
+                    catalog_name: object_name_to_string(&db_name),
+                    if_not_exists,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            ))),
             Statement::Drop {
                 object_type,
                 if_exists,
                 mut names,
-                cascade: _,
+                cascade,
                 restrict: _,
                 purge: _,
             } => {
@@ -249,18 +261,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }?;
 
                 match object_type {
-                    ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
-                        name,
-                        if_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
-                    ObjectType::View => Ok(LogicalPlan::DropView(DropView {
-                        name,
-                        if_exists,
-                        schema: DFSchemaRef::new(DFSchema::empty()),
-                    })),
+                    ObjectType::Table => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
+                            name,
+                            if_exists,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))
+                    }
+                    ObjectType::View => {
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                            name,
+                            if_exists,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))
+                    }
+                    ObjectType::Schema => {
+                        let name = match name {
+                            TableReference::Bare { table } => Ok(SchemaReference::Bare { schema: table } ) ,
+                            TableReference::Partial { schema, table } => Ok(SchemaReference::Full { schema: table,catalog: schema }),
+                            TableReference::Full { catalog: _, schema: _, table: _ } => {
+                                Err(ParserError("Invalid schema specifier (has 3 parts)".to_string()))
+                            },
+                        }?;
+                        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(DropCatalogSchema {
+                            name,
+                            if_exists,
+                            cascade,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        })))},
                     _ => Err(DataFusionError::NotImplemented(
-                        "Only `DROP TABLE/VIEW  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
                             .to_string(),
                     )),
                 }
@@ -374,11 +404,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             Statement::Delete {
-                table_name,
+                tables,
                 using,
                 selection,
                 returning,
+                from,
             } => {
+                if !tables.is_empty() {
+                    return Err(DataFusionError::NotImplemented(
+                        "DELETE <TABLE> not supported".to_string(),
+                    ));
+                }
+
                 if using.is_some() {
                     Err(DataFusionError::Plan(
                         "Using clause not supported".to_owned(),
@@ -389,6 +426,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         "Delete-returning clause not yet supported".to_owned(),
                     ))?;
                 }
+                let table_name = self.get_delete_target(from)?;
                 self.delete_to_plan(table_name, selection)
             }
 
@@ -463,6 +501,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    fn get_delete_target(&self, mut from: Vec<TableWithJoins>) -> Result<ObjectName> {
+        if from.len() != 1 {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got {}: {from:?}",
+                from.len()
+            )));
+        }
+        let table_factor = from.pop().unwrap();
+        if !table_factor.joins.is_empty() {
+            return Err(DataFusionError::NotImplemented(
+                "DELETE FROM only supports single table, got: joins".to_string(),
+            ));
+        }
+        let TableFactor::Table{name, ..} = table_factor.relation else {
+            return Err(DataFusionError::NotImplemented(format!(
+                "DELETE FROM only supports single table, got: {table_factor:?}"
+            )))
+        };
+
+        Ok(name)
+    }
+
     /// Generate a logical plan from a "SHOW TABLES" query
     fn show_tables_to_plan(
         &self,
@@ -509,12 +569,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
+    fn copy_to_plan(&self, _statement: CopyToStatement) -> Result<LogicalPlan> {
+        // TODO: implement as part of https://github.com/apache/arrow-datafusion/issues/5654
+        Err(DataFusionError::NotImplemented(
+            "`COPY .. TO ..` statement is not yet supported".to_string(),
+        ))
+    }
+
     fn build_order_by(
         &self,
-        order_exprs: Vec<OrderByExpr>,
+        order_exprs: Vec<LexOrdering>,
         schema: &DFSchemaRef,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<datafusion_expr::Expr>> {
+    ) -> Result<Vec<Vec<datafusion_expr::Expr>>> {
         // Ask user to provide a schema if schema is empty.
         if !order_exprs.is_empty() && schema.fields().is_empty() {
             return Err(DataFusionError::Plan(
@@ -522,25 +589,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_owned(),
             ));
         }
-        // Convert each OrderByExpr to a SortExpr:
-        let result = order_exprs
-            .into_iter()
-            .map(|e| self.order_by_to_sort_expr(e, schema, planner_context))
-            .collect::<Result<Vec<_>>>()?;
-        // Verify that columns of all SortExprs exist in the schema:
-        for expr in result.iter() {
-            for column in expr.to_columns()?.iter() {
-                if !schema.has_column(column) {
-                    // Return an error if any column is not in the schema:
-                    return Err(DataFusionError::Plan(format!(
-                        "Column {column} is not in schema"
-                    )));
+
+        let mut all_results = vec![];
+        for expr in order_exprs {
+            // Convert each OrderByExpr to a SortExpr:
+            let expr_vec = self.order_by_to_sort_expr(&expr, schema, planner_context)?;
+            // Verify that columns of all SortExprs exist in the schema:
+            for expr in expr_vec.iter() {
+                for column in expr.to_columns()?.iter() {
+                    if !schema.has_column(column) {
+                        // Return an error if any column is not in the schema:
+                        return Err(DataFusionError::Plan(format!(
+                            "Column {column} is not in schema"
+                        )));
+                    }
                 }
             }
+            // If all SortExprs are valid, return them as an expression vector
+            all_results.push(expr_vec)
         }
-
-        // If all SortExprs are valid, return them as an expression vector
-        Ok(result)
+        Ok(all_results)
     }
 
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
@@ -560,6 +628,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             file_compression_type,
             order_exprs,
+            unbounded,
             options,
         } = statement;
 
@@ -588,20 +657,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // External tables do not support schemas at the moment, so the name is just a table name
         let name = OwnedTableReference::bare(name);
 
-        Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
-            schema: df_schema,
-            name,
-            location,
-            file_type,
-            has_header,
-            delimiter,
-            table_partition_cols,
-            if_not_exists,
-            definition,
-            file_compression_type,
-            order_exprs: ordered_exprs,
-            options,
-        }))
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+            PlanCreateExternalTable {
+                schema: df_schema,
+                name,
+                location,
+                file_type,
+                has_header,
+                delimiter,
+                table_partition_cols,
+                if_not_exists,
+                definition,
+                file_compression_type,
+                order_exprs: ordered_exprs,
+                unbounded,
+                options,
+            },
+        )))
     }
 
     /// Generate a plan for EXPLAIN ... that will print out a plan
@@ -748,16 +820,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn delete_to_plan(
         &self,
-        table_factor: TableFactor,
+        table_name: ObjectName,
         predicate_expr: Option<Expr>,
     ) -> Result<LogicalPlan> {
-        let table_name = match &table_factor {
-            TableFactor::Table { name, .. } => name.clone(),
-            _ => Err(DataFusionError::Plan(
-                "Cannot delete from non-table relations!".to_string(),
-            ))?,
-        };
-
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let provider = self.schema_provider.get_table_provider(table_ref.clone())?;
@@ -873,16 +938,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         for (col_name, expr) in values.into_iter() {
             let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
             let expr = match expr {
-                datafusion_expr::Expr::Placeholder {
+                datafusion_expr::Expr::Placeholder(Placeholder {
                     ref id,
                     ref data_type,
-                } => match data_type {
+                }) => match data_type {
                     None => {
                         let dt = table_schema.data_type(&Column::from_name(&col_name))?;
-                        datafusion_expr::Expr::Placeholder {
-                            id: id.clone(),
-                            data_type: Some(dt.clone()),
-                        }
+                        datafusion_expr::Expr::Placeholder(Placeholder::new(
+                            id.clone(),
+                            Some(dt.clone()),
+                        ))
                     }
                     Some(_) => expr,
                 },

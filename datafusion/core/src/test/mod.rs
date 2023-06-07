@@ -21,11 +21,11 @@ use crate::arrow::array::UInt32Array;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_expr::LogicalPlan;
-use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
@@ -195,7 +195,7 @@ pub fn partitioned_csv_config(
         projection: None,
         limit: None,
         table_partition_cols: vec![],
-        output_ordering: None,
+        output_ordering: vec![],
         infinite_source: false,
     })
 }
@@ -344,7 +344,7 @@ pub fn csv_exec_sorted(
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: Some(sort_exprs),
+            output_ordering: vec![sort_exprs],
             infinite_source,
         },
         false,

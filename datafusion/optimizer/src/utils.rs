@@ -22,18 +22,16 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
-use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::expr_rewriter::{replace_col, strip_outer_reference};
 use datafusion_expr::logical_plan::LogicalPlanBuilder;
-use datafusion_expr::utils::{
-    check_all_columns_from_schema, from_plan, inspect_expr_pre,
-};
+use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
     Expr, Operator,
 };
 use log::{debug, trace};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -226,33 +224,6 @@ pub fn unalias(expr: Expr) -> Expr {
     }
 }
 
-/// Recursively scans a slice of expressions for any `Or` operators
-///
-/// # Arguments
-///
-/// * `predicates` - the expressions to scan
-///
-/// # Return value
-///
-/// A PlanError if a disjunction is found
-pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
-    // recursively check for unallowed predicates in expr
-    fn check(expr: &&Expr) -> Result<()> {
-        inspect_expr_pre(expr, |expr| match expr {
-            Expr::BinaryExpr(BinaryExpr {
-                left: _,
-                op: Operator::Or,
-                right: _,
-            }) => {
-                plan_err!("Optimizing disjunctions not supported!")
-            }
-            _ => Ok(()),
-        })
-    }
-
-    predicates.iter().try_for_each(check)
-}
-
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
 /// its predicate be all `predicates` ANDed.
 pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan> {
@@ -270,139 +241,32 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan
     )?))
 }
 
-/// Looks for correlating expressions: equality expressions with one field from the subquery, and
+/// Looks for correlating expressions: for example, a binary expression with one field from the subquery, and
 /// one not in the subquery (closed upon from outer scope)
 ///
 /// # Arguments
 ///
 /// * `exprs` - List of expressions that may or may not be joins
-/// * `schema` - HashSet of fully qualified (table.col) fields in subquery schema
 ///
 /// # Return value
 ///
 /// Tuple of (expressions containing joins, remaining non-join expressions)
-pub fn find_join_exprs(
-    exprs: Vec<&Expr>,
-    schema: &DFSchemaRef,
-) -> Result<(Vec<Expr>, Vec<Expr>)> {
-    let fields: HashSet<_> = schema
-        .fields()
-        .iter()
-        .map(|it| it.qualified_name())
-        .collect();
-
+pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
     let mut joins = vec![];
     let mut others = vec![];
-    for filter in exprs.iter() {
+    for filter in exprs.into_iter() {
         // If the expression contains correlated predicates, add it to join filters
         if filter.contains_outer() {
-            joins.push(strip_outer_reference((*filter).clone()));
-        } else {
-            // TODO remove the logic
-            let (left, op, right) = match filter {
-                Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                    (*left.clone(), *op, *right.clone())
-                }
-                _ => {
-                    others.push((*filter).clone());
-                    continue;
-                }
-            };
-            let left = match left {
-                Expr::Column(c) => c,
-                _ => {
-                    others.push((*filter).clone());
-                    continue;
-                }
-            };
-            let right = match right {
-                Expr::Column(c) => c,
-                _ => {
-                    others.push((*filter).clone());
-                    continue;
-                }
-            };
-            if fields.contains(&left.flat_name()) && fields.contains(&right.flat_name()) {
-                others.push((*filter).clone());
-                continue; // both columns present (none closed-upon)
-            }
-            if !fields.contains(&left.flat_name()) && !fields.contains(&right.flat_name())
+            if !matches!(filter, Expr::BinaryExpr(BinaryExpr{ left, op: Operator::Eq, right }) if left.eq(right))
             {
-                others.push((*filter).clone());
-                continue; // neither column present (syntax error?)
+                joins.push(strip_outer_reference((*filter).clone()));
             }
-            match op {
-                Operator::Eq => {}
-                Operator::NotEq => {}
-                _ => {
-                    plan_err!(format!("can't optimize {op} column comparison"))?;
-                }
-            }
-            joins.push((*filter).clone())
+        } else {
+            others.push((*filter).clone());
         }
     }
 
     Ok((joins, others))
-}
-
-/// Extracts correlating columns from expressions
-///
-/// # Arguments
-///
-/// * `exprs` - List of expressions that correlate a subquery to an outer scope
-/// * `schema` - subquery schema
-/// * `include_negated` - true if `NotEq` counts as a join operator
-///
-/// # Return value
-///
-/// Tuple of (outer-scope cols, subquery cols, non-correlation expressions)
-pub fn exprs_to_join_cols(
-    exprs: &[Expr],
-    schema: &DFSchemaRef,
-    include_negated: bool,
-) -> Result<(Vec<Column>, Vec<Column>, Option<Expr>)> {
-    let fields: HashSet<_> = schema
-        .fields()
-        .iter()
-        .map(|it| it.qualified_name())
-        .collect();
-
-    let mut joins: Vec<(String, String)> = vec![];
-    let mut others: Vec<Expr> = vec![];
-    for filter in exprs.iter() {
-        let (left, op, right) = match filter {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                (*left.clone(), *op, *right.clone())
-            }
-            _ => plan_err!("Invalid correlation expression!")?,
-        };
-        match op {
-            Operator::Eq => {}
-            Operator::NotEq => {
-                if !include_negated {
-                    others.push((*filter).clone());
-                    continue;
-                }
-            }
-            _ => plan_err!(format!("Correlation operator unsupported: {op}"))?,
-        }
-        let left = left.try_into_col()?;
-        let right = right.try_into_col()?;
-        let sorted = if fields.contains(&left.flat_name()) {
-            (right.flat_name(), left.flat_name())
-        } else {
-            (left.flat_name(), right.flat_name())
-        };
-        joins.push(sorted);
-    }
-
-    let (left_cols, right_cols): (Vec<_>, Vec<_>) = joins
-        .into_iter()
-        .map(|(l, r)| (Column::from(l.as_str()), Column::from(r.as_str())))
-        .unzip();
-    let pred = conjunction(others);
-
-    Ok((left_cols, right_cols, pred))
 }
 
 /// Returns the first (and only) element in a slice, or an error
@@ -482,35 +346,17 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
     }
 }
 
-/// Extract join predicates from the correclated subquery.
+/// Extract join predicates from the correlated subquery's [Filter] expressions.
 /// The join predicate means that the expression references columns
 /// from both the subquery and outer table or only from the outer table.
 ///
 /// Returns join predicates and subquery(extracted).
-/// ```
 pub(crate) fn extract_join_filters(
     maybe_filter: &LogicalPlan,
 ) -> Result<(Vec<Expr>, LogicalPlan)> {
     if let LogicalPlan::Filter(plan_filter) = maybe_filter {
-        let input_schema = plan_filter.input.schema();
         let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-
-        let mut join_filters: Vec<Expr> = vec![];
-        let mut subquery_filters: Vec<Expr> = vec![];
-        for expr in subquery_filter_exprs {
-            // If the expression contains correlated predicates, add it to join filters
-            if expr.contains_outer() {
-                join_filters.push(strip_outer_reference(expr.clone()))
-            } else {
-                let cols = expr.to_columns()?;
-                if check_all_columns_from_schema(&cols, input_schema.clone())? {
-                    subquery_filters.push(expr.clone());
-                } else {
-                    join_filters.push(expr.clone())
-                }
-            }
-        }
-
+        let (join_filters, subquery_filters) = find_join_exprs(subquery_filter_exprs)?;
         // if the subquery still has filter expressions, restore them.
         let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
         if let Some(expr) = conjunction(subquery_filters) {
@@ -538,6 +384,23 @@ pub(crate) fn collect_subquery_cols(
         cols.extend(using_cols);
         Result::<_>::Ok(cols)
     })
+}
+
+pub(crate) fn replace_qualified_name(
+    expr: Expr,
+    cols: &BTreeSet<Column>,
+    subquery_alias: &str,
+) -> Result<Expr> {
+    let alias_cols: Vec<Column> = cols
+        .iter()
+        .map(|col| {
+            Column::from_qualified_name(format!("{}.{}", subquery_alias, col.name))
+        })
+        .collect();
+    let replace_map: HashMap<&Column, &Column> =
+        cols.iter().zip(alias_cols.iter()).collect();
+
+    replace_col(expr, &replace_map)
 }
 
 /// Log the plan in debug/tracing mode after some part of the optimizer runs

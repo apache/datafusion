@@ -24,10 +24,11 @@ use std::fmt::{Display, Formatter};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::type_coercion::binary::coerce_types;
+use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::Operator;
 
 use crate::aggregate::min_max::{max, min};
+use crate::intervals::rounding::alter_fp_rounding_mode;
 
 /// This type represents a single endpoint of an [`Interval`]. An endpoint can
 /// be open or closed, denoting whether the interval includes or excludes the
@@ -75,38 +76,54 @@ impl IntervalBound {
     /// The result is unbounded if either is; otherwise, their values are
     /// added. The result is closed if both original bounds are closed, or open
     /// otherwise.
-    pub fn add<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
+    pub fn add<const UPPER: bool, T: Borrow<IntervalBound>>(
+        &self,
+        other: T,
+    ) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
-            IntervalBound::make_unbounded(coerce_types(
+            return IntervalBound::make_unbounded(get_result_type(
                 &self.get_datatype(),
                 &Operator::Plus,
                 &rhs.get_datatype(),
-            )?)
-        } else {
-            self.value
-                .add(&rhs.value)
-                .map(|v| IntervalBound::new(v, self.open || rhs.open))
+            )?);
         }
+        match self.get_datatype() {
+            DataType::Float64 | DataType::Float32 => {
+                alter_fp_rounding_mode::<UPPER, _>(&self.value, &rhs.value, |lhs, rhs| {
+                    lhs.add(rhs)
+                })
+            }
+            _ => self.value.add(&rhs.value),
+        }
+        .map(|v| IntervalBound::new(v, self.open || rhs.open))
     }
 
     /// This function subtracts the given `IntervalBound` from `self`.
     /// The result is unbounded if either is; otherwise, their values are
     /// subtracted. The result is closed if both original bounds are closed,
     /// or open otherwise.
-    pub fn sub<T: Borrow<IntervalBound>>(&self, other: T) -> Result<IntervalBound> {
+    pub fn sub<const UPPER: bool, T: Borrow<IntervalBound>>(
+        &self,
+        other: T,
+    ) -> Result<IntervalBound> {
         let rhs = other.borrow();
         if self.is_unbounded() || rhs.is_unbounded() {
-            IntervalBound::make_unbounded(coerce_types(
+            return IntervalBound::make_unbounded(get_result_type(
                 &self.get_datatype(),
                 &Operator::Minus,
                 &rhs.get_datatype(),
-            )?)
-        } else {
-            self.value
-                .sub(&rhs.value)
-                .map(|v| IntervalBound::new(v, self.open || rhs.open))
+            )?);
         }
+        match self.get_datatype() {
+            DataType::Float64 | DataType::Float32 => {
+                alter_fp_rounding_mode::<UPPER, _>(&self.value, &rhs.value, |lhs, rhs| {
+                    lhs.sub(rhs)
+                })
+            }
+            _ => self.value.sub(&rhs.value),
+        }
+        .map(|v| IntervalBound::new(v, self.open || rhs.open))
     }
 
     /// This function chooses one of the given `IntervalBound`s according to
@@ -240,8 +257,7 @@ impl Interval {
             Ok(lower_type)
         } else {
             Err(DataFusionError::Internal(format!(
-                "Interval bounds have different types: {} != {}",
-                lower_type, upper_type,
+                "Interval bounds have different types: {lower_type} != {upper_type}",
             )))
         }
     }
@@ -404,8 +420,8 @@ impl Interval {
     pub fn add<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         Ok(Interval::new(
-            self.lower.add(&rhs.lower)?,
-            self.upper.add(&rhs.upper)?,
+            self.lower.add::<false, _>(&rhs.lower)?,
+            self.upper.add::<true, _>(&rhs.upper)?,
         ))
     }
 
@@ -416,8 +432,8 @@ impl Interval {
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Interval> {
         let rhs = other.borrow();
         Ok(Interval::new(
-            self.lower.sub(&rhs.upper)?,
-            self.upper.sub(&rhs.lower)?,
+            self.lower.sub::<false, _>(&rhs.upper)?,
+            self.upper.sub::<true, _>(&rhs.lower)?,
         ))
     }
 
@@ -463,6 +479,8 @@ pub fn is_datatype_supported(data_type: &DataType) -> bool {
             | &DataType::UInt32
             | &DataType::UInt16
             | &DataType::UInt8
+            | &DataType::Float64
+            | &DataType::Float32
     )
 }
 
@@ -1041,7 +1059,7 @@ mod tests {
     // This function tests if valid constructions produce standardized objects
     // ([false, false], [false, true], [true, true]) for boolean intervals.
     #[test]
-    fn non_standard_interval_constructs() -> Result<()> {
+    fn non_standard_interval_constructs() {
         let cases = vec![
             (
                 IntervalBound::new(Boolean(None), true),
@@ -1078,6 +1096,80 @@ mod tests {
         for case in cases {
             assert_eq!(Interval::new(case.0, case.1), case.2)
         }
-        Ok(())
+    }
+
+    macro_rules! capture_mode_change {
+        ($TYPE:ty) => {
+            paste::item! {
+                capture_mode_change_helper!([<capture_mode_change_ $TYPE>],
+                                            [<create_interval_ $TYPE>],
+                                            $TYPE);
+            }
+        };
+    }
+
+    macro_rules! capture_mode_change_helper {
+        ($TEST_FN_NAME:ident, $CREATE_FN_NAME:ident, $TYPE:ty) => {
+            fn $CREATE_FN_NAME(lower: $TYPE, upper: $TYPE) -> Interval {
+                Interval::make(Some(lower as $TYPE), Some(upper as $TYPE), (true, true))
+            }
+
+            fn $TEST_FN_NAME(input: ($TYPE, $TYPE), expect_low: bool, expect_high: bool) {
+                assert!(expect_low || expect_high);
+                let interval1 = $CREATE_FN_NAME(input.0, input.0);
+                let interval2 = $CREATE_FN_NAME(input.1, input.1);
+                let result = interval1.add(&interval2).unwrap();
+                let without_fe = $CREATE_FN_NAME(input.0 + input.1, input.0 + input.1);
+                assert!(
+                    (!expect_low || result.lower.value < without_fe.lower.value)
+                        && (!expect_high || result.upper.value > without_fe.upper.value)
+                );
+            }
+        };
+    }
+
+    capture_mode_change!(f32);
+    capture_mode_change!(f64);
+
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        not(target_os = "windows")
+    ))]
+    #[test]
+    fn test_add_intervals_lower_affected_f32() {
+        // Lower is affected
+        let lower = f32::from_bits(1073741887); //1000000000000000000000000111111
+        let upper = f32::from_bits(1098907651); //1000001100000000000000000000011
+        capture_mode_change_f32((lower, upper), true, false);
+
+        // Upper is affected
+        let lower = f32::from_bits(1072693248); //111111111100000000000000000000
+        let upper = f32::from_bits(715827883); //101010101010101010101010101011
+        capture_mode_change_f32((lower, upper), false, true);
+
+        // Lower is affected
+        let lower = 1.0; // 0x3FF0000000000000
+        let upper = 0.3; // 0x3FD3333333333333
+        capture_mode_change_f64((lower, upper), true, false);
+
+        // Upper is affected
+        let lower = 1.4999999999999998; // 0x3FF7FFFFFFFFFFFF
+        let upper = 0.000_000_000_000_000_022_044_604_925_031_31; // 0x3C796A6B413BB21F
+        capture_mode_change_f64((lower, upper), false, true);
+    }
+
+    #[cfg(any(
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
+        target_os = "windows"
+    ))]
+    #[test]
+    fn test_next_impl_add_intervals_f64() {
+        let lower = 1.5;
+        let upper = 1.5;
+        capture_mode_change_f64((lower, upper), true, true);
+
+        let lower = 1.5;
+        let upper = 1.5;
+        capture_mode_change_f32((lower, upper), true, true);
     }
 }

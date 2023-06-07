@@ -32,7 +32,6 @@ if ! [ git rev-parse --is-inside-work-tree ]; then
   cd datafusion/common && cargo publish
   cd datafusion/expr && cargo publish
   cd datafusion/sql && cargo publish
-  cd datafusion/jit && cargo publish
   cd datafusion/row && cargo publish
   cd datafusion/physical-expr && cargo publish
   cd datafusion/optimizer && cargo publish

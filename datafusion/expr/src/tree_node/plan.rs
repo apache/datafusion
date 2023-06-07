@@ -22,12 +22,14 @@ use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
 use datafusion_common::{tree_node::TreeNode, Result};
 
 impl TreeNode for LogicalPlan {
-    /// Compared to the default implementation, we need to invoke [`apply_subqueries`]
-    /// before visiting its children
     fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
     {
+        // Note,
+        //
+        // Compared to the default implementation, we need to invoke
+        // [`Self::apply_subqueries`] before visiting its children
         match op(self)? {
             VisitRecursion::Continue => {}
             // If the recursion should skip, do not apply to its children. And let the recursion continue
@@ -61,13 +63,13 @@ impl TreeNode for LogicalPlan {
     /// visitor.post_visit(Filter)
     /// visitor.post_visit(Projection)
     /// ```
-    ///
-    /// Compared to the default implementation, we need to invoke [`visit_subqueries`]
-    /// before visiting its children
     fn visit<V: TreeNodeVisitor<N = Self>>(
         &self,
         visitor: &mut V,
     ) -> Result<VisitRecursion> {
+        // Compared to the default implementation, we need to invoke
+        // [`Self::visit_subqueries`] before visiting its children
+
         match visitor.pre_visit(self)? {
             VisitRecursion::Continue => {}
             // If the recursion should skip, do not apply to its children. And let the recursion continue

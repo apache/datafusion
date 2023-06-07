@@ -17,10 +17,11 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
+    AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
+    InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
-use crate::type_coercion::binary::binary_operator_data_type;
+use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::{
     aggregate_function, function, window_function, LogicalPlan, Projection, Subquery,
@@ -61,7 +62,7 @@ impl ExprSchemable for Expr {
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
             Expr::Alias(expr, name) => match &**expr {
-                Expr::Placeholder { data_type, .. } => match &data_type {
+                Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
                 },
@@ -94,14 +95,14 @@ impl ExprSchemable for Expr {
             }
             Expr::Cast(Cast { data_type, .. })
             | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
-            Expr::ScalarUDF { fun, args } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
-            Expr::ScalarFunction { fun, args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -122,7 +123,7 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 aggregate_function::return_type(fun, &data_types)
             }
-            Expr::AggregateUDF { fun, args, .. } => {
+            Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
@@ -132,7 +133,7 @@ impl ExprSchemable for Expr {
             Expr::Not(_)
             | Expr::IsNull(_)
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -149,17 +150,17 @@ impl ExprSchemable for Expr {
                 ref left,
                 ref right,
                 ref op,
-            }) => binary_operator_data_type(
-                &left.get_type(schema)?,
-                op,
-                &right.get_type(schema)?,
-            ),
+            }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
-            Expr::Placeholder { data_type, .. } => data_type.clone().ok_or_else(|| {
-                DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
-            }),
+            Expr::Placeholder(Placeholder { data_type, .. }) => {
+                data_type.clone().ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Placeholder type could not be resolved".to_owned(),
+                    )
+                })
+            }
             Expr::Wildcard => {
                 // Wildcard do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -195,7 +196,7 @@ impl ExprSchemable for Expr {
             | Expr::Not(expr)
             | Expr::Negative(expr)
             | Expr::Sort(Sort { expr, .. })
-            | Expr::InList { expr, .. } => expr.nullable(input_schema),
+            | Expr::InList(InList { expr, .. }) => expr.nullable(input_schema),
             Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),
@@ -220,11 +221,12 @@ impl ExprSchemable for Expr {
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
+            | Expr::ScalarFunction(..)
+            | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
-            | Expr::AggregateUDF { .. } => Ok(true),
+            | Expr::AggregateUDF { .. }
+            | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
             | Expr::IsTrue(_)
@@ -233,9 +235,8 @@ impl ExprSchemable for Expr {
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. }
-            | Expr::Placeholder { .. } => Ok(true),
-            Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
+            | Expr::Exists { .. } => Ok(false),
+            Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
@@ -354,7 +355,14 @@ mod tests {
     use super::*;
     use crate::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::Column;
+    use datafusion_common::{Column, ScalarValue};
+
+    macro_rules! test_is_expr_nullable {
+        ($EXPR_TYPE:ident) => {{
+            let expr = lit(ScalarValue::Null).$EXPR_TYPE();
+            assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        }};
+    }
 
     #[test]
     fn expr_schema_nullability() {
@@ -363,6 +371,15 @@ mod tests {
         assert!(expr
             .nullable(&MockExprSchema::new().with_nullable(true))
             .unwrap());
+
+        test_is_expr_nullable!(is_null);
+        test_is_expr_nullable!(is_not_null);
+        test_is_expr_nullable!(is_true);
+        test_is_expr_nullable!(is_not_true);
+        test_is_expr_nullable!(is_false);
+        test_is_expr_nullable!(is_not_false);
+        test_is_expr_nullable!(is_unknown);
+        test_is_expr_nullable!(is_not_unknown);
     }
 
     #[test]
@@ -375,6 +392,7 @@ mod tests {
         );
     }
 
+    #[derive(Debug)]
     struct MockExprSchema {
         nullable: bool,
         data_type: DataType,

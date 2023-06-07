@@ -532,16 +532,60 @@ FROM t1
 
 # test create table from query with LEFT join
 statement ok
-create table temp as 
+create table left_join_test as 
 with t1 as (select 1 as col1, 'asd' as col2), 
      t2 as (select 1 as col3, 'sdf' as col4)
 select col2, col4 from t1 left join t2 on col1 = col3
+
+# test create table from query with RIGHT join
+statement ok
+create table right_join_test as 
+with t1 as (select 1 as col1, 'asd' as col2), 
+     t2 as (select 1 as col3, 'sdf' as col4)
+select col2, col4 from t1 right join t2 on col1 = col3
+
+# test create table from query with FULL OUTER join
+statement ok
+create table full_join_test as 
+with t1 as (select 1 as col1, 'asd' as col2), 
+     t2 as (select 1 as col3, 'sdf' as col4)
+select col2, col4 from t1 full outer join t2 on col1 = col3
+
+# test eliminate join when condition is false
+query TT
+explain select * from t1 join t2 on false;
+----
+logical_plan EmptyRelation
+physical_plan EmptyExec: produce_one_row=false
+
+# test covert inner join to cross join when condition is true
+query TT
+explain select * from t1 inner join t2 on true;
+----
+logical_plan
+CrossJoin:
+--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+--TableScan: t2 projection=[t2_id, t2_name, t2_int]
+physical_plan
+CrossJoinExec
+--CoalescePartitionsExec
+----MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+--MemoryExec: partitions=4, partition_sizes=[1, 0, 0, 0]
 
 statement ok
 drop table IF EXISTS t1;
 
 statement ok
 drop table IF EXISTS t2;
+
+statement ok
+drop table IF EXISTS left_join_test;
+
+statement ok
+drop table IF EXISTS right_join_test;
+
+statement ok
+drop table IF EXISTS full_join_test;
 
 # batch size
 statement ok

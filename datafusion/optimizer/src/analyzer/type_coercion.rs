@@ -24,19 +24,20 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
+use datafusion_expr::expr::{
+    self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
+    ScalarUDF, WindowFunction,
+};
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    coerce_types, comparison_coercion, like_coercion,
+    any_decimal, coerce_types, comparison_coercion, like_coercion, math_decimal_coercion,
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{
-    is_date, is_numeric, is_timestamp, is_utf8_or_large_utf8,
-};
+use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
@@ -133,21 +134,21 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     outer_ref_columns,
                 }))
             }
-            Expr::Exists { subquery, negated } => {
+            Expr::Exists(Exists { subquery, negated }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
-                Ok(Expr::Exists {
+                Ok(Expr::Exists(Exists {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
                     },
                     negated,
-                })
+                }))
             }
-            Expr::InSubquery {
+            Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
                 negated,
-            } => {
+            }) => {
                 let new_plan = analyze_internal(&self.schema, &subquery.subquery)?;
                 let expr_type = expr.get_type(&self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
@@ -160,11 +161,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
                 };
-                Ok(Expr::InSubquery {
-                    expr: Box::new(expr.cast_to(&common_type, &self.schema)?),
-                    subquery: cast_subquery(new_subquery, &common_type)?,
+                Ok(Expr::InSubquery(InSubquery::new(
+                    Box::new(expr.cast_to(&common_type, &self.schema)?),
+                    cast_subquery(new_subquery, &common_type)?,
                     negated,
-                })
+                )))
             }
             Expr::IsTrue(expr) => {
                 let expr = is_true(get_casted_expr_for_bool_op(&expr, &self.schema)?);
@@ -181,6 +182,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
             Expr::IsNotFalse(expr) => {
                 let expr =
                     is_not_false(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
+            Expr::IsUnknown(expr) => {
+                let expr = is_unknown(get_casted_expr_for_bool_op(&expr, &self.schema)?);
+                Ok(expr)
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr =
+                    is_not_unknown(get_casted_expr_for_bool_op(&expr, &self.schema)?);
                 Ok(expr)
             }
             Expr::Like(Like {
@@ -219,24 +229,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
-            Expr::IsUnknown(expr) => {
-                // will convert the binary(expr,IsNotDistinctFrom,lit(Boolean(None));
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = DataType::Boolean;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::IsNotDistinctFrom, &right_type)?;
-                let expr = is_unknown(expr.cast_to(&coerced_type, &self.schema)?);
-                Ok(expr)
-            }
-            Expr::IsNotUnknown(expr) => {
-                // will convert the binary(expr,IsDistinctFrom,lit(Boolean(None));
-                let left_type = expr.get_type(&self.schema)?;
-                let right_type = DataType::Boolean;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
-                let expr = is_not_unknown(expr.cast_to(&coerced_type, &self.schema)?);
-                Ok(expr)
-            }
             Expr::BinaryExpr(BinaryExpr {
                 ref left,
                 op,
@@ -266,12 +258,39 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                             )))
                         }
                     }
-                    _ => {
-                        let coerced_type = coerce_types(&left_type, &op, &right_type)?;
+                    // For numerical operations between decimals, we don't coerce the types.
+                    // But if only one of the operands is decimal, we cast the other operand to decimal
+                    // if the other operand is integer. If the other operand is float, we cast the
+                    // decimal operand to float.
+                    (lhs_type, rhs_type)
+                        if op.is_numerical_operators()
+                            && any_decimal(lhs_type, rhs_type) =>
+                    {
+                        let (coerced_lhs_type, coerced_rhs_type) =
+                            math_decimal_coercion(lhs_type, rhs_type);
+                        let new_left = if let Some(lhs_type) = coerced_lhs_type {
+                            left.clone().cast_to(&lhs_type, &self.schema)?
+                        } else {
+                            left.as_ref().clone()
+                        };
+                        let new_right = if let Some(rhs_type) = coerced_rhs_type {
+                            right.clone().cast_to(&rhs_type, &self.schema)?
+                        } else {
+                            right.as_ref().clone()
+                        };
                         let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(left.clone().cast_to(&coerced_type, &self.schema)?),
+                            Box::new(new_left),
                             op,
-                            Box::new(right.clone().cast_to(&coerced_type, &self.schema)?),
+                            Box::new(new_right),
+                        ));
+                        Ok(expr)
+                    }
+                    _ => {
+                        let common_type = coerce_types(&left_type, &op, &right_type)?;
+                        let expr = Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left.clone().cast_to(&common_type, &self.schema)?),
+                            op,
+                            Box::new(right.clone().cast_to(&common_type, &self.schema)?),
                         ));
                         Ok(expr)
                     }
@@ -313,11 +332,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 ));
                 Ok(expr)
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr_data_type = expr.get_type(&self.schema)?;
                 let list_data_types = list
                     .iter()
@@ -338,11 +357,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                                 list_expr.cast_to(&coerced_type, &self.schema)
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        let expr = Expr::InList {
-                            expr: Box::new(cast_expr),
-                            list: cast_list_expr,
+                        let expr = Expr::InList(InList ::new(
+                             Box::new(cast_expr),
+                             cast_list_expr,
                             negated,
-                        };
+                        ));
                         Ok(expr)
                     }
                 }
@@ -351,28 +370,22 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let case = coerce_case_expression(case, &self.schema)?;
                 Ok(Expr::Case(case))
             }
-            Expr::ScalarUDF { fun, args } => {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::ScalarUDF {
-                    fun,
-                    args: new_expr,
-                };
+                let expr = Expr::ScalarUDF(ScalarUDF::new(fun, new_expr));
                 Ok(expr)
             }
-            Expr::ScalarFunction { fun, args } => {
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let nex_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &function::signature(&fun),
                 )?;
-                let expr = Expr::ScalarFunction {
-                    fun,
-                    args: nex_expr,
-                };
+                let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
                 Ok(expr)
             }
             Expr::AggregateFunction(expr::AggregateFunction {
@@ -380,6 +393,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 args,
                 distinct,
                 filter,
+                order_by,
             }) => {
                 let new_expr = coerce_agg_exprs_for_signature(
                     &fun,
@@ -388,21 +402,24 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     &aggregate_function::signature(&fun),
                 )?;
                 let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
-                    fun, new_expr, distinct, filter,
+                    fun, new_expr, distinct, filter, order_by,
                 ));
                 Ok(expr)
             }
-            Expr::AggregateUDF { fun, args, filter } => {
+            Expr::AggregateUDF(expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            }) => {
                 let new_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature,
                 )?;
-                let expr = Expr::AggregateUDF {
-                    fun,
-                    args: new_expr,
-                    filter,
-                };
+                let expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+                    fun, new_expr, filter, order_by,
+                ));
                 Ok(expr)
             }
             Expr::WindowFunction(WindowFunction {
@@ -522,7 +539,7 @@ fn coerce_window_frame(
             if let Some(col_type) = current_types.first() {
                 if is_numeric(col_type) || is_utf8_or_large_utf8(col_type) {
                     col_type
-                } else if is_timestamp(col_type) || is_date(col_type) {
+                } else if is_datetime(col_type) {
                     &DataType::Interval(IntervalUnit::MonthDayNano)
                 } else {
                     return Err(DataFusionError::Internal(format!(
@@ -547,9 +564,8 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    let right_type = DataType::Boolean;
-    let coerced_type = coerce_types(&left_type, &Operator::IsDistinctFrom, &right_type)?;
-    expr.clone().cast_to(&coerced_type, schema)
+    coerce_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    expr.clone().cast_to(&DataType::Boolean, schema)
 }
 
 /// Returns `expressions` coerced to types compatible with
@@ -730,7 +746,7 @@ mod test {
 
     use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
-    use datafusion_expr::expr::{self, Like};
+    use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
         AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
@@ -800,15 +816,15 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation =
             Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::new_utf8("a"))));
-        let udf = Expr::ScalarUDF {
-            fun: Arc::new(ScalarUDF::new(
+        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
+            Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
                 &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
                 &return_type,
                 &fun,
             )),
-            args: vec![lit(123_i32)],
-        };
+            vec![lit(123_i32)],
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let expected =
             "Projection: TestScalarUDF(CAST(Int32(123) AS Float32))\n  EmptyRelation";
@@ -821,15 +837,15 @@ mod test {
         let return_type: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Utf8)));
         let fun: ScalarFunctionImplementation = Arc::new(move |_| unimplemented!());
-        let udf = Expr::ScalarUDF {
-            fun: Arc::new(ScalarUDF::new(
+        let udf = Expr::ScalarUDF(expr::ScalarUDF::new(
+            Arc::new(ScalarUDF::new(
                 "TestScalarUDF",
                 &Signature::uniform(1, vec![DataType::Int32], Volatility::Stable),
                 &return_type,
                 &fun,
             )),
-            args: vec![lit("Apple")],
-        };
+            vec![lit("Apple")],
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
@@ -846,10 +862,8 @@ mod test {
         let empty = empty();
         let lit_expr = lit(10i64);
         let fun: BuiltinScalarFunction = BuiltinScalarFunction::Abs;
-        let scalar_function_expr = Expr::ScalarFunction {
-            fun,
-            args: vec![lit_expr],
-        };
+        let scalar_function_expr =
+            Expr::ScalarFunction(ScalarFunction::new(fun, vec![lit_expr]));
         let plan = LogicalPlan::Projection(Projection::try_new(
             vec![scalar_function_expr],
             empty,
@@ -874,11 +888,12 @@ mod test {
             }),
             Arc::new(vec![DataType::UInt64, DataType::Float64]),
         );
-        let udaf = Expr::AggregateUDF {
-            fun: Arc::new(my_avg),
-            args: vec![lit(10i64)],
-            filter: None,
-        };
+        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(my_avg),
+            vec![lit(10i64)],
+            None,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
@@ -904,11 +919,12 @@ mod test {
             &accumulator,
             &state_type,
         );
-        let udaf = Expr::AggregateUDF {
-            fun: Arc::new(my_avg),
-            args: vec![lit("10")],
-            filter: None,
-        };
+        let udaf = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(my_avg),
+            vec![lit("10")],
+            None,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "")
             .err()
@@ -929,6 +945,7 @@ mod test {
             vec![lit(12i64)],
             false,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
@@ -940,6 +957,7 @@ mod test {
             fun,
             vec![col("a")],
             false,
+            None,
             None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
@@ -957,6 +975,7 @@ mod test {
             vec![lit("1")],
             false,
             None,
+            None,
         ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
         assert_eq!(
@@ -967,7 +986,7 @@ mod test {
     }
 
     #[test]
-    fn binary_op_date32_add_interval() -> Result<()> {
+    fn binary_op_date32_op_interval() -> Result<()> {
         //CAST(Utf8("1998-03-18") AS Date32) + IntervalDayTime("386547056640")
         let expr = cast(lit("1998-03-18"), DataType::Date32)
             + lit(ScalarValue::IntervalDayTime(Some(386547056640)));
@@ -1159,7 +1178,7 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Utf8 IS NOT DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
+        assert!(err.unwrap_err().to_string().contains("Utf8 IS DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
 
         // is not unknown
         let expr = col("a").is_not_unknown();
@@ -1193,7 +1212,7 @@ mod test {
 
             let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
             let expected =
-                "Projection: concatwithseparator(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
+                "Projection: concat_ws(Utf8(\"-\"), a, Utf8(\"b\"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))\n  EmptyRelation";
             assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
         }
 
@@ -1242,7 +1261,7 @@ mod test {
     fn binary_op_date32_eq_ts() -> Result<()> {
         let expr = cast(
             lit("1998-03-18"),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
         )
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
@@ -1408,7 +1427,7 @@ mod test {
             Operator::Plus,
             Box::new(cast(
                 lit("2000-01-01T00:00:00"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();
@@ -1423,12 +1442,12 @@ mod test {
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
             Operator::Minus,
             Box::new(cast(
                 lit("1998-03-18"),
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
             )),
         ));
         let empty = empty();
@@ -1445,14 +1464,14 @@ mod test {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int64)?);
         // add cast for subquery
         let expected = "\
@@ -1470,14 +1489,14 @@ mod test {
         let empty_int32 = empty_with_type(DataType::Int32);
         let empty_int64 = empty_with_type(DataType::Int64);
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_int32)?);
         // add cast for subquery
         let expected = "\
@@ -1494,14 +1513,14 @@ mod test {
         let empty_inside = empty_with_type(DataType::Decimal128(10, 5));
         let empty_outside = empty_with_type(DataType::Decimal128(8, 8));
 
-        let in_subquery_expr = Expr::InSubquery {
-            expr: Box::new(col("a")),
-            subquery: Subquery {
+        let in_subquery_expr = Expr::InSubquery(InSubquery::new(
+            Box::new(col("a")),
+            Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
             },
-            negated: false,
-        };
+            false,
+        ));
         let plan = LogicalPlan::Filter(Filter::try_new(in_subquery_expr, empty_outside)?);
         // add cast for subquery
         let expected = "Filter: CAST(a AS Decimal128(13, 8)) IN (<subquery>)\

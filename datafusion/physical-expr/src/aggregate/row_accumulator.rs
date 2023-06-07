@@ -51,6 +51,20 @@ pub trait RowAccumulator: Send + Sync + Debug {
         accessor: &mut RowAccessor,
     ) -> Result<()>;
 
+    /// updates the accumulator's state from a vector of Scalar value.
+    fn update_scalar_values(
+        &mut self,
+        values: &[ScalarValue],
+        accessor: &mut RowAccessor,
+    ) -> Result<()>;
+
+    /// updates the accumulator's state from a Scalar value.
+    fn update_scalar(
+        &mut self,
+        value: &ScalarValue,
+        accessor: &mut RowAccessor,
+    ) -> Result<()>;
+
     /// updates the accumulator's state from a vector of states.
     fn merge_batch(
         &mut self,
@@ -69,7 +83,8 @@ pub trait RowAccumulator: Send + Sync + Debug {
 pub fn is_row_accumulator_support_dtype(data_type: &DataType) -> bool {
     matches!(
         data_type,
-        DataType::UInt8
+        DataType::Boolean
+            | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64

@@ -19,29 +19,139 @@
 
 # DataFusion Benchmarks
 
-This crate contains benchmarks based on popular public data sets and open source benchmark suites, making it easy to
-run real-world benchmarks to help with performance and scalability testing and for comparing performance with other Arrow
-implementations as well as other query engines.
+This crate contains benchmarks based on popular public data sets and
+open source benchmark suites, making it easy to run more realistic
+benchmarks to help with performance and scalability testing of DataFusion.
 
-## Benchmark derived from TPC-H
+# Benchmarks Against Other Engines
+
+DataFusion is included in the benchmark setups for several popular
+benchmarks that compare performance with other engines. For example:
+
+* [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
+* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](db-benchmark) directory
+
+[ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
+[H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
+
+# Running the benchmarks
+
+## Running Benchmarks
+
+The easiest way to run benchmarks from DataFusion source checkouts is
+to use the [bench.sh](bench.sh) script. Usage instructions can be
+found with:
+
+```shell
+# show usage
+./bench.sh
+```
+
+## Generating Data
+
+You can create data for all these benchmarks using the [bench.sh](bench.sh) script:
+
+```shell
+./bench.sh data
+```
+
+Data is generated in the `data` subdirectory and will not be checked
+in because this directory has been added to the `.gitignore` file.
+
+
+## Example to compare peformance on main to a branch
+
+```shell
+git checkout main
+
+# Create the data
+./benchmarks/bench.sh data
+
+# Gather baseline data for tpch benchmark
+./benchmarks/bench.sh run tpch
+
+# Switch to the branch the branch name is mybranch and gather data
+git checkout mybranch
+./benchmarks/bench.sh run tpch
+
+# Compare results in the two branches:
+./bench.sh compare main mybranch
+```
+
+This produces results like:
+
+```shell
+Comparing main and mybranch
+--------------------
+Benchmark tpch.json
+--------------------
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Query        ┃         main ┃     mybranch ┃        Change ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ QQuery 1     │    2520.52ms │    2795.09ms │  1.11x slower │
+│ QQuery 2     │     222.37ms │     216.01ms │     no change │
+│ QQuery 3     │     248.41ms │     239.07ms │     no change │
+│ QQuery 4     │     144.01ms │     129.28ms │ +1.11x faster │
+│ QQuery 5     │     339.54ms │     327.53ms │     no change │
+│ QQuery 6     │     147.59ms │     138.73ms │ +1.06x faster │
+│ QQuery 7     │     605.72ms │     631.23ms │     no change │
+│ QQuery 8     │     326.35ms │     372.12ms │  1.14x slower │
+│ QQuery 9     │     579.02ms │     634.73ms │  1.10x slower │
+│ QQuery 10    │     403.38ms │     420.39ms │     no change │
+│ QQuery 11    │     201.94ms │     212.12ms │  1.05x slower │
+│ QQuery 12    │     235.94ms │     254.58ms │  1.08x slower │
+│ QQuery 13    │     738.40ms │     789.67ms │  1.07x slower │
+│ QQuery 14    │     198.73ms │     206.96ms │     no change │
+│ QQuery 15    │     183.32ms │     179.53ms │     no change │
+│ QQuery 16    │     168.57ms │     186.43ms │  1.11x slower │
+│ QQuery 17    │    2032.57ms │    2108.12ms │     no change │
+│ QQuery 18    │    1912.80ms │    2134.82ms │  1.12x slower │
+│ QQuery 19    │     391.64ms │     368.53ms │ +1.06x faster │
+│ QQuery 20    │     648.22ms │     691.41ms │  1.07x slower │
+│ QQuery 21    │     866.25ms │    1020.37ms │  1.18x slower │
+│ QQuery 22    │     115.94ms │     117.27ms │     no change │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+--------------------
+Benchmark tpch_mem.json
+--------------------
+┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Query        ┃         main ┃     mybranch ┃        Change ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ QQuery 1     │    2182.44ms │    2390.39ms │  1.10x slower │
+│ QQuery 2     │     181.16ms │     153.94ms │ +1.18x faster │
+│ QQuery 3     │      98.89ms │      95.51ms │     no change │
+│ QQuery 4     │      61.43ms │      66.15ms │  1.08x slower │
+│ QQuery 5     │     260.20ms │     283.65ms │  1.09x slower │
+│ QQuery 6     │      24.24ms │      23.39ms │     no change │
+│ QQuery 7     │     545.87ms │     653.34ms │  1.20x slower │
+│ QQuery 8     │     147.48ms │     136.00ms │ +1.08x faster │
+│ QQuery 9     │     371.53ms │     363.61ms │     no change │
+│ QQuery 10    │     197.91ms │     190.37ms │     no change │
+│ QQuery 11    │     197.91ms │     183.70ms │ +1.08x faster │
+│ QQuery 12    │     100.32ms │     103.08ms │     no change │
+│ QQuery 13    │     428.02ms │     440.26ms │     no change │
+│ QQuery 14    │      38.50ms │      27.11ms │ +1.42x faster │
+│ QQuery 15    │     101.15ms │      63.25ms │ +1.60x faster │
+│ QQuery 16    │     171.15ms │     142.44ms │ +1.20x faster │
+│ QQuery 17    │    1885.05ms │    1953.58ms │     no change │
+│ QQuery 18    │    1549.92ms │    1914.06ms │  1.23x slower │
+│ QQuery 19    │     106.53ms │     104.28ms │     no change │
+│ QQuery 20    │     532.11ms │     610.62ms │  1.15x slower │
+│ QQuery 21    │     723.39ms │     823.34ms │  1.14x slower │
+│ QQuery 22    │      91.84ms │      89.89ms │     no change │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+```
+
+
+# Benchmark Descriptions:
+
+## `tpch` Benchmark derived from TPC-H
 
 These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers:
 https://github.com/databricks/tpch-dbgen.git, based on [2.17.1](https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf) version of TPC-H.
 
-## Generating Test Data
 
-TPC-H data can be generated using the `tpch-gen.sh` script, which creates a Docker image containing the TPC-DS data
-generator.
-
-```bash
-# scale_factor: scale of the database population. scale 1.0 represents ~1 GB of data
-./tpch-gen.sh <scale_factor>
-```
-
-Data will be generated into the `data` subdirectory and will not be checked in because this directory has been added
-to the `.gitignore` file.
-
-## Running the DataFusion Benchmarks
+### Running the DataFusion Benchmarks Manually
 
 The benchmark can then be run (assuming the data created from `dbgen` is in `./data`) with a command such as:
 
@@ -126,7 +236,7 @@ This will produce output like
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
-## Expected output
+### Expected output
 
 The result of query 1 should produce the following output when executed against the SF=1 dataset.
 

@@ -33,7 +33,6 @@ crates = {
     'datafusion-common': 'datafusion/common/Cargo.toml',
     'datafusion-expr': 'datafusion/expr/Cargo.toml',
     'datafusion-execution': 'datafusion/execution/Cargo.toml',
-    'datafusion-jit': 'datafusion/jit/Cargo.toml',
     'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
     'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
     'datafusion-proto': 'datafusion/proto/Cargo.toml',

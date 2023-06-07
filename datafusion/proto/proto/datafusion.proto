@@ -72,6 +72,7 @@ message LogicalPlanNode {
     ViewTableScanNode view_scan = 24;
     CustomTableScanNode custom_scan = 25;
     PrepareNode prepare = 26;
+    DropViewNode drop_view = 27;
   }
 }
 
@@ -96,6 +97,10 @@ message ParquetFormat {
 
 message AvroFormat {}
 
+message LogicalExprNodeCollection {
+  repeated LogicalExprNode logical_expr_nodes = 1;
+}
+
 message ListingTableScanNode {
   reserved 1; // was string table_name
   OwnedTableReference table_name = 14;
@@ -112,7 +117,7 @@ message ListingTableScanNode {
     ParquetFormat parquet = 11;
     AvroFormat avro = 12;
   }
-  repeated LogicalExprNode file_sort_order = 13;
+  repeated LogicalExprNodeCollection file_sort_order = 13;
 }
 
 message ViewTableScanNode {
@@ -183,7 +188,8 @@ message CreateExternalTableNode {
   string delimiter = 8;
   string definition = 9;
   string file_compression_type = 10;
-  repeated LogicalExprNode order_exprs = 13;
+  repeated LogicalExprNodeCollection order_exprs = 13;
+  bool unbounded = 14;
   map<string, string> options = 11;
 }
 
@@ -202,6 +208,12 @@ message CreateCatalogSchemaNode {
 message CreateCatalogNode {
   string catalog_name = 1;
   bool if_not_exists = 2;
+  DfSchema schema = 3;
+}
+
+message DropViewNode {
+  OwnedTableReference name = 1;
+  bool if_exists = 2;
   DfSchema schema = 3;
 }
 
@@ -534,6 +546,23 @@ enum ScalarFunction {
   Pi = 80;
   Degrees = 81;
   Radians = 82;
+  Factorial = 83;
+  Lcm = 84;
+  Gcd = 85;
+  ArrayAppend = 86;
+  ArrayConcat = 87;
+  ArrayDims = 88;
+  ArrayFill = 89;
+  ArrayLength = 90;
+  ArrayNdims = 91;
+  ArrayPosition = 92;
+  ArrayPositions = 93;
+  ArrayPrepend = 94;
+  ArrayRemove = 95;
+  ArrayReplace = 96;
+  ArrayToString = 97;
+  Cardinality = 98;
+  TrimArray = 99;
 }
 
 message ScalarFunctionNode {
@@ -561,6 +590,15 @@ enum AggregateFunction {
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
   MEDIAN = 18;
+  BIT_AND = 19;
+  BIT_OR = 20;
+  BIT_XOR = 21;
+  BOOL_AND = 22;
+  BOOL_OR = 23;
+  // When a function with the same name exists among built-in window functions,
+  // we append "_AGG" to obey name scoping rules.
+  FIRST_VALUE_AGG = 24;
+  LAST_VALUE_AGG = 25;
 }
 
 message AggregateExprNode {
@@ -568,12 +606,14 @@ message AggregateExprNode {
   repeated LogicalExprNode expr = 2;
   bool distinct = 3;
   LogicalExprNode filter = 4;
+  repeated LogicalExprNode order_by = 5;
 }
 
 message AggregateUDFExprNode {
   string fun_name = 1;
   repeated LogicalExprNode args = 2;
   LogicalExprNode filter = 3;
+  repeated LogicalExprNode order_by = 4;
 }
 
 message ScalarUDFExprNode {
@@ -1062,7 +1102,10 @@ message PhysicalScalarUdfNode {
 }
 
 message PhysicalAggregateExprNode {
-  AggregateFunction aggr_function = 1;
+  oneof AggregateFunction {
+    AggregateFunction aggr_function = 1;
+    string user_defined_aggr_function = 4;
+  }
   repeated PhysicalExprNode expr = 2;
   bool distinct = 3;
 }
@@ -1170,6 +1213,10 @@ message ScanLimit {
   uint32 limit = 1;
 }
 
+message PhysicalSortExprNodeCollection {
+  repeated PhysicalSortExprNode physical_sort_expr_nodes = 1;
+}
+
 message FileScanExecConf {
   // Was repeated ConfigOption options = 10;
   reserved 10;
@@ -1181,7 +1228,7 @@ message FileScanExecConf {
   Statistics statistics = 6;
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
-  repeated PhysicalSortExprNode output_ordering = 9;
+  repeated PhysicalSortExprNodeCollection output_ordering = 9;
 }
 
 message ParquetScanExecNode {
@@ -1273,6 +1320,10 @@ message MaybeFilter {
   PhysicalExprNode expr = 1;
 }
 
+message MaybePhysicalSortExprs {
+  repeated PhysicalSortExprNode sort_expr = 1;
+}
+
 message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
@@ -1285,6 +1336,7 @@ message AggregateExecNode {
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
+  repeated MaybePhysicalSortExprs order_by_expr = 11;
 }
 
 message GlobalLimitExecNode {

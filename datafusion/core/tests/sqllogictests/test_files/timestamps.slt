@@ -317,11 +317,11 @@ select
 ----
 08:09:10.123456789 13:14:15.123456 13:14:15.123 13:14:15
 
-query error Cannot cast string 'not a time' to value of Time64\(Nanosecond\) type\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error Cannot cast string 'not a time' to value of Time64\(Nanosecond\) type
 SELECT TIME 'not a time' as time;
 
 # invalid time
-query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+query error Cannot cast string '24:01:02' to value of Time64\(Nanosecond\) type
 SELECT TIME '24:01:02' as time;
 
 statement ok
@@ -392,11 +392,28 @@ drop table ts_data_millis
 statement ok
 drop table ts_data_secs
 
-
-
 ##########
 ## test date_bin function
 ##########
+
+# not support interval 0
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT DATE_BIN(INTERVAL '0 second', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
+
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT DATE_BIN(INTERVAL '0 month', TIMESTAMP '2022-08-03 14:38:50.000000006Z')
+
+statement error Execution error: DATE_BIN stride must be non-zero
+SELECT
+  DATE_BIN(INTERVAL '0' minute, time) AS time,
+  count(val)
+FROM (
+  VALUES
+    (TIMESTAMP '2021-06-10 17:05:00Z', 0.5),
+    (TIMESTAMP '2021-06-10 17:19:10Z', 0.3)
+  ) as t (time, val)
+group by time;
+
 query P
 SELECT DATE_BIN(INTERVAL '15 minutes', TIMESTAMP '2022-08-03 14:38:50Z', TIMESTAMP '1970-01-01T00:00:00Z')
 ----
@@ -421,7 +438,7 @@ SELECT DATE_BIN(INTERVAL '5 microseconds', TIMESTAMP '2022-08-03 14:38:50.000006
 2022-08-03T14:38:50.000005
 
 # Does not support months for Month-Day-Nano interval
-statement error This feature is not implemented: DATE_BIN stride does not support month intervals
+statement error DataFusion error: This feature is not implemented: DATE_BIN stride does not support combination of month, day and nanosecond intervals
 SELECT DATE_BIN(INTERVAL '1 month 5 nanoseconds', TIMESTAMP '2022-08-03 14:38:50.000000006Z', TIMESTAMP '1970-01-01T00:00:00Z')
 
 # Can coerce string interval arguments
@@ -500,6 +517,319 @@ FROM (
     (TIMESTAMP '2021-06-10 17:19:10Z', TIMESTAMP '2001-01-01T00:00:00Z', 0.3)
   ) as t (time, origin, val)
 
+# different input timestamp type
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_micros(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Microsecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_millis(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Millisecond, None)
+
+query P
+SELECT DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z')
+----
+2022-08-03T14:30:00
+
+query P
+select date_bin(INTERVAL '15 minute', column1)
+from (values
+  (to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'))
+) as sq
+----
+2022-08-03T14:30:00
+
+query T
+SELECT arrow_typeof(DATE_BIN(INTERVAL '15 minute', to_timestamp_seconds(TIMESTAMP '2022-08-03 14:38:50Z'), TIMESTAMP '1970-01-01 00:00:00Z'))
+----
+Timestamp(Second, None)
+
+# month interval with INTERVAL keyword in date_bin with default start time
+query P
+select date_bin(INTERVAL '1 month', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-02-01T00:00:00
+2022-02-01T00:00:00
+2022-03-01T00:00:00
+
+
+# year interval in date_bin with default start time
+query P
+select date_bin(INTERVAL '1 year', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2023-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2023-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+
+query P
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z', '1970-01-01T00:00:00Z');
+----
+2022-01-01T00:00:00
+
+
+# Tests without INTERVAL keyword
+# 1-month interval in date_bin with default start time
+query P
+select date_bin('1 month', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-02-01T00:00:00
+2022-02-01T00:00:00
+2022-03-01T00:00:00
+
+# 2-month interval in date_bin with default start time
+query P
+select date_bin('2 month', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-03-01T00:00:00
+
+
+# month interval with start date end of the month plus some minutes
+#
+# The the return of `date_bin` is the start of the bin. The bin width is one year.
+# The source data must be inside the bin.
+# Since the origin is '1970-12-31T00:15:00Z', the start of the bins are
+#   '1970-12-31T00:15:00Z',
+#   '1971-12-31T00:15:00Z',
+#   ...,
+#   '2021-12-31T00:15:00Z',
+#   '2022-12-31T00:15:00Z',
+#   ...
+#
+# Note the datetime '2022-03-31 00:00:00'. Its bin is NOT '2022-03-31 00:15:00' which is after its time
+# Its bin is '2022-02-28T00:15:00'
+#
+query P
+select date_bin('1 month', column1, '1970-12-31T00:15:00Z')
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2022-01-31T00:15:00
+2022-01-31T00:15:00
+2022-02-28T00:15:00
+
+# month interval with start date is end of the month plus some minutes
+query P
+select date_bin('2 months', column1, '1970-12-31T00:15:00Z')
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00')
+) as sq
+----
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2022-02-28T00:15:00
+
+# year interval in date_bin with default start time
+query P
+select date_bin('1 year', column1)
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00'),
+  (timestamp '2023-10-28 01:33:00')
+) as sq
+----
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2022-01-01T00:00:00
+2023-01-01T00:00:00
+
+# year interval with start date is end of the month plus some minutes
+query P
+select date_bin('1 year', column1, '1970-12-31T00:15:00Z')
+from (values
+  (timestamp '2022-01-01 00:00:00'),
+  (timestamp '2022-01-01 01:00:00'),
+  (timestamp '2022-01-02 00:00:00'),
+  (timestamp '2022-02-02 00:00:00'),
+  (timestamp '2022-02-15 00:00:00'),
+  (timestamp '2022-03-31 00:00:00'),
+  (timestamp '2023-03-31 00:00:00')
+) as sq
+----
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2021-12-31T00:15:00
+2022-12-31T00:15:00
+
+# month interval on constant
+query P
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
+----
+2022-01-01T00:00:00
+
+# five months interval on constant
+query P
+SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z');
+----
+2021-09-01T00:00:00
+
+# month interval with default start time
+query P
+SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
+----
+2022-01-01T00:00:00
+
+# origin on the first date but not at midnight
+query P
+SELECT DATE_BIN('1 month', '2022-04-01T00:00:00Z', '2021-05-01T00:04:00Z');
+----
+2022-03-01T00:04:00
+
+# origin is May 31 (last date of the month) to produce bin on Feb 28
+query P
+SELECT DATE_BIN('3 month', '2022-04-01T00:00:00Z', '2021-05-31T00:04:00Z');
+----
+2022-02-28T00:04:00
+
+# origin is on Feb 29 and interval is one month. The bins will be:
+# '2000-02-29T00:00:00'
+# '2000-01-29T00:00:00'
+# '1999-12-29T00:00:00'
+# ....
+# Reason: Even though 29 (or 28 for non-leap year) is the last date of Feb but it
+# is not last date of other month. Months' chrono consider a month before or after that
+# will land on the same 29th date.
+query P
+select date_bin('1 month', timestamp '2000-01-31T00:00:00', timestamp '2000-02-29T00:00:00');
+----
+2000-01-29T00:00:00
+
+# similar for the origin March 29
+query P
+select date_bin('1 month', timestamp '2000-01-31T00:00:00', timestamp '2000-03-29T00:00:00');
+----
+2000-01-29T00:00:00
+
+# any value of origin
+query P
+SELECT DATE_BIN('3 month', '2022-01-01T00:00:00Z', '2021-05-05T17:56:21Z');
+----
+2021-11-05T17:56:21
+
+# origin is later than source
+query P
+SELECT DATE_BIN('3 month', '2022-01-01T00:00:00Z', '2022-05-05T17:56:21Z');
+----
+2021-11-05T17:56:21
+
+# year interval on constant
+query P
+SELECT DATE_BIN('1 year', '2022-01-01 00:00:00Z');
+----
+2022-01-01T00:00:00
+
+# 3-year interval on constant
+query P
+SELECT DATE_BIN('3 year', '2022-01-01 00:00:00Z');
+----
+2021-01-01T00:00:00
+
+# 3 year 1 months = 37 months
+query P
+SELECT DATE_BIN('3 years 1 months', '2022-09-01 00:00:00Z');
+----
+2022-06-01T00:00:00
+
 ###
 ## test date_trunc function
 ###
@@ -509,7 +839,17 @@ SELECT DATE_TRUNC('year', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-01-01T00:00:00
 
 query P
+SELECT DATE_TRUNC('YEAR', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-01-01T00:00:00
+
+query P
 SELECT DATE_TRUNC('quarter', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-07-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('QUARTER', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-07-01T00:00:00
 
@@ -519,7 +859,27 @@ SELECT DATE_TRUNC('month', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-01T00:00:00
 
 query P
+SELECT DATE_TRUNC('MONTH', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('week', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
+SELECT DATE_TRUNC('WEEK', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-01T00:00:00
+
+query P
 SELECT DATE_TRUNC('day', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T00:00:00
+
+query P
+SELECT DATE_TRUNC('DAY', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T00:00:00
 
@@ -529,12 +889,27 @@ SELECT DATE_TRUNC('hour', TIMESTAMP '2022-08-03 14:38:50Z');
 2022-08-03T14:00:00
 
 query P
+SELECT DATE_TRUNC('HOUR', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:00:00
+
+query P
 SELECT DATE_TRUNC('minute', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:00
 
 query P
+SELECT DATE_TRUNC('MINUTE', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:00
+
+query P
 SELECT DATE_TRUNC('second', TIMESTAMP '2022-08-03 14:38:50Z');
+----
+2022-08-03T14:38:50
+
+query P
+SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
 
@@ -656,7 +1031,7 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-statement error DataFusion error: Error during planning: Timestamp\(Nanosecond, None\) \+ Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
+query error DataFusion error: type_coercion\ncaused by\nInternal error: Unsupported operation Plus between Timestamp\(Nanosecond, None\) and Timestamp\(Nanosecond, None\)\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT ts1 + ts2
 FROM foo;
 
@@ -673,8 +1048,7 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 0 years 0 mons -3653 days 0 hours 0 mins 0.000000000 secs
 
 # Interval - Timestamp => error
-statement error DataFusion error: Error during planning: Interval\(MonthDayNano\) - Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
-
+statement error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
 SELECT i - ts1 from FOO;
 
 statement ok

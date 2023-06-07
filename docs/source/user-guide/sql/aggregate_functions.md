@@ -24,6 +24,11 @@ Aggregate functions operate on a set of values to compute a single result.
 ## General
 
 - [avg](#avg)
+- [bit_and](#bit_and)
+- [bit_or](#bit_or)
+- [bit_xor](#bit_xor)
+- [bool_and](#bool_and)
+- [bool_or](#bool_or)
 - [count](#count)
 - [max](#max)
 - [mean](#mean)
@@ -31,6 +36,8 @@ Aggregate functions operate on a set of values to compute a single result.
 - [min](#min)
 - [sum](#sum)
 - [array_agg](#array_agg)
+- [first_value](#first_value)
+- [last_value](#last_value)
 
 ### `avg`
 
@@ -48,6 +55,71 @@ avg(expression)
 #### Aliases
 
 - `mean`
+
+### `bit_and`
+
+Computes the bitwise AND of all non-null input values.
+
+```
+bit_and(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `bit_or`
+
+Computes the bitwise OR of all non-null input values.
+
+```
+bit_or(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `bit_xor`
+
+Computes the bitwise exclusive OR of all non-null input values.
+
+```
+bit_xor(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `bool_and`
+
+Returns true if all non-null input values are true, otherwise false.
+
+```
+bool_and(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `bool_or`
+
+Returns true if any non-null input value is true, otherwise false.
+
+```
+bool_or(expression)
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
 
 ### `count`
 
@@ -124,10 +196,36 @@ sum(expression)
 
 ### `array_agg`
 
-Returns an array created from the expression elements.
+Returns an array created from the expression elements. If ordering requirement is given, elements are inserted in the order of required ordering.
 
 ```
-array_agg(expression)
+array_agg(expression [ORDER BY expression])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `first_value`
+
+Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
+
+```
+first_value(expression [ORDER BY expression])
+```
+
+#### Arguments
+
+- **expression**: Expression to operate on.
+  Can be a constant, column, or function, and any combination of arithmetic operators.
+
+### `last_value`
+
+Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
+
+```
+last_value(expression [ORDER BY expression])
 ```
 
 #### Arguments

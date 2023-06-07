@@ -20,13 +20,14 @@
 use crate::expr::{Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
-    SubqueryAlias, Union, Unnest, Values, Window,
+    Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
+    Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest,
+    Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, GroupingSet, LogicalPlan,
-    LogicalPlanBuilder, Operator, TableScan, TryCast,
+    BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
+    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
+    TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{
@@ -36,6 +37,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
 };
+use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -69,7 +71,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     }
 }
 
-/// The power set (or powerset) of a set S is the set of all subsets of S, \
+/// The [power set] (or powerset) of a set S is the set of all subsets of S, \
 /// including the empty set and S itself.
 ///
 /// Example:
@@ -85,7 +87,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
 ///  {x, y, z} \
 ///  and hence the power set of S is {{}, {x}, {y}, {z}, {x, y}, {x, z}, {y, z}, {x, y, z}}.
 ///
-/// Reference: https://en.wikipedia.org/wiki/Power_set
+/// [power set]: https://en.wikipedia.org/wiki/Power_set
 fn powerset<T>(slice: &[T]) -> Result<Vec<Vec<&T>>, String> {
     if slice.len() >= 64 {
         return Err("The size of the set must be less than 64.".into());
@@ -269,13 +271,11 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             Expr::Column(qc) => {
                 accum.insert(qc.clone());
             }
-            Expr::ScalarVariable(_, var_names) => {
-                accum.insert(Column::from_name(var_names.join(".")));
-            }
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            Expr::Alias(_, _)
+            Expr::ScalarVariable(_, _)
+            | Expr::Alias(_, _)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
@@ -296,30 +296,104 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::Sort { .. }
-            | Expr::ScalarFunction { .. }
-            | Expr::ScalarUDF { .. }
+            | Expr::ScalarFunction(..)
+            | Expr::ScalarUDF(..)
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::GroupingSet(_)
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Exists { .. }
-            | Expr::InSubquery { .. }
+            | Expr::InSubquery(_)
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. }
-            | Expr::Placeholder { .. }
+            | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. } => {}
         }
         Ok(())
     })
 }
 
+/// Find excluded columns in the schema, if any
+/// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
+fn get_excluded_columns(
+    opt_exclude: Option<ExcludeSelectItem>,
+    opt_except: Option<ExceptSelectItem>,
+    schema: &DFSchema,
+    qualifier: &Option<TableReference>,
+) -> Result<Vec<Column>> {
+    let mut idents = vec![];
+    if let Some(excepts) = opt_except {
+        idents.push(excepts.first_element);
+        idents.extend(excepts.additional_elements);
+    }
+    if let Some(exclude) = opt_exclude {
+        match exclude {
+            ExcludeSelectItem::Single(ident) => idents.push(ident),
+            ExcludeSelectItem::Multiple(idents_inner) => idents.extend(idents_inner),
+        }
+    }
+    // Excluded columns should be unique
+    let n_elem = idents.len();
+    let unique_idents = idents.into_iter().collect::<HashSet<_>>();
+    // if HashSet size, and vector length are different, this means that some of the excluded columns
+    // are not unique. In this case return error.
+    if n_elem != unique_idents.len() {
+        return Err(DataFusionError::Plan(
+            "EXCLUDE or EXCEPT contains duplicate column names".to_string(),
+        ));
+    }
+
+    let mut result = vec![];
+    for ident in unique_idents.into_iter() {
+        let col_name = ident.value.as_str();
+        let field = if let Some(qualifier) = qualifier {
+            schema.field_with_qualified_name(qualifier, col_name)?
+        } else {
+            schema.field_with_unqualified_name(col_name)?
+        };
+        result.push(field.qualified_column())
+    }
+    Ok(result)
+}
+
+/// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
+fn get_exprs_except_skipped(
+    schema: &DFSchema,
+    columns_to_skip: HashSet<Column>,
+) -> Vec<Expr> {
+    if columns_to_skip.is_empty() {
+        schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect::<Vec<Expr>>()
+    } else {
+        schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                let col = f.qualified_column();
+                if !columns_to_skip.contains(&col) {
+                    Some(Expr::Column(col))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Expr>>()
+    }
+}
+
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr>> {
+pub fn expand_wildcard(
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+    wildcard_options: Option<WildcardAdditionalOptions>,
+) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
-    let columns_to_skip = using_columns
+    let mut columns_to_skip = using_columns
         .into_iter()
         // For each USING JOIN condition, only expand to one of each join column in projection
         .flat_map(|cols| {
@@ -340,33 +414,26 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
                 .collect::<Vec<_>>()
         })
         .collect::<HashSet<_>>();
-
-    if columns_to_skip.is_empty() {
-        Ok(schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>())
+    let excluded_columns = if let Some(WildcardAdditionalOptions {
+        opt_exclude,
+        opt_except,
+        ..
+    }) = wildcard_options
+    {
+        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
     } else {
-        Ok(schema
-            .fields()
-            .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>())
-    }
+        vec![]
+    };
+    // Add each excluded `Column` to columns_to_skip
+    columns_to_skip.extend(excluded_columns);
+    Ok(get_exprs_except_skipped(schema, columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
+    wildcard_options: Option<WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
@@ -381,12 +448,20 @@ pub fn expand_qualified_wildcard(
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    // if qualified, allow all columns in output (i.e. ignore using column check)
-    Ok(qualified_schema
-        .fields()
-        .iter()
-        .map(|f| Expr::Column(f.qualified_column()))
-        .collect::<Vec<Expr>>())
+    let excluded_columns = if let Some(WildcardAdditionalOptions {
+        opt_exclude,
+        opt_except,
+        ..
+    }) = wildcard_options
+    {
+        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+    } else {
+        vec![]
+    };
+    // Add each excluded `Column` to columns_to_skip
+    let mut columns_to_skip = HashSet::new();
+    columns_to_skip.extend(excluded_columns);
+    Ok(get_exprs_except_skipped(&qualified_schema, columns_to_skip))
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
@@ -705,7 +780,7 @@ pub fn from_plan(
                     match expr {
                         Expr::Exists { .. }
                         | Expr::ScalarSubquery(_)
-                        | Expr::InSubquery { .. } => {
+                        | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }
@@ -836,29 +911,31 @@ pub fn from_plan(
             fetch: *fetch,
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+        LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(CreateMemoryTable {
             name,
             if_not_exists,
             or_replace,
             ..
-        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-            input: Arc::new(inputs[0].clone()),
-            primary_key: vec![],
-            name: name.clone(),
-            if_not_exists: *if_not_exists,
-            or_replace: *or_replace,
-        })),
-        LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+            CreateMemoryTable {
+                input: Arc::new(inputs[0].clone()),
+                primary_key: vec![],
+                name: name.clone(),
+                if_not_exists: *if_not_exists,
+                or_replace: *or_replace,
+            },
+        ))),
+        LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             name,
             or_replace,
             definition,
             ..
-        }) => Ok(LogicalPlan::CreateView(CreateView {
+        })) => Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             or_replace: *or_replace,
             definition: definition.clone(),
-        })),
+        }))),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
@@ -911,12 +988,8 @@ pub fn from_plan(
             }))
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::DropView(_)
-        | LogicalPlan::Statement(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_) => {
+        | LogicalPlan::Ddl(_)
+        | LogicalPlan::Statement(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{plan:?} should have no exprs");
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
@@ -956,13 +1029,12 @@ pub fn from_plan(
 }
 
 /// Find all columns referenced from an aggregate query
-fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
-    Ok(agg
-        .aggr_expr
+fn agg_cols(agg: &Aggregate) -> Vec<Column> {
+    agg.aggr_expr
         .iter()
         .chain(&agg.group_expr)
         .flat_map(find_columns_referenced_by_expr)
-        .collect())
+        .collect()
 }
 
 fn exprlist_to_fields_aggregate(
@@ -970,7 +1042,7 @@ fn exprlist_to_fields_aggregate(
     plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
-    let agg_cols = agg_cols(agg)?;
+    let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
         match expr {

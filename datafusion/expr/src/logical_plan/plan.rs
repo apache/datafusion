@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! Logical plan types
-use crate::logical_plan::builder::validate_unique_names;
+//! Logical plan types
+
+use crate::expr::InSubquery;
+use crate::expr::{Exists, Placeholder};
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::statement::{DmlStatement, Statement};
-
-use crate::logical_plan::plan;
+use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
     enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs, from_plan,
     grouping_set_expr_count, grouping_set_to_exprlist, inspect_expr_pre,
@@ -30,7 +30,6 @@ use crate::{
     build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
@@ -42,6 +41,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+// backwards compatible
+pub use datafusion_common::{JoinConstraint, JoinType};
+
+use super::DdlStatement;
 
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
@@ -92,20 +96,6 @@ pub enum LogicalPlan {
     Limit(Limit),
     /// [`Statement`]
     Statement(Statement),
-    /// Creates an external table.
-    CreateExternalTable(CreateExternalTable),
-    /// Creates an in memory table.
-    CreateMemoryTable(CreateMemoryTable),
-    /// Creates a new view.
-    CreateView(CreateView),
-    /// Creates a new catalog schema.
-    CreateCatalogSchema(CreateCatalogSchema),
-    /// Creates a new catalog (aka "Database").
-    CreateCatalog(CreateCatalog),
-    /// Drops a table.
-    DropTable(DropTable),
-    /// Drops a view.
-    DropView(DropView),
     /// Values expression. See
     /// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
     /// documentation for more details.
@@ -124,6 +114,8 @@ pub enum LogicalPlan {
     Prepare(Prepare),
     /// Insert / Update / Delete
     Dml(DmlStatement),
+    /// CREATE / DROP TABLES / VIEWS / SCHEMAs
+    Ddl(DdlStatement),
     /// Describe the schema of table
     DescribeTable(DescribeTable),
     /// Unnest a column that contains a nested list type.
@@ -152,26 +144,16 @@ impl LogicalPlan {
             LogicalPlan::Statement(statement) => statement.schema(),
             LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
-            LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
-                schema
-            }
             LogicalPlan::Prepare(Prepare { input, .. }) => input.schema(),
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. }) => input.schema(),
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
-                schema
-            }
-            LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
-            LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
-            LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::DescribeTable(DescribeTable { dummy_schema, .. }) => {
                 dummy_schema
             }
             LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
+            LogicalPlan::Ddl(ddl) => ddl.schema(),
             LogicalPlan::Unnest(Unnest { schema, .. }) => schema,
         }
     }
@@ -215,9 +197,7 @@ impl LogicalPlan {
             LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::Ddl(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -231,18 +211,13 @@ impl LogicalPlan {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Sort(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Prepare(_) => {
                 self.inputs().iter().map(|p| p.schema()).collect()
             }
             // return empty
-            LogicalPlan::Statement(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
-            | LogicalPlan::DescribeTable(_) => vec![],
+            LogicalPlan::Statement(_) | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
 
@@ -357,19 +332,13 @@ impl LogicalPlan {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
@@ -377,7 +346,7 @@ impl LogicalPlan {
 
     /// returns all inputs of this `LogicalPlan` node. Does not
     /// include inputs to inputs, or subqueries.
-    pub fn inputs(self: &LogicalPlan) -> Vec<&LogicalPlan> {
+    pub fn inputs(&self) -> Vec<&LogicalPlan> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => vec![input],
             LogicalPlan::Filter(Filter { input, .. }) => vec![input],
@@ -398,22 +367,14 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::Dml(write) => vec![&write.input],
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Prepare(Prepare { input, .. }) => {
-                vec![input]
-            }
+            LogicalPlan::Ddl(ddl) => ddl.inputs(),
             LogicalPlan::Unnest(Unnest { input, .. }) => vec![input],
+            LogicalPlan::Prepare(Prepare { input, .. }) => vec![input],
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::Statement { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
             | LogicalPlan::DescribeTable(_) => vec![],
         }
     }
@@ -484,6 +445,98 @@ impl LogicalPlan {
             _ => Ok(self),
         }
     }
+
+    /// Returns the maximum number of rows that this plan can output, if known.
+    ///
+    /// If `None`, the plan can return any number of rows.
+    /// If `Some(n)` then the plan can return at most `n` rows but may return fewer.
+    pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
+        match self {
+            LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
+            LogicalPlan::Filter(Filter { input, .. }) => input.max_rows(),
+            LogicalPlan::Window(Window { input, .. }) => input.max_rows(),
+            LogicalPlan::Aggregate(Aggregate {
+                input, group_expr, ..
+            }) => {
+                // Empty group_expr will return Some(1)
+                if group_expr
+                    .iter()
+                    .all(|expr| matches!(expr, Expr::Literal(_)))
+                {
+                    Some(1)
+                } else {
+                    input.max_rows()
+                }
+            }
+            LogicalPlan::Sort(Sort { input, fetch, .. }) => {
+                match (fetch, input.max_rows()) {
+                    (Some(fetch_limit), Some(input_max)) => {
+                        Some(input_max.min(*fetch_limit))
+                    }
+                    (Some(fetch_limit), None) => Some(*fetch_limit),
+                    (None, Some(input_max)) => Some(input_max),
+                    (None, None) => None,
+                }
+            }
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows(), right.max_rows()) {
+                        (Some(left_max), Some(right_max)) => {
+                            let min_rows = match join_type {
+                                JoinType::Left => left_max,
+                                JoinType::Right => right_max,
+                                JoinType::Full => left_max + right_max,
+                                _ => 0,
+                            };
+                            Some((left_max * right_max).max(min_rows))
+                        }
+                        _ => None,
+                    }
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => left.max_rows(),
+                JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
+            },
+            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
+                match (left.max_rows(), right.max_rows()) {
+                    (Some(left_max), Some(right_max)) => Some(left_max * right_max),
+                    _ => None,
+                }
+            }
+            LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
+            LogicalPlan::Union(Union { inputs, .. }) => inputs
+                .iter()
+                .map(|plan| plan.max_rows())
+                .try_fold(0usize, |mut acc, input_max| {
+                    if let Some(i_max) = input_max {
+                        acc += i_max;
+                        Some(acc)
+                    } else {
+                        None
+                    }
+                }),
+            LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
+            LogicalPlan::EmptyRelation(_) => Some(0),
+            LogicalPlan::Subquery(_) => None,
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.max_rows(),
+            LogicalPlan::Limit(Limit { fetch, .. }) => *fetch,
+            LogicalPlan::Distinct(Distinct { input }) => input.max_rows(),
+            LogicalPlan::Values(v) => Some(v.values.len()),
+            LogicalPlan::Unnest(_) => None,
+            LogicalPlan::Ddl(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Extension(_) => None,
+        }
+    }
 }
 
 impl LogicalPlan {
@@ -496,8 +549,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the collector sees a
                         // LogicalPlan::Subquery (even though it is
@@ -522,8 +575,8 @@ impl LogicalPlan {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| {
                 match expr {
-                    Expr::Exists { subquery, .. }
-                    | Expr::InSubquery { subquery, .. }
+                    Expr::Exists(Exists { subquery, .. })
+                    | Expr::InSubquery(InSubquery { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         // use a synthetic plan so the visitor sees a
                         // LogicalPlan::Subquery (even though it is
@@ -570,7 +623,7 @@ impl LogicalPlan {
         self.apply(&mut |plan| {
             plan.inspect_expressions(|expr| {
                 expr.apply(&mut |expr| {
-                    if let Expr::Placeholder { id, data_type } = expr {
+                    if let Expr::Placeholder(Placeholder { id, data_type }) = expr {
                         let prev = param_types.get(id);
                         match (prev, data_type) {
                             (Some(Some(prev)), Some(dt)) => {
@@ -604,7 +657,7 @@ impl LogicalPlan {
     ) -> Result<Expr> {
         expr.transform(&|expr| {
             match &expr {
-                Expr::Placeholder { id, data_type } => {
+                Expr::Placeholder(Placeholder { id, data_type }) => {
                     if id.is_empty() || id == "$0" {
                         return Err(DataFusionError::Plan(
                             "Empty placeholder id".to_string(),
@@ -636,7 +689,7 @@ impl LogicalPlan {
                 Expr::ScalarSubquery(qry) => {
                     let subquery =
                         Arc::new(qry.subquery.replace_params_with_values(param_values)?);
-                    Ok(Transformed::Yes(Expr::ScalarSubquery(plan::Subquery {
+                    Ok(Transformed::Yes(Expr::ScalarSubquery(Subquery {
                         subquery,
                         outer_ref_columns: qry.outer_ref_columns.clone(),
                     })))
@@ -921,6 +974,9 @@ impl LogicalPlan {
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
                         write!(f, "Dml: op=[{op}] table=[{table_name}]")
                     }
+                    LogicalPlan::Ddl(ddl) => {
+                        write!(f, "{}", ddl.display())
+                    }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
@@ -1037,49 +1093,6 @@ impl LogicalPlan {
                     LogicalPlan::Statement(statement) => {
                         write!(f, "{}", statement.display())
                     }
-                    LogicalPlan::CreateExternalTable(CreateExternalTable {
-                        ref name,
-                        ..
-                    }) => {
-                        write!(f, "CreateExternalTable: {name:?}")
-                    }
-                    LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name,
-                        primary_key,
-                        ..
-                    }) => {
-                        let pk: Vec<String> =
-                            primary_key.iter().map(|c| c.name.to_string()).collect();
-                        let mut pk = pk.join(", ");
-                        if !pk.is_empty() {
-                            pk = format!(" primary_key=[{pk}]");
-                        }
-                        write!(f, "CreateMemoryTable: {name:?}{pk}")
-                    }
-                    LogicalPlan::CreateView(CreateView { name, .. }) => {
-                        write!(f, "CreateView: {name:?}")
-                    }
-                    LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                        schema_name,
-                        ..
-                    }) => {
-                        write!(f, "CreateCatalogSchema: {schema_name:?}")
-                    }
-                    LogicalPlan::CreateCatalog(CreateCatalog {
-                        catalog_name, ..
-                    }) => {
-                        write!(f, "CreateCatalog: {catalog_name:?}")
-                    }
-                    LogicalPlan::DropTable(DropTable {
-                        name, if_exists, ..
-                    }) => {
-                        write!(f, "DropTable: {name:?} if not exist:={if_exists}")
-                    }
-                    LogicalPlan::DropView(DropView {
-                        name, if_exists, ..
-                    }) => {
-                        write!(f, "DropView: {name:?} if not exist:={if_exists}")
-                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -1115,102 +1128,6 @@ impl ToStringifiedPlan for LogicalPlan {
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan {
         StringifiedPlan::new(plan_type, self.display_indent().to_string())
     }
-}
-
-/// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinType {
-    /// Inner Join
-    Inner,
-    /// Left Join
-    Left,
-    /// Right Join
-    Right,
-    /// Full Join
-    Full,
-    /// Left Semi Join
-    LeftSemi,
-    /// Right Semi Join
-    RightSemi,
-    /// Left Anti Join
-    LeftAnti,
-    /// Right Anti Join
-    RightAnti,
-}
-
-impl JoinType {
-    pub fn is_outer(self) -> bool {
-        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
-    }
-}
-
-impl Display for JoinType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let join_type = match self {
-            JoinType::Inner => "Inner",
-            JoinType::Left => "Left",
-            JoinType::Right => "Right",
-            JoinType::Full => "Full",
-            JoinType::LeftSemi => "LeftSemi",
-            JoinType::RightSemi => "RightSemi",
-            JoinType::LeftAnti => "LeftAnti",
-            JoinType::RightAnti => "RightAnti",
-        };
-        write!(f, "{join_type}")
-    }
-}
-
-/// Join constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinConstraint {
-    /// Join ON
-    On,
-    /// Join USING
-    Using,
-}
-
-/// Creates a catalog (aka "Database").
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateCatalog {
-    /// The catalog name
-    pub catalog_name: String,
-    /// Do nothing (except issuing a notice) if a schema with the same name already exists
-    pub if_not_exists: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Creates a schema.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateCatalogSchema {
-    /// The table schema
-    pub schema_name: String,
-    /// Do nothing (except issuing a notice) if a schema with the same name already exists
-    pub if_not_exists: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Drops a table.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DropTable {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// If the table exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
-/// Drops a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DropView {
-    /// The view name
-    pub name: OwnedTableReference,
-    /// If the view exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
 }
 
 /// Produces no rows: An empty relation with an empty schema
@@ -1460,82 +1377,6 @@ pub struct Union {
     pub schema: DFSchemaRef,
 }
 
-/// Creates an in memory table.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateMemoryTable {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// The ordered list of columns in the primary key, or an empty vector if none
-    pub primary_key: Vec<Column>,
-    /// The logical plan
-    pub input: Arc<LogicalPlan>,
-    /// Option to not error if table already exists
-    pub if_not_exists: bool,
-    /// Option to replace table content if table already exists
-    pub or_replace: bool,
-}
-
-/// Creates a view.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CreateView {
-    /// The table name
-    pub name: OwnedTableReference,
-    /// The logical plan
-    pub input: Arc<LogicalPlan>,
-    /// Option to not error if table already exists
-    pub or_replace: bool,
-    /// SQL used to create the view, if available
-    pub definition: Option<String>,
-}
-
-/// Creates an external table.
-#[derive(Clone, PartialEq, Eq)]
-pub struct CreateExternalTable {
-    /// The table schema
-    pub schema: DFSchemaRef,
-    /// The table name
-    pub name: OwnedTableReference,
-    /// The physical location
-    pub location: String,
-    /// The file type of physical file
-    pub file_type: String,
-    /// Whether the CSV file contains a header
-    pub has_header: bool,
-    /// Delimiter for CSV
-    pub delimiter: char,
-    /// Partition Columns
-    pub table_partition_cols: Vec<String>,
-    /// Option to not error if table already exists
-    pub if_not_exists: bool,
-    /// SQL used to create the table, if available
-    pub definition: Option<String>,
-    /// Order expressions supplied by user
-    pub order_exprs: Vec<Expr>,
-    /// File compression type (GZIP, BZIP2, XZ, ZSTD)
-    pub file_compression_type: CompressionTypeVariant,
-    /// Table(provider) specific options
-    pub options: HashMap<String, String>,
-}
-
-// Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
-impl Hash for CreateExternalTable {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.schema.hash(state);
-        self.name.hash(state);
-        self.location.hash(state);
-        self.file_type.hash(state);
-        self.has_header.hash(state);
-        self.delimiter.hash(state);
-        self.table_partition_cols.hash(state);
-        self.if_not_exists.hash(state);
-        self.definition.hash(state);
-        self.file_compression_type.hash(state);
-        self.order_exprs.hash(state);
-        self.options.len().hash(state); // HashMap is not hashable
-    }
-}
-
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
 /// `Expr::Placeholder` expressions that are filled in during execution
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -1586,19 +1427,22 @@ pub struct Analyze {
 }
 
 /// Extension operator defined outside of DataFusion
-#[allow(clippy::derived_hash_with_manual_eq)] // see impl PartialEq for explanation
+// TODO(clippy): This clippy `allow` should be removed if
+// the manual `PartialEq` is removed in favor of a derive.
+// (see `PartialEq` the impl for details.)
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Eq, Hash)]
 pub struct Extension {
     /// The runtime extension operator
     pub node: Arc<dyn UserDefinedLogicalNode>,
 }
 
+// `PartialEq` cannot be derived for types containing `Arc<dyn Trait>`.
+// This manual implementation should be removed if
+// https://github.com/rust-lang/rust/issues/39128 is fixed.
 impl PartialEq for Extension {
-    #[allow(clippy::op_ref)] // clippy false positive
     fn eq(&self, other: &Self) -> bool {
-        // must be manually derived due to a bug in #[derive(PartialEq)]
-        // https://github.com/rust-lang/rust/issues/39128
-        &self.node == &other.node
+        self.node.eq(&other.node)
     }
 }
 
@@ -1647,7 +1491,6 @@ impl Aggregate {
         let group_expr = enumerate_grouping_sets(group_expr)?;
         let grouping_expr: Vec<Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
         let all_expr = grouping_expr.iter().chain(aggr_expr.iter());
-        validate_unique_names("Aggregations", all_expr.clone())?;
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
@@ -1861,7 +1704,6 @@ impl Display for PlanType {
 
 /// Represents some sort of execution plan, in String form
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(clippy::rc_buffer)]
 pub struct StringifiedPlan {
     /// An identifier of what type of plan this string represents
     pub plan_type: PlanType,
@@ -2354,10 +2196,10 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder {
-                id: "".into(),
-                data_type: Some(DataType::Int32),
-            }))
+            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
+                "".into(),
+                Some(DataType::Int32),
+            ))))
             .unwrap()
             .build()
             .unwrap();
@@ -2370,10 +2212,10 @@ mod tests {
 
         let plan = table_scan(TableReference::none(), &schema, None)
             .unwrap()
-            .filter(col("id").eq(Expr::Placeholder {
-                id: "$0".into(),
-                data_type: Some(DataType::Int32),
-            }))
+            .filter(col("id").eq(Expr::Placeholder(Placeholder::new(
+                "$0".into(),
+                Some(DataType::Int32),
+            ))))
             .unwrap()
             .build()
             .unwrap();

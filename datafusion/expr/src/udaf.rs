@@ -86,10 +86,11 @@ impl AggregateUDF {
     /// creates a logical expression with a call of the UDAF
     /// This utility allows using the UDAF without requiring access to the registry.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
-        Expr::AggregateUDF {
+        Expr::AggregateUDF(crate::expr::AggregateUDF {
             fun: Arc::new(self.clone()),
             args,
             filter: None,
-        }
+            order_by: None,
+        })
     }
 }

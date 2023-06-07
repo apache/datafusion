@@ -15,40 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains the shared state available at different parts
-//! of query planning and execution
-//!
-//! # Runtime Environment
-//!
-//! [`runtime_env::RuntimeEnv`] can be created from a [`runtime_env::RuntimeConfig`] and
-//! stores state to be shared across multiple sessions. In most applications there will
-//! be a single [`runtime_env::RuntimeEnv`] for the entire process
-//!
-//! # Session Context
-//!
-//! [`context::SessionContext`] can be created from a [`context::SessionConfig`] and
-//! an optional [`runtime_env::RuntimeConfig`], and stores the state for a particular
-//! query session.
-//!
-//! In particular [`context::SessionState`] is the information available to query planning
-//!
-//! # Task Context
-//!
-//! [`context::TaskContext`] is typically created from a [`context::SessionContext`] or
-//! [`context::SessionState`], and represents the state available to query execution.
-//!
-//! In particular it is the state passed to [`crate::physical_plan::ExecutionPlan::execute`]
-//!
+//! Shared state for query planning and execution.
 
 pub mod context;
 // backwards compatibility
 pub use crate::datasource::file_format::options;
 
 // backwards compatibility
-pub use datafusion_execution::disk_manager;
-pub use datafusion_execution::memory_pool;
-pub use datafusion_execution::registry;
-pub use datafusion_execution::runtime_env;
-
-pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
+pub use datafusion_execution::*;

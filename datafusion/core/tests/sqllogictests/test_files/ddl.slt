@@ -29,6 +29,22 @@ select * from users;
 2 3
 
 statement ok
+drop table users
+
+statement ok
+SELECT * INTO users FROM (VALUES(1,2),(2,3));
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+
+# Error if the table already exists
+statement error DataFusion error: Execution error: Table 'users' already exists
+SELECT * INTO users FROM (VALUES(1,2),(2,3));
+
+statement ok
 insert into users values(2, 4);
 
 query II rowsort
@@ -252,6 +268,18 @@ SELECT * FROM my_table order by c1 LIMIT 1
 0.00001 0.000000000001 true
 
 statement ok
+drop table my_table
+
+# select_into
+statement ok
+SELECT* INTO my_table FROM (SELECT * FROM aggregate_simple)
+
+query RRB rowsort
+SELECT * FROM my_table order by c1 LIMIT 1
+----
+0.00001 0.000000000001 true
+
+statement ok
 DROP TABLE my_table;
 
 # not ok to drop after already dropped
@@ -282,6 +310,18 @@ DROP TABLE my_table;
 statement ok
 DROP TABLE aggregate_simple
 
+# Arrow format
+statement ok
+CREATE external table arrow_simple STORED as ARROW LOCATION 'tests/data/example.arrow';
+
+query ITB rowsort
+SELECT * FROM arrow_simple order by f1 LIMIT 1
+----
+2 bar NULL
+
+statement ok
+DROP TABLE arrow_simple
+
 # create_table_with_schema_as_select_mismatch
 statement error table 'datafusion.public.aggregate_simple' not found
 CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * FROM aggregate_simple;
@@ -296,9 +336,36 @@ SELECT * FROM my_table;
 ----
 1 2 hello
 
+# Preserving data types with select into
+statement ok
+SELECT * INTO new_table FROM my_table
+
+query IRT rowsort
+SELECT * FROM new_table;
+----
+1 2 hello
+
+statement ok
+DROP TABLE new_table
+
+# create_table_with_schema_as_multiple_values
+statement ok
+CREATE TABLE test_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello'),(2, 1, 'there'),(3, 0, '!');
+
+statement ok
+SELECT * INTO new_table FROM test_table ORDER BY c1 DESC LIMIT 2
+
+query IRT
+SELECT * FROM new_table
+----
+3 0 !
+2 1 there
+
 statement ok
 DROP TABLE my_table;
 
+statement ok
+DROP TABLE new_table;
 
 # TODO enable information schema
 
@@ -485,6 +552,20 @@ CREATE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
 statement ok
 CREATE TABLE IF NOT EXISTS table_without_values(field1 BIGINT, field2 BIGINT);
 
+statement ok
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+
+# Should not recreate the same EXTERNAL table
+statement error Execution error: Table 'aggregate_simple' already exists
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+
+statement ok
+CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'
+
+# create bad custom table
+statement error DataFusion error: Execution error: Unable to find factory for DELTATABLE
+CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';
+
 
 # Should not recreate the same table
 statement error Table 'table_without_values' already exists
@@ -606,6 +687,17 @@ NULL
 statement ok
 drop table foo;
 
+# create csv table with empty csv file
+statement ok
+CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/empty.csv';
+
+query TTI
+select column_name, data_type, ordinal_position from information_schema.columns where table_name='empty';;
+----
+c1 Utf8 0
+c2 Utf8 1
+c3 Utf8 2
+
 
 ## should allow any type of exprs as values
 statement ok
@@ -615,6 +707,67 @@ query ?I
 select * from t;
 ----
 0 years 0 mons 5 days 0 hours 0 mins 0.000000003 secs 1
+
+statement ok
+drop table t;
+
+##########
+# Dropping schemas
+##########
+
+statement error DataFusion error: Execution error: Cannot drop schema foo_schema because other tables depend on it: bar
+DROP SCHEMA foo_schema;
+
+statement ok
+DROP SCHEMA foo_schema CASCADE;
+
+statement error DataFusion error: Execution error: Schema 'doesnt_exist' doesn't exist.
+DROP SCHEMA doesnt_exist;
+
+statement ok
+DROP SCHEMA IF EXISTS doesnt_exist;
+
+statement ok
+CREATE SCHEMA empty_schema;
+
+statement ok
+DROP SCHEMA empty_schema;
+
+##########
+# creating external CSV tables with an infinite marking
+##########
+
+# external table with infinite source
+statement ok
+CREATE UNBOUNDED external table t(c1 integer, c2 integer, c3 integer)
+STORED as CSV
+WITH HEADER ROW
+LOCATION 'tests/data/empty.csv';
+
+# should see infinite_source=true in the explain
+query TT
+explain select c1 from t;
+----
+logical_plan TableScan: t projection=[c1]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/empty.csv]]}, projection=[c1], infinite_source=true, has_header=true
+
+statement ok
+drop table t;
+
+
+# external table without explicit non infinite source
+statement ok
+CREATE external table t(c1 integer, c2 integer, c3 integer)
+STORED as CSV
+WITH HEADER ROW
+LOCATION 'tests/data/empty.csv';
+
+# expect to see no infinite_source in the explain
+query TT
+explain select c1 from t;
+----
+logical_plan TableScan: t projection=[c1]
+physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/empty.csv]]}, projection=[c1], has_header=true
 
 statement ok
 drop table t;

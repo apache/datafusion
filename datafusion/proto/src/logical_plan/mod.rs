@@ -17,7 +17,7 @@
 
 use crate::common::{byte_to_string, proto_error, str_to_byte};
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::CustomTableScanNode;
+use crate::protobuf::{CustomTableScanNode, LogicalExprNodeCollection};
 use crate::{
     convert_required,
     protobuf::{
@@ -42,6 +42,8 @@ use datafusion_common::{
     context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
     Result,
 };
+use datafusion_expr::logical_plan::DdlStatement;
+use datafusion_expr::DropView;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -324,19 +326,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| from_proto::parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let file_sort_order = scan
-                    .file_sort_order
-                    .iter()
-                    .map(|expr| from_proto::parse_expr(expr, ctx))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                // Protobuf doesn't distinguish between "not present"
-                // and empty
-                let file_sort_order = if file_sort_order.is_empty() {
-                    None
-                } else {
-                    Some(file_sort_order)
-                };
+                let mut all_sort_orders = vec![];
+                for order in &scan.file_sort_order {
+                    let file_sort_order = order
+                        .logical_expr_nodes
+                        .iter()
+                        .map(|expr| from_proto::parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    all_sort_orders.push(file_sort_order)
+                }
 
                 let file_format: Arc<dyn FileFormat> =
                     match scan.file_format_type.as_ref().ok_or_else(|| {
@@ -383,7 +381,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
-                    .with_file_sort_order(file_sort_order);
+                    .with_file_sort_order(all_sort_orders);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -504,13 +502,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )))?
                 }
 
-                let order_exprs = create_extern_table
-                    .order_exprs
-                    .iter()
-                    .map(|expr| from_proto::parse_expr(expr, ctx))
-                    .collect::<Result<Vec<Expr>, _>>()?;
+                let mut order_exprs = vec![];
+                for expr in &create_extern_table.order_exprs {
+                    let order_expr = expr
+                        .logical_expr_nodes
+                        .iter()
+                        .map(|expr| from_proto::parse_expr(expr, ctx))
+                        .collect::<Result<Vec<Expr>, _>>()?;
+                    order_exprs.push(order_expr)
+                }
 
-                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
                     name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
@@ -526,8 +528,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     if_not_exists: create_extern_table.if_not_exists,
                     file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
+                    unbounded: create_extern_table.unbounded,
                     options: create_extern_table.options.clone(),
-                }))
+                })))
             }
             LogicalPlanType::CreateView(create_view) => {
                 let plan = create_view
@@ -541,7 +544,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                Ok(LogicalPlan::CreateView(CreateView {
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_owned_table_reference(
                         create_view.name.as_ref(),
                         "CreateView",
@@ -549,7 +552,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
-                }))
+                })))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
                 let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
@@ -558,11 +561,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                    schema_name: create_catalog_schema.schema_name.clone(),
-                    if_not_exists: create_catalog_schema.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                    CreateCatalogSchema {
+                        schema_name: create_catalog_schema.schema_name.clone(),
+                        if_not_exists: create_catalog_schema.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::CreateCatalog(create_catalog) => {
                 let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
@@ -571,11 +576,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                    catalog_name: create_catalog.catalog_name.clone(),
-                    if_not_exists: create_catalog.if_not_exists,
-                    schema: pb_schema.try_into()?,
-                }))
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
+                    CreateCatalog {
+                        catalog_name: create_catalog.catalog_name.clone(),
+                        if_not_exists: create_catalog.if_not_exists,
+                        schema: pb_schema.try_into()?,
+                    },
+                )))
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
@@ -763,6 +770,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .prepare(prepare.name.clone(), data_types)?
                     .build()
             }
+            LogicalPlanType::DropView(dropview) => Ok(datafusion_expr::LogicalPlan::Ddl(
+                datafusion_expr::DdlStatement::DropView(DropView {
+                    name: from_owned_table_reference(dropview.name.as_ref(), "DropView")?,
+                    if_exists: dropview.if_exists,
+                    schema: Arc::new(convert_required!(dropview.schema)?),
+                }),
+            )),
         }
     }
 
@@ -843,15 +857,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     };
 
                     let options = listing_table.options();
-                    let file_sort_order =
-                        if let Some(file_sort_order) = &options.file_sort_order {
-                            file_sort_order
+
+                    let mut exprs_vec: Vec<LogicalExprNodeCollection> = vec![];
+                    for order in &options.file_sort_order {
+                        let expr_vec = LogicalExprNodeCollection {
+                            logical_expr_nodes: order
                                 .iter()
                                 .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<protobuf::LogicalExprNode>, _>>()?
-                        } else {
-                            vec![]
+                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
                         };
+                        exprs_vec.push(expr_vec);
+                    }
 
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
@@ -874,7 +890,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 target_partitions: options.target_partitions as u32,
-                                file_sort_order,
+                                file_sort_order: exprs_vec,
                             },
                         )),
                     })
@@ -1166,46 +1182,61 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateExternalTable(CreateExternalTable {
-                name,
-                location,
-                file_type,
-                has_header,
-                delimiter,
-                schema: df_schema,
-                table_partition_cols,
-                if_not_exists,
-                definition,
-                file_compression_type,
-                order_exprs,
-                options,
-            }) => Ok(protobuf::LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
-                    protobuf::CreateExternalTableNode {
-                        name: Some(name.clone().into()),
-                        location: location.clone(),
-                        file_type: file_type.clone(),
-                        has_header: *has_header,
-                        schema: Some(df_schema.try_into()?),
-                        table_partition_cols: table_partition_cols.clone(),
-                        if_not_exists: *if_not_exists,
-                        delimiter: String::from(*delimiter),
-                        order_exprs: order_exprs
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
+                CreateExternalTable {
+                    name,
+                    location,
+                    file_type,
+                    has_header,
+                    delimiter,
+                    schema: df_schema,
+                    table_partition_cols,
+                    if_not_exists,
+                    definition,
+                    file_compression_type,
+                    order_exprs,
+                    unbounded,
+                    options,
+                },
+            )) => {
+                let mut converted_order_exprs: Vec<LogicalExprNodeCollection> = vec![];
+                for order in order_exprs {
+                    let temp = LogicalExprNodeCollection {
+                        logical_expr_nodes: order
                             .iter()
                             .map(|expr| expr.try_into())
-                            .collect::<Result<Vec<_>, to_proto::Error>>()?,
-                        definition: definition.clone().unwrap_or_default(),
-                        file_compression_type: file_compression_type.to_string(),
-                        options: options.clone(),
-                    },
-                )),
-            }),
-            LogicalPlan::CreateView(CreateView {
+                            .collect::<Result<Vec<_>, to_proto::Error>>(
+                        )?,
+                    };
+                    converted_order_exprs.push(temp);
+                }
+
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
+                        protobuf::CreateExternalTableNode {
+                            name: Some(name.clone().into()),
+                            location: location.clone(),
+                            file_type: file_type.clone(),
+                            has_header: *has_header,
+                            schema: Some(df_schema.try_into()?),
+                            table_partition_cols: table_partition_cols.clone(),
+                            if_not_exists: *if_not_exists,
+                            delimiter: String::from(*delimiter),
+                            order_exprs: converted_order_exprs,
+                            definition: definition.clone().unwrap_or_default(),
+                            file_compression_type: file_compression_type.to_string(),
+                            unbounded: *unbounded,
+                            options: options.clone(),
+                        },
+                    )),
+                })
+            }
+            LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                 name,
                 input,
                 or_replace,
                 definition,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
                         name: Some(name.clone().into()),
@@ -1218,11 +1249,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 ))),
             }),
-            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                schema_name,
-                if_not_exists,
-                schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
+                CreateCatalogSchema {
+                    schema_name,
+                    if_not_exists,
+                    schema: df_schema,
+                },
+            )) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
@@ -1231,11 +1264,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     },
                 )),
             }),
-            LogicalPlan::CreateCatalog(CreateCatalog {
+            LogicalPlan::Ddl(DdlStatement::CreateCatalog(CreateCatalog {
                 catalog_name,
                 if_not_exists,
                 schema: df_schema,
-            }) => Ok(protobuf::LogicalPlanNode {
+            })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalog(
                     protobuf::CreateCatalogNode {
                         catalog_name: catalog_name.clone(),
@@ -1354,14 +1387,27 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Unnest(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Unnest",
             )),
-            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for CreateMemoryTable",
             )),
-            LogicalPlan::DropTable(_) => Err(proto_error(
+            LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
-            LogicalPlan::DropView(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DropView",
+            LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                name,
+                if_exists,
+                schema,
+            })) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::DropView(
+                    protobuf::DropViewNode {
+                        name: Some(name.clone().into()),
+                        if_exists: *if_exists,
+                        schema: Some(schema.try_into()?),
+                    },
+                )),
+            }),
+            LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
             LogicalPlan::Statement(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Statement",
@@ -1404,7 +1450,8 @@ mod roundtrip_tests {
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
     use datafusion_expr::expr::{
-        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
+        ScalarUDF, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
     use datafusion_expr::{
@@ -1629,13 +1676,23 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
+
+        // SELECT
         let plan = ctx
             .sql("SELECT * FROM view_t1")
             .await?
             .into_optimized_plan()?;
+
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+        // DROP
+        let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
         Ok(())
     }
 
@@ -2426,11 +2483,11 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_inlist() {
-        let test_expr = Expr::InList {
-            expr: Box::new(lit(1.0_f32)),
-            list: vec![lit(2.0_f32)],
-            negated: true,
-        };
+        let test_expr = Expr::InList(InList::new(
+            Box::new(lit(1.0_f32)),
+            vec![lit(2.0_f32)],
+            true,
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2446,10 +2503,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_sqrt() {
-        let test_expr = Expr::ScalarFunction {
-            fun: Sqrt,
-            args: vec![col("col")],
-        };
+        let test_expr = Expr::ScalarFunction(ScalarFunction::new(Sqrt, vec![col("col")]));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
@@ -2515,6 +2569,7 @@ mod roundtrip_tests {
             vec![col("bananas")],
             false,
             None,
+            None,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2527,6 +2582,7 @@ mod roundtrip_tests {
             vec![col("bananas")],
             true,
             None,
+            None,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2538,6 +2594,7 @@ mod roundtrip_tests {
             AggregateFunction::ApproxPercentileCont,
             vec![col("bananas"), lit(0.42_f32)],
             false,
+            None,
             None,
         ));
 
@@ -2592,11 +2649,12 @@ mod roundtrip_tests {
             Arc::new(vec![DataType::Float64, DataType::UInt32]),
         );
 
-        let test_expr = Expr::AggregateUDF {
-            fun: Arc::new(dummy_agg.clone()),
-            args: vec![lit(1.0_f64)],
-            filter: Some(Box::new(lit(true))),
-        };
+        let test_expr = Expr::AggregateUDF(expr::AggregateUDF::new(
+            Arc::new(dummy_agg.clone()),
+            vec![lit(1.0_f64)],
+            Some(Box::new(lit(true))),
+            None,
+        ));
 
         let ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
@@ -2618,10 +2676,8 @@ mod roundtrip_tests {
             scalar_fn,
         );
 
-        let test_expr = Expr::ScalarUDF {
-            fun: Arc::new(udf.clone()),
-            args: vec![lit("")],
-        };
+        let test_expr =
+            Expr::ScalarUDF(ScalarUDF::new(Arc::new(udf.clone()), vec![lit("")]));
 
         let ctx = SessionContext::new();
         ctx.register_udf(udf);
@@ -2660,16 +2716,16 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_substr() {
         // substr(string, position)
-        let test_expr = Expr::ScalarFunction {
-            fun: Substr,
-            args: vec![col("col"), lit(1_i64)],
-        };
+        let test_expr = Expr::ScalarFunction(ScalarFunction::new(
+            Substr,
+            vec![col("col"), lit(1_i64)],
+        ));
 
         // substr(string, position, count)
-        let test_expr_with_count = Expr::ScalarFunction {
-            fun: Substr,
-            args: vec![col("col"), lit(1_i64), lit(1_i64)],
-        };
+        let test_expr_with_count = Expr::ScalarFunction(ScalarFunction::new(
+            Substr,
+            vec![col("col"), lit(1_i64), lit(1_i64)],
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx.clone());

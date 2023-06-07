@@ -27,12 +27,12 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use log::debug;
+use log::trace;
 
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]
@@ -132,7 +132,7 @@ impl ExecutionPlan for EmptyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         if partition >= self.partitions {
             return Err(DataFusionError::Internal(format!(

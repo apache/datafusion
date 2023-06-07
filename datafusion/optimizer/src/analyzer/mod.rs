@@ -17,16 +17,20 @@
 
 pub mod count_wildcard_rule;
 pub mod inline_table_scan;
+pub mod subquery;
 pub mod type_coercion;
 
 use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 
+use crate::analyzer::subquery::check_subquery_expr;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::utils::log_plan;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::expr::Exists;
+use datafusion_expr::expr::InSubquery;
 use datafusion_expr::utils::inspect_expr_pre;
 use datafusion_expr::{Expr, LogicalPlan};
 use log::debug;
@@ -117,8 +121,8 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
         for expr in plan.expressions().iter() {
             // recursively look for subqueries
             inspect_expr_pre(expr, |expr| match expr {
-                Expr::Exists { subquery, .. }
-                | Expr::InSubquery { subquery, .. }
+                Expr::Exists(Exists { subquery, .. })
+                | Expr::InSubquery(InSubquery { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
                     check_subquery_expr(plan, &subquery.subquery, expr)
                 }
@@ -130,115 +134,4 @@ fn check_plan(plan: &LogicalPlan) -> Result<()> {
     })?;
 
     Ok(())
-}
-
-/// Do necessary check on subquery expressions and fail the invalid plan
-/// 1) Check whether the outer plan is in the allowed outer plans list to use subquery expressions,
-///    the allowed while list: [Projection, Filter, Window, Aggregate, Sort, Join].
-/// 2) Check whether the inner plan is in the allowed inner plans list to use correlated(outer) expressions.
-/// 3) Check and validate unsupported cases to use the correlated(outer) expressions inside the subquery(inner) plans/inner expressions.
-/// For example, we do not want to support to use correlated expressions as the Join conditions in the subquery plan when the Join
-/// is a Full Out Join
-fn check_subquery_expr(
-    outer_plan: &LogicalPlan,
-    inner_plan: &LogicalPlan,
-    expr: &Expr,
-) -> Result<()> {
-    check_plan(inner_plan)?;
-
-    // Scalar subquery should only return one column
-    if matches!(expr, Expr::ScalarSubquery(subquery) if subquery.subquery.schema().fields().len() > 1)
-    {
-        return Err(DataFusionError::Plan(
-            "Scalar subquery should only return one column".to_string(),
-        ));
-    }
-
-    match outer_plan {
-        LogicalPlan::Projection(_)
-        | LogicalPlan::Filter(_)
-        | LogicalPlan::Window(_)
-        | LogicalPlan::Aggregate(_)
-        | LogicalPlan::Join(_) => Ok(()),
-        LogicalPlan::Sort(_) => match expr {
-            Expr::InSubquery { .. } | Expr::Exists { .. } => Err(DataFusionError::Plan(
-                "In/Exist subquery can not be used in Sort plan nodes".to_string(),
-            )),
-            Expr::ScalarSubquery(_) => Ok(()),
-            _ => Ok(()),
-        },
-        _ => Err(DataFusionError::Plan(
-            "Subquery can only be used in Projection, Filter, \
-            Window functions, Aggregate, Sort and Join plan nodes"
-                .to_string(),
-        )),
-    }?;
-    check_correlations_in_subquery(outer_plan, inner_plan, expr, true)
-}
-
-// Recursively check the unsupported outer references in the sub query plan.
-fn check_correlations_in_subquery(
-    outer_plan: &LogicalPlan,
-    inner_plan: &LogicalPlan,
-    expr: &Expr,
-    can_contain_outer_ref: bool,
-) -> Result<()> {
-    // We want to support as many operators as possible inside the correlated subquery
-    if !can_contain_outer_ref && contains_outer_reference(outer_plan, inner_plan, expr) {
-        return Err(DataFusionError::Plan(
-            "Accessing outer reference column is not allowed in the plan".to_string(),
-        ));
-    }
-    match inner_plan {
-        LogicalPlan::Projection(_)
-        | LogicalPlan::Filter(_)
-        | LogicalPlan::Window(_)
-        | LogicalPlan::Aggregate(_)
-        | LogicalPlan::Distinct(_)
-        | LogicalPlan::Sort(_)
-        | LogicalPlan::CrossJoin(_)
-        | LogicalPlan::Union(_)
-        | LogicalPlan::TableScan(_)
-        | LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::Limit(_)
-        | LogicalPlan::Values(_)
-        | LogicalPlan::Subquery(_)
-        | LogicalPlan::SubqueryAlias(_) => {
-            inner_plan.apply_children(&mut |plan| {
-                check_correlations_in_subquery(
-                    outer_plan,
-                    plan,
-                    expr,
-                    can_contain_outer_ref,
-                )?;
-                Ok(VisitRecursion::Continue)
-            })?;
-            Ok(())
-        }
-        LogicalPlan::Join(_) => {
-            // TODO support correlation columns in the subquery join
-            inner_plan.apply_children(&mut |plan| {
-                check_correlations_in_subquery(
-                    outer_plan,
-                    plan,
-                    expr,
-                    can_contain_outer_ref,
-                )?;
-                Ok(VisitRecursion::Continue)
-            })?;
-            Ok(())
-        }
-        _ => Err(DataFusionError::Plan(
-            "Unsupported operator in the subquery plan.".to_string(),
-        )),
-    }
-}
-
-fn contains_outer_reference(
-    _outer_plan: &LogicalPlan,
-    _inner_plan: &LogicalPlan,
-    _expr: &Expr,
-) -> bool {
-    // TODO check outer references
-    false
 }

@@ -61,16 +61,11 @@ impl PhysicalOptimizerRule for PipelineFixer {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
-        let physical_optimizer_subrules: Vec<Box<PipelineFixerSubrule>> = vec![
+        let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let state = pipeline.transform_up(&|p| {
-            apply_subrules_and_check_finiteness_requirements(
-                p,
-                &physical_optimizer_subrules,
-            )
-        })?;
+        let state = pipeline.transform_up(&|p| apply_subrules(p, &subrules))?;
         Ok(state.plan)
     }
 
@@ -88,13 +83,13 @@ impl PhysicalOptimizerRule for PipelineFixer {
 /// question. If possible, it makes this replacement; otherwise, it has no
 /// effect.
 fn hash_join_convert_symmetric_subrule(
-    input: PipelineStatePropagator,
+    mut input: PipelineStatePropagator,
 ) -> Option<Result<PipelineStatePropagator>> {
-    let plan = input.plan;
-    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children_unbounded;
+    if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
+        let ub_flags = &input.children_unbounded;
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        let new_plan = if left_unbounded && right_unbounded {
+        input.unbounded = left_unbounded || right_unbounded;
+        let result = if left_unbounded && right_unbounded {
             SymmetricHashJoinExec::try_new(
                 hash_join.left().clone(),
                 hash_join.right().clone(),
@@ -107,15 +102,14 @@ fn hash_join_convert_symmetric_subrule(
                 hash_join.join_type(),
                 hash_join.null_equals_null(),
             )
-            .map(|e| Arc::new(e) as _)
+            .map(|exec| {
+                input.plan = Arc::new(exec) as _;
+                input
+            })
         } else {
-            Ok(plan)
+            Ok(input)
         };
-        Some(new_plan.map(|plan| PipelineStatePropagator {
-            plan,
-            unbounded: left_unbounded || right_unbounded,
-            children_unbounded: ub_flags,
-        }))
+        Some(result)
     } else {
         None
     }
@@ -163,32 +157,29 @@ fn hash_join_convert_symmetric_subrule(
 ///
 /// ```
 fn hash_join_swap_subrule(
-    input: PipelineStatePropagator,
+    mut input: PipelineStatePropagator,
 ) -> Option<Result<PipelineStatePropagator>> {
-    let plan = input.plan;
-    if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-        let ub_flags = input.children_unbounded;
+    if let Some(hash_join) = input.plan.as_any().downcast_ref::<HashJoinExec>() {
+        let ub_flags = &input.children_unbounded;
         let (left_unbounded, right_unbounded) = (ub_flags[0], ub_flags[1]);
-        let new_plan = if left_unbounded && !right_unbounded {
-            if matches!(
+        input.unbounded = left_unbounded || right_unbounded;
+        let result = if left_unbounded
+            && !right_unbounded
+            && matches!(
                 *hash_join.join_type(),
                 JoinType::Inner
                     | JoinType::Left
                     | JoinType::LeftSemi
                     | JoinType::LeftAnti
             ) {
-                swap(hash_join)
-            } else {
-                Ok(plan)
-            }
+            swap(hash_join).map(|plan| {
+                input.plan = plan;
+                input
+            })
         } else {
-            Ok(plan)
+            Ok(input)
         };
-        Some(new_plan.map(|plan| PipelineStatePropagator {
-            plan,
-            unbounded: left_unbounded || right_unbounded,
-            children_unbounded: ub_flags,
-        }))
+        Some(result)
     } else {
         None
     }
@@ -220,22 +211,24 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     }
 }
 
-fn apply_subrules_and_check_finiteness_requirements(
+fn apply_subrules(
     mut input: PipelineStatePropagator,
-    physical_optimizer_subrules: &Vec<Box<PipelineFixerSubrule>>,
+    subrules: &Vec<Box<PipelineFixerSubrule>>,
 ) -> Result<Transformed<PipelineStatePropagator>> {
-    for sub_rule in physical_optimizer_subrules {
-        if let Some(value) = sub_rule(input.clone()).transpose()? {
+    for subrule in subrules {
+        if let Some(value) = subrule(input.clone()).transpose()? {
             input = value;
         }
     }
     let is_unbounded = input
         .plan
         .unbounded_output(&input.children_unbounded)
-        // Treat the cases where executor cannot be run on unbounded data
-        // as generating unbounded data. These executors may be fixed during optimization
-        // (Sort will be removed, Window will be swapped etc.), If cannot
-        // be fixed Pipeline checker will generate error anyway.
+        // Treat the case where an operator can not run on unbounded data as
+        // if it can and it outputs unbounded data. Do not raise an error yet.
+        // Such operators may be fixed, adjusted or replaced later on during
+        // optimization passes -- sorts may be removed, windows may be adjusted
+        // etc. If this doesn't happen, the final `PipelineChecker` rule will
+        // catch this and raise an error anyway.
         .unwrap_or(true);
     input.unbounded = is_unbounded;
     Ok(Transformed::Yes(input))
@@ -285,6 +278,7 @@ mod hash_join_tests {
     use crate::test_util::UnboundedExec;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::utils::DataPtr;
     use std::sync::Arc;
 
     struct TestCase {
@@ -617,7 +611,6 @@ mod hash_join_tests {
         Ok(())
     }
 
-    #[allow(clippy::vtable_address_comparisons)]
     async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
         let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
@@ -684,8 +677,8 @@ mod hash_join_tests {
             ..
         }) = plan.as_any().downcast_ref::<HashJoinExec>()
         {
-            let left_changed = Arc::ptr_eq(left, &right_exec);
-            let right_changed = Arc::ptr_eq(right, &left_exec);
+            let left_changed = Arc::data_ptr_eq(left, &right_exec);
+            let right_changed = Arc::data_ptr_eq(right, &left_exec);
             // If this is not equal, we have a bigger problem.
             assert_eq!(left_changed, right_changed);
             assert_eq!(

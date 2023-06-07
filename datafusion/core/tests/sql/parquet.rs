@@ -58,9 +58,7 @@ async fn parquet_with_sort_order_specified() {
     let session_config = SessionConfig::new().with_target_partitions(2);
 
     // The sort order is not specified
-    let options_no_sort = parquet_read_options
-        .to_listing_options(&session_config)
-        .with_file_sort_order(None);
+    let options_no_sort = parquet_read_options.to_listing_options(&session_config);
 
     // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("string_col"), col("int_col")]
@@ -74,12 +72,12 @@ async fn parquet_with_sort_order_specified() {
 
     let options_sort = parquet_read_options
         .to_listing_options(&session_config)
-        .with_file_sort_order(Some(file_sort_order));
+        .with_file_sort_order(vec![file_sort_order]);
 
     // This string appears in ParquetExec if the output ordering is
     // specified
     let expected_output_ordering =
-        "output_ordering=[string_col@9 ASC NULLS LAST, int_col@4 ASC NULLS LAST]";
+        "output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]";
 
     // when sort not specified, should not appear in the explain plan
     let num_files = 1;
@@ -151,7 +149,7 @@ async fn fixed_size_binary_columns() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/data/test_binary.parquet",
+        "tests/data/test_binary.parquet",
         ParquetReadOptions::default(),
     )
     .await
@@ -170,7 +168,7 @@ async fn window_fn_timestamp_tz() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/data/timestamp_with_tz.parquet",
+        "tests/data/timestamp_with_tz.parquet",
         ParquetReadOptions::default(),
     )
     .await

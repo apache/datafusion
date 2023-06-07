@@ -1041,11 +1041,18 @@ pub fn build_join_schema(
     right: &DFSchema,
     join_type: &JoinType,
 ) -> Result<DFSchema> {
+    fn nullify_fields(fields: &[DFField]) -> Vec<DFField> {
+        fields
+            .iter()
+            .map(|f| f.clone().with_nullable(true))
+            .collect()
+    }
+
     let right_fields = right.fields();
     let left_fields = left.fields();
 
     let fields: Vec<DFField> = match join_type {
-        JoinType::Inner | JoinType::Full | JoinType::Right => {
+        JoinType::Inner => {
             // left then right
             left_fields
                 .iter()
@@ -1055,14 +1062,25 @@ pub fn build_join_schema(
         }
         JoinType::Left => {
             // left then right, right set to nullable in case of not matched scenario
-            let right_fields_nullable: Vec<DFField> = right_fields
-                .iter()
-                .map(|f| f.clone().with_nullable(true))
-                .collect();
-
             left_fields
                 .iter()
-                .chain(&right_fields_nullable)
+                .chain(&nullify_fields(right_fields))
+                .cloned()
+                .collect()
+        }
+        JoinType::Right => {
+            // left then right, left set to nullable in case of not matched scenario
+            nullify_fields(left_fields)
+                .iter()
+                .chain(right_fields.iter())
+                .cloned()
+                .collect()
+        }
+        JoinType::Full => {
+            // left then right, all set to nullable in case of not matched scenario
+            nullify_fields(left_fields)
+                .iter()
+                .chain(&nullify_fields(right_fields))
                 .cloned()
                 .collect()
         }
@@ -1115,11 +1133,18 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            ignore_alias @ Expr::Alias { .. } => ignore_alias,
-            ignore_col @ Expr::Column { .. } => ignore_col,
-            x => x.alias(schema.field(i).name()),
+            Expr::Alias(_, ref name) if name != schema.field(i).name() => {
+                e.unalias().alias(schema.field(i).name())
+            }
+            Expr::Column(Column {
+                relation: _,
+                ref name,
+            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
+            Expr::Alias { .. } | Expr::Column { .. } => e,
+            _ => e.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
+
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         alias_expr, input, schema,
     )?))
@@ -1169,7 +1194,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
-            x => vec![Arc::new(x)],
+            other_plan => vec![Arc::new(other_plan)],
         })
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
@@ -1181,7 +1206,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
                         Arc::new(union_schema.clone()),
                     )?))
                 }
-                x => Ok(Arc::new(x)),
+                other_plan => Ok(Arc::new(other_plan)),
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1211,11 +1236,10 @@ pub fn project(
         let e = e.into();
         match e {
             Expr::Wildcard => {
-                projected_expr.extend(expand_wildcard(input_schema, &plan)?)
+                projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => {
-                projected_expr.extend(expand_qualified_wildcard(qualifier, input_schema)?)
-            }
+            Expr::QualifiedWildcard { ref qualifier } => projected_expr
+                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1250,12 +1274,24 @@ pub fn table_scan<'a>(
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
+    table_scan_with_filters(name, table_schema, projection, vec![])
+}
+
+/// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
+/// and inlined filters.
+/// This is mostly used for testing and documentation.
+pub fn table_scan_with_filters<'a>(
+    name: Option<impl Into<TableReference<'a>>>,
+    table_schema: &Schema,
+    projection: Option<Vec<usize>>,
+    filters: Vec<Expr>,
+) -> Result<LogicalPlanBuilder> {
     let table_source = table_source(table_schema);
     let name = name
         .map(|n| n.into())
         .unwrap_or_else(|| OwnedTableReference::bare(UNNAMED_TABLE))
         .to_owned_reference();
-    LogicalPlanBuilder::scan(name, table_source, projection)
+    LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
 }
 
 fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
@@ -1291,7 +1327,7 @@ pub fn wrap_projection_for_join_if_necessary(
 
     let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
     let plan = if need_project {
-        let mut projection = expand_wildcard(input_schema, &input)?;
+        let mut projection = expand_wildcard(input_schema, &input, None)?;
         let join_key_items = alias_join_keys
             .iter()
             .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))

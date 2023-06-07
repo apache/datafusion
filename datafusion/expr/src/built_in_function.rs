@@ -19,11 +19,16 @@
 
 use crate::Volatility;
 use datafusion_common::{DataFusionError, Result};
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
+
+use lazy_static::lazy_static;
 
 /// Enum of all built-in scalar functions
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter, Copy)]
 pub enum BuiltinScalarFunction {
     // math functions
     /// abs
@@ -58,8 +63,14 @@ pub enum BuiltinScalarFunction {
     Digest,
     /// exp
     Exp,
+    /// factorial
+    Factorial,
     /// floor
     Floor,
+    /// gcd, Greatest common divisor
+    Gcd,
+    /// lcm, Least common multiple
+    Lcm,
     /// ln, Natural logarithm
     Ln,
     /// log, same as log10
@@ -91,9 +102,39 @@ pub enum BuiltinScalarFunction {
     /// trunc
     Trunc,
 
-    // string functions
+    // array functions
+    /// array_append
+    ArrayAppend,
+    /// array_concat
+    ArrayConcat,
+    /// array_dims
+    ArrayDims,
+    /// array_fill
+    ArrayFill,
+    /// array_length
+    ArrayLength,
+    /// array_ndims
+    ArrayNdims,
+    /// array_position
+    ArrayPosition,
+    /// array_positions
+    ArrayPositions,
+    /// array_prepend
+    ArrayPrepend,
+    /// array_remove
+    ArrayRemove,
+    /// array_replace
+    ArrayReplace,
+    /// array_to_string
+    ArrayToString,
+    /// cardinality
+    Cardinality,
     /// construct an array from columns
     MakeArray,
+    /// trim_array
+    TrimArray,
+
+    // string functions
     /// ascii
     Ascii,
     /// bit_length
@@ -196,6 +237,28 @@ pub enum BuiltinScalarFunction {
     ArrowTypeof,
 }
 
+lazy_static! {
+    /// Maps the sql function name to `BuiltinScalarFunction`
+    static ref NAME_TO_FUNCTION: HashMap<&'static str, BuiltinScalarFunction> = {
+        let mut map: HashMap<&'static str, BuiltinScalarFunction> = HashMap::new();
+        BuiltinScalarFunction::iter().for_each(|func| {
+            let a = aliases(&func);
+            a.iter().for_each(|a| {map.insert(a, func);});
+        });
+        map
+    };
+
+    /// Maps `BuiltinScalarFunction` --> canonical sql function
+    /// First alias in the array is used to display function names
+    static ref FUNCTION_TO_NAME: HashMap<BuiltinScalarFunction, &'static str> = {
+        let mut map: HashMap<BuiltinScalarFunction, &'static str> = HashMap::new();
+        BuiltinScalarFunction::iter().for_each(|func| {
+            map.insert(func, aliases(&func).first().unwrap_or(&"NO_ALIAS"));
+        });
+        map
+    };
+}
+
 impl BuiltinScalarFunction {
     /// an allowlist of functions to take zero arguments, so that they will get special treatment
     /// while executing.
@@ -228,7 +291,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Cosh => Volatility::Immutable,
             BuiltinScalarFunction::Degrees => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
+            BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
+            BuiltinScalarFunction::Gcd => Volatility::Immutable,
+            BuiltinScalarFunction::Lcm => Volatility::Immutable,
             BuiltinScalarFunction::Ln => Volatility::Immutable,
             BuiltinScalarFunction::Log => Volatility::Immutable,
             BuiltinScalarFunction::Log10 => Volatility::Immutable,
@@ -244,7 +310,21 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Tan => Volatility::Immutable,
             BuiltinScalarFunction::Tanh => Volatility::Immutable,
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayNdims => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPosition => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPositions => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayPrepend => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayRemove => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayReplace => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayToString => Volatility::Immutable,
+            BuiltinScalarFunction::Cardinality => Volatility::Immutable,
             BuiltinScalarFunction::MakeArray => Volatility::Immutable,
+            BuiltinScalarFunction::TrimArray => Volatility::Immutable,
             BuiltinScalarFunction::Ascii => Volatility::Immutable,
             BuiltinScalarFunction::BitLength => Volatility::Immutable,
             BuiltinScalarFunction::Btrim => Volatility::Immutable,
@@ -305,123 +385,161 @@ impl BuiltinScalarFunction {
     }
 }
 
+fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
+    match func {
+        BuiltinScalarFunction::Abs => &["abs"],
+        BuiltinScalarFunction::Acos => &["acos"],
+        BuiltinScalarFunction::Acosh => &["acosh"],
+        BuiltinScalarFunction::Asin => &["asin"],
+        BuiltinScalarFunction::Asinh => &["asinh"],
+        BuiltinScalarFunction::Atan => &["atan"],
+        BuiltinScalarFunction::Atanh => &["atanh"],
+        BuiltinScalarFunction::Atan2 => &["atan2"],
+        BuiltinScalarFunction::Cbrt => &["cbrt"],
+        BuiltinScalarFunction::Ceil => &["ceil"],
+        BuiltinScalarFunction::Cos => &["cos"],
+        BuiltinScalarFunction::Cosh => &["cosh"],
+        BuiltinScalarFunction::Degrees => &["degrees"],
+        BuiltinScalarFunction::Exp => &["exp"],
+        BuiltinScalarFunction::Factorial => &["factorial"],
+        BuiltinScalarFunction::Floor => &["floor"],
+        BuiltinScalarFunction::Gcd => &["gcd"],
+        BuiltinScalarFunction::Lcm => &["lcm"],
+        BuiltinScalarFunction::Ln => &["ln"],
+        BuiltinScalarFunction::Log => &["log"],
+        BuiltinScalarFunction::Log10 => &["log10"],
+        BuiltinScalarFunction::Log2 => &["log2"],
+        BuiltinScalarFunction::Pi => &["pi"],
+        BuiltinScalarFunction::Power => &["power", "pow"],
+        BuiltinScalarFunction::Radians => &["radians"],
+        BuiltinScalarFunction::Random => &["random"],
+        BuiltinScalarFunction::Round => &["round"],
+        BuiltinScalarFunction::Signum => &["signum"],
+        BuiltinScalarFunction::Sin => &["sin"],
+        BuiltinScalarFunction::Sinh => &["sinh"],
+        BuiltinScalarFunction::Sqrt => &["sqrt"],
+        BuiltinScalarFunction::Tan => &["tan"],
+        BuiltinScalarFunction::Tanh => &["tanh"],
+        BuiltinScalarFunction::Trunc => &["trunc"],
+
+        // conditional functions
+        BuiltinScalarFunction::Coalesce => &["coalesce"],
+        BuiltinScalarFunction::NullIf => &["nullif"],
+
+        // string functions
+        BuiltinScalarFunction::Ascii => &["ascii"],
+        BuiltinScalarFunction::BitLength => &["bit_length"],
+        BuiltinScalarFunction::Btrim => &["btrim"],
+        BuiltinScalarFunction::CharacterLength => {
+            &["character_length", "char_length", "length"]
+        }
+        BuiltinScalarFunction::Concat => &["concat"],
+        BuiltinScalarFunction::ConcatWithSeparator => &["concat_ws"],
+        BuiltinScalarFunction::Chr => &["chr"],
+        BuiltinScalarFunction::InitCap => &["initcap"],
+        BuiltinScalarFunction::Left => &["left"],
+        BuiltinScalarFunction::Lower => &["lower"],
+        BuiltinScalarFunction::Lpad => &["lpad"],
+        BuiltinScalarFunction::Ltrim => &["ltrim"],
+        BuiltinScalarFunction::OctetLength => &["octet_length"],
+        BuiltinScalarFunction::Repeat => &["repeat"],
+        BuiltinScalarFunction::Replace => &["replace"],
+        BuiltinScalarFunction::Reverse => &["reverse"],
+        BuiltinScalarFunction::Right => &["right"],
+        BuiltinScalarFunction::Rpad => &["rpad"],
+        BuiltinScalarFunction::Rtrim => &["rtrim"],
+        BuiltinScalarFunction::SplitPart => &["split_part"],
+        BuiltinScalarFunction::StartsWith => &["starts_with"],
+        BuiltinScalarFunction::Strpos => &["strpos"],
+        BuiltinScalarFunction::Substr => &["substr"],
+        BuiltinScalarFunction::ToHex => &["to_hex"],
+        BuiltinScalarFunction::Translate => &["translate"],
+        BuiltinScalarFunction::Trim => &["trim"],
+        BuiltinScalarFunction::Upper => &["upper"],
+        BuiltinScalarFunction::Uuid => &["uuid"],
+
+        // regex functions
+        BuiltinScalarFunction::RegexpMatch => &["regexp_match"],
+        BuiltinScalarFunction::RegexpReplace => &["regexp_replace"],
+
+        // time/date functions
+        BuiltinScalarFunction::Now => &["now"],
+        BuiltinScalarFunction::CurrentDate => &["current_date"],
+        BuiltinScalarFunction::CurrentTime => &["current_time"],
+        BuiltinScalarFunction::DateBin => &["date_bin"],
+        BuiltinScalarFunction::DateTrunc => &["date_trunc", "datetrunc"],
+        BuiltinScalarFunction::DatePart => &["date_part", "datepart"],
+        BuiltinScalarFunction::ToTimestamp => &["to_timestamp"],
+        BuiltinScalarFunction::ToTimestampMillis => &["to_timestamp_millis"],
+        BuiltinScalarFunction::ToTimestampMicros => &["to_timestamp_micros"],
+        BuiltinScalarFunction::ToTimestampSeconds => &["to_timestamp_seconds"],
+        BuiltinScalarFunction::FromUnixtime => &["from_unixtime"],
+
+        // hashing functions
+        BuiltinScalarFunction::Digest => &["digest"],
+        BuiltinScalarFunction::MD5 => &["md5"],
+        BuiltinScalarFunction::SHA224 => &["sha224"],
+        BuiltinScalarFunction::SHA256 => &["sha256"],
+        BuiltinScalarFunction::SHA384 => &["sha384"],
+        BuiltinScalarFunction::SHA512 => &["sha512"],
+
+        // other functions
+        BuiltinScalarFunction::Struct => &["struct"],
+        BuiltinScalarFunction::ArrowTypeof => &["arrow_typeof"],
+
+        // array functions
+        BuiltinScalarFunction::ArrayAppend => &["array_append"],
+        BuiltinScalarFunction::ArrayConcat => &["array_concat"],
+        BuiltinScalarFunction::ArrayDims => &["array_dims"],
+        BuiltinScalarFunction::ArrayFill => &["array_fill"],
+        BuiltinScalarFunction::ArrayLength => &["array_length"],
+        BuiltinScalarFunction::ArrayNdims => &["array_ndims"],
+        BuiltinScalarFunction::ArrayPosition => &["array_position"],
+        BuiltinScalarFunction::ArrayPositions => &["array_positions"],
+        BuiltinScalarFunction::ArrayPrepend => &["array_prepend"],
+        BuiltinScalarFunction::ArrayRemove => &["array_remove"],
+        BuiltinScalarFunction::ArrayReplace => &["array_replace"],
+        BuiltinScalarFunction::ArrayToString => &["array_to_string"],
+        BuiltinScalarFunction::Cardinality => &["cardinality"],
+        BuiltinScalarFunction::MakeArray => &["make_array"],
+        BuiltinScalarFunction::TrimArray => &["trim_array"],
+    }
+}
+
 impl fmt::Display for BuiltinScalarFunction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // lowercase of the debug.
-        write!(f, "{}", format!("{self:?}").to_lowercase())
+        // .unwrap is safe here because compiler makes sure the map will have matches for each BuiltinScalarFunction
+        write!(f, "{}", FUNCTION_TO_NAME.get(self).unwrap())
     }
 }
 
 impl FromStr for BuiltinScalarFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
-        Ok(match name {
-            // math functions
-            "abs" => BuiltinScalarFunction::Abs,
-            "acos" => BuiltinScalarFunction::Acos,
-            "acosh" => BuiltinScalarFunction::Acosh,
-            "asin" => BuiltinScalarFunction::Asin,
-            "asinh" => BuiltinScalarFunction::Asinh,
-            "atan" => BuiltinScalarFunction::Atan,
-            "atanh" => BuiltinScalarFunction::Atanh,
-            "atan2" => BuiltinScalarFunction::Atan2,
-            "cbrt" => BuiltinScalarFunction::Cbrt,
-            "ceil" => BuiltinScalarFunction::Ceil,
-            "cos" => BuiltinScalarFunction::Cos,
-            "cosh" => BuiltinScalarFunction::Cosh,
-            "degrees" => BuiltinScalarFunction::Degrees,
-            "exp" => BuiltinScalarFunction::Exp,
-            "floor" => BuiltinScalarFunction::Floor,
-            "ln" => BuiltinScalarFunction::Ln,
-            "log" => BuiltinScalarFunction::Log,
-            "log10" => BuiltinScalarFunction::Log10,
-            "log2" => BuiltinScalarFunction::Log2,
-            "pi" => BuiltinScalarFunction::Pi,
-            "power" | "pow" => BuiltinScalarFunction::Power,
-            "radians" => BuiltinScalarFunction::Radians,
-            "random" => BuiltinScalarFunction::Random,
-            "round" => BuiltinScalarFunction::Round,
-            "signum" => BuiltinScalarFunction::Signum,
-            "sin" => BuiltinScalarFunction::Sin,
-            "sinh" => BuiltinScalarFunction::Sinh,
-            "sqrt" => BuiltinScalarFunction::Sqrt,
-            "tan" => BuiltinScalarFunction::Tan,
-            "tanh" => BuiltinScalarFunction::Tanh,
-            "trunc" => BuiltinScalarFunction::Trunc,
+        if let Some(func) = NAME_TO_FUNCTION.get(name) {
+            Ok(*func)
+        } else {
+            Err(DataFusionError::Plan(format!(
+                "There is no built-in function named {name}"
+            )))
+        }
+    }
+}
 
-            // conditional functions
-            "coalesce" => BuiltinScalarFunction::Coalesce,
-            "nullif" => BuiltinScalarFunction::NullIf,
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-            // string functions
-            "ascii" => BuiltinScalarFunction::Ascii,
-            "bit_length" => BuiltinScalarFunction::BitLength,
-            "btrim" => BuiltinScalarFunction::Btrim,
-            "char_length" => BuiltinScalarFunction::CharacterLength,
-            "character_length" => BuiltinScalarFunction::CharacterLength,
-            "concat" => BuiltinScalarFunction::Concat,
-            "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
-            "chr" => BuiltinScalarFunction::Chr,
-            "initcap" => BuiltinScalarFunction::InitCap,
-            "left" => BuiltinScalarFunction::Left,
-            "length" => BuiltinScalarFunction::CharacterLength,
-            "lower" => BuiltinScalarFunction::Lower,
-            "lpad" => BuiltinScalarFunction::Lpad,
-            "ltrim" => BuiltinScalarFunction::Ltrim,
-            "octet_length" => BuiltinScalarFunction::OctetLength,
-            "repeat" => BuiltinScalarFunction::Repeat,
-            "replace" => BuiltinScalarFunction::Replace,
-            "reverse" => BuiltinScalarFunction::Reverse,
-            "right" => BuiltinScalarFunction::Right,
-            "rpad" => BuiltinScalarFunction::Rpad,
-            "rtrim" => BuiltinScalarFunction::Rtrim,
-            "split_part" => BuiltinScalarFunction::SplitPart,
-            "starts_with" => BuiltinScalarFunction::StartsWith,
-            "strpos" => BuiltinScalarFunction::Strpos,
-            "substr" => BuiltinScalarFunction::Substr,
-            "to_hex" => BuiltinScalarFunction::ToHex,
-            "translate" => BuiltinScalarFunction::Translate,
-            "trim" => BuiltinScalarFunction::Trim,
-            "upper" => BuiltinScalarFunction::Upper,
-            "uuid" => BuiltinScalarFunction::Uuid,
-
-            // regex functions
-            "regexp_match" => BuiltinScalarFunction::RegexpMatch,
-            "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
-
-            // time/date functions
-            "now" => BuiltinScalarFunction::Now,
-            "current_date" => BuiltinScalarFunction::CurrentDate,
-            "current_time" => BuiltinScalarFunction::CurrentTime,
-            "date_bin" => BuiltinScalarFunction::DateBin,
-            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
-            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
-            "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
-            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
-            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
-            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
-            "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
-
-            // hashing functions
-            "digest" => BuiltinScalarFunction::Digest,
-            "md5" => BuiltinScalarFunction::MD5,
-            "sha224" => BuiltinScalarFunction::SHA224,
-            "sha256" => BuiltinScalarFunction::SHA256,
-            "sha384" => BuiltinScalarFunction::SHA384,
-            "sha512" => BuiltinScalarFunction::SHA512,
-
-            // other functions
-            "struct" => BuiltinScalarFunction::Struct,
-            "arrow_typeof" => BuiltinScalarFunction::ArrowTypeof,
-
-            // array functions
-            "make_array" => BuiltinScalarFunction::MakeArray,
-
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {name}"
-                )))
-            }
-        })
+    #[test]
+    // Test for BuiltinScalarFunction's Display and from_str() implementations.
+    // For each variant in BuiltinScalarFunction, it converts the variant to a string
+    // and then back to a variant. The test asserts that the original variant and
+    // the reconstructed variant are the same.
+    fn test_display_and_from_str() {
+        for (_, func_original) in NAME_TO_FUNCTION.iter() {
+            let func_name = func_original.to_string();
+            let func_from_str = BuiltinScalarFunction::from_str(&func_name).unwrap();
+            assert_eq!(func_from_str, *func_original);
+        }
     }
 }

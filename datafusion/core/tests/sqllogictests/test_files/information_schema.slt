@@ -125,6 +125,12 @@ drop table t2
 statement ok
 SET datafusion.execution.target_partitions=7
 
+# planning_concurrency defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.planning_concurrency=13
+
 # show all variables
 query TT rowsort
 SHOW ALL
@@ -136,15 +142,17 @@ datafusion.catalog.format NULL
 datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
+datafusion.execution.aggregate.scalar_update_factor 10
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics false
-datafusion.execution.parquet.enable_page_index false
+datafusion.execution.parquet.enable_page_index true
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
+datafusion.execution.planning_concurrency 13
 datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
@@ -161,7 +169,7 @@ datafusion.optimizer.repartition_file_scans true
 datafusion.optimizer.repartition_joins true
 datafusion.optimizer.repartition_sorts true
 datafusion.optimizer.repartition_windows true
-datafusion.optimizer.skip_failed_rules true
+datafusion.optimizer.skip_failed_rules false
 datafusion.optimizer.top_down_join_key_reordering true
 datafusion.sql_parser.dialect generic
 datafusion.sql_parser.enable_ident_normalization true
@@ -375,7 +383,7 @@ SHOW CREATE TABLE test.xyz
 ----
 datafusion test xyz CREATE VIEW test.xyz AS SELECT * FROM abc
 
-statement error DataFusion error: This feature is not implemented: Only `DROP TABLE/VIEW
+statement error DataFusion error: Execution error: Cannot drop schema test because other tables depend on it: xyz
 DROP SCHEMA test;
 
 statement ok

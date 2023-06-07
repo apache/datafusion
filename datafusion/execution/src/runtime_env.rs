@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution runtime environment that holds object Store, memory manager, disk manager
-//! and various system level components that are used during physical plan execution.
+//! Execution [`RuntimeEnv`] environment that manages access to object
+//! store, memory manager, disk manager.
 
 use crate::{
     disk_manager::{DiskManager, DiskManagerConfig},
@@ -32,7 +32,15 @@ use std::sync::Arc;
 use url::Url;
 
 #[derive(Clone)]
-/// Execution runtime environment.
+/// Execution runtime environment that manages system resources such
+/// as memory, disk and storage.
+///
+/// A [`RuntimeEnv`] is created from a [`RuntimeConfig`] and has the
+/// following resource management functionality:
+///
+/// * [`MemoryPool`]: Manage memory
+/// * [`DiskManager`]: Manage temporary files on local disk
+/// * [`ObjectStoreRegistry`]: Manage mapping URLs to object store instances
 pub struct RuntimeEnv {
     /// Runtime memory management
     pub memory_pool: Arc<dyn MemoryPool>,

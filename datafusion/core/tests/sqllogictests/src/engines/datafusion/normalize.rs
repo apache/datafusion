@@ -74,7 +74,7 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
 ///   "Sort: d.b ASC NULLS LAST",
 /// ]
 /// [ <--- newly added row
-///   "  Projection: d.b, MAX(d.a) AS max_a",
+///   "|-- Projection: d.b, MAX(d.a) AS max_a",
 /// ]
 /// ```
 fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
@@ -92,7 +92,18 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
         }
 
         // form new rows with each additional line
-        let new_lines: Vec<_> = lines.into_iter().map(|l| vec![l.to_string()]).collect();
+        let new_lines: Vec<_> = lines
+            .into_iter()
+            .map(|l| {
+                // replace any leading spaces with '-' as
+                // `sqllogictest` ignores whitespace differences
+                //
+                // See https://github.com/apache/arrow-datafusion/issues/6328
+                let content = l.trim_start();
+                let new_prefix = "-".repeat(l.len() - content.len());
+                vec![format!("{new_prefix}{content}")]
+            })
+            .collect();
 
         Either::Right(once(row).chain(new_lines.into_iter()))
     } else {
@@ -200,10 +211,9 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
             DataType::Float64 => {
                 Ok(f64_to_str(get_row_value!(array::Float64Array, col, row)))
             }
-            DataType::Decimal128(_, scale) => {
+            DataType::Decimal128(precision, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
-                let decimal_scale = u32::try_from((*scale).max(0)).unwrap();
-                Ok(i128_to_str(value, decimal_scale))
+                Ok(i128_to_str(value, precision, scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,

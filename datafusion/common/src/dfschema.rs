@@ -24,7 +24,6 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::{unqualified_field_not_found, DataFusionError, Result, SchemaError};
-use crate::utils::quote_identifier;
 use crate::{field_not_found, Column, OwnedTableReference, TableReference};
 
 use arrow::compute::can_cast_types;
@@ -68,14 +67,7 @@ impl DFSchema {
 
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
-                if !qualified_names.insert((qualifier, field.name())) {
-                    return Err(DataFusionError::SchemaError(
-                        SchemaError::DuplicateQualifiedField {
-                            qualifier: Box::new(qualifier.clone()),
-                            name: field.name().to_string(),
-                        },
-                    ));
-                }
+                qualified_names.insert((qualifier, field.name()));
             } else if !unqualified_names.insert(field.name()) {
                 return Err(DataFusionError::SchemaError(
                     SchemaError::DuplicateUnqualifiedField {
@@ -224,20 +216,7 @@ impl DFSchema {
                 (None, Some(_)) | (None, None) => field.name() == name,
             })
             .map(|(idx, _)| idx);
-        match matches.next() {
-            None => Ok(None),
-            Some(idx) => match matches.next() {
-                None => Ok(Some(idx)),
-                // found more than one matches
-                Some(_) => Err(DataFusionError::Internal(format!(
-                    "Ambiguous reference to qualified field named {}.{}",
-                    qualifier
-                        .map(|q| q.to_quoted_string())
-                        .unwrap_or("<unqualified>".to_string()),
-                    quote_identifier(name)
-                ))),
-            },
-        }
+        Ok(matches.next())
     }
 
     /// Find the index of the column with the given qualifier and name
@@ -532,7 +511,6 @@ impl From<DFSchema> for SchemaRef {
 }
 
 // Hashing refers to a subset of fields considered in PartialEq.
-#[allow(clippy::derived_hash_with_manual_eq)]
 impl Hash for DFSchema {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.fields.hash(state);
@@ -546,25 +524,21 @@ where
     Self: Sized,
 {
     /// Attempt to create a DSSchema
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema>;
 
     /// Attempt to create a DSSchemaRef
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema_ref(self) -> Result<DFSchemaRef> {
         Ok(Arc::new(self.to_dfschema()?))
     }
 }
 
 impl ToDFSchema for Schema {
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         DFSchema::try_from(self)
     }
 }
 
 impl ToDFSchema for SchemaRef {
-    #[allow(clippy::wrong_self_convention)]
     fn to_dfschema(self) -> Result<DFSchema> {
         // Attempt to use the Schema directly if there are no other
         // references, otherwise clone
@@ -601,7 +575,7 @@ impl Display for DFSchema {
 ///
 /// Note that this trait is implemented for &[DFSchema] which is
 /// widely used in the DataFusion codebase.
-pub trait ExprSchema {
+pub trait ExprSchema: std::fmt::Debug {
     /// Is this column reference nullable?
     fn nullable(&self, col: &Column) -> Result<bool>;
 
@@ -610,7 +584,7 @@ pub trait ExprSchema {
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
-impl<P: AsRef<DFSchema>> ExprSchema for P {
+impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn nullable(&self, col: &Column) -> Result<bool> {
         self.as_ref().nullable(col)
     }
@@ -859,10 +833,7 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let join = left.join(&right);
-        assert_eq!(
-            join.unwrap_err().to_string(),
-            "Schema error: Schema contains duplicate qualified field name t1.c0",
-        );
+        assert!(join.err().is_none());
         Ok(())
     }
 

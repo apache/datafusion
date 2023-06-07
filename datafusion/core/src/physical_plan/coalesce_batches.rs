@@ -29,10 +29,10 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 
-use crate::execution::context::TaskContext;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -96,7 +96,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])

@@ -17,10 +17,12 @@
 
 //! Simplify expressions optimizer rule and implementation
 
+use std::sync::Arc;
+
 use super::{ExprSimplifier, SimplifyContext};
 use crate::utils::merge_schema;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 
@@ -61,16 +63,16 @@ impl SimplifyExpressions {
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        // Pass down the `children merge schema` and `plan schema` to evaluate expression types.
-        // pass all `child schema` and `plan schema` isn't enough, because like `t1 semi join t2 on
-        // on t1.id = t2.id`, each individual schema can't contain all the columns in it.
-        let children_merge_schema = DFSchemaRef::new(merge_schema(plan.inputs()));
-        let schemas = vec![plan.schema(), &children_merge_schema];
-        let info = schemas
-            .into_iter()
-            .fold(SimplifyContext::new(execution_props), |context, schema| {
-                context.with_schema(schema.clone())
-            });
+        let schema = if !plan.inputs().is_empty() {
+            DFSchemaRef::new(merge_schema(plan.inputs()))
+        } else if let LogicalPlan::TableScan(_) = plan {
+            // When predicates are pushed into a table scan, there needs to be
+            // a schema to resolve the fields against.
+            Arc::clone(plan.schema())
+        } else {
+            Arc::new(DFSchema::empty())
+        };
+        let info = SimplifyContext::new(execution_props).with_schema(schema);
 
         let simplifier = ExprSimplifier::new(info);
 
@@ -118,6 +120,8 @@ impl SimplifyExpressions {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
+
     use crate::simplify_expressions::utils::for_test::{
         cast_to_int64_expr, now_expr, to_timestamp_expr,
     };
@@ -127,7 +131,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{or, BinaryExpr, Cast, Operator};
+    use datafusion_expr::logical_plan::builder::table_scan_with_filters;
+    use datafusion_expr::{call_fn, or, BinaryExpr, Cast, Operator};
 
     use crate::OptimizerContext;
     use datafusion_expr::logical_plan::table_scan;
@@ -164,6 +169,7 @@ mod tests {
             Field::new("b", DataType::Boolean, false),
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::UInt32, false),
+            Field::new("e", DataType::UInt32, true),
         ]);
         table_scan(Some("test"), &schema, None)
             .expect("creating scan")
@@ -415,7 +421,7 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -555,7 +561,7 @@ mod tests {
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = r#"Projection: Date32("18636") AS totimestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
+        let expected = r#"Projection: Date32("18636") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("528280977408")
   TableScan: test"#;
         let actual = get_optimized_plan_formatted(&plan, &time);
 
@@ -620,9 +626,9 @@ mod tests {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_null().not())?
+            .filter(col("e").is_null().not())?
             .build()?;
-        let expected = "Filter: test.d IS NOT NULL\
+        let expected = "Filter: test.e IS NOT NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -633,9 +639,9 @@ mod tests {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_not_null().not())?
+            .filter(col("e").is_not_null().not())?
             .build()?;
-        let expected = "Filter: test.d IS NULL\
+        let expected = "Filter: test.e IS NULL\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -649,7 +655,7 @@ mod tests {
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())?
             .build()?;
         let expected =
-            "Filter: test.d != Int32(3) AND test.d != Int32(2) AND test.d != Int32(1)\
+            "Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -663,7 +669,7 @@ mod tests {
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())?
             .build()?;
         let expected =
-            "Filter: test.d = Int32(3) OR test.d = Int32(2) OR test.d = Int32(1)\
+            "Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
@@ -805,6 +811,69 @@ mod tests {
         let expected = "Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)\
             \n  TableScan: t1\
             \n  TableScan: t2";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_project_scalar_fn() -> Result<()> {
+        // Issue https://github.com/apache/arrow-datafusion/issues/5996
+        let schema = Schema::new(vec![Field::new("f", DataType::Float64, false)]);
+        let plan = table_scan(Some("test"), &schema, None)?
+            .project(vec![call_fn("power", vec![col("f"), lit(1.0)])?])?
+            .build()?;
+
+        // before simplify: power(t.f, 1.0)
+        // after simplify:  t.f as "power(t.f, 1.0)"
+        let expected = "Projection: test.f AS power(test.f,Float64(1))\
+                      \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_scan_predicate() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("f", DataType::Float64, false),
+            Field::new("g", DataType::Float64, false),
+        ]);
+        let plan = table_scan_with_filters(
+            Some("test"),
+            &schema,
+            None,
+            vec![col("g").eq(call_fn("power", vec![col("f"), lit(1.0)])?)],
+        )?
+        .build()?;
+
+        // before simplify: t.g = power(t.f, 1.0)
+        // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
+        let expected =
+            "TableScan: test, unsupported_filters=[g = f AS g = power(f,Float64(1))]";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_is_not_null() -> Result<()> {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_not_null())?
+            .build()?;
+        let expected = "Filter: Boolean(true)\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_is_null() -> Result<()> {
+        let table_scan = test_table_scan();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("d").is_null())?
+            .build()?;
+        let expected = "Filter: Boolean(false)\
+        \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
     }

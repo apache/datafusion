@@ -23,17 +23,14 @@ use std::sync::Arc;
 use crate::{
     error::{DataFusionError, Result},
     logical_expr::StringifiedPlan,
-    physical_plan::{
-        common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan, Partitioning,
-        Statistics,
-    },
+    physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics},
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-use log::debug;
+use log::trace;
 
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
-use crate::execution::context::TaskContext;
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
+use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_execution::TaskContext;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes
@@ -109,7 +106,7 @@ impl ExecutionPlan for ExplainExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "ExplainExec invalid partition {partition}"
@@ -150,17 +147,12 @@ impl ExecutionPlan for ExplainExec {
             ],
         )?;
 
-        let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, context.memory_pool(), partition);
+        trace!(
+            "Before returning RecordBatchStream in ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
-        debug!(
-            "Before returning SizedRecordBatch in ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-
-        Ok(Box::pin(SizedRecordBatchStream::new(
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema.clone(),
-            vec![Arc::new(record_batch)],
-            tracking_metrics,
+            futures::stream::iter(vec![Ok(record_batch)]),
         )))
     }
 

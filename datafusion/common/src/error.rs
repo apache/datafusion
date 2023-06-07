@@ -28,8 +28,6 @@ use crate::{Column, DFSchema, OwnedTableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
-#[cfg(feature = "jit")]
-use cranelift_module::ModuleError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
@@ -85,9 +83,6 @@ pub enum DataFusionError {
     /// Errors originating from outside DataFusion's core codebase.
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
     External(GenericError),
-    #[cfg(feature = "jit")]
-    /// Error occurs during code generation
-    JITError(ModuleError),
     /// Error with additional context
     Context(String, Box<DataFusionError>),
     /// Errors originating from either mapping LogicalPlans to/from Substrait plans
@@ -281,13 +276,6 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
-#[cfg(feature = "jit")]
-impl From<ModuleError> for DataFusionError {
-    fn from(e: ModuleError) -> Self {
-        DataFusionError::JITError(e)
-    }
-}
-
 impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
         DataFusionError::External(err)
@@ -332,10 +320,6 @@ impl Display for DataFusionError {
             DataFusionError::External(ref desc) => {
                 write!(f, "External error: {desc}")
             }
-            #[cfg(feature = "jit")]
-            DataFusionError::JITError(ref desc) => {
-                write!(f, "JIT error: {desc}")
-            }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
                 write!(f, "Object Store error: {desc}")
@@ -369,8 +353,6 @@ impl Error for DataFusionError {
             DataFusionError::Execution(_) => None,
             DataFusionError::ResourcesExhausted(_) => None,
             DataFusionError::External(e) => Some(e.as_ref()),
-            #[cfg(feature = "jit")]
-            DataFusionError::JITError(e) => Some(e),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
         }
@@ -504,22 +486,18 @@ mod test {
         );
     }
 
-    /// Model what happens when implementing SendableRecrordBatchStream:
+    /// Model what happens when implementing SendableRecordBatchStream:
     /// DataFusion code needs to return an ArrowError
-    #[allow(clippy::try_err)]
     fn return_arrow_error() -> arrow::error::Result<()> {
         // Expect the '?' to work
-        Err(DataFusionError::Plan("foo".to_string()))?;
-        Ok(())
+        Err(DataFusionError::Plan("foo".to_string()).into())
     }
 
     /// Model what happens when using arrow kernels in DataFusion
     /// code: need to turn an ArrowError into a DataFusionError
-    #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        Err(ArrowError::SchemaError("bar".to_string()))?;
-        Ok(())
+        Err(ArrowError::SchemaError("bar".to_string()).into())
     }
 
     fn do_root_test(e: DataFusionError, exp: DataFusionError) {

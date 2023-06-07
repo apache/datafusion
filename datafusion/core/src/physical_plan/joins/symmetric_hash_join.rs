@@ -51,8 +51,6 @@ use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalBound};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
-use crate::logical_expr::JoinType;
 use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
 use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
@@ -72,6 +70,8 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::JoinType;
+use datafusion_execution::TaskContext;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -263,7 +263,7 @@ impl SymmetricHashJoinExec {
     /// # Error
     /// This function errors when:
     /// - It is not possible to join the left and right sides on keys `on`, or
-    /// - It fails to construct [SortedFilterExpr]s, or
+    /// - It fails to construct `SortedFilterExpr`s, or
     /// - It fails to create the [ExprIntervalGraph].
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
@@ -458,7 +458,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             DisplayFormatType::Default => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
-                    |f| format!(", filter={:?}", f.expression()),
+                    |f| format!(", filter={}", f.expression()),
                 );
                 write!(
                     f,
@@ -514,13 +514,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                         for (join_side, child) in join_sides.iter().zip(children.iter()) {
                             let sorted_expr = child
                                 .output_ordering()
-                                .and_then(|orders| orders.first())
-                                .and_then(|order| {
+                                .and_then(|orders| {
                                     build_filter_input_order(
                                         *join_side,
                                         filter,
                                         &child.schema(),
-                                        order,
+                                        &orders[0],
                                     )
                                     .transpose()
                                 })
@@ -1548,7 +1547,7 @@ impl SymmetricHashJoinStream {
 mod tests {
     use std::fs::File;
 
-    use arrow::array::{ArrayRef, IntervalDayTimeArray};
+    use arrow::array::{ArrayRef, Float64Array, IntervalDayTimeArray};
     use arrow::array::{Int32Array, TimestampMillisecondArray};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
@@ -1559,7 +1558,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, col, Column};
     use datafusion_physical_expr::intervals::test_utils::{
-        gen_conjunctive_numeric_expr, gen_conjunctive_temporal_expr,
+        gen_conjunctive_numerical_expr, gen_conjunctive_temporal_expr,
     };
     use datafusion_physical_expr::PhysicalExpr;
 
@@ -1597,7 +1596,7 @@ mod tests {
             assert_eq!((i, first_line), (i, second_line));
         }
     }
-    #[allow(clippy::too_many_arguments)]
+
     async fn partitioned_sym_join_with_filter(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -1648,7 +1647,7 @@ mod tests {
 
         Ok(batches)
     }
-    #[allow(clippy::too_many_arguments)]
+
     async fn partitioned_hash_join_with_filter(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -1711,127 +1710,184 @@ mod tests {
         Ok(result)
     }
 
-    fn join_expr_tests_fixture(
-        expr_id: usize,
-        left_col: Arc<dyn PhysicalExpr>,
-        right_col: Arc<dyn PhysicalExpr>,
-    ) -> Arc<dyn PhysicalExpr> {
-        match expr_id {
-            // left_col + 1 > right_col + 5 AND left_col + 3 < right_col + 10
-            0 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Plus,
-                1,
-                5,
-                3,
-                10,
-                (Operator::Gt, Operator::Lt),
-            ),
-            // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
-            1 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Plus,
-                1,
-                5,
-                3,
-                10,
-                (Operator::Gt, Operator::Lt),
-            ),
-            // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
-            2 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Plus,
-                1,
-                5,
-                3,
-                10,
-                (Operator::Gt, Operator::Lt),
-            ),
-            // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
-            3 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Plus,
-                10,
-                5,
-                3,
-                10,
-                (Operator::Gt, Operator::Lt),
-            ),
-            // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
-            4 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Minus,
-                10,
-                5,
-                30,
-                3,
-                (Operator::Gt, Operator::Lt),
-            ),
-            // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
-            5 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Plus,
-                Operator::Minus,
-                2,
-                5,
-                7,
-                3,
-                (Operator::GtEq, Operator::LtEq),
-            ),
-            // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
-            6 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Plus,
-                Operator::Plus,
-                28,
-                11,
-                21,
-                39,
-                (Operator::Gt, Operator::LtEq),
-            ),
-            // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
-            7 => gen_conjunctive_numeric_expr(
-                left_col,
-                right_col,
-                Operator::Plus,
-                Operator::Minus,
-                Operator::Minus,
-                Operator::Plus,
-                28,
-                11,
-                21,
-                39,
-                (Operator::GtEq, Operator::Lt),
-            ),
-            _ => unreachable!(),
+    // It creates join filters for different type of fields for testing.
+    macro_rules! join_expr_tests {
+        ($func_name:ident, $type:ty, $SCALAR:ident) => {
+            fn $func_name(
+                expr_id: usize,
+                left_col: Arc<dyn PhysicalExpr>,
+                right_col: Arc<dyn PhysicalExpr>,
+            ) -> Arc<dyn PhysicalExpr> {
+                match expr_id {
+                    // left_col + 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                    0 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(1 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
+                    ),
+                    // left_col - 1 > right_col + 5 AND left_col + 3 < right_col + 10
+                    1 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(1 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
+                    ),
+                    // left_col - 1 > right_col + 5 AND left_col - 3 < right_col + 10
+                    2 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Minus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(1 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
+                    ),
+                    // left_col - 10 > right_col - 5 AND left_col - 3 < right_col + 10
+                    3 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        (Operator::Gt, Operator::Lt),
+                    ),
+                    // left_col - 10 > right_col - 5 AND left_col - 30 < right_col - 3
+                    4 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Minus,
+                        ),
+                        ScalarValue::$SCALAR(Some(10 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(30 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        (Operator::Gt, Operator::Lt),
+                    ),
+                    // left_col - 2 >= right_col - 5 AND left_col - 7 <= right_col - 3
+                    5 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Plus,
+                            Operator::Minus,
+                        ),
+                        ScalarValue::$SCALAR(Some(2 as $type)),
+                        ScalarValue::$SCALAR(Some(5 as $type)),
+                        ScalarValue::$SCALAR(Some(7 as $type)),
+                        ScalarValue::$SCALAR(Some(3 as $type)),
+                        (Operator::GtEq, Operator::LtEq),
+                    ),
+                    // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                    6 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Plus,
+                            Operator::Minus,
+                            Operator::Plus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(28 as $type)),
+                        ScalarValue::$SCALAR(Some(11 as $type)),
+                        ScalarValue::$SCALAR(Some(21 as $type)),
+                        ScalarValue::$SCALAR(Some(39 as $type)),
+                        (Operator::Gt, Operator::LtEq),
+                    ),
+                    // left_col - 28 >= right_col - 11 AND left_col - 21 <= right_col - 39
+                    7 => gen_conjunctive_numerical_expr(
+                        left_col,
+                        right_col,
+                        (
+                            Operator::Plus,
+                            Operator::Minus,
+                            Operator::Minus,
+                            Operator::Plus,
+                        ),
+                        ScalarValue::$SCALAR(Some(28 as $type)),
+                        ScalarValue::$SCALAR(Some(11 as $type)),
+                        ScalarValue::$SCALAR(Some(21 as $type)),
+                        ScalarValue::$SCALAR(Some(39 as $type)),
+                        (Operator::GtEq, Operator::Lt),
+                    ),
+                    _ => panic!("No case"),
+                }
+            }
+        };
+    }
+
+    join_expr_tests!(join_expr_tests_fixture_i32, i32, Int32);
+    join_expr_tests!(join_expr_tests_fixture_f64, f64, Float64);
+
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+    use std::iter::Iterator;
+
+    struct AscendingRandomFloatIterator {
+        prev: f64,
+        max: f64,
+        rng: StdRng,
+    }
+
+    impl AscendingRandomFloatIterator {
+        fn new(min: f64, max: f64) -> Self {
+            let mut rng = StdRng::seed_from_u64(42);
+            let initial = rng.gen_range(min..max);
+            AscendingRandomFloatIterator {
+                prev: initial,
+                max,
+                rng,
+            }
         }
     }
+
+    impl Iterator for AscendingRandomFloatIterator {
+        type Item = f64;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let value = self.rng.gen_range(self.prev..self.max);
+            self.prev = value;
+            Some(value)
+        }
+    }
+
     fn join_expr_tests_fixture_temporal(
         expr_id: usize,
         left_col: Arc<dyn PhysicalExpr>,
@@ -1887,10 +1943,16 @@ mod tests {
         let cardinality = Arc::new(Int32Array::from_iter(
             initial_range.clone().map(|x| x % 4).collect::<Vec<i32>>(),
         ));
-        let cardinality_key = Arc::new(Int32Array::from_iter(
+        let cardinality_key_left = Arc::new(Int32Array::from_iter(
             initial_range
                 .clone()
                 .map(|x| x % key_cardinality.0)
+                .collect::<Vec<i32>>(),
+        ));
+        let cardinality_key_right = Arc::new(Int32Array::from_iter(
+            initial_range
+                .clone()
+                .map(|x| x % key_cardinality.1)
                 .collect::<Vec<i32>>(),
         ));
         let ordered_asc_null_first = Arc::new(Int32Array::from_iter({
@@ -1926,10 +1988,15 @@ mod tests {
                 .collect::<Vec<i64>>(),
         ));
 
+        let float_asc = Arc::new(Float64Array::from_iter_values(
+            AscendingRandomFloatIterator::new(0., table_size as f64)
+                .take(table_size as usize),
+        ));
+
         let left = RecordBatch::try_from_iter(vec![
             ("la1", ordered.clone()),
             ("lb1", cardinality.clone()),
-            ("lc1", cardinality_key.clone()),
+            ("lc1", cardinality_key_left),
             ("lt1", time.clone()),
             ("la2", ordered.clone()),
             ("la1_des", ordered_des.clone()),
@@ -1937,11 +2004,12 @@ mod tests {
             ("l_asc_null_last", ordered_asc_null_last.clone()),
             ("l_desc_null_first", ordered_desc_null_first.clone()),
             ("li1", interval_time.clone()),
+            ("l_float", float_asc.clone()),
         ])?;
         let right = RecordBatch::try_from_iter(vec![
             ("ra1", ordered.clone()),
             ("rb1", cardinality),
-            ("rc1", cardinality_key),
+            ("rc1", cardinality_key_right),
             ("rt1", time),
             ("ra2", ordered),
             ("ra1_des", ordered_des),
@@ -1949,6 +2017,7 @@ mod tests {
             ("r_asc_null_last", ordered_asc_null_last),
             ("r_desc_null_first", ordered_desc_null_first),
             ("ri1", interval_time),
+            ("r_float", float_asc),
         ])?;
         Ok((left, right))
     }
@@ -2140,7 +2209,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2201,7 +2270,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2312,7 +2381,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2346,16 +2415,14 @@ mod tests {
             Field::new("a2", DataType::UInt32, false),
         ]));
         // Specify the ordering:
-        let file_sort_order = Some(
-            [datafusion_expr::col("a1")]
-                .into_iter()
-                .map(|e| {
-                    let ascending = true;
-                    let nulls_first = false;
-                    e.sort(ascending, nulls_first)
-                })
-                .collect::<Vec<_>>(),
-        );
+        let file_sort_order = vec![[datafusion_expr::col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>()];
         register_unbounded_file_with_ordering(
             &ctx,
             schema.clone(),
@@ -2382,13 +2449,13 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Gt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(3) } } }, op: And, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Lt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(10) } } } }",
+                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
                 "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
-                // "   CsvExec: files={1 group: [[tempdir/left.csv]]}, has_header=false, limit=None, projection=[a1, a2]",
+                // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
                 "  CoalesceBatchesExec: target_batch_size=8192",
                 "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
-                // "   CsvExec: files={1 group: [[tempdir/right.csv]]}, has_header=false, limit=None, projection=[a1, a2]"
+                // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
             ]
         };
         let mut actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2435,13 +2502,13 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent().to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=BinaryExpr { left: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Gt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(3) } } }, op: And, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 0 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Lt, right: BinaryExpr { left: CastExpr { expr: Column { name: \"a1\", index: 1 }, cast_type: Int64, cast_options: CastOptions { safe: false } }, op: Plus, right: Literal { value: Int64(10) } } } }",
+                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
                 "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
-                // "   CsvExec: files={1 group: [[tempdir/left.csv]]}, has_header=false, limit=None, projection=[a1, a2]",
+                // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
                 "  CoalesceBatchesExec: target_batch_size=8192",
                 "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
-                // "   CsvExec: files={1 group: [[tempdir/right.csv]]}, has_header=false, limit=None, projection=[a1, a2]"
+                // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
             ]
         };
         let mut actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2537,7 +2604,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2600,7 +2667,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2664,7 +2731,7 @@ mod tests {
             Field::new("left", DataType::Int32, true),
             Field::new("right", DataType::Int32, true),
         ]);
-        let filter_expr = join_expr_tests_fixture(
+        let filter_expr = join_expr_tests_fixture_i32(
             case_expr,
             col("left", &intermediate_schema)?,
             col("right", &intermediate_schema)?,
@@ -2802,17 +2869,19 @@ mod tests {
             Field::new("0", DataType::Int32, true),
             Field::new("1", DataType::Int32, true),
         ]);
-        let filter_expr = gen_conjunctive_numeric_expr(
+        let filter_expr = gen_conjunctive_numerical_expr(
             col("0", &intermediate_schema)?,
             col("1", &intermediate_schema)?,
-            Operator::Plus,
-            Operator::Minus,
-            Operator::Plus,
-            Operator::Plus,
-            0,
-            3,
-            0,
-            3,
+            (
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Plus,
+                Operator::Plus,
+            ),
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(3)),
+            ScalarValue::Int32(Some(0)),
+            ScalarValue::Int32(Some(3)),
             (Operator::Gt, Operator::Lt),
         );
         let column_indices = vec![
@@ -3031,6 +3100,80 @@ mod tests {
         let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
         experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
 
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn testing_ascending_float_pruning(
+        #[values(
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::RightSemi,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::Full
+        )]
+        join_type: JoinType,
+        #[values(
+        (4, 5),
+        (99, 12),
+        )]
+        cardinality: (i32, i32),
+        #[values(0, 1, 2, 3, 4, 5, 6, 7)] case_expr: usize,
+    ) -> Result<()> {
+        let config = SessionConfig::new().with_repartition_joins(false);
+        let session_ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
+        let (left_batch, right_batch) =
+            build_sides_record_batches(TABLE_SIZE, cardinality)?;
+        let left_schema = &left_batch.schema();
+        let right_schema = &right_batch.schema();
+        let left_sorted = vec![PhysicalSortExpr {
+            expr: col("l_float", left_schema)?,
+            options: SortOptions::default(),
+        }];
+        let right_sorted = vec![PhysicalSortExpr {
+            expr: col("r_float", right_schema)?,
+            options: SortOptions::default(),
+        }];
+        let (left, right) = create_memory_table(
+            left_batch,
+            right_batch,
+            Some(left_sorted),
+            Some(right_sorted),
+            13,
+        )?;
+
+        let on = vec![(
+            Column::new_with_schema("lc1", left_schema)?,
+            Column::new_with_schema("rc1", right_schema)?,
+        )];
+
+        let intermediate_schema = Schema::new(vec![
+            Field::new("left", DataType::Float64, true),
+            Field::new("right", DataType::Float64, true),
+        ]);
+        let filter_expr = join_expr_tests_fixture_f64(
+            case_expr,
+            col("left", &intermediate_schema)?,
+            col("right", &intermediate_schema)?,
+        );
+        let column_indices = vec![
+            ColumnIndex {
+                index: 10, // l_float
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 10, // r_float
+                side: JoinSide::Right,
+            },
+        ];
+        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+
+        experiment(left, right, Some(filter), join_type, on, task_ctx).await?;
         Ok(())
     }
 }

@@ -40,6 +40,7 @@ use rstest::rstest;
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
+    // Enable RUST_LOG logging configuration for tests
     let _ = env_logger::try_init();
 }
 
@@ -55,6 +56,11 @@ fn parse_decimals() {
         (
             "10000000000000000000.00",
             "Decimal128(Some(1000000000000000000000),22,2)",
+        ),
+        ("18446744073709551615", "UInt64(18446744073709551615)"),
+        (
+            "18446744073709551616",
+            "Decimal128(Some(18446744073709551616),38,0)",
         ),
     ];
     for (a, b) in test_data {
@@ -74,6 +80,16 @@ fn parse_decimals() {
 #[test]
 fn parse_ident_normalization() {
     let test_data = [
+        (
+            "SELECT LENGTH('str')",
+            "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
+            false,
+        ),
+        (
+            "SELECT CONCAT('Hello', 'World')",
+            "Ok(Projection: concat(Utf8(\"Hello\"), Utf8(\"World\"))\n  EmptyRelation)",
+            false,
+        ),
         (
             "SELECT age FROM person",
             "Ok(Projection: person.age\n  TableScan: person)",
@@ -1490,8 +1506,8 @@ fn select_count_column() {
 #[test]
 fn select_approx_median() {
     let sql = "SELECT approx_median(age) FROM person";
-    let expected = "Projection: APPROXMEDIAN(person.age)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXMEDIAN(person.age)]]\
+    let expected = "Projection: APPROX_MEDIAN(person.age)\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROX_MEDIAN(person.age)]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -1959,7 +1975,7 @@ fn union_with_different_column_names() {
     let expected = "Union\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
-            \n  Projection: orders.customer_id\
+            \n  Projection: orders.customer_id AS order_id\
             \n    TableScan: orders";
     quick_test(sql, expected);
 }
@@ -2059,7 +2075,7 @@ fn union_with_binary_expr_and_cast() {
         \n      SubqueryAlias: x\
         \n        Projection: Int64(1) AS a\
         \n          EmptyRelation\
-        \n  Projection: Float64(2.1) + x.a\
+        \n  Projection: Float64(2.1) + x.a AS Float64(0) + x.a\
         \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
         \n      SubqueryAlias: x\
         \n        Projection: Int64(1) AS a\
@@ -2422,8 +2438,8 @@ fn approx_median_window() {
     let sql =
         "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
     let expected = "\
-        Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        Projection: orders.order_id, APPROX_MEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[APPROX_MEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
     quick_test(sql, expected);
 }
@@ -2474,7 +2490,7 @@ fn select_groupby_orderby() {
     // expect that this is not an ambiguous reference
     let expected =
         "Sort: birth_date ASC NULLS LAST\
-         \n  Projection: AVG(person.age) AS value, datetrunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+         \n  Projection: AVG(person.age) AS value, date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
          \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[AVG(person.age)]]\
          \n      TableScan: person";
     quick_test(sql, expected);
@@ -3386,10 +3402,6 @@ fn test_select_distinct_order_by() {
 #[case::select_sort_by_unsupported(
     "SELECT * FROM person SORT BY id",
     "This feature is not implemented: SORT BY"
-)]
-#[case::select_into_unsupported(
-    "SELECT * INTO test FROM person",
-    "This feature is not implemented: INTO"
 )]
 #[test]
 fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {

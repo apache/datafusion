@@ -21,6 +21,7 @@
 #[cfg(test)]
 mod unix_test {
     use arrow::array::Array;
+    use arrow::csv::ReaderBuilder;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::test_util::register_unbounded_file_with_ordering;
     use datafusion::{
@@ -254,16 +255,14 @@ mod unix_test {
             Field::new("a2", DataType::UInt32, false),
         ]));
         // Specify the ordering:
-        let file_sort_order = Some(
-            [datafusion_expr::col("a1")]
-                .into_iter()
-                .map(|e| {
-                    let ascending = true;
-                    let nulls_first = false;
-                    e.sort(ascending, nulls_first)
-                })
-                .collect::<Vec<_>>(),
-        );
+        let file_sort_order = vec![[datafusion_expr::col("a1")]
+            .into_iter()
+            .map(|e| {
+                let ascending = true;
+                let nulls_first = false;
+                e.sort(ascending, nulls_first)
+            })
+            .collect::<Vec<_>>()];
         // Set unbounded sorted files read configuration
         register_unbounded_file_with_ordering(
             &ctx,
@@ -332,6 +331,96 @@ mod unix_test {
                     .count()
                     > 1
         );
+        Ok(())
+    }
+
+    /// It tests the INSERT INTO functionality.
+    #[tokio::test]
+    async fn test_sql_insert_into_fifo() -> Result<()> {
+        // To make unbounded deterministic
+        let waiting = Arc::new(AtomicBool::new(true));
+        let waiting_thread = waiting.clone();
+        // create local execution context
+        let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
+        let ctx = SessionContext::with_config(config);
+        // Create a new temporary FIFO file
+        let tmp_dir = TempDir::new()?;
+        let source_fifo_path = create_fifo_file(&tmp_dir, "source.csv")?;
+        // Prevent move
+        let (source_fifo_path_thread, source_display_fifo_path) =
+            (source_fifo_path.clone(), source_fifo_path.display());
+        // Tasks
+        let mut tasks: Vec<JoinHandle<()>> = vec![];
+        // TEST_BATCH_SIZE + 1 rows will be provided. However, after processing precisely
+        // TEST_BATCH_SIZE rows, the program will pause and wait for a batch to be read in another
+        // thread. This approach ensures that the pipeline remains unbroken.
+        tasks.push(create_writing_thread(
+            source_fifo_path_thread,
+            "a1,a2\n".to_owned(),
+            (0..TEST_DATA_SIZE)
+                .map(|_| "a,1\n".to_string())
+                .collect::<Vec<_>>(),
+            waiting,
+            TEST_BATCH_SIZE,
+        ));
+        // Create a new temporary FIFO file
+        let sink_fifo_path = create_fifo_file(&tmp_dir, "sink.csv")?;
+        // Prevent move
+        let (sink_fifo_path_thread, sink_display_fifo_path) =
+            (sink_fifo_path.clone(), sink_fifo_path.display());
+        // Spawn a new thread to read sink EXTERNAL TABLE.
+        tasks.push(thread::spawn(move || {
+            let file = File::open(sink_fifo_path_thread).unwrap();
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a1", DataType::Utf8, false),
+                Field::new("a2", DataType::UInt32, false),
+            ]));
+
+            let mut reader = ReaderBuilder::new(schema)
+                .has_header(true)
+                .with_batch_size(TEST_BATCH_SIZE)
+                .build(file)
+                .map_err(|e| DataFusionError::Internal(e.to_string()))
+                .unwrap();
+
+            while let Some(Ok(_)) = reader.next() {
+                waiting_thread.store(false, Ordering::SeqCst);
+            }
+        }));
+        // register second csv file with the SQL (create an empty file if not found)
+        ctx.sql(&format!(
+            "CREATE EXTERNAL TABLE source_table (
+                a1  VARCHAR NOT NULL,
+                a2  INT NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            OPTIONS ('UNBOUNDED' 'TRUE')
+            LOCATION '{source_display_fifo_path}'"
+        ))
+        .await?;
+
+        // register csv file with the SQL
+        ctx.sql(&format!(
+            "CREATE EXTERNAL TABLE sink_table (
+                a1  VARCHAR NOT NULL,
+                a2  INT NOT NULL
+            )
+            STORED AS CSV
+            WITH HEADER ROW
+            OPTIONS ('UNBOUNDED' 'TRUE')
+            LOCATION '{sink_display_fifo_path}'"
+        ))
+        .await?;
+
+        let df = ctx
+            .sql(
+                "INSERT INTO sink_table
+            SELECT a1, a2 FROM source_table",
+            )
+            .await?;
+        df.collect().await?;
+        tasks.into_iter().for_each(|jh| jh.join().unwrap());
         Ok(())
     }
 }

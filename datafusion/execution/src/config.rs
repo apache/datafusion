@@ -57,6 +57,11 @@ impl SessionConfig {
         Ok(ConfigOptions::from_env()?.into())
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Result<Self> {
+        Ok(ConfigOptions::from_string_hash_map(settings)?.into())
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.options.set(key, &value.to_string()).unwrap();
@@ -94,7 +99,7 @@ impl SessionConfig {
 
     /// Customize [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
@@ -104,7 +109,7 @@ impl SessionConfig {
 
     /// Get [`target_partitions`]
     ///
-    /// [`target_partitions`]: crate::config::ExecutionOptions::target_partitions
+    /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }
@@ -230,6 +235,43 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.options.execution.batch_size
+    }
+
+    /// Get the currently configured scalar_update_factor for aggregate
+    pub fn agg_scalar_update_factor(&self) -> usize {
+        self.options.execution.aggregate.scalar_update_factor
+    }
+
+    /// Customize scalar_update_factor for aggregate
+    pub fn with_agg_scalar_update_factor(mut self, n: usize) -> Self {
+        // scalar update factor must be greater than zero
+        assert!(n > 0);
+        self.options.execution.aggregate.scalar_update_factor = n;
+        self
+    }
+
+    /// Enables or disables the coalescence of small batches into larger batches
+    pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
+        self.options.execution.coalesce_batches = enabled;
+        self
+    }
+
+    /// Returns true if record batches will be examined between each operator
+    /// and small batches will be coalesced into larger batches.
+    pub fn coalesce_batches(&self) -> bool {
+        self.options.execution.coalesce_batches
+    }
+
+    /// Enables or disables the round robin repartition for increasing parallelism
+    pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
+        self.options.optimizer.enable_round_robin_repartition = enabled;
+        self
+    }
+
+    /// Returns true if the physical plan optimizer will try to
+    /// add round robin repartition to increase parallelism to leverage more CPU cores.
+    pub fn round_robin_repartition(&self) -> bool {
+        self.options.optimizer.enable_round_robin_repartition
     }
 
     /// Convert configuration options to name-value pairs with values

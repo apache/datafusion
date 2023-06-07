@@ -21,20 +21,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use log::debug;
-use tokio::sync::mpsc;
+use log::{debug, trace};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
+use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::sorts::streaming_merge;
-use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
-    common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
-    Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Sort preserving merge execution plan
@@ -149,7 +148,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!(
+        trace!(
             "Start SortPreservingMergeExec::execute for partition: {}",
             partition
         );
@@ -159,11 +158,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )));
         }
 
-        let tracking_metrics =
-            MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
-
         let input_partitions = self.input.output_partitioning().partition_count();
-        debug!(
+        trace!(
             "Number of input partitions of  SortPreservingMergeExec::execute: {}",
             input_partitions
         );
@@ -181,29 +177,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 result
             }
             _ => {
-                // Use tokio only if running from a tokio context (#2201)
-                let receivers = match tokio::runtime::Handle::try_current() {
-                    Ok(_) => (0..input_partitions)
-                        .map(|part_i| {
-                            let (sender, receiver) = mpsc::channel(1);
-                            let join_handle = spawn_execution(
-                                self.input.clone(),
-                                sender,
-                                part_i,
-                                context.clone(),
-                            );
-
-                            RecordBatchReceiverStream::create(
-                                &schema,
-                                receiver,
-                                join_handle,
-                            )
-                        })
-                        .collect(),
-                    Err(_) => (0..input_partitions)
-                        .map(|partition| self.input.execute(partition, context.clone()))
-                        .collect::<Result<_>>()?,
-                };
+                let receivers = (0..input_partitions)
+                    .map(|partition| {
+                        let stream = self.input.execute(partition, context.clone())?;
+                        Ok(spawn_buffered(stream, 1))
+                    })
+                    .collect::<Result<_>>()?;
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
@@ -211,7 +190,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     receivers,
                     schema,
                     &self.expr,
-                    tracking_metrics,
+                    BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
                 )?;
 
@@ -252,8 +231,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use futures::FutureExt;
-    use tokio_stream::StreamExt;
+    use futures::{FutureExt, StreamExt};
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::from_slice::FromSlice;
@@ -262,6 +240,7 @@ mod tests {
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::metrics::MetricValue;
     use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::stream::RecordBatchReceiverStream;
     use crate::physical_plan::{collect, common};
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -812,9 +791,12 @@ mod tests {
         let mut streams = Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
-            let (sender, receiver) = mpsc::channel(1);
+            let mut builder = RecordBatchReceiverStream::builder(schema.clone(), 1);
+
+            let sender = builder.tx();
+
             let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
-            let join_handle = tokio::spawn(async move {
+            builder.spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
                     // This causes the MergeStream to wait for more input
@@ -822,22 +804,16 @@ mod tests {
                 }
             });
 
-            streams.push(RecordBatchReceiverStream::create(
-                &schema,
-                receiver,
-                join_handle,
-            ));
+            streams.push(builder.build());
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
         let merge_stream = streaming_merge(
             streams,
             batches.schema(),
             sort.as_slice(),
-            tracking_metrics,
+            BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
         )
         .unwrap();

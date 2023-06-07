@@ -23,9 +23,8 @@ use datafusion::datasource::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
-use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
-use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -56,7 +55,7 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 #[derive(Debug)]
 struct CustomPlan {
     schema: SchemaRef,
-    batches: Vec<Arc<RecordBatch>>,
+    batches: Vec<RecordBatch>,
 }
 
 impl ExecutionPlan for CustomPlan {
@@ -89,16 +88,12 @@ impl ExecutionPlan for CustomPlan {
 
     fn execute(
         &self,
-        partition: usize,
-        context: Arc<TaskContext>,
+        _partition: usize,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, context.memory_pool(), partition);
-        Ok(Box::pin(SizedRecordBatchStream::new(
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            self.batches.clone(),
-            tracking_metrics,
+            futures::stream::iter(self.batches.clone().into_iter().map(Ok)),
         )))
     }
 
@@ -183,8 +178,8 @@ impl TableProvider for CustomProvider {
                 Ok(Arc::new(CustomPlan {
                     schema: self.zero_batch.schema(),
                     batches: match int_value {
-                        0 => vec![Arc::new(self.zero_batch.clone())],
-                        1 => vec![Arc::new(self.one_batch.clone())],
+                        0 => vec![self.zero_batch.clone()],
+                        1 => vec![self.one_batch.clone()],
                         _ => vec![],
                     },
                 }))

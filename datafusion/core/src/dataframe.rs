@@ -38,6 +38,7 @@ use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
+use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
@@ -48,7 +49,6 @@ use crate::logical_expr::{
     col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning, TableType,
 };
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
@@ -825,7 +825,7 @@ impl DataFrame {
     /// Note: This method should not be used outside testing, as it loses the snapshot
     /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
     /// operations may take place against a different state
-    #[deprecated(note = "Use DataFrame::into_optimized_plan")]
+    #[deprecated(since = "23.0.0", note = "Use DataFrame::into_optimized_plan")]
     pub fn to_logical_plan(self) -> Result<LogicalPlan> {
         self.into_optimized_plan()
     }

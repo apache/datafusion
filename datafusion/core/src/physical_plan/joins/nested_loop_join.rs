@@ -39,6 +39,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::{DataFusionError, Statistics};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
 use futures::{ready, Stream, StreamExt, TryStreamExt};
@@ -48,14 +49,12 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::error::Result;
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::{
-    MemoryConsumer, SharedMemoryReservation, SharedOptionalMemoryReservation, TryGrow,
-};
 use crate::physical_plan::coalesce_batches::concat_batches;
+use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::TaskContext;
 
 /// Data of the inner table side
-type JoinLeftData = RecordBatch;
+type JoinLeftData = (RecordBatch, MemoryReservation);
 
 /// NestedLoopJoinExec executes partitions in parallel.
 /// One input will be collected to a single partition, call it inner-table.
@@ -91,8 +90,6 @@ pub struct NestedLoopJoinExec {
     inner_table: OnceAsync<JoinLeftData>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
-    /// Operator-level memory reservation for left data
-    reservation: SharedOptionalMemoryReservation,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -118,7 +115,6 @@ impl NestedLoopJoinExec {
             schema: Arc::new(schema),
             inner_table: Default::default(),
             column_indices,
-            reservation: Default::default(),
             metrics: Default::default(),
         })
     }
@@ -201,15 +197,15 @@ impl ExecutionPlan for NestedLoopJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
-        // Initialization of operator-level reservation
-        self.reservation
-            .initialize("NestedLoopJoinExec", context.memory_pool());
+        // Initialization reservation for load of inner table
+        let load_reservation =
+            MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
+                .register(context.memory_pool());
 
-        // Inititalization of stream-level reservation
-        let reservation = SharedMemoryReservation::from(
+        // Initialization of stream-level reservation
+        let reservation =
             MemoryConsumer::new(format!("NestedLoopJoinStream[{partition}]"))
-                .register(context.memory_pool()),
-        );
+                .register(context.memory_pool());
 
         let (outer_table, inner_table) = if left_is_build_side(self.join_type) {
             // left must be single partition
@@ -219,7 +215,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     self.left.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    Arc::new(self.reservation.clone()),
+                    load_reservation,
                 )
             });
             let outer_table = self.right.execute(partition, context)?;
@@ -232,7 +228,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     self.right.clone(),
                     context.clone(),
                     join_metrics.clone(),
-                    Arc::new(self.reservation.clone()),
+                    load_reservation,
                 )
             });
             let outer_table = self.left.execute(partition, context)?;
@@ -314,12 +310,12 @@ async fn load_specified_partition_of_input(
     input: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
     join_metrics: BuildProbeJoinMetrics,
-    reservation: Arc<dyn TryGrow>,
+    reservation: MemoryReservation,
 ) -> Result<JoinLeftData> {
     let stream = input.execute(partition, context)?;
 
     // Load all batches and count the rows
-    let (batches, num_rows, _, _) = stream
+    let (batches, num_rows, _, reservation) = stream
         .try_fold(
             (Vec::new(), 0usize, join_metrics, reservation),
             |mut acc, batch| async {
@@ -341,7 +337,7 @@ async fn load_specified_partition_of_input(
 
     let merged_batch = concat_batches(&input.schema(), &batches, num_rows)?;
 
-    Ok(merged_batch)
+    Ok((merged_batch, reservation))
 }
 
 // BuildLeft means the left relation is the single patrition side.
@@ -375,26 +371,26 @@ struct NestedLoopJoinStream {
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Memory reservation for visited_left_side
-    reservation: SharedMemoryReservation,
+    reservation: MemoryReservation,
 }
 
 fn build_join_indices(
-    left_index: usize,
-    batch: &RecordBatch,
-    left_data: &JoinLeftData,
+    left_row_index: usize,
+    right_batch: &RecordBatch,
+    left_batch: &RecordBatch,
     filter: Option<&JoinFilter>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     // left indices: [left_index, left_index, ...., left_index]
     // right indices: [0, 1, 2, 3, 4,....,right_row_count]
 
-    let right_row_count = batch.num_rows();
-    let left_indices = UInt64Array::from(vec![left_index as u64; right_row_count]);
+    let right_row_count = right_batch.num_rows();
+    let left_indices = UInt64Array::from(vec![left_row_index as u64; right_row_count]);
     let right_indices = UInt32Array::from_iter_values(0..(right_row_count as u32));
     // in the nested loop join, the filter can contain non-equal and equal condition.
     if let Some(filter) = filter {
         apply_join_filter_to_indices(
-            left_data,
-            batch,
+            left_batch,
+            right_batch,
             left_indices,
             right_indices,
             filter,
@@ -413,7 +409,7 @@ impl NestedLoopJoinStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         // all left row
         let build_timer = self.join_metrics.build_time.timer();
-        let left_data = match ready!(self.inner_table.get(cx)) {
+        let (left_data, _) = match ready!(self.inner_table.get(cx)) {
             Ok(data) => data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
@@ -516,7 +512,7 @@ impl NestedLoopJoinStream {
     ) -> Poll<Option<Result<RecordBatch>>> {
         // all right row
         let build_timer = self.join_metrics.build_time.timer();
-        let right_data = match ready!(self.inner_table.get(cx)) {
+        let (right_data, _) = match ready!(self.inner_table.get(cx)) {
             Ok(data) => data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
@@ -1168,7 +1164,7 @@ mod tests {
                 err.to_string(),
                 "External error: Resources exhausted: Failed to allocate additional"
             );
-            assert_contains!(err.to_string(), "NestedLoopJoinExec");
+            assert_contains!(err.to_string(), "NestedLoopJoinLoad[0]");
         }
 
         Ok(())

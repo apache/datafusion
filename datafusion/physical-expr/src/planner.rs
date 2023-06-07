@@ -19,7 +19,7 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, like, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+        self, binary, date_time_interval_expr, like, Column, GetIndexedFieldExpr, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -27,7 +27,7 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::Cast;
+use datafusion_expr::expr::{Cast, InList, ScalarFunction, ScalarUDF};
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -195,42 +195,22 @@ pub fn create_physical_expr(
                     DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
                 (
                     DataType::Interval(_),
                     Operator::Plus | Operator::Minus,
                     DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    rhs,
-                    *op,
-                    lhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(rhs, *op, lhs, input_schema)?),
                 (
                     DataType::Timestamp(_, _),
                     Operator::Minus,
                     DataType::Timestamp(_, _),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
                 (
                     DataType::Interval(_),
                     Operator::Plus | Operator::Minus,
                     DataType::Interval(_),
-                ) => Ok(Arc::new(DateTimeIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
+                ) => Ok(date_time_interval_expr(lhs, *op, rhs, input_schema)?),
                 _ => {
                     // Note that the logical planner is responsible
                     // for type coercion on the arguments (e.g. if one
@@ -403,7 +383,7 @@ pub fn create_physical_expr(
             )))
         }
 
-        Expr::ScalarFunction { fun, args } => {
+        Expr::ScalarFunction(ScalarFunction { fun, args }) => {
             let physical_args = args
                 .iter()
                 .map(|e| {
@@ -417,7 +397,7 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::ScalarUDF { fun, args } => {
+        Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             let mut physical_args = vec![];
             for e in args {
                 physical_args.push(create_physical_expr(
@@ -468,11 +448,11 @@ pub fn create_physical_expr(
                 binary_expr
             }
         }
-        Expr::InList {
+        Expr::InList(InList {
             expr,
             list,
             negated,
-        } => match expr.as_ref() {
+        }) => match expr.as_ref() {
             Expr::Literal(ScalarValue::Utf8(None)) => {
                 Ok(expressions::lit(ScalarValue::Boolean(None)))
             }

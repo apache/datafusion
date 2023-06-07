@@ -215,6 +215,18 @@ select exp(null);
 ----
 NULL
 
+# factorial scalar function
+query III rowsort
+select factorial(0), factorial(10), factorial(15);
+----
+1 3628800 1307674368000
+
+# factorial scalar nulls
+query I rowsort
+select factorial(null);
+----
+NULL
+
 # floor scalar function
 query RRR rowsort
 select floor(1.4), floor(1.5), floor(1.6);
@@ -224,6 +236,54 @@ select floor(1.4), floor(1.5), floor(1.6);
 # floor scalar nulls
 query R rowsort
 select floor(null);
+----
+NULL
+
+# gcd scalar function
+query III rowsort
+select gcd(0, 0), gcd(2, 3), gcd(15, 10);
+----
+0 1 5
+
+# gcd scalar nulls
+query I rowsort
+select gcd(null, 64);
+----
+NULL
+
+# gcd scalar nulls 1
+query I rowsort
+select gcd(2, null);
+----
+NULL
+
+# gcd scalar nulls 2
+query I rowsort
+select gcd(null, null);
+----
+NULL
+
+# lcm scalar function
+query III rowsort
+select lcm(0, 0), lcm(2, 3), lcm(15, 10);
+----
+0 6 30
+
+# lcm scalar nulls
+query I rowsort
+select lcm(null, 64);
+----
+NULL
+
+# lcm scalar nulls 1
+query I rowsort
+select lcm(2, null);
+----
+NULL
+
+# lcm scalar nulls 2
+query I rowsort
+select lcm(null, null);
 ----
 NULL
 
@@ -613,6 +673,14 @@ NULL
 NULL
 4
 
+# issue: https://github.com/apache/arrow-datafusion/issues/6376
+query I
+select case when a = 0 then 123 end from (values(1), (0), (null)) as t(a);
+----
+NULL
+123
+NULL
+
 # csv_query_sum_cast() {
 
 statement ok
@@ -641,6 +709,54 @@ SELECT arrow_typeof(c8), arrow_typeof(c6), arrow_typeof(c8 + c6) FROM aggregate_
 ----
 Int32 Int64 Int64
 
+# in list array
+query BBBBB rowsort
+SELECT c1 IN ('a', 'c') AS utf8_in_true
+      ,c1 IN ('x', 'y') AS utf8_in_false
+      ,c1 NOT IN ('x', 'y') AS utf8_not_in_true
+      ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
+      ,NULL IN ('a', 'c') AS utf8_in_null
+FROM aggregate_test_100 WHERE c12 < 0.05
+----
+false false true true NULL
+false false true true NULL
+false false true true NULL
+false false true true NULL
+true false true false NULL
+true false true false NULL
+true false true false NULL
+
+# csv count star
+query III
+SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100
+----
+100 100 100
+
+# csv query sqrt sqrt
+query R
+SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1
+----
+0.98186505614
+
+# csv query cbrt cbrt
+query R
+SELECT cbrt(cbrt(c12)) FROM aggregate_test_100 LIMIT 1
+----
+0.991899036678
+
+# csv query cast
+query R rowsort
+SELECT CAST(c12 AS float) FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4
+----
+0.3887028
+0.39144436
+
+# csv query cast literal
+query RR rowsort
+SELECT c12, CAST(1 AS float) FROM aggregate_test_100 WHERE c12 > CAST(0 AS float) LIMIT 2
+----
+0.311471253986 1
+0.929409733247 1
 
 statement ok
 drop table aggregate_test_100
@@ -805,7 +921,7 @@ SELECT null, not(null)
 ----
 NULL NULL
 
-query error DataFusion error: Error during planning: NOT or BITWISE_NOT not supported for datatype: 'Utf8'
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT/BITWISE_NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL or Integer\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT NOT('hi')
 
 # test_negative_expressions()
@@ -820,3 +936,332 @@ drop table test_boolean
 
 statement ok
 drop table test_int32
+
+# scientific notation (0s)
+query RRRR
+SELECT 0e0 AS c1, 0.e-0 AS c2, -.0e+0 AS c3, 00.00e-00 AS c4
+----
+0 0 0 0
+
+# scientific notation (integer)
+query RRRR
+SELECT -1e-1, 0e100, 10E-2, 1E+0;
+----
+-0.1 0 0.1 1
+
+# scientific notation (decimal)
+query RRRR
+SELECT -1.5e-1, 00.0e1, 150.0E-3, 0.015E+2;
+----
+-0.15 0 0.15 1.5
+
+# scientific notation (integer or decimal part only)
+query RRRR
+SELECT -2.e-1, 0.e0, .0002E+3, .02E+2;
+----
+-0.2 0 0.2 2
+
+# scientific notation (overflows)
+# FLOAT64 range: -1.79E+308 to -2.22E-308, or from 2.22E-308 to 1.79E+308
+query RRRR
+SELECT -1.79e309, -2.22e-309, 2.22E-309, 1.79E+309;
+----
+-Infinity 0 0 Infinity
+
+# scientific notation (other edgecases)
+query IRRR
+SELECT 1ea, 1e-2a, 1E-2-2, 1E-1e2;
+----
+1 0.01 -1.99 0.1
+
+# case with bool type result
+query B
+SELECT CASE WHEN 'cpu' != 'cpu' THEN true ELSE false END
+----
+false
+
+statement ok
+CREATE TABLE t1(
+  a boolean,
+  b boolean,
+) as VALUES
+  (true, true),
+  (true, null),
+  (true, false),
+  (null, true),
+  (null, null),
+  (null, false),
+  (false, true),
+  (false, null),
+  (false, null)
+;
+
+# csv query boolean eq neq
+query BBBBBB rowsort
+SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1
+----
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL true
+false NULL NULL NULL NULL true
+false true false true true true
+true NULL NULL NULL NULL false
+true false false false true false
+true true true true false false
+
+# csv query boolean lt lt eq
+query BBBBBB rowsort
+SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1
+----
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL true
+false NULL NULL NULL NULL true
+false true true true true true
+true NULL NULL NULL NULL true
+true false false false false true
+true true false true true true
+
+# csv query boolean gt gt eq
+query BBBBBB rowsort
+SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1
+---- 
+----
+NULL NULL NULL NULL NULL NULL
+NULL false NULL false NULL NULL
+NULL true NULL true NULL NULL
+false NULL NULL NULL NULL false
+false NULL NULL NULL NULL false
+false true false true false false
+true NULL NULL NULL NULL true
+true false true false true true
+true true false true true true
+
+# csv query boolean distinct from
+query BBBBBB rowsort
+SELECT a, b,
+      a is distinct from b as df, 
+      b is distinct from true as df_scalar, 
+      a is not distinct from b as ndf, 
+      a is not distinct from true as ndf_scalar 
+FROM t1
+----
+NULL NULL false true true false
+NULL false true true false false
+NULL true true false false false
+false NULL true true false false
+false NULL true true false false
+false true true false false false
+true NULL true true false true
+true false true true false true
+true true false false true true
+
+statement ok
+drop table t1
+
+# like nlike with null lt
+query BB rowsort
+SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t
+----
+NULL NULL
+NULL NULL
+NULL NULL
+
+query BB rowsort
+SELECT column1 not like NULL as col_null, NULL not like column1 as null_col from (values('a'), ('b'), (NULL)) as t
+----
+NULL NULL
+NULL NULL
+NULL NULL
+
+statement ok
+CREATE TABLE test(
+  c1 VARCHAR,
+  c2 INT
+) as VALUES
+('',0),
+('a',1),
+('aa',NULL),
+('aaa',3);
+
+# query concat
+query T rowsort
+SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test
+----
+-hi-0
+a-hi-1
+aa-hi-
+aaa-hi-3
+
+# query array
+query ? rowsort
+SELECT make_array(c1, cast(c2 as varchar)) FROM test
+----
+[, 0]
+[a, 1]
+[aa, ]
+[aaa, 3]
+
+statement ok
+drop table test
+
+# query array scalar
+query ?
+SELECT make_array(1, 2, 3);
+----
+[1, 2, 3]
+
+# coalesce static empty value
+query T
+SELECT COALESCE('', 'test')
+----
+(empty)
+
+# coalesce static value with null
+query T
+SELECT COALESCE(NULL, 'test')
+----
+test
+
+statement ok
+CREATE TABLE test(
+  c1 INT,
+  c2 INT
+) as VALUES
+(0, 1),
+(NULL, 1),
+(1, 0),
+(NULL, 1),
+(NULL, NULL);
+
+# coalesce result
+query I rowsort
+SELECT COALESCE(c1, c2) FROM test
+----
+0
+1
+1
+1
+NULL
+
+# coalesce result with default value
+query T rowsort
+SELECT COALESCE(c1, c2, '-1') FROM test
+----
+-1
+0
+1
+1
+1
+
+statement ok
+drop table test
+
+statement ok
+CREATE TABLE test(
+  c1 INT,
+  c2 INT
+) as VALUES
+(1, 2),
+(NULL, 2),
+(1, NULL),
+(NULL, NULL);
+
+# coalesce sum with default value
+query I
+SELECT SUM(COALESCE(c1, c2, 0)) FROM test
+----
+4
+
+# coalesce mul with default value
+query I
+SELECT COALESCE(c1 * c2, 0) FROM test
+----
+2
+0
+0
+0
+
+statement ok
+drop table test
+
+statement ok
+CREATE TABLE test(
+  i32 INT,
+  i64 INT,
+  f32 FLOAT,
+  f64 FLOAT
+) as VALUES
+(2, 2, 1.0, 1.0),
+(5, 5, 2.5, 2.5),
+(0, 0, 0.0, 0.0),
+(-14, -14, -14.5, -14.5),
+(NULL, NULL, NULL, NULL);
+
+query RRRRIR rowsort
+SELECT power(i32, exp_i) as power_i32,
+       power(i64, exp_f) as power_i64,
+       pow(f32, exp_i) as power_f32,
+       power(f64, exp_f) as power_f64,
+       pow(2, 3) as power_int_scalar,
+       power(2.5, 3.0) as power_float_scalar
+FROM (select test.*, 3 as exp_i, 3.0 as exp_f from test) a
+----
+-2744 -2744 -3048.625 -3048.625 8 15.625
+0 0 0 0 8 15.625
+125 125 15.625 15.625 8 15.625
+8 8 1 1 8 15.625
+NULL NULL NULL NULL 8 15.625
+
+statement ok
+drop table test
+
+# error message for wrong function signature (Variadic: arbitrary number of args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'concat\(\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tconcat\(Utf8, ..\)
+SELECT concat();
+
+# error message for wrong function signature (Uniform: t args all from some common types)
+statement error Error during planning: No function matches the given name and argument types 'nullif\(Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tnullif\(Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8, Boolean/UInt8/UInt16/UInt32/UInt64/Int8/Int16/Int32/Int64/Float32/Float64/Utf8/LargeUtf8\)
+SELECT nullif(1);
+
+# error message for wrong function signature (Exact: exact number of args of an exact type)
+statement error Error during planning: No function matches the given name and argument types 'pi\(Float64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpi\(\)
+SELECT pi(3.14);
+
+# error message for wrong function signature (Any: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'arrow_typeof\(Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tarrow_typeof\(Any\)
+SELECT arrow_typeof(1, 1);
+
+# error message for wrong function signature (OneOf: fixed number of args of arbitrary types)
+statement error Error during planning: No function matches the given name and argument types 'power\(Int64, Int64, Int64\)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tpower\(Int64, Int64\)\n\tpower\(Float64, Float64\)
+SELECT power(1, 2, 3);
+
+# turn off enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld
+
+# turn on enable_ident_normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld

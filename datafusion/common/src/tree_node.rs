@@ -15,18 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides common traits for visiting or rewriting tree nodes easily.
+//! This module provides common traits for visiting or rewriting tree
+//! data structures easily.
 
 use std::sync::Arc;
 
 use crate::Result;
 
-/// Trait for tree node. It can be [`ExecutionPlan`], [`PhysicalExpr`], [`LogicalPlan`], [`Expr`], etc.
+/// Defines a visitable and rewriteable a tree node. This trait is
+/// implemented for plans ([`ExecutionPlan`] and [`LogicalPlan`]) as
+/// well as expression trees ([`PhysicalExpr`], [`Expr`]) in
+/// DataFusion
+///
+/// <!-- Since these are in the datafusion-common crate, can't use intra doc links) -->
+/// [`ExecutionPlan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
+/// [`PhysicalExpr`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.PhysicalExpr.html
+/// [`LogicalPlan`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html
+/// [`Expr`]: https://docs.rs/datafusion-expr/latest/datafusion_expr/expr/enum.Expr.html
 pub trait TreeNode: Sized {
-    /// Use preorder to iterate the node on the tree so that we can stop fast for some cases.
+    /// Use preorder to iterate the node on the tree so that we can
+    /// stop fast for some cases.
     ///
-    /// [`op`] can be used to collect some info from the tree node
-    ///      or do some checking for the tree node.
+    /// The `op` closure can be used to collect some info from the
+    /// tree node or do some checking for the tree node.
     fn apply<F>(&self, op: &mut F) -> Result<VisitRecursion>
     where
         F: FnMut(&Self) -> Result<VisitRecursion>,
@@ -68,7 +79,8 @@ pub trait TreeNode: Sized {
     /// children of that node will be visited, nor is post_visit
     /// called on that node. Details see [`TreeNodeVisitor`]
     ///
-    /// If using the default [`post_visit`] with nothing to do, the [`apply`] should be preferred
+    /// If using the default [`TreeNodeVisitor::post_visit`] that does
+    /// nothing, [`Self::apply`] should be preferred.
     fn visit<V: TreeNodeVisitor<N = Self>>(
         &self,
         visitor: &mut V,
@@ -152,7 +164,8 @@ pub trait TreeNode: Sized {
     /// children of that node will be visited, nor is mutate
     /// called on that node
     ///
-    /// If using the default [`pre_visit`] with [`true`] returned, the [`transform`] should be preferred
+    /// If using the default [`TreeNodeRewriter::pre_visit`] which
+    /// returns `true`, [`Self::transform`] should be preferred.
     fn rewrite<R: TreeNodeRewriter<N = Self>>(self, rewriter: &mut R) -> Result<Self> {
         let need_mutate = match rewriter.pre_visit(&self)? {
             RewriteRecursion::Mutate => return rewriter.mutate(self),
@@ -190,8 +203,8 @@ pub trait TreeNode: Sized {
 /// tree and makes it easier to add new types of tree node and
 /// algorithms.
 ///
-/// When passed to[`TreeNode::visit`], [`TreeNode::pre_visit`]
-/// and [`TreeNode::post_visit`] are invoked recursively
+/// When passed to[`TreeNode::visit`], [`TreeNodeVisitor::pre_visit`]
+/// and [`TreeNodeVisitor::post_visit`] are invoked recursively
 /// on an node tree.
 ///
 /// If an [`Err`] result is returned, recursion is stopped
@@ -239,7 +252,7 @@ pub trait TreeNodeRewriter: Sized {
     fn mutate(&mut self, node: Self::N) -> Result<Self::N>;
 }
 
-/// Controls how the [TreeNode] recursion should proceed for [`rewrite`].
+/// Controls how the [`TreeNode`] recursion should proceed for [`TreeNode::rewrite`].
 #[derive(Debug)]
 pub enum RewriteRecursion {
     /// Continue rewrite this node tree.
@@ -252,7 +265,7 @@ pub enum RewriteRecursion {
     Skip,
 }
 
-/// Controls how the [TreeNode] recursion should proceed for [`visit`].
+/// Controls how the [`TreeNode`] recursion should proceed for [`TreeNode::visit`].
 #[derive(Debug)]
 pub enum VisitRecursion {
     /// Continue the visit to this node tree.
