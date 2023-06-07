@@ -47,6 +47,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             crate::utils::normalize_ident(function.name.0[0].clone())
         };
 
+        if self.options.prioritize_udf {
+            // user-defined functions (UDF)
+            if let Some(udf) =
+                self.try_sql_fn_to_udf(&name, &function, schema, planner_context)?
+            {
+                return Ok(udf);
+            }
+        }
+
         // next, scalar built-in
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
             let args =
@@ -139,14 +148,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )));
             };
 
-            // finally, user-defined functions (UDF) and UDAF
-            if let Some(fm) = self.schema_provider.get_function_meta(&name) {
-                let args =
-                    self.function_args_to_expr(function.args, schema, planner_context)?;
-                return Ok(Expr::ScalarUDF(ScalarUDF::new(fm, args)));
+            if !self.options.prioritize_udf {
+                // user-defined functions (UDF)
+                if let Some(udf) =
+                    self.try_sql_fn_to_udf(&name, &function, schema, planner_context)?
+                {
+                    return Ok(udf);
+                }
             }
 
-            // User defined aggregate functions
+            // User defined aggregate functions (UDAF)
             if let Some(fm) = self.schema_provider.get_aggregate_meta(&name) {
                 let args =
                     self.function_args_to_expr(function.args, schema, planner_context)?;
@@ -191,6 +202,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .ok_or_else(|| {
                 DataFusionError::Plan(format!("There is no window function named {name}"))
             })
+    }
+
+    fn try_sql_fn_to_udf(
+        &self,
+        name: &str,
+        function: &SQLFunction,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Option<Expr>> {
+        if let Some(fm) = self.schema_provider.get_function_meta(name) {
+            let args = self.function_args_to_expr(
+                function.args.clone(),
+                schema,
+                planner_context,
+            )?;
+            return Ok(Some(Expr::ScalarUDF(ScalarUDF::new(fm, args))));
+        }
+        Ok(None)
     }
 
     fn sql_fn_arg_to_logical_expr(

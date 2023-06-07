@@ -28,7 +28,8 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, ScalarUDF, TableSource,
+    AggregateUDF, BuiltinScalarFunction, ColumnarValue, Expr, ReturnTypeFunction,
+    ScalarFunctionImplementation, ScalarUDF, Signature, TableSource, Volatility,
 };
 use datafusion_sql::{
     parser::DFParser,
@@ -72,6 +73,7 @@ fn parse_decimals() {
             ParserOptions {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
+                prioritize_udf: false,
             },
         );
     }
@@ -125,9 +127,75 @@ fn parse_ident_normalization() {
             ParserOptions {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
+                prioritize_udf: false,
             },
         );
         assert_eq!(expected, format!("{plan:?}"));
+    }
+}
+
+#[test]
+fn parse_prioritize_udf() {
+    // Create a UDF that has the same name as a builtin function (abs)
+    let return_type: ReturnTypeFunction =
+        Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
+    let fun: ScalarFunctionImplementation =
+        Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(1)))));
+    let scalar_udf = Arc::new(ScalarUDF::new(
+        "abs",
+        &Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        &return_type,
+        &fun,
+    ));
+
+    // Test data
+    let test_data = [
+        (
+            "SELECT ABS(-1)",
+            Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Abs,
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(-1)))],
+            }),
+            false,
+        ),
+        (
+            "SELECT ABS(-1)",
+            Expr::ScalarUDF(datafusion_expr::expr::ScalarUDF {
+                fun: scalar_udf.clone(),
+                args: vec![Expr::Literal(ScalarValue::Int64(Some(-1)))],
+            }),
+            true,
+        ),
+    ];
+
+    for (sql, expected_projected_field, prioritize_udf) in test_data {
+        let mut udfs = HashMap::new();
+        udfs.insert("abs".to_string(), scalar_udf.clone());
+        let plan = logical_plan_with_options_and_context(
+            sql,
+            ParserOptions {
+                parse_float_as_decimal: false,
+                enable_ident_normalization: true,
+                prioritize_udf,
+            },
+            &MockContextProvider {
+                udafs: HashMap::default(),
+                udfs,
+                options: ConfigOptions::default(),
+            },
+        );
+        // Check that the plan is as expected
+        assert_eq!(
+            "Ok(Projection: abs(Int64(-1))\n  EmptyRelation)",
+            format!("{:?}", &plan)
+        );
+        // Because a plan with a UDF is displayed exactly the same as a plan with a built-in function,
+        // we need to check the the projected field to ensure that the plan is correct.
+        let projected_field = match plan {
+            Ok(LogicalPlan::Projection(projection)) => projection.expr[0].to_owned(),
+            _ => panic!("Expected Projection"),
+        };
+        assert_eq!(projected_field, expected_projected_field);
     }
 }
 
@@ -1246,9 +1314,12 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"SUM(person.age)\", \
+    assert_eq!(
+        "Schema error: No field named doesnotexist. Valid fields are \"SUM(person.age)\", \
         person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".", format!("{err}"));
+        person.salary, person.birth_date, person.\"😀\".",
+        format!("{err}")
+    );
 }
 
 #[test]
@@ -2549,6 +2620,18 @@ fn logical_plan_with_dialect_and_options(
     planner.statement_to_plan(ast.pop_front().unwrap())
 }
 
+fn logical_plan_with_options_and_context<S: ContextProvider>(
+    sql: &str,
+    options: ParserOptions,
+    context: &S,
+) -> Result<LogicalPlan> {
+    let dialect = &GenericDialect {};
+    let planner = SqlToRel::new_with_options(context, options);
+    let result = DFParser::parse_sql_with_dialect(sql, dialect);
+    let mut ast = result?;
+    planner.statement_to_plan(ast.pop_front().unwrap())
+}
+
 /// Create logical plan, write with formatter, compare to expected output
 fn quick_test(sql: &str, expected: &str) {
     let plan = logical_plan(sql).unwrap();
@@ -2596,6 +2679,7 @@ fn prepare_stmt_replace_params_quick_test(
 struct MockContextProvider {
     options: ConfigOptions,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    udfs: HashMap<String, Arc<ScalarUDF>>,
 }
 
 impl ContextProvider for MockContextProvider {
@@ -2679,8 +2763,8 @@ impl ContextProvider for MockContextProvider {
         }
     }
 
-    fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-        None
+    fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
+        self.udfs.get(name).map(Arc::clone)
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
