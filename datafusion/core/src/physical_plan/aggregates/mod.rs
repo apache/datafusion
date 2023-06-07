@@ -17,7 +17,6 @@
 
 //! Aggregates functionalities
 
-use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::{
     bounded_aggregate_stream::BoundedAggregateStream, no_grouping::AggregateStream,
     row_hash::GroupedHashAggregateStream,
@@ -32,6 +31,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
     aggregate::row_accumulator::RowAccumulator,
@@ -564,6 +564,7 @@ impl AggregateExec {
         // in `Final` mode, it is not important to produce correct result in `Partial` mode.
         // We only support `Single` mode, where we are sure that output produced is final, and it
         // is produced in a single step.
+
         let requirement = get_finest_requirement(
             &mut aggr_expr,
             &mut order_by_expr,
@@ -582,13 +583,10 @@ impl AggregateExec {
             .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
         {
             let reverse_agg_requirement = requirement.map(|reqs| {
-                PhysicalSortRequirement::from_sort_exprs(
-                    reverse_order_bys(&reqs).iter(),
-                )
+                PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&reqs).iter())
             });
             aggregator_reverse_reqs = reverse_agg_requirement;
         }
-
 
         // construct a map from the input columns to the output columns of the Aggregation
         let mut columns_map: HashMap<Column, Vec<Column>> = HashMap::new();
@@ -1179,8 +1177,8 @@ fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
-    use crate::execution::context::{SessionConfig, TaskContext};
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use super::*;
+    use crate::execution::context::SessionConfig;
     use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
         get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
@@ -1195,12 +1193,13 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion_physical_expr::expressions::{
         lit, ApproxDistinct, Column, Count, FirstValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, EquivalenceProperties, OrderedColumn,
-        OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        AggregateExpr, EquivalenceProperties, OrderingEquivalenceProperties,
+        PhysicalExpr, PhysicalSortExpr,
     };
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -1858,8 +1857,14 @@ mod tests {
         eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), options1)],
-            &vec![OrderedColumn::new(col_c.clone(), options2)],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()) as _,
+                options: options1,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_c.clone()) as _,
+                options: options2,
+            }],
         ));
         let mut order_by_exprs = vec![
             None,
@@ -1892,8 +1897,11 @@ mod tests {
                 options: options2,
             }]),
         ];
-        let aggr_expr =
-            Arc::new(FirstValue::new(Arc::new(col_a.clone()), DataType::Int32)) as _;
+        let aggr_expr = Arc::new(FirstValue::new(
+            Arc::new(col_a.clone()),
+            "first1",
+            DataType::Int32,
+        )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(
             &mut aggr_exprs,

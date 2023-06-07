@@ -19,17 +19,15 @@
 
 use super::SendableRecordBatchStream;
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::MemoryReservation;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
-use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
+use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use futures::{Future, StreamExt, TryStreamExt};
-use log::debug;
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 use std::fs;
@@ -37,7 +35,6 @@ use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// [`MemoryReservation`] used across query execution streams
@@ -96,42 +93,6 @@ fn build_file_list_recurse(
     Ok(())
 }
 
-/// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
-pub(crate) fn spawn_execution(
-    input: Arc<dyn ExecutionPlan>,
-    output: mpsc::Sender<Result<RecordBatch>>,
-    partition: usize,
-    context: Arc<TaskContext>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut stream = match input.execute(partition, context) {
-            Err(e) => {
-                // If send fails, plan being torn down,
-                // there is no place to send the error.
-                output.send(Err(e)).await.ok();
-                debug!(
-                    "Stopping execution: error executing input: {}",
-                    displayable(input.as_ref()).one_line()
-                );
-                return;
-            }
-            Ok(stream) => stream,
-        };
-
-        while let Some(item) = stream.next().await {
-            // If send fails, plan being torn down,
-            // there is no place to send the error.
-            if output.send(item).await.is_err() {
-                debug!(
-                    "Stopping execution: output is gone, plan cancelling: {}",
-                    displayable(input.as_ref()).one_line()
-                );
-                return;
-            }
-        }
-    })
-}
-
 /// If running in a tokio context spawns the execution of `stream` to a separate task
 /// allowing it to execute in parallel with an intermediate buffer of size `buffer`
 pub(crate) fn spawn_buffered(
@@ -139,14 +100,15 @@ pub(crate) fn spawn_buffered(
     buffer: usize,
 ) -> SendableRecordBatchStream {
     // Use tokio only if running from a tokio context (#2201)
-    let handle = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle,
-        Err(_) => return input,
+    if tokio::runtime::Handle::try_current().is_err() {
+        return input;
     };
 
-    let schema = input.schema();
-    let (sender, receiver) = mpsc::channel(buffer);
-    let join = handle.spawn(async move {
+    let mut builder = RecordBatchReceiverStream::builder(input.schema(), buffer);
+
+    let sender = builder.tx();
+
+    builder.spawn(async move {
         while let Some(item) = input.next().await {
             if sender.send(item).await.is_err() {
                 return;
@@ -154,7 +116,7 @@ pub(crate) fn spawn_buffered(
         }
     });
 
-    RecordBatchReceiverStream::create(&schema, receiver, join)
+    builder.build()
 }
 
 /// Computes the statistics for an in-memory RecordBatch

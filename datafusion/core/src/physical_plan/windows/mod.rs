@@ -53,9 +53,7 @@ use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_e
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::{
-    OrderedColumn, OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -70,8 +68,14 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunction::AggregateFunction(fun) => {
-            let aggregate =
-                aggregates::create_aggregate_expr(fun, false, args, &[], input_schema, name)?;
+            let aggregate = aggregates::create_aggregate_expr(
+                fun,
+                false,
+                args,
+                &[],
+                input_schema,
+                name,
+            )?;
             if !window_frame.start_bound.is_unbounded() {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     aggregate,
@@ -270,14 +274,17 @@ pub(crate) fn window_ordering_equivalence(
                 .is::<RowNumber>()
             {
                 if let Some((idx, field)) =
-                    schema.column_with_name(expr.field().unwrap().name())
+                    schema.column_with_name(builtin_window_expr.name())
                 {
                     let column = Column::new(field.name(), idx);
                     let options = SortOptions {
                         descending: false,
                         nulls_first: false,
                     }; // ASC, NULLS LAST
-                    let rhs = OrderedColumn::new(column, options);
+                    let rhs = PhysicalSortExpr {
+                        expr: Arc::new(column) as _,
+                        options,
+                    };
                     builder.add_equal_conditions(vec![rhs]);
                 }
             }
@@ -288,9 +295,9 @@ pub(crate) fn window_ordering_equivalence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::physical_plan::CsvExec;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};

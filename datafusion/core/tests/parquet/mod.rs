@@ -29,11 +29,8 @@ use arrow::{
 };
 use chrono::{Datelike, Duration};
 use datafusion::{
-    datasource::{provider_as_source, TableProvider},
-    physical_plan::{
-        accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
-        ExecutionPlanVisitor,
-    },
+    datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
+    physical_plan::{accept, metrics::MetricsSet, ExecutionPlan, ExecutionPlanVisitor},
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -46,6 +43,14 @@ mod custom_reader;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
+mod schema_coercion;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}
 
 // ----------------------
 // Begin test fixture

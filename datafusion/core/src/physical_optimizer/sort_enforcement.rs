@@ -967,10 +967,10 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
-    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::joins::SortMergeJoinExec;
@@ -2896,15 +2896,15 @@ mod tests {
 }
 
 mod tmp_tests {
-    use std::sync::Arc;
-    use arrow::util::pretty::print_batches;
     use crate::assert_batches_eq;
     use crate::physical_plan::{collect, displayable, ExecutionPlan};
     use crate::prelude::SessionContext;
+    use arrow::util::pretty::print_batches;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
+    use std::sync::Arc;
 
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()>{
+    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
         let formatted = displayable(plan.as_ref()).indent().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
         println!("{:#?}", actual);
@@ -2941,7 +2941,7 @@ WITH HEADER ROW
 WITH ORDER (a ASC, b ASC, c ASC)
 LOCATION 'tests/data/window_2.csv'",
         )
-            .await?;
+        .await?;
 
         //  let sql = "SELECT FIRST_VALUE(inc_col ORDER BY ts ASC) as first
         // FROM annotated_data_infinite";
@@ -2966,10 +2966,10 @@ LOCATION 'tests/data/window_2.csv'",
 
     #[tokio::test]
     async fn test_subquery() -> Result<()> {
-        let config = SessionConfig::new()
-            .with_target_partitions(8);
+        let config = SessionConfig::new().with_target_partitions(8);
         let ctx = SessionContext::with_config(config);
-        ctx.sql("CREATE TABLE sales_global (zip_code INT,
+        ctx.sql(
+            "CREATE TABLE sales_global (zip_code INT,
           country VARCHAR(3),
           sn INT,
           ts TIMESTAMP,
@@ -2981,9 +2981,12 @@ LOCATION 'tests/data/window_2.csv'",
           (1, 'TUR', 2, '2022-01-01 11:30:00'::timestamp, 'TRY', 75.0),
           (1, 'FRA', 3, '2022-01-02 12:00:00'::timestamp, 'EUR', 200.0),
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
-          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)").await?;
+          (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)",
+        )
+        .await?;
 
-        ctx.sql("CREATE EXTERNAL TABLE aggregate_test_100 (
+        ctx.sql(
+            "CREATE EXTERNAL TABLE aggregate_test_100 (
           c1  VARCHAR NOT NULL,
           c2  TINYINT NOT NULL,
           c3  SMALLINT NOT NULL,
@@ -3000,17 +3003,19 @@ LOCATION 'tests/data/window_2.csv'",
         )
         STORED AS CSV
         WITH HEADER ROW
-        LOCATION '../../testing/data/csv/aggregate_test_100.csv'").await?;
+        LOCATION '../../testing/data/csv/aggregate_test_100.csv'",
+        )
+        .await?;
 
-  //       let sql = "SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
-  // FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
-  // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
-  // FROM sales_global
-  // GROUP BY country";
+        //       let sql = "SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
+        // FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
+        // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
+        // FROM sales_global
+        // GROUP BY country";
 
-  //       let sql = "SELECT FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
-  // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
-  // FROM sales_global";
+        //       let sql = "SELECT FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
+        // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
+        // FROM sales_global";
 
         let sql = "SELECT SUM(c9), LAST_VALUE(c9 ORDER BY c11)
                         FROM aggregate_test_100";

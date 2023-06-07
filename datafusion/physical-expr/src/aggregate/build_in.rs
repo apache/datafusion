@@ -26,14 +26,14 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
+use crate::expressions::format_state_name;
 use crate::{expressions, AggregateExpr, PhysicalExpr};
 use arrow::datatypes::Schema;
+use arrow_schema::Field;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::aggregate_function::{return_type, sum_type_of_avg};
 pub use datafusion_expr::AggregateFunction;
 use std::sync::Arc;
-use arrow_schema::Field;
-use crate::expressions::format_state_name;
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -324,10 +324,12 @@ pub fn create_aggregate_expr(
         }
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
+            name,
             input_phy_types[0].clone(),
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
+            name,
             ordering_fields,
             orderings.to_vec(),
             input_phy_types[0].clone(),

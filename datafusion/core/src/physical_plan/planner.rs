@@ -1667,7 +1667,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 None => None,
             };
             let orderings = order_by.clone().unwrap_or(vec![]);
-            let orderings = orderings.into_iter().map(|elem| elem.expr).collect::<Vec<_>>();
+            let orderings = orderings
+                .into_iter()
+                .map(|elem| elem.expr)
+                .collect::<Vec<_>>();
             let agg_expr = aggregates::create_aggregate_expr(
                 fun,
                 *distinct,
@@ -1930,10 +1933,8 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::execution::context::TaskContext;
-    use crate::execution::options::CsvReadOptions;
-    use crate::execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
@@ -1946,6 +1947,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{assert_contains, TableReference};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::TaskContext;
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,
@@ -2233,7 +2236,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
 
-        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } } }";
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } } }";
 
         let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);

@@ -17,18 +17,12 @@
 
 //! Execution plan for reading Parquet files
 
-use fmt::Debug;
-use std::any::Any;
-use std::cmp::min;
-use std::fmt;
-use std::fs;
-use std::ops::Range;
-use std::sync::Arc;
-
-use crate::physical_plan::file_format::file_stream::{
+use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
+use crate::datasource::physical_plan::{
+    parquet::page_filter::PagePruningPredicate, FileMeta, FileScanConfig, SchemaAdapter,
+};
 use crate::{
     config::ConfigOptions,
     datasource::listing::FileRange,
@@ -37,13 +31,19 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         common::AbortOnDropSingle,
-        expressions::PhysicalSortExpr,
-        file_format::{FileMeta, FileScanConfig, SchemaAdapter},
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_physical_expr::PhysicalSortExpr;
+use fmt::Debug;
+use std::any::Any;
+use std::cmp::min;
+use std::fmt;
+use std::fs;
+use std::ops::Range;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
@@ -485,9 +485,10 @@ impl FileOpener for ParquetOpener {
                 &self.metrics,
             )?;
 
-        let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
+        let projected_schema = SchemaRef::from(self.table_schema.project(&projection)?);
+        let schema_adapter = SchemaAdapter::new(projected_schema);
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
@@ -505,8 +506,9 @@ impl FileOpener for ParquetOpener {
             let mut builder =
                 ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
                     .await?;
-            let adapted_projections =
-                schema_adapter.map_projections(builder.schema(), &projection)?;
+
+            let (schema_mapping, adapted_projections) =
+                schema_adapter.map_schema(builder.schema())?;
             // let predicate = predicate.map(|p| reassign_predicate_columns(p, builder.schema(), true)).transpose()?;
 
             let mask = ProjectionMask::roots(
@@ -575,11 +577,8 @@ impl FileOpener for ParquetOpener {
             let adapted = stream
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                 .map(move |maybe_batch| {
-                    maybe_batch.and_then(|b| {
-                        schema_adapter
-                            .adapt_batch(b, &projection)
-                            .map_err(Into::into)
-                    })
+                    maybe_batch
+                        .and_then(|b| schema_mapping.map_batch(b).map_err(Into::into))
                 });
 
             Ok(adapted.boxed())
@@ -781,12 +780,12 @@ mod tests {
     // See also `parquet_exec` integration test
 
     use super::*;
+    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
-    use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::displayable;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
@@ -795,13 +794,14 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::{ArrayRef, Float32Array, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::Schema;
     use arrow::record_batch::RecordBatch;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field, SchemaBuilder},
     };
+    use arrow_array::Date64Array;
     use chrono::{TimeZone, Utc};
     use datafusion_common::ScalarValue;
     use datafusion_common::{assert_contains, ToDFSchema};
@@ -892,7 +892,6 @@ mod tests {
                     .unwrap(),
                 ),
             };
-
             // If testing with page_index_predicate, write parquet
             // files with multiple pages
             let multi_page = page_index_predicate;
@@ -1465,8 +1464,11 @@ mod tests {
 
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        let c4: ArrayRef =
-            Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0_f32), None]));
+        let c4: ArrayRef = Arc::new(Date64Array::from(vec![
+            Some(86400000),
+            None,
+            Some(259200000),
+        ]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![
@@ -1490,7 +1492,7 @@ mod tests {
             .round_trip_to_batches(vec![batch1, batch2])
             .await;
         assert_contains!(read.unwrap_err().to_string(),
-                         "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
+            "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
     }
 
     #[tokio::test]
@@ -1722,6 +1724,7 @@ mod tests {
                 location,
                 last_modified: Utc.timestamp_nanos(0),
                 size: 1337,
+                e_tag: None,
             },
             partition_values: vec![],
             range: None,

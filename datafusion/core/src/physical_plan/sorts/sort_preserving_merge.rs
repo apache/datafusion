@@ -24,7 +24,6 @@ use arrow::datatypes::SchemaRef;
 use log::{debug, trace};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
 use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -34,6 +33,7 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
 /// Sort preserving merge execution plan
@@ -792,9 +792,12 @@ mod tests {
         let mut streams = Vec::with_capacity(partition_count);
 
         for partition in 0..partition_count {
-            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            let mut builder = RecordBatchReceiverStream::builder(schema.clone(), 1);
+
+            let sender = builder.tx();
+
             let mut stream = batches.execute(partition, task_ctx.clone()).unwrap();
-            let join_handle = tokio::spawn(async move {
+            builder.spawn(async move {
                 while let Some(batch) = stream.next().await {
                     sender.send(batch).await.unwrap();
                     // This causes the MergeStream to wait for more input
@@ -802,11 +805,7 @@ mod tests {
                 }
             });
 
-            streams.push(RecordBatchReceiverStream::create(
-                &schema,
-                receiver,
-                join_handle,
-            ));
+            streams.push(builder.build());
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
