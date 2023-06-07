@@ -49,6 +49,7 @@ pub mod tree_node;
 pub mod type_coercion;
 mod udaf;
 mod udf;
+mod udwf;
 pub mod utils;
 pub mod window_frame;
 pub mod window_function;
@@ -74,6 +75,7 @@ pub use signature::{Signature, TypeSignature, Volatility};
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;
+pub use udwf::WindowUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
 

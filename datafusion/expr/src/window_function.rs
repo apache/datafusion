@@ -23,7 +23,9 @@
 
 use crate::aggregate_function::AggregateFunction;
 use crate::type_coercion::functions::data_types;
-use crate::{aggregate_function, AggregateUDF, Signature, TypeSignature, Volatility};
+use crate::{
+    aggregate_function, AggregateUDF, Signature, TypeSignature, Volatility, WindowUDF,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
@@ -33,11 +35,14 @@ use strum_macros::EnumIter;
 /// WindowFunction
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WindowFunction {
-    /// window function that leverages an aggregate function
+    /// A built in aggregate function that leverages an aggregate function
     AggregateFunction(AggregateFunction),
-    /// window function that leverages a built-in window function
+    /// A a built-in window function
     BuiltInWindowFunction(BuiltInWindowFunction),
+    /// A user defined aggregate function
     AggregateUDF(Arc<AggregateUDF>),
+    /// A user defined aggregate function
+    WindowUDF(Arc<WindowUDF>),
 }
 
 /// Find DataFusion's built-in window function by name.
@@ -69,6 +74,7 @@ impl fmt::Display for WindowFunction {
             WindowFunction::AggregateFunction(fun) => fun.fmt(f),
             WindowFunction::BuiltInWindowFunction(fun) => fun.fmt(f),
             WindowFunction::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
+            WindowFunction::WindowUDF(fun) => std::fmt::Debug::fmt(fun, f),
         }
     }
 }
@@ -166,6 +172,9 @@ pub fn return_type(
         WindowFunction::AggregateUDF(fun) => {
             Ok((*(fun.return_type)(input_expr_types)?).clone())
         }
+        WindowFunction::WindowUDF(fun) => {
+            Ok((*(fun.return_type)(input_expr_types)?).clone())
+        }
     }
 }
 
@@ -202,6 +211,7 @@ pub fn signature(fun: &WindowFunction) -> Signature {
         WindowFunction::AggregateFunction(fun) => aggregate_function::signature(fun),
         WindowFunction::BuiltInWindowFunction(fun) => signature_for_built_in(fun),
         WindowFunction::AggregateUDF(fun) => fun.signature.clone(),
+        WindowFunction::WindowUDF(fun) => fun.signature.clone(),
     }
 }
 
