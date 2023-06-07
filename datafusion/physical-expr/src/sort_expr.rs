@@ -80,7 +80,7 @@ impl PhysicalSortExpr {
 
 /// Represents sort requirement associated with a plan
 ///
-/// If the requirement incudes [`SortOptions`] then both the
+/// If the requirement includes [`SortOptions`] then both the
 /// expression *and* the sort options must match.
 ///
 /// If the requirement does not include [`SortOptions`]) then only the
