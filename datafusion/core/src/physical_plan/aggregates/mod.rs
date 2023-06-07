@@ -81,6 +81,8 @@ pub enum AggregateMode {
 /// Group By expression modes
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
+    /// None of the expressions in the GROUP BY clause have an ordering.
+    Linear,
     /// Some of the expressions in the GROUP BY clause have an ordering.
     // For example, if the input is ordered by a, b, c and we group by b, a, d;
     // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
@@ -430,9 +432,11 @@ fn get_finest_requirement<
 fn calc_required_input_ordering(
     input: &Arc<dyn ExecutionPlan>,
     aggr_expr: &mut [Arc<dyn AggregateExpr>],
+    order_by_expr: &mut [Option<LexOrdering>],
     aggregator_reqs: LexOrderingReq,
     aggregator_reverse_reqs: Option<LexOrderingReq>,
-    aggregation_ordering: &Option<AggregationOrdering>,
+    aggregation_ordering: &mut Option<AggregationOrdering>,
+    is_single_mode: bool,
 ) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = vec![];
     // Boolean shows that whether `required_input_ordering` stored comes from
@@ -459,14 +463,14 @@ fn calc_required_input_ordering(
             // then we append the aggregator ordering requirement to the existing
             // ordering. This way, we can still run with bounded memory.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-            ..
+            order_indices
         }) = aggregation_ordering
         {
             // Get the section of the input ordering that enables us to run in
             // FullyOrdered or PartiallyOrdered modes:
             let requirement_prefix =
                 if let Some(existing_ordering) = input.output_ordering() {
-                    &existing_ordering[0..ordering.len()]
+                    &existing_ordering[0..order_indices.len()]
                 } else {
                     &[]
                 };
@@ -474,11 +478,21 @@ fn calc_required_input_ordering(
                 PhysicalSortRequirement::from_sort_exprs(requirement_prefix.iter());
             for req in aggregator_requirement {
                 if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
-                    requirement.push(req);
+                    requirement.push(req.clone());
+                }
+                if ordering.iter().all(|item| req.expr.ne(&item.expr)) && !is_single_mode {
+                    ordering.push(req.into());
                 }
             }
             required_input_ordering = requirement;
         } else {
+            if !is_single_mode && !aggregator_requirement.is_empty() {
+                *aggregation_ordering = Some(AggregationOrdering {
+                    mode: GroupByOrderMode::Linear,
+                    order_indices: vec![],
+                    ordering: PhysicalSortRequirement::to_sort_exprs(aggregator_requirement.clone()),
+                });
+            }
             required_input_ordering = aggregator_requirement;
         }
         // keep track of from which direction required_input_ordering is constructed
@@ -503,11 +517,12 @@ fn calc_required_input_ordering(
     // each `aggr_expr` to be able to correctly calculate their result in reverse order.
     if reverse_req {
         aggr_expr
-            .iter_mut()
-            .map(|elem| {
+            .iter_mut().zip(order_by_expr.iter_mut())
+            .map(|(elem, ob_expr)| {
                 if is_order_sensitive(elem) {
                     if let Some(reverse) = elem.reverse_expr() {
                         *elem = reverse;
+                        *ob_expr = ob_expr.as_ref().map(|obs| reverse_order_bys(obs));
                     } else {
                         return Err(DataFusionError::Execution(
                             "Aggregate expression should have a reverse expression"
@@ -555,7 +570,9 @@ impl AggregateExec {
                 }
             })
             .collect::<Vec<_>>();
-
+        println!("------------------");
+        println!("aggr_expr: {:?}", aggr_expr);
+        println!("order_by_expr: {:?}", order_by_expr);
         let mut aggregator_reqs = vec![];
         let mut aggregator_reverse_reqs = None;
         // Currently we support order-sensitive aggregation only in `Single` mode.
@@ -598,15 +615,22 @@ impl AggregateExec {
             };
         }
 
-        let aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
+        let mut aggregation_ordering = calc_aggregation_ordering(&input, &group_by);
 
         let required_input_ordering = calc_required_input_ordering(
             &input,
             &mut aggr_expr,
+            &mut order_by_expr,
             aggregator_reqs,
             aggregator_reverse_reqs,
-            &aggregation_ordering,
+            &mut aggregation_ordering,
+            matches!(mode, AggregateMode::Single),
         )?;
+        println!("aggr_expr: {:?}", aggr_expr);
+        println!("order_by_expr: {:?}", order_by_expr);
+        println!("aggregation_ordering:{:?}", aggregation_ordering);
+        println!("mode: {:?}", mode);
+        println!("------------------");
 
         // // If aggregator is working on multiple partitions and there is an order-sensitive aggregator with a requirement return error.
         // if input.output_partitioning().partition_count() > 1
