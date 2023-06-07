@@ -209,7 +209,7 @@ fn create_output_batch(
         plan_builder.append_value(total_rows.to_string());
 
         type_builder.append_value("Duration");
-        plan_builder.append_value(format!("{:?}", duration));
+        plan_builder.append_value(format!("{duration:?}"));
     }
 
     RecordBatch::try_new(
