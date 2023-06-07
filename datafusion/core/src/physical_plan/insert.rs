@@ -54,7 +54,11 @@ pub trait DataSink: Display + Debug + Send + Sync {
     /// This method will be called exactly once during each DML
     /// statement. Thus prior to return, the sink should do any commit
     /// or rollback required.
-    async fn write_all(&self, data: SendableRecordBatchStream) -> Result<u64>;
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64>;
 }
 
 /// Execution plan for writing record batches to a [`DataSink`]
@@ -163,12 +167,12 @@ impl ExecutionPlan for InsertExec {
             )));
         }
 
-        let data = self.input.execute(0, context)?;
+        let data = self.input.execute(0, context.clone())?;
         let schema = self.schema.clone();
         let sink = self.sink.clone();
 
         let stream = futures::stream::once(async move {
-            sink.write_all(data).await.map(make_count_batch)
+            sink.write_all(data, &context).await.map(make_count_batch)
         })
         .boxed();
 

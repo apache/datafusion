@@ -25,6 +25,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 
 use crate::datasource::{TableProvider, TableType};
@@ -223,7 +224,11 @@ impl MemSink {
 
 #[async_trait]
 impl DataSink for MemSink {
-    async fn write_all(&self, mut data: SendableRecordBatchStream) -> Result<u64> {
+    async fn write_all(
+        &self,
+        mut data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> Result<u64> {
         let num_partitions = self.batches.len();
 
         // buffer up the data round robin style into num_partitions

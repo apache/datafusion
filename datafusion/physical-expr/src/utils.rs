@@ -679,6 +679,44 @@ pub fn reassign_predicate_columns(
     })
 }
 
+/// Reverses the ORDER BY expression, which is useful during equivalent window
+/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
+/// 'ORDER BY a DESC, NULLS FIRST'.
+pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
+    order_bys
+        .iter()
+        .map(|e| PhysicalSortExpr {
+            expr: e.expr.clone(),
+            options: !e.options,
+        })
+        .collect()
+}
+
+/// Find the finer requirement among `req1` and `req2`
+/// If `None`, this means that `req1` and `req2` are not compatible
+/// e.g there is no requirement that satisfies both
+pub fn get_finer_ordering<
+    'a,
+    F: Fn() -> EquivalenceProperties,
+    F2: Fn() -> OrderingEquivalenceProperties,
+>(
+    req1: &'a [PhysicalSortExpr],
+    req2: &'a [PhysicalSortExpr],
+    eq_properties: F,
+    ordering_eq_properties: F2,
+) -> Option<&'a [PhysicalSortExpr]> {
+    if ordering_satisfy_concrete(req1, req2, &eq_properties, &ordering_eq_properties) {
+        // Finer requirement is `provided`, since it satisfies the other:
+        return Some(req1);
+    }
+    if ordering_satisfy_concrete(req2, req1, &eq_properties, &ordering_eq_properties) {
+        // Finer requirement is `req`, since it satisfies the other:
+        return Some(req2);
+    }
+    // Neither `provided` nor `req` satisfies one another, they are incompatible.
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

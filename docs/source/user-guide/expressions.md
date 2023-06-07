@@ -177,6 +177,26 @@ Unlike to some databases the math functions in Datafusion works the same way as 
 | trim(string)                                   | Removes all characters, space by default from the string (`string`)                                                                                                                                                                      |
 | upper                                          | Converts all characters in the string into upper case. Example: `upper('hello') -> HELLO`                                                                                                                                                |
 
+## Array Expressions
+
+| Function                             | Notes                                                           |
+| ------------------------------------ | --------------------------------------------------------------- |
+| array_append(array, element)         | Appends an element to the end of an array.                      |
+| array_concat(array[, ..., array_n])  | Concatenates arrays.                                            |
+| array_dims(array)                    | Returns an array of the array's dimensions.                     |
+| array_fill(element, array)           | Returns an array filled with copies of the given value.         |
+| array_length(array, dimension)       | Returns the length of the array dimension.                      |
+| array_ndims(array)                   | Returns the number of dimensions of the array.                  |
+| array_position(array, element)       | Searches for an element in the array, returns first occurrence. |
+| array_positions(array, element)      | Searches for an element in the array, returns all occurrences.  |
+| array_prepend(array, element)        | Prepends an element to the beginning of an array.               |
+| array_remove(array, element)         | Removes all elements equal to the given value from the array.   |
+| array_replace(array, from, to)       | Replaces a specified element with another specified element.    |
+| array_to_string(array, delimeter)    | Converts each element to its text representation.               |
+| cardinality(array)                   | Returns the total number of elements in the array.              |
+| make_array(value1, [value2 [, ...]]) | Returns an Arrow array using the specified input expressions.   |
+| trim_array(array, n)                 | Removes the last n elements from the array.                     |
+
 ## Regular Expressions
 
 | Function       | Notes                                                                         |

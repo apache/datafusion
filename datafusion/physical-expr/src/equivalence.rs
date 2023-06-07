@@ -24,7 +24,7 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 /// Represents a collection of [`EquivalentClass`] (equivalences

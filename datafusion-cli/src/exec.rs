@@ -185,7 +185,7 @@ async fn exec_and_print(
     let plan = ctx.state().create_logical_plan(&sql).await?;
     let df = match &plan {
         LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-            create_external_table(ctx, cmd)?;
+            create_external_table(ctx, cmd).await?;
             ctx.execute_logical_plan(plan).await?
         }
         _ => ctx.execute_logical_plan(plan).await?,
@@ -197,7 +197,10 @@ async fn exec_and_print(
     Ok(())
 }
 
-fn create_external_table(ctx: &SessionContext, cmd: &CreateExternalTable) -> Result<()> {
+async fn create_external_table(
+    ctx: &SessionContext,
+    cmd: &CreateExternalTable,
+) -> Result<()> {
     let table_path = ListingTableUrl::parse(&cmd.location)?;
     let scheme = table_path.scheme();
     let url: &Url = table_path.as_ref();
@@ -205,7 +208,7 @@ fn create_external_table(ctx: &SessionContext, cmd: &CreateExternalTable) -> Res
     // registering the cloud object store dynamically using cmd.options
     let store = match scheme {
         "s3" => {
-            let builder = get_s3_object_store_builder(url, cmd)?;
+            let builder = get_s3_object_store_builder(url, cmd).await?;
             Arc::new(builder.build()?) as Arc<dyn ObjectStore>
         }
         "oss" => {

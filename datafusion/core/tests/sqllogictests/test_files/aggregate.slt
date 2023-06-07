@@ -65,7 +65,7 @@ statement error Error during planning: The percentile sample points count for Ap
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
 # csv_query_array_agg_unsupported
-statement error This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1
+statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
 SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
@@ -1169,7 +1169,7 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 5 -194 -13.857142857143 118 -101 14
 
 # csv_query_array_agg_unsupported
-statement error This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1
+statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
 SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow

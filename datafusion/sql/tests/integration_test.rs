@@ -81,6 +81,16 @@ fn parse_decimals() {
 fn parse_ident_normalization() {
     let test_data = [
         (
+            "SELECT LENGTH('str')",
+            "Ok(Projection: character_length(Utf8(\"str\"))\n  EmptyRelation)",
+            false,
+        ),
+        (
+            "SELECT CONCAT('Hello', 'World')",
+            "Ok(Projection: concat(Utf8(\"Hello\"), Utf8(\"World\"))\n  EmptyRelation)",
+            false,
+        ),
+        (
             "SELECT age FROM person",
             "Ok(Projection: person.age\n  TableScan: person)",
             true,

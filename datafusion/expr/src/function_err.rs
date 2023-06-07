@@ -29,8 +29,12 @@
 //! ```
 
 use crate::function::signature;
-use crate::{BuiltinScalarFunction, TypeSignature};
+use crate::{
+    AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction, TypeSignature,
+};
 use arrow::datatypes::DataType;
+use datafusion_common::utils::datafusion_strsim;
+use strum::IntoEnumIterator;
 
 impl TypeSignature {
     fn to_string_repr(&self) -> Vec<String> {
@@ -88,4 +92,34 @@ pub fn generate_signature_error_msg(
         "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
         fun, join_types(input_expr_types, ", "), candidate_signatures
     )
+}
+
+/// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitve)
+/// Input `candidates` must not be empty otherwise it will panic
+fn find_closest_match(candidates: Vec<String>, target: &str) -> String {
+    let target = target.to_lowercase();
+    candidates
+        .into_iter()
+        .min_by_key(|candidate| {
+            datafusion_strsim::levenshtein(&candidate.to_lowercase(), &target)
+        })
+        .expect("No candidates provided.") // Panic if `candidates` argument is empty
+}
+
+/// Suggest a valid function based on an invalid input function name
+pub fn suggest_valid_function(input_function_name: &str, is_window_func: bool) -> String {
+    let valid_funcs = if is_window_func {
+        // All aggregate functions and builtin window functions
+        AggregateFunction::iter()
+            .map(|func| func.to_string())
+            .chain(BuiltInWindowFunction::iter().map(|func| func.to_string()))
+            .collect()
+    } else {
+        // All scalar functions and aggregate functions
+        BuiltinScalarFunction::iter()
+            .map(|func| func.to_string())
+            .chain(AggregateFunction::iter().map(|func| func.to_string()))
+            .collect()
+    };
+    find_closest_match(valid_funcs, input_function_name)
 }

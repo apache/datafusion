@@ -289,9 +289,9 @@ pub(crate) fn window_ordering_equivalence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::physical_plan::CsvExec;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
