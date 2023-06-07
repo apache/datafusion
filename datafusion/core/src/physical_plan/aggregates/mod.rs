@@ -577,7 +577,6 @@ impl AggregateExec {
         println!("------------------");
         println!("aggr_expr: {:?}", aggr_expr);
         println!("order_by_expr: {:?}", order_by_expr);
-        let mut aggregator_reqs = vec![];
         let mut aggregator_reverse_reqs = None;
         // Currently we support order-sensitive aggregation only in `Single` mode.
         // For `Final` and `FinalPartitioned` modes, we cannot guarantee they will receive
@@ -595,7 +594,7 @@ impl AggregateExec {
         let aggregator_requirement = requirement
             .as_ref()
             .map(|exprs| PhysicalSortRequirement::from_sort_exprs(exprs.iter()));
-        aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
+        let aggregator_reqs = aggregator_requirement.unwrap_or(vec![]);
         // If all aggregate expressions are reversible, also consider reverse
         // requirement(s). The reason is that existing ordering may satisfy the
         // given requirement or its reverse. By considering both, we can generate better plans.
@@ -630,21 +629,6 @@ impl AggregateExec {
             &mut aggregation_ordering,
             matches!(mode, AggregateMode::Single),
         )?;
-        println!("aggr_expr: {:?}", aggr_expr);
-        println!("order_by_expr: {:?}", order_by_expr);
-        println!("aggregation_ordering:{:?}", aggregation_ordering);
-        println!("mode: {:?}", mode);
-        println!("------------------");
-
-        // // If aggregator is working on multiple partitions and there is an order-sensitive aggregator with a requirement return error.
-        // if input.output_partitioning().partition_count() > 1
-        //     && order_by_expr.iter().any(|req| req.is_some())
-        // {
-        //     return Err(DataFusionError::NotImplemented(
-        //         "Order-sensitive aggregators is not supported on multiple partitions"
-        //             .to_string(),
-        //     ));
-        // }
 
         Ok(AggregateExec {
             mode,
