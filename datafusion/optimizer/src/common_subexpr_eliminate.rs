@@ -21,12 +21,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::tree_node::{
+    RewriteRecursion, TreeNode, TreeNodeRewriter, TreeNodeVisitor, VisitRecursion,
+};
+use datafusion_common::{
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
+};
 use datafusion_expr::{
     col,
-    expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
-    expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
     Expr, ExprSchemable,
 };
@@ -57,17 +59,14 @@ type Identifier = String;
 pub struct CommonSubexprEliminate {}
 
 impl CommonSubexprEliminate {
-    fn rewrite_expr(
+    fn rewrite_exprs_list(
         &self,
         exprs_list: &[&[Expr]],
         arrays_list: &[&[Vec<(usize, String)>]],
-        input: &LogicalPlan,
-        expr_set: &mut ExprSet,
-        config: &dyn OptimizerConfig,
-    ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-        let mut affected_id = BTreeSet::<Identifier>::new();
-
-        let rewrite_exprs = exprs_list
+        expr_set: &ExprSet,
+        affected_id: &mut BTreeSet<Identifier>,
+    ) -> Result<Vec<Vec<Expr>>> {
+        exprs_list
             .iter()
             .zip(arrays_list.iter())
             .map(|(exprs, arrays)| {
@@ -76,11 +75,25 @@ impl CommonSubexprEliminate {
                     .cloned()
                     .zip(arrays.iter())
                     .map(|(expr, id_array)| {
-                        replace_common_expr(expr, id_array, expr_set, &mut affected_id)
+                        replace_common_expr(expr, id_array, expr_set, affected_id)
                     })
                     .collect::<Result<Vec<_>>>()
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()
+    }
+
+    fn rewrite_expr(
+        &self,
+        exprs_list: &[&[Expr]],
+        arrays_list: &[&[Vec<(usize, String)>]],
+        input: &LogicalPlan,
+        expr_set: &ExprSet,
+        config: &dyn OptimizerConfig,
+    ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
+        let mut affected_id = BTreeSet::<Identifier>::new();
+
+        let rewrite_exprs =
+            self.rewrite_exprs_list(exprs_list, arrays_list, expr_set, &mut affected_id)?;
 
         let mut new_input = self
             .try_optimize(input, config)?
@@ -91,6 +104,231 @@ impl CommonSubexprEliminate {
 
         Ok((rewrite_exprs, new_input))
     }
+
+    fn try_optimize_projection(
+        &self,
+        projection: &Projection,
+        config: &dyn OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let Projection {
+            expr,
+            input,
+            schema,
+            ..
+        } = projection;
+        let input_schema = Arc::clone(input.schema());
+        let mut expr_set = ExprSet::new();
+        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+
+        let (mut new_expr, new_input) =
+            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
+
+        Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+            pop_expr(&mut new_expr)?,
+            Arc::new(new_input),
+            schema.clone(),
+        )?))
+    }
+
+    fn try_optimize_filter(
+        &self,
+        filter: &Filter,
+        config: &dyn OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let mut expr_set = ExprSet::new();
+        let predicate = &filter.predicate;
+        let input_schema = Arc::clone(filter.input.schema());
+        let mut id_array = vec![];
+        expr_to_identifier(
+            predicate,
+            &mut expr_set,
+            &mut id_array,
+            input_schema,
+            ExprMask::Normal,
+        )?;
+
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &[&[predicate.clone()]],
+            &[&[id_array]],
+            &filter.input,
+            &expr_set,
+            config,
+        )?;
+
+        if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
+            Ok(LogicalPlan::Filter(Filter::try_new(
+                predicate,
+                Arc::new(new_input),
+            )?))
+        } else {
+            Err(DataFusionError::Internal(
+                "Failed to pop predicate expr".to_string(),
+            ))
+        }
+    }
+
+    fn try_optimize_window(
+        &self,
+        window: &Window,
+        config: &dyn OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let Window {
+            input,
+            window_expr,
+            schema,
+        } = window;
+        let mut expr_set = ExprSet::new();
+
+        let input_schema = Arc::clone(input.schema());
+        let arrays =
+            to_arrays(window_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+
+        let (mut new_expr, new_input) =
+            self.rewrite_expr(&[window_expr], &[&arrays], input, &expr_set, config)?;
+
+        Ok(LogicalPlan::Window(Window {
+            input: Arc::new(new_input),
+            window_expr: pop_expr(&mut new_expr)?,
+            schema: schema.clone(),
+        }))
+    }
+
+    fn try_optimize_aggregate(
+        &self,
+        aggregate: &Aggregate,
+        config: &dyn OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let Aggregate {
+            group_expr,
+            aggr_expr,
+            input,
+            schema,
+            ..
+        } = aggregate;
+        let mut expr_set = ExprSet::new();
+
+        // rewrite inputs
+        let input_schema = Arc::clone(input.schema());
+        let group_arrays = to_arrays(
+            group_expr,
+            Arc::clone(&input_schema),
+            &mut expr_set,
+            ExprMask::Normal,
+        )?;
+        let aggr_arrays =
+            to_arrays(aggr_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+
+        let (mut new_expr, new_input) = self.rewrite_expr(
+            &[group_expr, aggr_expr],
+            &[&group_arrays, &aggr_arrays],
+            input,
+            &expr_set,
+            config,
+        )?;
+        // note the reversed pop order.
+        let new_aggr_expr = pop_expr(&mut new_expr)?;
+        let new_group_expr = pop_expr(&mut new_expr)?;
+
+        // create potential projection on top
+        let mut expr_set = ExprSet::new();
+        let new_input_schema = Arc::clone(new_input.schema());
+        let aggr_arrays = to_arrays(
+            &new_aggr_expr,
+            new_input_schema.clone(),
+            &mut expr_set,
+            ExprMask::NormalAndAggregates,
+        )?;
+        let mut affected_id = BTreeSet::<Identifier>::new();
+        let mut rewritten = self.rewrite_exprs_list(
+            &[&new_aggr_expr],
+            &[&aggr_arrays],
+            &expr_set,
+            &mut affected_id,
+        )?;
+        let rewritten = pop_expr(&mut rewritten)?;
+
+        if affected_id.is_empty() {
+            Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Arc::new(new_input),
+                new_group_expr,
+                new_aggr_expr,
+                schema.clone(),
+            )?))
+        } else {
+            let mut agg_exprs = vec![];
+
+            for id in affected_id {
+                match expr_set.get(&id) {
+                    Some((expr, _, _)) => {
+                        // todo: check `nullable`
+                        agg_exprs.push(expr.clone().alias(&id));
+                    }
+                    _ => {
+                        return Err(DataFusionError::Internal(
+                            "expr_set invalid state".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            let mut proj_exprs = vec![];
+            for expr in &new_group_expr {
+                let out_col: Column =
+                    expr.to_field(&new_input_schema)?.qualified_column();
+                proj_exprs.push(Expr::Column(out_col));
+            }
+            for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
+                if expr_rewritten == expr_orig {
+                    if let Expr::Alias(expr, name) = expr_rewritten {
+                        agg_exprs.push(expr.alias(&name));
+                        proj_exprs.push(Expr::Column(Column::from_name(name)));
+                    } else {
+                        let id =
+                            ExprIdentifierVisitor::<'static>::desc_expr(&expr_rewritten);
+                        let out_name =
+                            expr_rewritten.to_field(&new_input_schema)?.qualified_name();
+                        agg_exprs.push(expr_rewritten.alias(&id));
+                        proj_exprs
+                            .push(Expr::Column(Column::from_name(id)).alias(out_name));
+                    }
+                } else {
+                    proj_exprs.push(expr_rewritten);
+                }
+            }
+
+            let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+                Arc::new(new_input),
+                new_group_expr,
+                agg_exprs,
+            )?);
+
+            Ok(LogicalPlan::Projection(Projection::try_new(
+                proj_exprs,
+                Arc::new(agg),
+            )?))
+        }
+    }
+
+    fn try_optimize_sort(
+        &self,
+        sort: &Sort,
+        config: &dyn OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        let Sort { expr, input, fetch } = sort;
+        let mut expr_set = ExprSet::new();
+
+        let input_schema = Arc::clone(input.schema());
+        let arrays = to_arrays(expr, input_schema, &mut expr_set, ExprMask::Normal)?;
+
+        let (mut new_expr, new_input) =
+            self.rewrite_expr(&[expr], &[&arrays], input, &expr_set, config)?;
+
+        Ok(LogicalPlan::Sort(Sort {
+            expr: pop_expr(&mut new_expr)?,
+            input: Arc::new(new_input),
+            fetch: *fetch,
+        }))
+    }
 }
 
 impl OptimizerRule for CommonSubexprEliminate {
@@ -99,124 +337,20 @@ impl OptimizerRule for CommonSubexprEliminate {
         plan: &LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        let mut expr_set = ExprSet::new();
-
-        let original_schema = plan.schema().clone();
         let optimized_plan = match plan {
-            LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-                ..
-            }) => {
-                let input_schema = Arc::clone(input.schema());
-                let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
-
-                let (mut new_expr, new_input) =
-                    self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
-
-                Some(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    pop_expr(&mut new_expr)?,
-                    Arc::new(new_input),
-                    schema.clone(),
-                )?))
+            LogicalPlan::Projection(projection) => {
+                Some(self.try_optimize_projection(projection, config)?)
             }
             LogicalPlan::Filter(filter) => {
-                let input = &filter.input;
-                let predicate = &filter.predicate;
-                let input_schema = Arc::clone(input.schema());
-                let mut id_array = vec![];
-                expr_to_identifier(
-                    predicate,
-                    &mut expr_set,
-                    &mut id_array,
-                    input_schema,
-                )?;
-
-                let (mut new_expr, new_input) = self.rewrite_expr(
-                    &[&[predicate.clone()]],
-                    &[&[id_array]],
-                    &filter.input,
-                    &mut expr_set,
-                    config,
-                )?;
-
-                if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                    Some(LogicalPlan::Filter(Filter::try_new(
-                        predicate,
-                        Arc::new(new_input),
-                    )?))
-                } else {
-                    return Err(DataFusionError::Internal(
-                        "Failed to pop predicate expr".to_string(),
-                    ));
-                }
+                Some(self.try_optimize_filter(filter, config)?)
             }
-            LogicalPlan::Window(Window {
-                input,
-                window_expr,
-                schema,
-            }) => {
-                let input_schema = Arc::clone(input.schema());
-                let arrays = to_arrays(window_expr, input_schema, &mut expr_set)?;
-
-                let (mut new_expr, new_input) = self.rewrite_expr(
-                    &[window_expr],
-                    &[&arrays],
-                    input,
-                    &mut expr_set,
-                    config,
-                )?;
-
-                Some(LogicalPlan::Window(Window {
-                    input: Arc::new(new_input),
-                    window_expr: pop_expr(&mut new_expr)?,
-                    schema: schema.clone(),
-                }))
+            LogicalPlan::Window(window) => {
+                Some(self.try_optimize_window(window, config)?)
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                input,
-                schema,
-                ..
-            }) => {
-                let input_schema = Arc::clone(input.schema());
-                let group_arrays =
-                    to_arrays(group_expr, Arc::clone(&input_schema), &mut expr_set)?;
-                let aggr_arrays = to_arrays(aggr_expr, input_schema, &mut expr_set)?;
-
-                let (mut new_expr, new_input) = self.rewrite_expr(
-                    &[group_expr, aggr_expr],
-                    &[&group_arrays, &aggr_arrays],
-                    input,
-                    &mut expr_set,
-                    config,
-                )?;
-                // note the reversed pop order.
-                let new_aggr_expr = pop_expr(&mut new_expr)?;
-                let new_group_expr = pop_expr(&mut new_expr)?;
-
-                Some(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    Arc::new(new_input),
-                    new_group_expr,
-                    new_aggr_expr,
-                    schema.clone(),
-                )?))
+            LogicalPlan::Aggregate(aggregate) => {
+                Some(self.try_optimize_aggregate(aggregate, config)?)
             }
-            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
-                let input_schema = Arc::clone(input.schema());
-                let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
-
-                let (mut new_expr, new_input) =
-                    self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
-
-                Some(LogicalPlan::Sort(Sort {
-                    expr: pop_expr(&mut new_expr)?,
-                    input: Arc::new(new_input),
-                    fetch: *fetch,
-                }))
-            }
+            LogicalPlan::Sort(sort) => Some(self.try_optimize_sort(sort, config)?),
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
@@ -227,16 +361,10 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
-            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::Ddl(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::CreateMemoryTable(_)
-            | LogicalPlan::CreateView(_)
-            | LogicalPlan::CreateCatalogSchema(_)
-            | LogicalPlan::CreateCatalog(_)
-            | LogicalPlan::DropTable(_)
-            | LogicalPlan::DropView(_)
-            | LogicalPlan::SetVariable(_)
+            | LogicalPlan::Statement(_)
             | LogicalPlan::DescribeTable(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Extension(_)
@@ -248,6 +376,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             }
         };
 
+        let original_schema = plan.schema().clone();
         match optimized_plan {
             Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
                 // add an additional projection if the output schema changed.
@@ -288,11 +417,18 @@ fn to_arrays(
     expr: &[Expr],
     input_schema: DFSchemaRef,
     expr_set: &mut ExprSet,
+    expr_mask: ExprMask,
 ) -> Result<Vec<Vec<(usize, String)>>> {
     expr.iter()
         .map(|e| {
             let mut id_array = vec![];
-            expr_to_identifier(e, expr_set, &mut id_array, Arc::clone(&input_schema))?;
+            expr_to_identifier(
+                e,
+                expr_set,
+                &mut id_array,
+                Arc::clone(&input_schema),
+                expr_mask,
+            )?;
 
             Ok(id_array)
         })
@@ -312,7 +448,7 @@ fn build_common_expr_project_plan(
         match expr_set.get(&id) {
             Some((expr, _, data_type)) => {
                 // todo: check `nullable`
-                let field = DFField::new(None, &id, data_type.clone(), true);
+                let field = DFField::new_unqualified(&id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
                 project_exprs.push(expr.clone().alias(&id));
             }
@@ -352,6 +488,49 @@ fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalP
     )
 }
 
+/// Which type of [expressions](Expr) should be considered for rewriting?
+#[derive(Debug, Clone, Copy)]
+enum ExprMask {
+    /// Ignores:
+    ///
+    /// - [`Literal`](Expr::Literal)
+    /// - [`Columns`](Expr::Column)
+    /// - [`ScalarVariable`](Expr::ScalarVariable)
+    /// - [`Alias`](Expr::Alias)
+    /// - [`Sort`](Expr::Sort)
+    /// - [`Wildcard`](Expr::Wildcard)
+    /// - [`AggregateFunction`](Expr::AggregateFunction)
+    /// - [`AggregateUDF`](Expr::AggregateUDF)
+    Normal,
+
+    /// Like [`Normal`](Self::Normal), but includes [`AggregateFunction`](Expr::AggregateFunction) and [`AggregateUDF`](Expr::AggregateUDF).
+    NormalAndAggregates,
+}
+
+impl ExprMask {
+    fn ignores(&self, expr: &Expr) -> bool {
+        let is_normal_minus_aggregates = matches!(
+            expr,
+            Expr::Literal(..)
+                | Expr::Column(..)
+                | Expr::ScalarVariable(..)
+                | Expr::Alias(..)
+                | Expr::Sort { .. }
+                | Expr::Wildcard
+        );
+
+        let is_aggr = matches!(
+            expr,
+            Expr::AggregateFunction(..) | Expr::AggregateUDF { .. }
+        );
+
+        match self {
+            Self::Normal => is_normal_minus_aggregates || is_aggr,
+            Self::NormalAndAggregates => is_normal_minus_aggregates,
+        }
+    }
+}
+
 /// Go through an expression tree and generate identifier.
 ///
 /// An identifier contains information of the expression itself and its sub-expression.
@@ -385,6 +564,8 @@ struct ExprIdentifierVisitor<'a> {
     node_count: usize,
     /// increased in post_visit, start from 1.
     series_number: usize,
+    /// which expression should be skipped?
+    expr_mask: ExprMask,
 }
 
 /// Record item that used when traversing a expression tree.
@@ -421,34 +602,28 @@ impl ExprIdentifierVisitor<'_> {
     }
 }
 
-impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
-    fn pre_visit(mut self, _expr: &Expr) -> Result<Recursion<Self>> {
+impl TreeNodeVisitor for ExprIdentifierVisitor<'_> {
+    type N = Expr;
+
+    fn pre_visit(&mut self, _expr: &Expr) -> Result<VisitRecursion> {
         self.visit_stack
             .push(VisitRecord::EnterMark(self.node_count));
         self.node_count += 1;
         // put placeholder
         self.id_array.push((0, "".to_string()));
-        Ok(Recursion::Continue(self))
+        Ok(VisitRecursion::Continue)
     }
 
-    fn post_visit(mut self, expr: &Expr) -> Result<Self> {
+    fn post_visit(&mut self, expr: &Expr) -> Result<VisitRecursion> {
         self.series_number += 1;
 
         let (idx, sub_expr_desc) = self.pop_enter_mark();
         // skip exprs should not be recognize.
-        if matches!(
-            expr,
-            Expr::Literal(..)
-                | Expr::Column(..)
-                | Expr::ScalarVariable(..)
-                | Expr::Alias(..)
-                | Expr::Sort { .. }
-                | Expr::Wildcard
-        ) {
+        if self.expr_mask.ignores(expr) {
             self.id_array[idx].0 = self.series_number;
             let desc = Self::desc_expr(expr);
             self.visit_stack.push(VisitRecord::ExprItem(desc));
-            return Ok(self);
+            return Ok(VisitRecursion::Continue);
         }
         let mut desc = Self::desc_expr(expr);
         desc.push_str(&sub_expr_desc);
@@ -462,7 +637,7 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
             .1 += 1;
-        Ok(self)
+        Ok(VisitRecursion::Continue)
     }
 }
 
@@ -472,14 +647,16 @@ fn expr_to_identifier(
     expr_set: &mut ExprSet,
     id_array: &mut Vec<(usize, Identifier)>,
     input_schema: DFSchemaRef,
+    expr_mask: ExprMask,
 ) -> Result<()> {
-    expr.accept(ExprIdentifierVisitor {
+    expr.visit(&mut ExprIdentifierVisitor {
         expr_set,
         id_array,
         input_schema,
         visit_stack: vec![],
         node_count: 0,
         series_number: 0,
+        expr_mask,
     })?;
 
     Ok(())
@@ -489,7 +666,7 @@ fn expr_to_identifier(
 /// the corresponding temporary column name. That column contains the
 /// evaluate result of replaced expression.
 struct CommonSubexprRewriter<'a> {
-    expr_set: &'a mut ExprSet,
+    expr_set: &'a ExprSet,
     id_array: &'a [(usize, Identifier)],
     /// Which identifier is replaced.
     affected_id: &'a mut BTreeSet<Identifier>,
@@ -502,7 +679,9 @@ struct CommonSubexprRewriter<'a> {
     curr_index: usize,
 }
 
-impl ExprRewriter for CommonSubexprRewriter<'_> {
+impl TreeNodeRewriter for CommonSubexprRewriter<'_> {
+    type N = Expr;
+
     fn pre_visit(&mut self, _: &Expr) -> Result<RewriteRecursion> {
         if self.curr_index >= self.id_array.len()
             || self.max_series_number > self.id_array[self.curr_index].0
@@ -570,7 +749,7 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
 fn replace_common_expr(
     expr: Expr,
     id_array: &[(usize, Identifier)],
-    expr_set: &mut ExprSet,
+    expr_set: &ExprSet,
     affected_id: &mut BTreeSet<Identifier>,
 ) -> Result<Expr> {
     expr.rewrite(&mut CommonSubexprRewriter {
@@ -591,8 +770,11 @@ mod test {
     use datafusion_common::DFSchema;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
-        avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
-        Operator,
+        avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
+    };
+    use datafusion_expr::{
+        AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
+        StateTypeFunction, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -612,30 +794,50 @@ mod test {
 
     #[test]
     fn id_array_visitor() -> Result<()> {
-        let expr = binary_expr(
-            binary_expr(
-                sum(binary_expr(col("a"), Operator::Plus, lit(1))),
-                Operator::Minus,
-                avg(col("c")),
-            ),
-            Operator::Multiply,
-            lit(2),
-        );
+        let expr = ((sum(col("a") + lit(1))) - avg(col("c"))) * lit(2);
 
         let schema = Arc::new(DFSchema::new_with_metadata(
             vec![
-                DFField::new(None, "a", DataType::Int64, false),
-                DFField::new(None, "c", DataType::Int64, false),
+                DFField::new_unqualified("a", DataType::Int64, false),
+                DFField::new_unqualified("c", DataType::Int64, false),
             ],
             Default::default(),
         )?);
 
+        // skip aggregates
         let mut id_array = vec![];
         expr_to_identifier(
             &expr,
             &mut HashMap::new(),
             &mut id_array,
             Arc::clone(&schema),
+            ExprMask::Normal,
+        )?;
+
+        let expected = vec![
+            (9, "(SUM(a + Int32(1)) - AVG(c)) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"),
+            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)SUM(a + Int32(1))"),
+            (4, ""),
+            (3, "a + Int32(1)Int32(1)a"),
+            (1, ""),
+            (2, ""),
+            (6, ""),
+            (5, ""),
+            (8, "")
+        ]
+        .into_iter()
+        .map(|(number, id)| (number, id.into()))
+        .collect::<Vec<_>>();
+        assert_eq!(expected, id_array);
+
+        // include aggregates
+        let mut id_array = vec![];
+        expr_to_identifier(
+            &expr,
+            &mut HashMap::new(),
+            &mut id_array,
+            Arc::clone(&schema),
+            ExprMask::NormalAndAggregates,
         )?;
 
         let expected = vec![
@@ -673,20 +875,8 @@ mod test {
             .aggregate(
                 iter::empty::<Expr>(),
                 vec![
-                    sum(binary_expr(
-                        col("a"),
-                        Operator::Multiply,
-                        binary_expr(lit(1), Operator::Minus, col("b")),
-                    )),
-                    sum(binary_expr(
-                        binary_expr(
-                            col("a"),
-                            Operator::Multiply,
-                            binary_expr(lit(1), Operator::Minus, col("b")),
-                        ),
-                        Operator::Multiply,
-                        binary_expr(lit(1), Operator::Plus, col("c")),
-                    )),
+                    sum(col("a") * (lit(1) - col("b"))),
+                    sum((col("a") * (lit(1) - col("b"))) * (lit(1) + col("c"))),
                 ],
             )?
             .build()?;
@@ -704,19 +894,154 @@ mod test {
     fn aggregate() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let return_type: ReturnTypeFunction = Arc::new(|inputs| {
+            assert_eq!(inputs, &[DataType::UInt32]);
+            Ok(Arc::new(DataType::UInt32))
+        });
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(|_| unimplemented!());
+        let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
+        let udf_agg = |inner: Expr| {
+            Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
+                Arc::new(AggregateUDF::new(
+                    "my_agg",
+                    &Signature::exact(vec![DataType::UInt32], Volatility::Stable),
+                    &return_type,
+                    &accumulator,
+                    &state_type,
+                )),
+                vec![inner],
+                None,
+                None,
+            ))
+        };
+
+        // test: common aggregates
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
             .aggregate(
                 iter::empty::<Expr>(),
                 vec![
-                    binary_expr(lit(1), Operator::Plus, avg(col("a"))),
-                    binary_expr(lit(1), Operator::Minus, avg(col("a"))),
+                    // common: avg(col("a"))
+                    avg(col("a")).alias("col1"),
+                    avg(col("a")).alias("col2"),
+                    // no common
+                    avg(col("b")).alias("col3"),
+                    avg(col("c")),
+                    // common: udf_agg(col("a"))
+                    udf_agg(col("a")).alias("col4"),
+                    udf_agg(col("a")).alias("col5"),
+                    // no common
+                    udf_agg(col("b")).alias("col6"),
+                    udf_agg(col("c")),
                 ],
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[Int32(1) + AVG(test.a)test.a AS AVG(test.a), Int32(1) - AVG(test.a)test.a AS AVG(test.a)]]\
-        \n  Projection: AVG(test.a) AS AVG(test.a)test.a, test.a, test.b, test.c\
+        let expected = "Projection: AVG(test.a)test.a AS AVG(test.a) AS col1, AVG(test.a)test.a AS AVG(test.a) AS col2, col3, AVG(test.c) AS AVG(test.c), my_agg(test.a)test.a AS my_agg(test.a) AS col4, my_agg(test.a)test.a AS my_agg(test.a) AS col5, col6, my_agg(test.c) AS my_agg(test.c)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS AVG(test.a)test.a, my_agg(test.a) AS my_agg(test.a)test.a, AVG(test.b) AS col3, AVG(test.c) AS AVG(test.c), my_agg(test.b) AS col6, my_agg(test.c) AS my_agg(test.c)]]\
         \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        // test: trafo after aggregate
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    lit(1) + avg(col("a")),
+                    lit(1) - avg(col("a")),
+                    lit(1) + udf_agg(col("a")),
+                    lit(1) - udf_agg(col("a")),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Projection: Int32(1) + AVG(test.a)test.a AS AVG(test.a), Int32(1) - AVG(test.a)test.a AS AVG(test.a), Int32(1) + my_agg(test.a)test.a AS my_agg(test.a), Int32(1) - my_agg(test.a)test.a AS my_agg(test.a)\
+        \n  Aggregate: groupBy=[[]], aggr=[[AVG(test.a) AS AVG(test.a)test.a, my_agg(test.a) AS my_agg(test.a)test.a]]\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        // test: transformation before aggregate
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .aggregate(
+                iter::empty::<Expr>(),
+                vec![
+                    avg(lit(1u32) + col("a")).alias("col1"),
+                    udf_agg(lit(1u32) + col("a")).alias("col2"),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[]], aggr=[[AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS col1, my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS col2]]\
+        \n  Projection: UInt32(1) + test.a AS UInt32(1) + test.atest.aUInt32(1), test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        // test: common between agg and group
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .aggregate(
+                vec![lit(1u32) + col("a")],
+                vec![
+                    avg(lit(1u32) + col("a")).alias("col1"),
+                    udf_agg(lit(1u32) + col("a")).alias("col2"),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a]], aggr=[[AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS col1, my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS col2]]\
+        \n  Projection: UInt32(1) + test.a AS UInt32(1) + test.atest.aUInt32(1), test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        // test: all mixed
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![lit(1u32) + col("a")],
+                vec![
+                    (lit(1u32) + avg(lit(1u32) + col("a"))).alias("col1"),
+                    (lit(1u32) - avg(lit(1u32) + col("a"))).alias("col2"),
+                    avg(lit(1u32) + col("a")),
+                    (lit(1u32) + udf_agg(lit(1u32) + col("a"))).alias("col3"),
+                    (lit(1u32) - udf_agg(lit(1u32) + col("a"))).alias("col4"),
+                    udf_agg(lit(1u32) + col("a")),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Projection: UInt32(1) + test.a, UInt32(1) + AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a AS AVG(UInt32(1) + test.a) AS col1, UInt32(1) - AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a AS AVG(UInt32(1) + test.a) AS col2, AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a AS AVG(UInt32(1) + test.a), UInt32(1) + my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a AS my_agg(UInt32(1) + test.a) AS col3, UInt32(1) - my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a AS my_agg(UInt32(1) + test.a) AS col4, my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a AS my_agg(UInt32(1) + test.a)\
+        \n  Aggregate: groupBy=[[UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a]], aggr=[[AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS AVG(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a, my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a) AS my_agg(UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a)UInt32(1) + test.atest.aUInt32(1) AS UInt32(1) + test.a]]\
+        \n    Projection: UInt32(1) + test.a AS UInt32(1) + test.atest.aUInt32(1), test.a, test.b, test.c\
+        \n      TableScan: test";
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_with_releations_and_dots() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("col.a", DataType::UInt32, false)]);
+        let table_scan = table_scan(Some("table.test"), &schema, None)?.build()?;
+
+        let col_a = Expr::Column(Column::new(Some("table.test"), "col.a"));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col_a.clone()],
+                vec![
+                    (lit(1u32) + avg(lit(1u32) + col_a.clone())),
+                    avg(lit(1u32) + col_a),
+                ],
+            )?
+            .build()?;
+
+        let expected = "Projection: table.test.col.a, UInt32(1) + AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a)UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a AS AVG(UInt32(1) + table.test.col.a), AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a)UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a AS AVG(UInt32(1) + table.test.col.a)\
+        \n  Aggregate: groupBy=[[table.test.col.a]], aggr=[[AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a) AS AVG(UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a)UInt32(1) + table.test.col.atable.test.col.aUInt32(1) AS UInt32(1) + table.test.col.a]]\
+        \n    Projection: UInt32(1) + table.test.col.a AS UInt32(1) + table.test.col.atable.test.col.aUInt32(1), table.test.col.a\
+        \n      TableScan: table.test";
 
         assert_optimized_plan_eq(expected, &plan);
 
@@ -729,8 +1054,8 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                binary_expr(lit(1), Operator::Plus, col("a")).alias("first"),
-                binary_expr(lit(1), Operator::Plus, col("a")).alias("second"),
+                (lit(1) + col("a")).alias("first"),
+                (lit(1) + col("a")).alias("second"),
             ])?
             .build()?;
 
@@ -748,10 +1073,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![
-                binary_expr(lit(1), Operator::Plus, col("a")),
-                binary_expr(col("a"), Operator::Plus, lit(1)),
-            ])?
+            .project(vec![lit(1) + col("a"), col("a") + lit(1)])?
             .build()?;
 
         let expected = "Projection: Int32(1) + test.a, test.a + Int32(1)\
@@ -767,8 +1089,8 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
-            .project(vec![binary_expr(lit(1), Operator::Plus, col("a"))])?
+            .project(vec![lit(1) + col("a")])?
+            .project(vec![lit(1) + col("a")])?
             .build()?;
 
         let expected = "Projection: Int32(1) + test.a\

@@ -17,10 +17,18 @@
 
 //! DataFusion Join implementations
 
+pub use cross_join::CrossJoinExec;
+pub use hash_join::HashJoinExec;
+pub use nested_loop_join::NestedLoopJoinExec;
+// Note: SortMergeJoin is not used in plans yet
+pub use sort_merge_join::SortMergeJoinExec;
+pub use symmetric_hash_join::SymmetricHashJoinExec;
 mod cross_join;
 mod hash_join;
+mod hash_join_utils;
 mod nested_loop_join;
 mod sort_merge_join;
+mod symmetric_hash_join;
 pub mod utils;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,10 +42,3 @@ pub enum PartitionMode {
     /// It will also consider swapping the left and right inputs for the Join
     Auto,
 }
-
-pub use cross_join::CrossJoinExec;
-pub use hash_join::HashJoinExec;
-pub use nested_loop_join::NestedLoopJoinExec;
-
-// Note: SortMergeJoin is not used in plans yet
-pub use sort_merge_join::SortMergeJoinExec;

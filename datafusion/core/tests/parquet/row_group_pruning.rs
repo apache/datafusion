@@ -483,3 +483,36 @@ async fn prune_decimal_in_list() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn prune_periods_in_column_names() {
+    // There are three row groups for "service.name", each with 5 rows = 15 rows total
+    // name = "HTTP GET / DISPATCH", service.name = ['frontend', 'frontend'],
+    // name = "HTTP PUT / DISPATCH", service.name = ['backend',  'frontend'],
+    // name = "HTTP GET / DISPATCH", service.name = ['backend',  'backend' ],
+    test_prune(
+        Scenario::PeriodsInColumnNames,
+        // use double quotes to use column named "service.name"
+        "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend'",
+        Some(0),
+        Some(1), // prune out last row group
+        7,
+    )
+    .await;
+    test_prune(
+        Scenario::PeriodsInColumnNames,
+        "SELECT \"name\", \"service.name\" FROM t WHERE \"name\" != 'HTTP GET / DISPATCH'",
+        Some(0),
+        Some(2), // prune out first and last row group
+        5,
+    )
+    .await;
+    test_prune(
+        Scenario::PeriodsInColumnNames,
+        "SELECT \"name\", \"service.name\" FROM t WHERE \"service.name\" = 'frontend' AND \"name\" != 'HTTP GET / DISPATCH'",
+        Some(0),
+        Some(2), // prune out middle and last row group
+        2,
+    )
+    .await;
+}

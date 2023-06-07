@@ -26,4 +26,4 @@ This crate is a submodule of DataFusion that provides an optimized row based for
 See the documentation in [`lib.rs`] for more details.
 
 [df]: https://crates.io/crates/datafusion
-[`lib.rs`]: https://github.com/apache/arrow-datafusion/blob/master/datafusion/row/src/lib.rs
+[`lib.rs`]: https://github.com/apache/arrow-datafusion/blob/main/datafusion/row/src/lib.rs

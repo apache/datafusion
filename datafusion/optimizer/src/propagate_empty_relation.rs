@@ -144,14 +144,8 @@ impl OptimizerRule for PropagateEmptyRelation {
 }
 
 fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
-    let inputs = plan.inputs();
-
-    // all binary-plan need to deal with separately.
-    match inputs.len() {
-        2 => {
-            let left = inputs.get(0).unwrap();
-            let right = inputs.get(1).unwrap();
-
+    match plan.inputs()[..] {
+        [left, right] => {
             let left_empty = match left {
                 LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
                 _ => false,
@@ -169,26 +163,20 @@ fn binary_plan_children_is_empty(plan: &LogicalPlan) -> Result<(bool, bool)> {
 }
 
 fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-    let inputs = plan.inputs();
-
-    // all binary-plan need to deal with separately.
-    match inputs.len() {
-        1 => {
-            let input = inputs.get(0).unwrap();
-            match input {
-                LogicalPlan::EmptyRelation(empty) => {
-                    if !empty.produce_one_row {
-                        Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
-                            produce_one_row: false,
-                            schema: plan.schema().clone(),
-                        })))
-                    } else {
-                        Ok(None)
-                    }
+    match plan.inputs()[..] {
+        [child] => match child {
+            LogicalPlan::EmptyRelation(empty) => {
+                if !empty.produce_one_row {
+                    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: plan.schema().clone(),
+                    })))
+                } else {
+                    Ok(None)
                 }
-                _ => Ok(None),
             }
-        }
+            _ => Ok(None),
+        },
         _ => Err(DataFusionError::Plan(
             "plan just can have one child".to_string(),
         )),
@@ -283,8 +271,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\
-            \n  TableScan: test";
+        let expected = "TableScan: test";
         assert_together_optimized_plan_eq(&plan, expected)
     }
 
@@ -374,8 +361,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\
-            \n  TableScan: test";
+        let expected = "TableScan: test";
         assert_together_optimized_plan_eq(&plan, expected)
     }
 

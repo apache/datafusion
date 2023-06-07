@@ -29,16 +29,16 @@ use arrow::json::reader::ValueIter;
 use async_trait::async_trait;
 use bytes::Buf;
 
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use super::FileScanConfig;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::physical_plan::NdJsonExec;
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_expr::Expr;
-use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -143,7 +143,7 @@ impl FileFormat for JsonFormat {
         &self,
         _state: &SessionState,
         conf: FileScanConfig,
-        _filters: &[Expr],
+        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::new(conf, self.file_compression_type.to_owned());
         Ok(Arc::new(exec))
@@ -256,7 +256,7 @@ mod tests {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let filename = "tests/jsons/2.json";
+        let filename = "tests/data/2.json";
         let format = JsonFormat::default();
         scan_format(state, &format, ".", filename, projection, limit).await
     }
@@ -266,7 +266,7 @@ mod tests {
         let session = SessionContext::new();
         let ctx = session.state();
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let filename = "tests/jsons/schema_infer_limit.json";
+        let filename = "tests/data/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
 
         let file_schema = format

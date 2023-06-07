@@ -15,33 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! In-memory data source for presenting a Vec<RecordBatch> as a data source that can be
-//! queried by DataFusion. This allows data to be pre-loaded into memory and then
-//! repeatedly queried without incurring additional file I/O overhead.
+//! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
 use futures::StreamExt;
 use std::any::Any;
+use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
+use tokio::sync::RwLock;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::common;
 use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
-/// In-memory table
+/// Type alias for partition data
+pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
+
+/// In-memory data source for presenting a `Vec<RecordBatch>` as a
+/// data source that can be queried by DataFusion. This allows data to
+/// be pre-loaded into memory and then repeatedly queried without
+/// incurring additional file I/O overhead.
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    batches: Vec<Vec<RecordBatch>>,
+    pub(crate) batches: Vec<PartitionData>,
 }
 
 impl MemTable {
@@ -54,7 +62,10 @@ impl MemTable {
         {
             Ok(Self {
                 schema,
-                batches: partitions,
+                batches: partitions
+                    .into_iter()
+                    .map(|e| Arc::new(RwLock::new(e)))
+                    .collect::<Vec<_>>(),
             })
         } else {
             Err(DataFusionError::Plan(
@@ -143,22 +154,115 @@ impl TableProvider for MemTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(MemoryExec::try_new(
-            &self.batches.clone(),
+        let mut partitions = vec![];
+        for arc_inner_vec in self.batches.iter() {
+            let inner_vec = arc_inner_vec.read().await;
+            partitions.push(inner_vec.clone())
+        }
+        Ok(Arc::new(MemoryExec::try_new_owned_data(
+            partitions,
             self.schema(),
             projection.cloned(),
         )?))
+    }
+
+    /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
+    ///
+    /// The [`ExecutionPlan`] must have the same schema as this [`MemTable`].
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The [`SessionState`] containing the context for executing the plan.
+    /// * `input` - The [`ExecutionPlan`] to execute and insert.
+    ///
+    /// # Returns
+    ///
+    /// * A plan that returns the number of rows written.
+    async fn insert_into(
+        &self,
+        _state: &SessionState,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Create a physical plan from the logical plan.
+        // Check that the schema of the plan matches the schema of this table.
+        if !input.schema().eq(&self.schema) {
+            return Err(DataFusionError::Plan(
+                "Inserting query must have the same schema with the table.".to_string(),
+            ));
+        }
+        let sink = Arc::new(MemSink::new(self.batches.clone()));
+        Ok(Arc::new(InsertExec::new(input, sink)))
+    }
+}
+
+/// Implements for writing to a [`MemTable`]
+struct MemSink {
+    /// Target locations for writing data
+    batches: Vec<PartitionData>,
+}
+
+impl Debug for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemSink")
+            .field("num_partitions", &self.batches.len())
+            .finish()
+    }
+}
+
+impl Display for MemSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let partition_count = self.batches.len();
+        write!(f, "MemoryTable (partitions={partition_count})")
+    }
+}
+
+impl MemSink {
+    fn new(batches: Vec<PartitionData>) -> Self {
+        Self { batches }
+    }
+}
+
+#[async_trait]
+impl DataSink for MemSink {
+    async fn write_all(
+        &self,
+        mut data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        let num_partitions = self.batches.len();
+
+        // buffer up the data round robin style into num_partitions
+
+        let mut new_batches = vec![vec![]; num_partitions];
+        let mut i = 0;
+        let mut row_count = 0;
+        while let Some(batch) = data.next().await.transpose()? {
+            row_count += batch.num_rows();
+            new_batches[i].push(batch);
+            i = (i + 1) % num_partitions;
+        }
+
+        // write the outputs into the batches
+        for (target, mut batches) in self.batches.iter().zip(new_batches.into_iter()) {
+            // Append all the new batches in one go to minimize locking overhead
+            target.write().await.append(&mut batches);
+        }
+
+        Ok(row_count as u64)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::provider_as_source;
     use crate::from_slice::FromSlice;
+    use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{AsArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow::error::ArrowError;
+    use datafusion_expr::LogicalPlanBuilder;
     use futures::StreamExt;
     use std::collections::HashMap;
 
@@ -386,6 +490,170 @@ mod tests {
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());
 
+        Ok(())
+    }
+
+    async fn experiment(
+        schema: SchemaRef,
+        initial_data: Vec<Vec<RecordBatch>>,
+        inserted_data: Vec<Vec<RecordBatch>>,
+    ) -> Result<Vec<Vec<RecordBatch>>> {
+        let expected_count: u64 = inserted_data
+            .iter()
+            .flat_map(|batches| batches.iter().map(|batch| batch.num_rows() as u64))
+            .sum();
+
+        // Create a new session context
+        let session_ctx = SessionContext::new();
+        // Create and register the initial table with the provided schema and data
+        let initial_table = Arc::new(MemTable::try_new(schema.clone(), initial_data)?);
+        session_ctx.register_table("t", initial_table.clone())?;
+        // Create and register the source table with the provided schema and inserted data
+        let source_table = Arc::new(MemTable::try_new(schema.clone(), inserted_data)?);
+        session_ctx.register_table("source", source_table.clone())?;
+        // Convert the source table into a provider so that it can be used in a query
+        let source = provider_as_source(source_table);
+        // Create a table scan logical plan to read from the source table
+        let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
+        // Create an insert plan to insert the source data into the initial table
+        let insert_into_table =
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema)?.build()?;
+        // Create a physical plan from the insert plan
+        let plan = session_ctx
+            .state()
+            .create_physical_plan(&insert_into_table)
+            .await?;
+
+        // Execute the physical plan and collect the results
+        let res = collect(plan, session_ctx.task_ctx()).await?;
+        assert_eq!(extract_count(res), expected_count);
+
+        // Read the data from the initial table and store it in a vector of partitions
+        let mut partitions = vec![];
+        for partition in initial_table.batches.iter() {
+            let part = partition.read().await.clone();
+            partitions.push(part);
+        }
+        Ok(partitions)
+    }
+
+    /// Returns the value of results. For example, returns 6 given the follwing
+    ///
+    /// ```text
+    /// +-------+,
+    /// | count |,
+    /// +-------+,
+    /// | 6     |,
+    /// +-------+,
+    /// ```
+    fn extract_count(res: Vec<RecordBatch>) -> u64 {
+        assert_eq!(res.len(), 1, "expected one batch, got {}", res.len());
+        let batch = &res[0];
+        assert_eq!(
+            batch.num_columns(),
+            1,
+            "expected 1 column, got {}",
+            batch.num_columns()
+        );
+        let col = batch.column(0).as_primitive::<UInt64Type>();
+        assert_eq!(col.len(), 1, "expected 1 row, got {}", col.len());
+        let val = col
+            .iter()
+            .next()
+            .expect("had value")
+            .expect("expected non null");
+        val
+    }
+
+    // Test inserting a single batch of data into a single partition
+    #[tokio::test]
+    async fn test_insert_into_single_partition() -> Result<()> {
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+        )?;
+        // Run the experiment and obtain the resulting data in the table
+        let resulting_data_in_table =
+            experiment(schema, vec![vec![batch.clone()]], vec![vec![batch.clone()]])
+                .await?;
+        // Ensure that the table now contains two batches of data in the same partition
+        assert_eq!(resulting_data_in_table[0].len(), 2);
+        Ok(())
+    }
+
+    // Test inserting multiple batches of data into a single partition
+    #[tokio::test]
+    async fn test_insert_into_single_partition_with_multi_partition() -> Result<()> {
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+        )?;
+        // Run the experiment and obtain the resulting data in the table
+        let resulting_data_in_table = experiment(
+            schema,
+            vec![vec![batch.clone()]],
+            vec![vec![batch.clone()], vec![batch]],
+        )
+        .await?;
+        // Ensure that the table now contains three batches of data in the same partition
+        assert_eq!(resulting_data_in_table[0].len(), 3);
+        Ok(())
+    }
+
+    // Test inserting multiple batches of data into multiple partitions
+    #[tokio::test]
+    async fn test_insert_into_multi_partition_with_multi_partition() -> Result<()> {
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+        )?;
+        // Run the experiment and obtain the resulting data in the table
+        let resulting_data_in_table = experiment(
+            schema,
+            vec![vec![batch.clone()], vec![batch.clone()]],
+            vec![
+                vec![batch.clone(), batch.clone()],
+                vec![batch.clone(), batch],
+            ],
+        )
+        .await?;
+        // Ensure that each partition in the table now contains three batches of data
+        assert_eq!(resulting_data_in_table[0].len(), 3);
+        assert_eq!(resulting_data_in_table[1].len(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_from_empty_table() -> Result<()> {
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+        )?;
+        // Run the experiment and obtain the resulting data in the table
+        let resulting_data_in_table = experiment(
+            schema,
+            vec![vec![batch.clone(), batch.clone()]],
+            vec![vec![]],
+        )
+        .await?;
+        // Ensure that the table now contains two batches of data in the same partition
+        assert_eq!(resulting_data_in_table[0].len(), 2);
         Ok(())
     }
 }

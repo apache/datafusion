@@ -20,9 +20,10 @@ use crate::error::{DataFusionError, Result};
 use apache_avro::schema::{Alias, Name};
 use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
-use arrow::datatypes::Field;
+use arrow::datatypes::{Field, UnionFields};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::sync::Arc;
 
 /// Converts an avro schema to an arrow schema
 pub fn to_arrow_schema(avro_schema: &apache_avro::Schema) -> Result<Schema> {
@@ -70,7 +71,7 @@ fn schema_to_field_with_props(
         AvroSchema::Double => DataType::Float64,
         AvroSchema::Bytes => DataType::Binary,
         AvroSchema::String => DataType::Utf8,
-        AvroSchema::Array(item_schema) => DataType::List(Box::new(
+        AvroSchema::Array(item_schema) => DataType::List(Arc::new(
             schema_to_field_with_props(item_schema, None, false, None)?,
         )),
         AvroSchema::Map(value_schema) => {
@@ -104,12 +105,12 @@ fn schema_to_field_with_props(
                     .iter()
                     .map(|s| schema_to_field_with_props(s, None, has_nullable, None))
                     .collect::<Result<Vec<Field>>>()?;
-                let type_ids = (0_i8..fields.len() as i8).collect();
-                DataType::Union(fields, type_ids, UnionMode::Dense)
+                let type_ids = 0_i8..fields.len() as i8;
+                DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
             }
         }
         AvroSchema::Record { name, fields, .. } => {
-            let fields: Result<Vec<Field>> = fields
+            let fields: Result<_> = fields
                 .iter()
                 .map(|field| {
                     let mut props = HashMap::new();
@@ -214,7 +215,7 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::FixedSizeList(_, _) => "fixed_size_list",
         DataType::LargeList(_) => "largelist",
         DataType::Struct(_) => "struct",
-        DataType::Union(_, _, _) => "union",
+        DataType::Union(_, _) => "union",
         DataType::Dictionary(_, _) => "map",
         DataType::Map(_, _) => unimplemented!("Map support not implemented"),
         DataType::RunEndEncoded(_, _) => {

@@ -34,20 +34,20 @@ pub fn get_coerce_type_for_list(
         })
 }
 
-/// Find a common coerceable type for all `then_types` as well
-/// and the `else_type`, if specified.
-/// Returns the common data type for `then_types` and `else_type`
-pub fn get_coerce_type_for_case_when(
-    then_types: &[DataType],
-    else_type: Option<&DataType>,
+/// Find a common coerceable type for all `when_or_then_types` as well
+/// and the `case_or_else_type`, if specified.
+/// Returns the common data type for `when_or_then_types` and `case_or_else_type`
+pub fn get_coerce_type_for_case_expression(
+    when_or_then_types: &[DataType],
+    case_or_else_type: Option<&DataType>,
 ) -> Option<DataType> {
-    let else_type = match else_type {
-        None => then_types[0].clone(),
+    let case_or_else_type = match case_or_else_type {
+        None => when_or_then_types[0].clone(),
         Some(data_type) => data_type.clone(),
     };
-    then_types
+    when_or_then_types
         .iter()
-        .fold(Some(else_type), |left, right_type| match left {
+        .fold(Some(case_or_else_type), |left, right_type| match left {
             // failed to find a valid coercion in a previous iteration
             None => None,
             // TODO: now just use the `equal` coercion rule for case when. If find the issue, and

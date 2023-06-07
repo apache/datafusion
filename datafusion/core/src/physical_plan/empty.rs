@@ -25,14 +25,14 @@ use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 use arrow::array::{ArrayRef, NullArray};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use log::debug;
+use log::trace;
 
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]
@@ -74,14 +74,12 @@ impl EmptyExec {
             vec![RecordBatch::try_new(
                 Arc::new(Schema::new(
                     (0..n_field)
-                        .into_iter()
                         .map(|i| {
                             Field::new(format!("placeholder_{i}"), DataType::Null, true)
                         })
-                        .collect(),
+                        .collect::<Fields>(),
                 )),
                 (0..n_field)
-                    .into_iter()
                     .map(|_i| {
                         let ret: ArrayRef = Arc::new(NullArray::new(1));
                         ret
@@ -134,7 +132,7 @@ impl ExecutionPlan for EmptyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         if partition >= self.partitions {
             return Err(DataFusionError::Internal(format!(
@@ -200,11 +198,11 @@ mod tests {
         let empty = Arc::new(EmptyExec::new(false, schema.clone()));
         let empty_with_row = Arc::new(EmptyExec::new(true, schema));
 
-        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?;
+        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?.into();
         assert_eq!(empty.schema(), empty2.schema());
 
         let empty_with_row_2 =
-            with_new_children_if_necessary(empty_with_row.clone(), vec![])?;
+            with_new_children_if_necessary(empty_with_row.clone(), vec![])?.into();
         assert_eq!(empty_with_row.schema(), empty_with_row_2.schema());
 
         let too_many_kids = vec![empty2];

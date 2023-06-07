@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use crate::execution::memory_pool::MemoryConsumer;
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::repartition::distributor_channels::channels;
 use crate::physical_plan::{
@@ -33,16 +33,16 @@ use crate::physical_plan::{
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use log::debug;
+use log::trace;
 
 use self::distributor_channels::{DistributionReceiver, DistributionSender};
 
-use super::common::{AbortOnDropMany, AbortOnDropSingle};
+use super::common::{AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
@@ -53,7 +53,6 @@ use tokio::task::JoinHandle;
 mod distributor_channels;
 
 type MaybeBatch = Option<Result<RecordBatch>>;
-type SharedMemoryReservation = Arc<Mutex<MemoryReservation>>;
 
 /// Inner state of [`RepartitionExec`].
 #[derive(Debug)]
@@ -221,6 +220,14 @@ impl BatchPartitioner {
 
         Ok(it)
     }
+
+    // return the number of output partitions
+    fn num_partitions(&self) -> usize {
+        match self.state {
+            BatchPartitionerState::RoundRobin { num_partitions, .. } => num_partitions,
+            BatchPartitionerState::Hash { num_partitions, .. } => num_partitions,
+        }
+    }
 }
 
 /// The repartition operator maps N input partitions to M output partitions based on a
@@ -319,8 +326,8 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
     }
@@ -351,7 +358,7 @@ impl ExecutionPlan for RepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!(
+        trace!(
             "Start RepartitionExec::execute for partition: {}",
             partition
         );
@@ -412,7 +419,7 @@ impl ExecutionPlan for RepartitionExec {
             state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
         }
 
-        debug!(
+        trace!(
             "Before returning stream in RepartitionExec::execute for partition: {}",
             partition
         );
@@ -503,6 +510,7 @@ impl RepartitionExec {
 
         // While there are still outputs to send to, keep
         // pulling inputs
+        let mut batches_until_yield = partitioner.num_partitions();
         while !txs.is_empty() {
             // fetch the next batch
             let timer = r_metrics.fetch_time.timer();
@@ -531,6 +539,29 @@ impl RepartitionExec {
                     }
                 }
                 timer.done();
+            }
+
+            // If the input stream is endless, we may spin forever and
+            // never yield back to tokio.  See
+            // https://github.com/apache/arrow-datafusion/issues/5278.
+            //
+            // However, yielding on every batch causes a bottleneck
+            // when running with multiple cores. See
+            // https://github.com/apache/arrow-datafusion/issues/6290
+            //
+            // Thus, heuristically yield after producing num_partition
+            // batches
+            //
+            // In round robin this is ideal as each input will get a
+            // new batch. In hash partitioning it may yield too often
+            // on uneven distributions even if some partition can not
+            // make progress, but parallelism is going to be limited
+            // in that case anyways
+            if batches_until_yield == 0 {
+                tokio::task::yield_now().await;
+                batches_until_yield = partitioner.num_partitions();
+            } else {
+                batches_until_yield -= 1;
             }
         }
 
@@ -654,7 +685,6 @@ impl RecordBatchStream for RepartitionStream {
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
@@ -673,6 +703,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_string_array;
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use futures::FutureExt;
     use std::collections::HashSet;
 

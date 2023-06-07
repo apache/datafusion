@@ -26,13 +26,15 @@ use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
+use datafusion_expr::{Accumulator, WindowFrame};
 
-use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
+use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
+use crate::{
+    expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
+};
 
 /// A window expr that takes the form of an aggregate function
 /// Aggregate Window Expressions that have the form
@@ -138,10 +140,8 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.aggregate.supports_bounded_execution()
             && !self.window_frame.end_bound.is_unbounded()
-            && !matches!(self.window_frame.units, WindowFrameUnits::Groups)
     }
 }
 

@@ -27,6 +27,31 @@ use super::functions::can_coerce_from;
 
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 
+pub static SIGNED_INTEGERS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+];
+
+pub static UNSIGNED_INTEGERS: &[DataType] = &[
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+
+pub static INTEGERS: &[DataType] = &[
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+];
+
 pub static NUMERICS: &[DataType] = &[
     DataType::Int8,
     DataType::Int16,
@@ -91,6 +116,30 @@ pub fn coerce_types(
             // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
             // smallint, int, bigint, real, double precision, decimal, or interval
             if !is_avg_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::BitAnd
+        | AggregateFunction::BitOr
+        | AggregateFunction::BitXor => {
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            // smallint, int, bigint, real, double precision, decimal, or interval.
+            if !is_bit_and_or_xor_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::BoolAnd | AggregateFunction::BoolOr => {
+            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+            // smallint, int, bigint, real, double precision, decimal, or interval.
+            if !is_bool_and_or_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
@@ -215,7 +264,9 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median => Ok(input_types.to_vec()),
+        AggregateFunction::Median
+        | AggregateFunction::FirstValue
+        | AggregateFunction::LastValue => Ok(input_types.to_vec()),
         AggregateFunction::Grouping => Ok(vec![input_types[0].clone()]),
     }
 }
@@ -263,6 +314,13 @@ fn check_arg_count(
                 )));
             }
         }
+        TypeSignature::VariadicAny => {
+            if input_types.is_empty() {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {agg_fun:?} expects at least one argument"
+                )));
+            }
+        }
         _ => {
             return Err(DataFusionError::Internal(format!(
                 "Aggregate functions do not support this {signature:?}"
@@ -291,12 +349,8 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
 /// function return type of a sum
 pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-            Ok(DataType::Int64)
-        }
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            Ok(DataType::UInt64)
-        }
+        arg_type if SIGNED_INTEGERS.contains(arg_type) => Ok(DataType::Int64),
+        arg_type if UNSIGNED_INTEGERS.contains(arg_type) => Ok(DataType::UInt64),
         // In the https://www.postgresql.org/docs/current/functions-aggregate.html doc,
         // the result type of floating-point is FLOAT64 with the double precision.
         DataType::Float64 | DataType::Float32 => Ok(DataType::Float64),
@@ -306,6 +360,9 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal128(new_precision, *scale))
         }
+        DataType::Dictionary(_, dict_value_type) => {
+            sum_return_type(dict_value_type.as_ref())
+        }
         other => Err(DataFusionError::Plan(format!(
             "SUM does not support type \"{other:?}\""
         ))),
@@ -314,77 +371,45 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
 
 /// function return type of variance
 pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
-        other => Err(DataFusionError::Plan(format!(
-            "VAR does not support {other:?}"
-        ))),
+    if NUMERICS.contains(arg_type) {
+        Ok(DataType::Float64)
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "VAR does not support {arg_type:?}"
+        )))
     }
 }
 
 /// function return type of covariance
 pub fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
-        other => Err(DataFusionError::Plan(format!(
-            "COVAR does not support {other:?}"
-        ))),
+    if NUMERICS.contains(arg_type) {
+        Ok(DataType::Float64)
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "COVAR does not support {arg_type:?}"
+        )))
     }
 }
 
 /// function return type of correlation
 pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
-        other => Err(DataFusionError::Plan(format!(
-            "CORR does not support {other:?}"
-        ))),
+    if NUMERICS.contains(arg_type) {
+        Ok(DataType::Float64)
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "CORR does not support {arg_type:?}"
+        )))
     }
 }
 
 /// function return type of standard deviation
 pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
-        other => Err(DataFusionError::Plan(format!(
-            "STDDEV does not support {other:?}"
-        ))),
+    if NUMERICS.contains(arg_type) {
+        Ok(DataType::Float64)
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "STDDEV does not support {arg_type:?}"
+        )))
     }
 }
 
@@ -398,117 +423,93 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
             let new_scale = DECIMAL128_MAX_SCALE.min(*scale + 4);
             Ok(DataType::Decimal128(new_precision, new_scale))
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
+        arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
+        DataType::Dictionary(_, dict_value_type) => {
+            avg_return_type(dict_value_type.as_ref())
+        }
         other => Err(DataFusionError::Plan(format!(
             "AVG does not support {other:?}"
         ))),
     }
 }
 
+/// internal sum type of an average
+pub fn avg_sum_type(arg_type: &DataType) -> Result<DataType> {
+    match arg_type {
+        DataType::Decimal128(precision, scale) => {
+            // in the spark, the sum type of avg is DECIMAL(min(38,precision+10), s)
+            let new_precision = DECIMAL128_MAX_PRECISION.min(*precision + 10);
+            Ok(DataType::Decimal128(new_precision, *scale))
+        }
+        arg_type if NUMERICS.contains(arg_type) => Ok(DataType::Float64),
+        DataType::Dictionary(_, dict_value_type) => {
+            avg_sum_type(dict_value_type.as_ref())
+        }
+        other => Err(DataFusionError::Plan(format!(
+            "AVG does not support {other:?}"
+        ))),
+    }
+}
+
+pub fn is_bit_and_or_xor_support_arg_type(arg_type: &DataType) -> bool {
+    NUMERICS.contains(arg_type)
+}
+
+pub fn is_bool_and_or_support_arg_type(arg_type: &DataType) -> bool {
+    matches!(arg_type, DataType::Boolean)
+}
+
 pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-    )
+    match arg_type {
+        DataType::Dictionary(_, dict_value_type) => {
+            is_sum_support_arg_type(dict_value_type.as_ref())
+        }
+        _ => matches!(
+            arg_type,
+            arg_type if NUMERICS.contains(arg_type)
+            || matches!(arg_type, DataType::Decimal128(_, _))
+        ),
+    }
 }
 
 pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-    )
+    match arg_type {
+        DataType::Dictionary(_, dict_value_type) => {
+            is_avg_support_arg_type(dict_value_type.as_ref())
+        }
+        _ => matches!(
+            arg_type,
+            arg_type if NUMERICS.contains(arg_type)
+                || matches!(arg_type, DataType::Decimal128(_, _))
+        ),
+    }
 }
 
 pub fn is_variance_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
 pub fn is_covariance_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
 pub fn is_stddev_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
 pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 
@@ -531,16 +532,7 @@ pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
 pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 

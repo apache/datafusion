@@ -19,11 +19,10 @@
 
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::{
-    logical_plan::{Extension, UserDefinedLogicalNode},
+    logical_plan::{Extension, UserDefinedLogicalNodeCore},
     Expr, LogicalPlan,
 };
 use std::{
-    any::Any,
     fmt::{self, Debug},
     sync::Arc,
 };
@@ -34,6 +33,7 @@ pub fn new(input: LogicalPlan) -> LogicalPlan {
     LogicalPlan::Extension(Extension { node })
 }
 
+#[derive(PartialEq, Eq, Hash)]
 struct TestUserDefinedPlanNode {
     input: LogicalPlan,
 }
@@ -44,9 +44,9 @@ impl Debug for TestUserDefinedPlanNode {
     }
 }
 
-impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
-    fn as_any(&self) -> &dyn Any {
-        self
+impl UserDefinedLogicalNodeCore for TestUserDefinedPlanNode {
+    fn name(&self) -> &str {
+        "TestUserDefined"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -65,15 +65,11 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
         write!(f, "TestUserDefined")
     }
 
-    fn from_template(
-        &self,
-        exprs: &[Expr],
-        inputs: &[LogicalPlan],
-    ) -> Arc<dyn UserDefinedLogicalNode> {
+    fn from_template(&self, exprs: &[Expr], inputs: &[LogicalPlan]) -> Self {
         assert_eq!(inputs.len(), 1, "input size inconsistent");
         assert_eq!(exprs.len(), 0, "expression size inconsistent");
-        Arc::new(TestUserDefinedPlanNode {
+        Self {
             input: inputs[0].clone(),
-        })
+        }
     }
 }

@@ -26,12 +26,12 @@ set datafusion.catalog.information_schema = true
 statement ok
 CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
 
-query C1 rowsort
+query TTT rowsort
 DESCRIBE aggregate_simple;
 ----
-c1 Float32 NO
-c2 Float64 NO
-c3 Boolean NO
+c1 Float32 YES
+c2 Float64 YES
+c3 Boolean YES
 
 statement ok
 DROP TABLE aggregate_simple;
@@ -46,12 +46,12 @@ set datafusion.catalog.information_schema = false
 statement ok
 CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
 
-query C2 rowsort
+query TTT rowsort
 DESCRIBE aggregate_simple;
 ----
-c1 Float32 NO
-c2 Float64 NO
-c3 Boolean NO
+c1 Float32 YES
+c2 Float64 YES
+c3 Boolean YES
 
 statement ok
 DROP TABLE aggregate_simple;

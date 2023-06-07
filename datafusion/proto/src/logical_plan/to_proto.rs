@@ -23,11 +23,12 @@ use crate::protobuf::{
     self,
     arrow_type::ArrowTypeEnum,
     plan_type::PlanTypeEnum::{
-        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
+        OptimizedPhysicalPlan,
     },
-    CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
+    OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
@@ -35,12 +36,13 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
+    Placeholder, ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+    TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
 };
 
 #[derive(Debug)]
@@ -151,7 +153,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Timestamp(time_unit, timezone) => {
                 Self::Timestamp(protobuf::Timestamp {
                     time_unit: protobuf::TimeUnit::from(time_unit) as i32,
-                    timezone: timezone.to_owned().unwrap_or_default(),
+                    timezone: timezone.as_deref().unwrap_or("").to_string(),
                 })
             }
             DataType::Date32 => Self::Date32(EmptyMessage {}),
@@ -188,21 +190,21 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: struct_fields
                     .iter()
-                    .map(|field| field.try_into())
+                    .map(|field| field.as_ref().try_into())
                     .collect::<Result<Vec<_>, Error>>()?,
             }),
-            DataType::Union(union_types, type_ids, union_mode) => {
+            DataType::Union(fields, union_mode) => {
                 let union_mode = match union_mode {
                     UnionMode::Sparse => protobuf::UnionMode::Sparse,
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types
+                    union_types: fields
                         .iter()
-                        .map(|field| field.try_into())
+                        .map(|(_, field)| field.as_ref().try_into())
                         .collect::<Result<Vec<_>, Error>>()?,
                     union_mode: union_mode.into(),
-                    type_ids: type_ids.iter().map(|x| *x as i32).collect(),
+                    type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
             }
             DataType::Dictionary(key_type, value_type) => {
@@ -218,9 +220,12 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Decimal256(_, _) => {
                 return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))
             }
-            DataType::Map(_, _) => {
-                return Err(Error::General(
-                    "Proto serialization error: The Map data type is not yet supported".to_owned()
+            DataType::Map(field, sorted) => {
+                Self::Map(Box::new(
+                    protobuf::Map {
+                        field_type: Some(Box::new(field.as_ref().try_into()?)),
+                        keys_sorted: *sorted,
+                    }
                 ))
             }
             DataType::RunEndEncoded(_, _) => {
@@ -237,9 +242,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
 impl From<Column> for protobuf::Column {
     fn from(c: Column) -> Self {
         Self {
-            relation: c
-                .relation
-                .map(|relation| protobuf::ColumnRelation { relation }),
+            relation: c.relation.map(|relation| protobuf::ColumnRelation {
+                relation: relation.to_string(),
+            }),
             name: c.name,
         }
     }
@@ -259,7 +264,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::try_from)
+                .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
         })
     }
@@ -273,7 +278,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
             columns: schema
                 .fields()
                 .iter()
-                .map(protobuf::Field::try_from)
+                .map(|f| f.as_ref().try_into())
                 .collect::<Result<Vec<_>, Error>>()?,
         })
     }
@@ -284,7 +289,7 @@ impl TryFrom<&DFField> for protobuf::DfField {
 
     fn try_from(f: &DFField) -> Result<Self, Self::Error> {
         Ok(Self {
-            field: Some(f.field().try_into()?),
+            field: Some(f.field().as_ref().try_into()?),
             qualifier: f.qualifier().map(|r| protobuf::ColumnRelation {
                 relation: r.to_string(),
             }),
@@ -314,6 +319,16 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
             plan_type: match stringified_plan.clone().plan_type {
                 PlanType::InitialLogicalPlan => Some(protobuf::PlanType {
                     plan_type_enum: Some(InitialLogicalPlan(EmptyMessage {})),
+                }),
+                PlanType::AnalyzedLogicalPlan { analyzer_name } => {
+                    Some(protobuf::PlanType {
+                        plan_type_enum: Some(AnalyzedLogicalPlan(
+                            AnalyzedLogicalPlanType { analyzer_name },
+                        )),
+                    })
+                }
+                PlanType::FinalAnalyzedLogicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalAnalyzedLogicalPlan(EmptyMessage {})),
                 }),
                 PlanType::OptimizedLogicalPlan { optimizer_name } => {
                     Some(protobuf::PlanType {
@@ -351,6 +366,11 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Max => Self::Max,
             AggregateFunction::Sum => Self::Sum,
             AggregateFunction::Avg => Self::Avg,
+            AggregateFunction::BitAnd => Self::BitAnd,
+            AggregateFunction::BitOr => Self::BitOr,
+            AggregateFunction::BitXor => Self::BitXor,
+            AggregateFunction::BoolAnd => Self::BoolAnd,
+            AggregateFunction::BoolOr => Self::BoolOr,
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
@@ -368,6 +388,8 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ApproxMedian => Self::ApproxMedian,
             AggregateFunction::Grouping => Self::Grouping,
             AggregateFunction::Median => Self::Median,
+            AggregateFunction::FirstValue => Self::FirstValueAgg,
+            AggregateFunction::LastValue => Self::LastValueAgg,
         }
     }
 }
@@ -486,50 +508,59 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     // linearized from left innermost to right outermost (but while
                     // traversing the chain we do the exact opposite).
                     operands: exprs
-                    .into_iter()
-                    .rev()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, Error>>()?,
+                        .into_iter()
+                        .rev()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, Error>>()?,
                     op: format!("{op:?}"),
                 };
                 Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
-            Expr::Like(Like { negated, expr, pattern, escape_char }) => {
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
                 let pb = Box::new(protobuf::LikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default()
+                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Like(pb)),
                 }
             }
-            Expr::ILike(Like { negated, expr, pattern, escape_char }) => {
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
                 let pb = Box::new(protobuf::ILikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default(),
+                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Ilike(pb)),
                 }
             }
-            Expr::SimilarTo(Like { negated, expr, pattern, escape_char }) => {
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
-                    escape_char: escape_char
-                        .map(|ch| ch.to_string())
-                        .unwrap_or_default(),
+                    escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::SimilarTo(pb)),
@@ -554,7 +585,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         )
                     }
                     // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
-                    WindowFunction::AggregateUDF(_) => return Err(Error::NotImplemented("UDAF as window function in proto".to_string()))
+                    WindowFunction::AggregateUDF(_) => {
+                        return Err(Error::NotImplemented(
+                            "UDAF as window function in proto".to_string(),
+                        ))
+                    }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
@@ -571,7 +606,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let window_frame: Option<protobuf::WindowFrame> = Some(window_frame.try_into()?);
+                let window_frame: Option<protobuf::WindowFrame> =
+                    Some(window_frame.try_into()?);
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),
@@ -587,7 +623,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 ref fun,
                 ref args,
                 ref distinct,
-                ref filter
+                ref filter,
+                ref order_by,
             }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
@@ -603,6 +640,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
                     AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
+                    AggregateFunction::BitAnd => protobuf::AggregateFunction::BitAnd,
+                    AggregateFunction::BitOr => protobuf::AggregateFunction::BitOr,
+                    AggregateFunction::BitXor => protobuf::AggregateFunction::BitXor,
+                    AggregateFunction::BoolAnd => protobuf::AggregateFunction::BoolAnd,
+                    AggregateFunction::BoolOr => protobuf::AggregateFunction::BoolOr,
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
                     AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
@@ -627,6 +669,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     }
                     AggregateFunction::Grouping => protobuf::AggregateFunction::Grouping,
                     AggregateFunction::Median => protobuf::AggregateFunction::Median,
+                    AggregateFunction::FirstValue => {
+                        protobuf::AggregateFunction::FirstValueAgg
+                    }
+                    AggregateFunction::LastValue => {
+                        protobuf::AggregateFunction::LastValueAgg
+                    }
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {
@@ -640,13 +688,25 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
+                    order_by: match order_by {
+                        Some(e) => e
+                            .iter()
+                            .map(|expr| expr.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => vec![],
+                    },
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
                 }
             }
-            Expr::ScalarVariable(_, _) => return Err(Error::General("Proto serialization error: Scalar Variable not supported".to_string())),
-            Expr::ScalarFunction { ref fun, ref args } => {
+            Expr::ScalarVariable(_, _) => {
+                return Err(Error::General(
+                    "Proto serialization error: Scalar Variable not supported"
+                        .to_string(),
+                ))
+            }
+            Expr::ScalarFunction(ScalarFunction { fun, args }) => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
                     .iter()
@@ -661,7 +721,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { fun, args } => Self {
+            Expr::ScalarUDF(ScalarUDF { fun, args }) => Self {
                 expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
                     fun_name: fun.name.clone(),
                     args: args
@@ -670,23 +730,34 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                 })),
             },
-            Expr::AggregateUDF { fun, args, filter } => {
-                Self {
-                    expr_type: Some(ExprType::AggregateUdfExpr(
-                        Box::new(protobuf::AggregateUdfExprNode {
-                            fun_name: fun.name.clone(),
-                            args: args.iter().map(|expr| expr.try_into()).collect::<Result<
-                                Vec<_>,
-                                Error,
-                            >>()?,
-                            filter: match filter {
-                                Some(e) => Some(Box::new(e.as_ref().try_into()?)),
-                                None => None,
-                            },
+            Expr::AggregateUDF(expr::AggregateUDF {
+                fun,
+                args,
+                filter,
+                order_by,
+            }) => Self {
+                expr_type: Some(ExprType::AggregateUdfExpr(Box::new(
+                    protobuf::AggregateUdfExprNode {
+                        fun_name: fun.name.clone(),
+                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                            Vec<_>,
+                            Error,
+                        >>(
+                        )?,
+                        filter: match filter {
+                            Some(e) => Some(Box::new(e.as_ref().try_into()?)),
+                            None => None,
                         },
-                        ))),
-                }
-            }
+                        order_by: match order_by {
+                            Some(e) => e
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            None => vec![],
+                        },
+                    },
+                ))),
+            },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -776,7 +847,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 }
             }
             Expr::Case(case) => {
-                let when_then_expr = case.when_then_expr
+                let when_then_expr = case
+                    .when_then_expr
                     .iter()
                     .map(|(w, t)| {
                         Ok(protobuf::WhenThen {
@@ -809,7 +881,16 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Cast(expr)),
                 }
             }
-            Expr::Sort(Sort{
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                let expr = Box::new(protobuf::TryCastNode {
+                    expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    arrow_type: Some(data_type.try_into()?),
+                });
+                Self {
+                    expr_type: Some(ExprType::TryCast(expr)),
+                }
+            }
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
@@ -831,11 +912,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Negative(expr)),
                 }
             }
-            Expr::InList {
+            Expr::InList(InList {
                 expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::InListNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     list: list
@@ -851,27 +932,30 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Wildcard => Self {
                 expr_type: Some(ExprType::Wildcard(true)),
             },
-            Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
+            Expr::ScalarSubquery(_)
+            | Expr::InSubquery(_)
+            | Expr::Exists { .. }
+            | Expr::OuterReferenceColumn { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()));
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists { .. } | Exp:OuterReferenceColumn not supported".to_string()));
             }
-            Expr::GetIndexedField(GetIndexedField { key, expr }) =>
-                Self {
-                    expr_type: Some(ExprType::GetIndexedField(Box::new(
-                        protobuf::GetIndexedField {
-                            key: Some(key.try_into()?),
-                            expr: Some(Box::new(expr.as_ref().try_into()?)),
-                        },
-                    ))),
-                },
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => Self {
+                expr_type: Some(ExprType::GetIndexedField(Box::new(
+                    protobuf::GetIndexedField {
+                        key: Some(key.try_into()?),
+                        expr: Some(Box::new(expr.as_ref().try_into()?)),
+                    },
+                ))),
+            },
 
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => Self {
                 expr_type: Some(ExprType::Cube(CubeNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>()?,
+                    >>(
+                    )?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => Self {
@@ -879,7 +963,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>()?,
+                    >>(
+                    )?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => Self {
@@ -897,7 +982,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
             },
-            Expr::Placeholder{ id, data_type } => {
+            Expr::Placeholder(Placeholder { id, data_type }) => {
                 let data_type = match data_type {
                     Some(data_type) => Some(data_type.try_into()?),
                     None => None,
@@ -908,10 +993,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         data_type,
                     })),
                 }
-            },
+            }
 
-            Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
+            Expr::QualifiedWildcard { .. } => return Err(Error::General(
+                "Proto serialization error: Expr::QualifiedWildcard { .. } not supported"
+                    .to_string(),
+            )),
         };
 
         Ok(expr_node)
@@ -1008,7 +1095,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampMicrosecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(
                                 *s,
@@ -1020,7 +1107,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampNanosecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(
                                 *s,
@@ -1053,7 +1140,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampSecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeSecondValue(*s),
                         ),
@@ -1063,7 +1150,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampMillisecond(val, tz) => {
                 create_proto_scalar(val.as_ref(), &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
-                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        timezone: tz.as_deref().unwrap_or("").to_string(),
                         value: Some(
                             protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(
                                 *s,
@@ -1182,7 +1269,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
                 let fields = fields
                     .iter()
-                    .map(|f| f.try_into())
+                    .map(|f| f.as_ref().try_into())
                     .collect::<Result<Vec<protobuf::Field>, _>>()?;
 
                 Ok(protobuf::ScalarValue {
@@ -1214,16 +1301,28 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
         let scalar_function = match scalar {
             BuiltinScalarFunction::Sqrt => Self::Sqrt,
+            BuiltinScalarFunction::Cbrt => Self::Cbrt,
             BuiltinScalarFunction::Sin => Self::Sin,
             BuiltinScalarFunction::Cos => Self::Cos,
             BuiltinScalarFunction::Tan => Self::Tan,
+            BuiltinScalarFunction::Sinh => Self::Sinh,
+            BuiltinScalarFunction::Cosh => Self::Cosh,
+            BuiltinScalarFunction::Tanh => Self::Tanh,
             BuiltinScalarFunction::Asin => Self::Asin,
             BuiltinScalarFunction::Acos => Self::Acos,
             BuiltinScalarFunction::Atan => Self::Atan,
+            BuiltinScalarFunction::Asinh => Self::Asinh,
+            BuiltinScalarFunction::Acosh => Self::Acosh,
+            BuiltinScalarFunction::Atanh => Self::Atanh,
             BuiltinScalarFunction::Exp => Self::Exp,
+            BuiltinScalarFunction::Factorial => Self::Factorial,
+            BuiltinScalarFunction::Gcd => Self::Gcd,
+            BuiltinScalarFunction::Lcm => Self::Lcm,
             BuiltinScalarFunction::Log => Self::Log,
             BuiltinScalarFunction::Ln => Self::Ln,
             BuiltinScalarFunction::Log10 => Self::Log10,
+            BuiltinScalarFunction::Degrees => Self::Degrees,
+            BuiltinScalarFunction::Radians => Self::Radians,
             BuiltinScalarFunction::Floor => Self::Floor,
             BuiltinScalarFunction::Ceil => Self::Ceil,
             BuiltinScalarFunction::Round => Self::Round,
@@ -1237,7 +1336,21 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
+            BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
+            BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
+            BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
+            BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
+            BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
+            BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
+            BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
+            BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
+            BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
+            BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
+            BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
+            BuiltinScalarFunction::TrimArray => Self::TrimArray,
             BuiltinScalarFunction::NullIf => Self::NullIf,
             BuiltinScalarFunction::DatePart => Self::DatePart,
             BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
@@ -1281,6 +1394,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
+            BuiltinScalarFunction::Pi => Self::Pi,
             BuiltinScalarFunction::Power => Self::Power,
             BuiltinScalarFunction::Struct => Self::StructFun,
             BuiltinScalarFunction::FromUnixtime => Self::FromUnixtime,
@@ -1318,12 +1432,14 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
         use protobuf::owned_table_reference::TableReferenceEnum;
         let table_reference_enum = match t {
             OwnedTableReference::Bare { table } => {
-                TableReferenceEnum::Bare(protobuf::BareTableReference { table })
+                TableReferenceEnum::Bare(protobuf::BareTableReference {
+                    table: table.to_string(),
+                })
             }
             OwnedTableReference::Partial { schema, table } => {
                 TableReferenceEnum::Partial(protobuf::PartialTableReference {
-                    schema,
-                    table,
+                    schema: schema.to_string(),
+                    table: table.to_string(),
                 })
             }
             OwnedTableReference::Full {
@@ -1331,9 +1447,9 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
                 schema,
                 table,
             } => TableReferenceEnum::Full(protobuf::FullTableReference {
-                catalog,
-                schema,
-                table,
+                catalog: catalog.to_string(),
+                schema: schema.to_string(),
+                table: table.to_string(),
             }),
         };
 

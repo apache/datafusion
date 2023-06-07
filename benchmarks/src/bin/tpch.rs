@@ -17,15 +17,7 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use std::{
-    fs::File,
-    io::Write,
-    iter::Iterator,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
-
+use datafusion::datasource::file_format::{csv::CsvFormat, FileFormat};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::parquet::basic::Compression;
@@ -39,18 +31,12 @@ use datafusion::{
     arrow::util::pretty,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
-use datafusion::{
-    datasource::file_format::{csv::CsvFormat, FileFormat},
-    DATAFUSION_VERSION,
-};
-use datafusion_benchmarks::tpch::*;
+use datafusion_benchmarks::{tpch::*, BenchmarkRun};
+use std::{iter::Iterator, path::PathBuf, sync::Arc, time::Instant};
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::scheduler::Scheduler;
-use futures::TryStreamExt;
-use serde::Serialize;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -95,17 +81,13 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    /// Path to output directory where JSON summary file should be written to
+    /// Path to machine readable output file
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
 
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
     #[structopt(short = "S", long = "disable-statistics")]
     disable_statistics: bool,
-
-    /// Enable scheduler
-    #[structopt(short = "e", long = "enable-scheduler")]
-    enable_scheduler: bool,
 }
 
 #[derive(Debug, StructOpt)]
@@ -162,11 +144,11 @@ async fn main() -> Result<()> {
             let compression = match opt.compression.as_str() {
                 "none" => Compression::UNCOMPRESSED,
                 "snappy" => Compression::SNAPPY,
-                "brotli" => Compression::BROTLI,
-                "gzip" => Compression::GZIP,
+                "brotli" => Compression::BROTLI(Default::default()),
+                "gzip" => Compression::GZIP(Default::default()),
                 "lz4" => Compression::LZ4,
                 "lz0" => Compression::LZO,
-                "zstd" => Compression::ZSTD,
+                "zstd" => Compression::ZSTD(Default::default()),
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Invalid compression format: {other}"
@@ -201,22 +183,22 @@ async fn benchmark_datafusion(
     let mut benchmark_run = BenchmarkRun::new();
     let mut results = vec![];
     for query_id in query_range {
+        benchmark_run.start_new_case(&format!("Query {query_id}"));
         let (query_run, result) = benchmark_query(&opt, query_id).await?;
         results.push(result);
-        benchmark_run.add_query(query_run);
+        for iter in query_run {
+            benchmark_run.write_iter(iter.elapsed, iter.row_count);
+        }
     }
-
-    if let Some(path) = &opt.output_path {
-        write_summary_json(&mut benchmark_run, path)?;
-    }
+    benchmark_run.maybe_write_json(opt.output_path.as_ref())?;
     Ok(results)
 }
 
 async fn benchmark_query(
     opt: &DataFusionBenchmarkOpt,
     query_id: usize,
-) -> Result<(QueryRun, Vec<RecordBatch>)> {
-    let mut benchmark_run = QueryRun::new(query_id);
+) -> Result<(Vec<QueryResult>, Vec<RecordBatch>)> {
+    let mut query_results = vec![];
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size)
@@ -239,32 +221,31 @@ async fn benchmark_query(
         if query_id == 15 {
             for (n, query) in sql.iter().enumerate() {
                 if n == 1 {
-                    result = execute_query(&ctx, query, opt.debug, opt.enable_scheduler)
-                        .await?;
+                    result = execute_query(&ctx, query, opt.debug).await?;
                 } else {
-                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
+                    execute_query(&ctx, query, opt.debug).await?;
                 }
             }
         } else {
             for query in sql {
-                result =
-                    execute_query(&ctx, query, opt.debug, opt.enable_scheduler).await?;
+                result = execute_query(&ctx, query, opt.debug).await?;
             }
         }
 
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed);
+        let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        millis.push(ms);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
-            "Query {query_id} iteration {i} took {elapsed:.1} ms and returned {row_count} rows"
+            "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
         );
-        benchmark_run.add_result(elapsed, row_count);
+        query_results.push(QueryResult { elapsed, row_count });
     }
 
     let avg = millis.iter().sum::<f64>() / millis.len() as f64;
     println!("Query {query_id} avg time: {avg:.2} ms");
 
-    Ok((benchmark_run, result))
+    Ok((query_results, result))
 }
 
 async fn register_tables(
@@ -302,25 +283,10 @@ async fn register_tables(
     Ok(())
 }
 
-fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &Path) -> Result<()> {
-    let json =
-        serde_json::to_string_pretty(&benchmark_run).expect("summary is serializable");
-    let filename = format!("tpch-summary--{}.json", benchmark_run.context.start_time);
-    let path = path.join(filename);
-    println!(
-        "Writing summary file to {}",
-        path.as_os_str().to_str().unwrap()
-    );
-    let mut file = File::create(path)?;
-    file.write_all(json.as_bytes())?;
-    Ok(())
-}
-
 async fn execute_query(
     ctx: &SessionContext,
     sql: &str,
     debug: bool,
-    enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
     let (state, plan) = plan.into_parts();
@@ -340,15 +306,7 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let result = if enable_scheduler {
-        let scheduler = Scheduler::new(num_cpus::get());
-        let results = scheduler
-            .schedule(physical_plan.clone(), state.task_ctx())
-            .unwrap();
-        results.stream().try_collect().await?
-    } else {
-        collect(physical_plan.clone(), state.task_ctx()).await?
-    };
+    let result = collect(physical_plan.clone(), state.task_ctx()).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -421,413 +379,18 @@ async fn get_table(
     Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
-#[derive(Debug, Serialize)]
-struct RunContext {
-    /// Benchmark crate version
-    benchmark_version: String,
-    /// DataFusion crate version
-    datafusion_version: String,
-    /// Number of CPU cores
-    num_cpus: usize,
-    /// Start time
-    start_time: u64,
-    /// CLI arguments
-    arguments: Vec<String>,
-}
-
-impl RunContext {
-    fn new() -> Self {
-        Self {
-            benchmark_version: env!("CARGO_PKG_VERSION").to_owned(),
-            datafusion_version: DATAFUSION_VERSION.to_owned(),
-            num_cpus: num_cpus::get(),
-            start_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is later than UNIX_EPOCH")
-                .as_secs(),
-            arguments: std::env::args()
-                .skip(1)
-                .into_iter()
-                .collect::<Vec<String>>(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct BenchmarkRun {
-    /// Information regarding the environment in which the benchmark was run
-    context: RunContext,
-    /// Per-query summaries
-    queries: Vec<QueryRun>,
-}
-
-impl BenchmarkRun {
-    fn new() -> Self {
-        Self {
-            context: RunContext::new(),
-            queries: vec![],
-        }
-    }
-
-    fn add_query(&mut self, query: QueryRun) {
-        self.queries.push(query)
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct QueryRun {
-    /// query number
-    query: usize,
-    /// list of individual run times and row counts
-    iterations: Vec<QueryResult>,
-    /// Start time
-    start_time: u64,
-}
-
-impl QueryRun {
-    fn new(query: usize) -> Self {
-        Self {
-            query,
-            iterations: vec![],
-            start_time: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("current time is later than UNIX_EPOCH")
-                .as_secs(),
-        }
-    }
-
-    fn add_result(&mut self, elapsed: f64, row_count: usize) {
-        self.iterations.push(QueryResult { elapsed, row_count })
-    }
-}
-
-#[derive(Debug, Serialize)]
 struct QueryResult {
-    elapsed: f64,
+    elapsed: std::time::Duration,
     row_count: usize,
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use datafusion::sql::TableReference;
-    use std::io::{BufRead, BufReader};
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn q1_expected_plan() -> Result<()> {
-        expected_plan(1).await
-    }
-
-    #[tokio::test]
-    async fn q2_expected_plan() -> Result<()> {
-        expected_plan(2).await
-    }
-
-    #[tokio::test]
-    async fn q3_expected_plan() -> Result<()> {
-        expected_plan(3).await
-    }
-
-    #[tokio::test]
-    async fn q4_expected_plan() -> Result<()> {
-        expected_plan(4).await
-    }
-
-    #[tokio::test]
-    async fn q5_expected_plan() -> Result<()> {
-        expected_plan(5).await
-    }
-
-    #[tokio::test]
-    async fn q6_expected_plan() -> Result<()> {
-        expected_plan(6).await
-    }
-
-    #[tokio::test]
-    async fn q7_expected_plan() -> Result<()> {
-        expected_plan(7).await
-    }
-
-    #[tokio::test]
-    async fn q8_expected_plan() -> Result<()> {
-        expected_plan(8).await
-    }
-
-    #[tokio::test]
-    async fn q9_expected_plan() -> Result<()> {
-        expected_plan(9).await
-    }
-
-    #[tokio::test]
-    async fn q10_expected_plan() -> Result<()> {
-        expected_plan(10).await
-    }
-
-    #[tokio::test]
-    async fn q11_expected_plan() -> Result<()> {
-        expected_plan(11).await
-    }
-
-    #[tokio::test]
-    async fn q12_expected_plan() -> Result<()> {
-        expected_plan(12).await
-    }
-
-    #[tokio::test]
-    async fn q13_expected_plan() -> Result<()> {
-        expected_plan(13).await
-    }
-
-    #[tokio::test]
-    async fn q14_expected_plan() -> Result<()> {
-        expected_plan(14).await
-    }
-
-    #[tokio::test]
-    async fn q15_expected_plan() -> Result<()> {
-        expected_plan(15).await
-    }
-
-    #[tokio::test]
-    async fn q16_expected_plan() -> Result<()> {
-        expected_plan(16).await
-    }
-
-    #[tokio::test]
-    async fn q17_expected_plan() -> Result<()> {
-        expected_plan(17).await
-    }
-
-    #[tokio::test]
-    async fn q18_expected_plan() -> Result<()> {
-        expected_plan(18).await
-    }
-
-    #[tokio::test]
-    async fn q19_expected_plan() -> Result<()> {
-        expected_plan(19).await
-    }
-
-    #[tokio::test]
-    async fn q20_expected_plan() -> Result<()> {
-        expected_plan(20).await
-    }
-
-    #[tokio::test]
-    async fn q21_expected_plan() -> Result<()> {
-        expected_plan(21).await
-    }
-
-    #[tokio::test]
-    async fn q22_expected_plan() -> Result<()> {
-        expected_plan(22).await
-    }
-
-    async fn expected_plan(query: usize) -> Result<()> {
-        let ctx = create_context()?;
-        let mut actual = String::new();
-        let sql = get_query_sql(query)?;
-        for sql in &sql {
-            let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.into_optimized_plan()?;
-            if !actual.is_empty() {
-                actual += "\n";
-            }
-            use std::fmt::Write as _;
-            write!(actual, "{}", plan.display_indent()).unwrap();
-        }
-
-        let possibilities = vec![
-            format!("expected-plans/q{query}.txt"),
-            format!("benchmarks/expected-plans/q{query}.txt"),
-        ];
-
-        let mut found = false;
-        for path in &possibilities {
-            let path = Path::new(&path);
-            if let Ok(expected) = read_text_file(path) {
-                assert_eq!(expected, actual,
-                           // generate output that is easier to copy/paste/update
-                           "\n\nMismatch of expected content in: {path:?}\nExpected:\n\n{expected}\n\nActual:\n\n{actual}\n\n");
-                found = true;
-                break;
-            }
-        }
-        assert!(found);
-
-        Ok(())
-    }
-
-    fn create_context() -> Result<SessionContext> {
-        let ctx = SessionContext::new();
-        for table in TPCH_TABLES {
-            let table = table.to_string();
-            let schema = get_tpch_table_schema(&table);
-            let mem_table = MemTable::try_new(Arc::new(schema), vec![])?;
-            ctx.register_table(
-                TableReference::from(table.as_str()),
-                Arc::new(mem_table),
-            )?;
-        }
-        Ok(ctx)
-    }
-
-    /// we need to read line by line and add \n so tests work on Windows
-    fn read_text_file(path: &Path) -> Result<String> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut str = String::new();
-        for line in reader.lines() {
-            let line = line?;
-            if !str.is_empty() {
-                str += "\n";
-            }
-            str += &line;
-        }
-        Ok(str)
-    }
-
-    #[tokio::test]
-    async fn run_q1() -> Result<()> {
-        run_query(1).await
-    }
-
-    #[tokio::test]
-    async fn run_q2() -> Result<()> {
-        run_query(2).await
-    }
-
-    #[tokio::test]
-    async fn run_q3() -> Result<()> {
-        run_query(3).await
-    }
-
-    #[tokio::test]
-    async fn run_q4() -> Result<()> {
-        run_query(4).await
-    }
-
-    #[tokio::test]
-    async fn run_q5() -> Result<()> {
-        run_query(5).await
-    }
-
-    #[tokio::test]
-    async fn run_q6() -> Result<()> {
-        run_query(6).await
-    }
-
-    #[tokio::test]
-    async fn run_q7() -> Result<()> {
-        run_query(7).await
-    }
-
-    #[tokio::test]
-    async fn run_q8() -> Result<()> {
-        run_query(8).await
-    }
-
-    #[tokio::test]
-    async fn run_q9() -> Result<()> {
-        run_query(9).await
-    }
-
-    #[tokio::test]
-    async fn run_q10() -> Result<()> {
-        run_query(10).await
-    }
-
-    #[tokio::test]
-    async fn run_q11() -> Result<()> {
-        run_query(11).await
-    }
-
-    #[tokio::test]
-    async fn run_q12() -> Result<()> {
-        run_query(12).await
-    }
-
-    #[tokio::test]
-    async fn run_q13() -> Result<()> {
-        run_query(13).await
-    }
-
-    #[tokio::test]
-    async fn run_q14() -> Result<()> {
-        run_query(14).await
-    }
-
-    #[tokio::test]
-    async fn run_q15() -> Result<()> {
-        run_query(15).await
-    }
-
-    #[tokio::test]
-    async fn run_q16() -> Result<()> {
-        run_query(16).await
-    }
-
-    #[tokio::test]
-    async fn run_q17() -> Result<()> {
-        run_query(17).await
-    }
-
-    #[tokio::test]
-    async fn run_q18() -> Result<()> {
-        run_query(18).await
-    }
-
-    #[tokio::test]
-    async fn run_q19() -> Result<()> {
-        run_query(19).await
-    }
-
-    #[tokio::test]
-    async fn run_q20() -> Result<()> {
-        run_query(20).await
-    }
-
-    #[tokio::test]
-    async fn run_q21() -> Result<()> {
-        run_query(21).await
-    }
-
-    #[tokio::test]
-    async fn run_q22() -> Result<()> {
-        run_query(22).await
-    }
-
-    async fn run_query(n: usize) -> Result<()> {
-        // Tests running query with empty tables, to see whether they run successfully.
-
-        let config = SessionConfig::new()
-            .with_target_partitions(1)
-            .with_batch_size(10);
-        let ctx = SessionContext::with_config(config);
-
-        for &table in TPCH_TABLES {
-            let schema = get_tpch_table_schema(table);
-            let batch = RecordBatch::new_empty(Arc::new(schema.to_owned()));
-
-            ctx.register_batch(table, batch)?;
-        }
-
-        let sql = &get_query_sql(n)?;
-        for query in sql {
-            execute_query(&ctx, query, false, false).await?;
-        }
-
-        Ok(())
-    }
-}
-
-/// CI checks
-#[cfg(test)]
 #[cfg(feature = "ci")]
-mod ci {
+/// CI checks
+mod tests {
+    use std::path::Path;
+
     use super::*;
-    use arrow::datatypes::{DataType, Field};
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
     async fn serde_round_trip(query: usize) -> Result<()> {
@@ -844,13 +407,12 @@ mod ci {
             mem_table: false,
             output_path: None,
             disable_statistics: false,
-            enable_scheduler: false,
         };
         register_tables(&opt, &ctx).await?;
         let queries = get_query_sql(query)?;
         for query in queries {
             let plan = ctx.sql(&query).await?;
-            let plan = plan.to_logical_plan()?;
+            let plan = plan.into_optimized_plan()?;
             let bytes = logical_plan_to_bytes(&plan)?;
             let plan2 = logical_plan_from_bytes(&bytes, &ctx)?;
             let plan_formatted = format!("{}", plan.display_indent());
@@ -968,249 +530,6 @@ mod ci {
     #[tokio::test]
     async fn serde_q22() -> Result<()> {
         serde_round_trip(22).await
-    }
-
-    #[tokio::test]
-    async fn verify_q1() -> Result<()> {
-        verify_query(1).await
-    }
-
-    #[tokio::test]
-    async fn verify_q2() -> Result<()> {
-        verify_query(2).await
-    }
-
-    #[tokio::test]
-    async fn verify_q3() -> Result<()> {
-        verify_query(3).await
-    }
-
-    #[tokio::test]
-    async fn verify_q4() -> Result<()> {
-        verify_query(4).await
-    }
-
-    #[tokio::test]
-    async fn verify_q5() -> Result<()> {
-        verify_query(5).await
-    }
-
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4024
-    #[tokio::test]
-    async fn verify_q6() -> Result<()> {
-        verify_query(6).await
-    }
-
-    #[tokio::test]
-    async fn verify_q7() -> Result<()> {
-        verify_query(7).await
-    }
-
-    #[tokio::test]
-    async fn verify_q8() -> Result<()> {
-        verify_query(8).await
-    }
-
-    #[tokio::test]
-    async fn verify_q9() -> Result<()> {
-        verify_query(9).await
-    }
-
-    #[tokio::test]
-    async fn verify_q10() -> Result<()> {
-        verify_query(10).await
-    }
-
-    #[tokio::test]
-    async fn verify_q11() -> Result<()> {
-        verify_query(11).await
-    }
-
-    #[tokio::test]
-    async fn verify_q12() -> Result<()> {
-        verify_query(12).await
-    }
-
-    #[tokio::test]
-    async fn verify_q13() -> Result<()> {
-        verify_query(13).await
-    }
-
-    #[tokio::test]
-    async fn verify_q14() -> Result<()> {
-        verify_query(14).await
-    }
-
-    #[tokio::test]
-    async fn verify_q15() -> Result<()> {
-        verify_query(15).await
-    }
-
-    #[tokio::test]
-    async fn verify_q16() -> Result<()> {
-        verify_query(16).await
-    }
-
-    #[tokio::test]
-    async fn verify_q17() -> Result<()> {
-        verify_query(17).await
-    }
-
-    #[tokio::test]
-    async fn verify_q18() -> Result<()> {
-        verify_query(18).await
-    }
-
-    #[tokio::test]
-    async fn verify_q19() -> Result<()> {
-        verify_query(19).await
-    }
-
-    #[tokio::test]
-    async fn verify_q20() -> Result<()> {
-        verify_query(20).await
-    }
-
-    #[tokio::test]
-    async fn verify_q21() -> Result<()> {
-        verify_query(21).await
-    }
-
-    #[tokio::test]
-    async fn verify_q22() -> Result<()> {
-        verify_query(22).await
-    }
-
-    /// compares query results against stored answers from the git repo
-    /// verifies that:
-    ///  * datatypes returned in columns is correct
-    ///  * the correct number of rows are returned
-    ///  * the content of the rows is correct
-    async fn verify_query(n: usize) -> Result<()> {
-        use datafusion::common::ScalarValue;
-        use datafusion::logical_expr::expr::Cast;
-
-        let path = get_tpch_data_path()?;
-
-        let answer_file = format!("{}/answers/q{}.out", path, n);
-        if !Path::new(&answer_file).exists() {
-            return Err(DataFusionError::Execution(format!(
-                "Expected results not found: {}",
-                answer_file
-            )));
-        }
-
-        // load expected answers from tpch-dbgen
-        // read csv as all strings, trim and cast to expected type as the csv string
-        // to value parser does not handle data with leading/trailing spaces
-        let ctx = SessionContext::new();
-        let schema = string_schema(get_answer_schema(n));
-        let options = CsvReadOptions::new()
-            .schema(&schema)
-            .delimiter(b'|')
-            .file_extension(".out");
-        let df = ctx.read_csv(&answer_file, options).await?;
-        let df = df.select(
-            get_answer_schema(n)
-                .fields()
-                .iter()
-                .map(|field| {
-                    match Field::data_type(field) {
-                        DataType::Decimal128(_, _) => {
-                            // there's no support for casting from Utf8 to Decimal, so
-                            // we'll cast from Utf8 to Float64 to Decimal for Decimal types
-                            let inner_cast = Box::new(Expr::Cast(Cast::new(
-                                Box::new(trim(col(Field::name(field)))),
-                                DataType::Float64,
-                            )));
-                            Expr::Cast(Cast::new(
-                                inner_cast,
-                                Field::data_type(field).to_owned(),
-                            ))
-                            .alias(Field::name(field))
-                        }
-                        _ => Expr::Cast(Cast::new(
-                            Box::new(trim(col(Field::name(field)))),
-                            Field::data_type(field).to_owned(),
-                        ))
-                        .alias(Field::name(field)),
-                    }
-                })
-                .collect::<Vec<Expr>>(),
-        )?;
-        let expected = df.collect().await?;
-
-        // run the query to compute actual results of the query
-        let opt = DataFusionBenchmarkOpt {
-            query: Some(n),
-            debug: false,
-            iterations: 1,
-            partitions: 2,
-            batch_size: 8192,
-            path: PathBuf::from(path.to_string()),
-            file_format: "tbl".to_string(),
-            mem_table: false,
-            output_path: None,
-            disable_statistics: false,
-            enable_scheduler: false,
-        };
-        let mut results = benchmark_datafusion(opt).await?;
-        assert_eq!(results.len(), 1);
-
-        let actual = results.remove(0);
-        let transformed = transform_actual_result(actual, n).await?;
-
-        // assert schema data types match
-        let transformed_fields = &transformed[0].schema().fields;
-        let expected_fields = &expected[0].schema().fields;
-        let schema_matches =
-            transformed_fields
-                .iter()
-                .zip(expected_fields.iter())
-                .all(|(t, e)| match t.data_type() {
-                    DataType::Decimal128(_, _) => {
-                        matches!(e.data_type(), DataType::Decimal128(_, _))
-                    }
-                    data_type => data_type == e.data_type(),
-                });
-        if !schema_matches {
-            panic!(
-                "expected_fields: {:?}\ntransformed_fields: {:?}",
-                expected_fields, transformed_fields
-            )
-        }
-
-        // convert both datasets to Vec<Vec<String>> for simple comparison
-        let expected_vec = result_vec(&expected);
-        let actual_vec = result_vec(&transformed);
-
-        // basic result comparison
-        assert_eq!(expected_vec.len(), actual_vec.len());
-
-        // compare each row. this works as all TPC-H queries have deterministically ordered results
-        for i in 0..expected_vec.len() {
-            let expected_row = &expected_vec[i];
-            let actual_row = &actual_vec[i];
-            assert_eq!(expected_row.len(), actual_row.len());
-
-            for j in 0..expected.len() {
-                match (&expected_row[j], &actual_row[j]) {
-                    (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => {
-                        // allow for rounding errors until we move to decimal types
-                        let tolerance = 0.1;
-                        if (l - r).abs() > tolerance {
-                            panic!(
-                                "Expected: {}; Actual: {}; Tolerance: {}",
-                                l, r, tolerance
-                            )
-                        }
-                    }
-                    (l, r) => assert_eq!(format!("{:?}", l), format!("{:?}", r)),
-                }
-            }
-        }
-
-        Ok(())
     }
 
     fn get_tpch_data_path() -> Result<String> {

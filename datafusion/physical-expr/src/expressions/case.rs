@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
@@ -23,7 +24,7 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
+use arrow::compute::{and, eq_dyn, is_null, not, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
@@ -138,6 +139,11 @@ impl CaseExpr {
             let when_value = when_value.into_array(batch.num_rows());
             // build boolean array representing which rows match the "when" value
             let when_match = eq_dyn(&when_value, base_value.as_ref())?;
+            // Treat nulls as false
+            let when_match = match when_match.null_count() {
+                0 => Cow::Borrowed(&when_match),
+                _ => Cow::Owned(prep_null_mask_filter(&when_match)),
+            };
 
             let then_value = self.when_then_expr[i]
                 .1
@@ -152,7 +158,7 @@ impl CaseExpr {
             current_value =
                 zip(&when_match, then_value.as_ref(), current_value.as_ref())?;
 
-            remainder = and(&remainder, &or_kleene(&not(&when_match)?, &base_nulls)?)?;
+            remainder = and(&remainder, &not(&when_match)?)?;
         }
 
         if let Some(e) = &self.else_expr {
@@ -187,20 +193,22 @@ impl CaseExpr {
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
-            // Treat 'NULL' as false value
-            let when_value = match when_value {
-                ColumnarValue::Scalar(value) if value.is_null() => {
-                    continue;
-                }
-                _ => when_value,
-            };
             let when_value = when_value.into_array(batch.num_rows());
-            let when_value = as_boolean_array(&when_value)
-                .expect("WHEN expression did not return a BooleanArray");
+            let when_value = as_boolean_array(&when_value).map_err(|e| {
+                DataFusionError::Context(
+                    "WHEN expression did not return a BooleanArray".to_string(),
+                    Box::new(e),
+                )
+            })?;
+            // Treat 'NULL' as false value
+            let when_value = match when_value.null_count() {
+                0 => Cow::Borrowed(when_value),
+                _ => Cow::Owned(prep_null_mask_filter(when_value)),
+            };
 
             let then_value = self.when_then_expr[i]
                 .1
-                .evaluate_selection(batch, when_value)?;
+                .evaluate_selection(batch, &when_value)?;
             let then_value = match then_value {
                 ColumnarValue::Scalar(value) if value.is_null() => {
                     new_null_array(&return_type, batch.num_rows())
@@ -208,14 +216,12 @@ impl CaseExpr {
                 _ => then_value.into_array(batch.num_rows()),
             };
 
-            current_value = zip(when_value, then_value.as_ref(), current_value.as_ref())?;
+            current_value =
+                zip(&when_value, then_value.as_ref(), current_value.as_ref())?;
 
             // Succeed tuples should be filtered out for short-circuit evaluation,
             // null values for the current when expr should be kept
-            remainder = and(
-                &remainder,
-                &or_kleene(&not(when_value)?, &is_null(when_value)?)?,
-            )?;
+            remainder = and(&remainder, &not(&when_value)?)?;
         }
 
         if let Some(e) = &self.else_expr {
@@ -387,12 +393,12 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::lit;
     use crate::expressions::{binary, cast};
-    use crate::rewrite::TreeNodeRewritable;
     use arrow::array::StringArray;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -516,6 +522,35 @@ mod tests {
         let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_when_null() -> Result<()> {
+        let batch = case_test_batch()?;
+        let schema = batch.schema();
+
+        // CASE a WHEN NULL THEN 0 WHEN a THEN 123 ELSE 999 END
+        let when1 = lit(ScalarValue::Utf8(None));
+        let then1 = lit(0i32);
+        let when2 = col("a", &schema)?;
+        let then2 = lit(123i32);
+        let else_value = lit(999i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            Some(else_value),
+            schema.as_ref(),
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = as_int32_array(&result)?;
+
+        let expected =
+            &Int32Array::from(vec![Some(123), Some(123), Some(999), Some(123)]);
 
         assert_eq!(expected, result);
 
@@ -716,10 +751,10 @@ mod tests {
 
         //let valid_array = vec![true, false, false, true, false, tru
         let null_buffer = Buffer::from([0b00101001u8]);
-        let load4 = ArrayDataBuilder::new(load4.data_type().clone())
-            .len(load4.len())
+        let load4 = load4
+            .into_data()
+            .into_builder()
             .null_bit_buffer(Some(null_buffer))
-            .buffers(load4.data().buffers().to_vec())
             .build()
             .unwrap();
         let load4: Float64Array = load4.into();
@@ -870,32 +905,43 @@ mod tests {
 
         let expr2 = expr
             .clone()
-            .transform(
-                &|e| match e.as_any().downcast_ref::<crate::expressions::Literal>() {
-                    Some(lit_value) => match lit_value.value() {
-                        ScalarValue::Utf8(Some(str_value)) => {
-                            Ok(Some(lit(str_value.to_uppercase())))
-                        }
-                        _ => Ok(None),
-                    },
-                    _ => Ok(None),
-                },
-            )
+            .transform(&|e| {
+                let transformed =
+                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
+                        Some(lit_value) => match lit_value.value() {
+                            ScalarValue::Utf8(Some(str_value)) => {
+                                Some(lit(str_value.to_uppercase()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                Ok(if let Some(transformed) = transformed {
+                    Transformed::Yes(transformed)
+                } else {
+                    Transformed::No(e)
+                })
+            })
             .unwrap();
 
         let expr3 = expr
             .clone()
-            .transform_down(&|e| match e
-                .as_any()
-                .downcast_ref::<crate::expressions::Literal>()
-            {
-                Some(lit_value) => match lit_value.value() {
-                    ScalarValue::Utf8(Some(str_value)) => {
-                        Ok(Some(lit(str_value.to_uppercase())))
-                    }
-                    _ => Ok(None),
-                },
-                _ => Ok(None),
+            .transform_down(&|e| {
+                let transformed =
+                    match e.as_any().downcast_ref::<crate::expressions::Literal>() {
+                        Some(lit_value) => match lit_value.value() {
+                            ScalarValue::Utf8(Some(str_value)) => {
+                                Some(lit(str_value.to_uppercase()))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                Ok(if let Some(transformed) = transformed {
+                    Transformed::Yes(transformed)
+                } else {
+                    Transformed::No(e)
+                })
             })
             .unwrap();
 

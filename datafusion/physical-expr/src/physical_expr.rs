@@ -19,6 +19,7 @@ use arrow::datatypes::{DataType, Schema};
 
 use arrow::record_batch::RecordBatch;
 
+use datafusion_common::utils::DataPtr;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
 };
@@ -30,6 +31,7 @@ use std::fmt::{Debug, Display};
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
+use crate::intervals::Interval;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -81,7 +83,31 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         context
     }
+
+    /// Computes bounds for the expression using interval arithmetic.
+    fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Not implemented for {self}"
+        )))
+    }
+
+    /// Updates/shrinks bounds for the expression using interval arithmetic.
+    /// If constraint propagation reveals an infeasibility, returns [None] for
+    /// the child causing infeasibility. If none of the children intervals
+    /// change, may return an empty vector instead of cloning `children`.
+    fn propagate_constraints(
+        &self,
+        _interval: &Interval,
+        _children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Not implemented for {self}"
+        )))
+    }
 }
+
+/// Shared [`PhysicalExpr`].
+pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
 /// The shared context used during the analysis of an expression. Includes
 /// the boundaries for all known columns.
@@ -210,9 +236,6 @@ impl ExprBoundaries {
 
 /// Returns a copy of this expr if we change any child according to the pointer comparison.
 /// The size of `children` must be equal to the size of `PhysicalExpr::children()`.
-/// Allow the vtable address comparisons for PhysicalExpr Trait Objects，it is harmless even
-/// in the case of 'false-native'.
-#[allow(clippy::vtable_address_comparisons)]
 pub fn with_new_children_if_necessary(
     expr: Arc<dyn PhysicalExpr>,
     children: Vec<Arc<dyn PhysicalExpr>>,
@@ -226,7 +249,7 @@ pub fn with_new_children_if_necessary(
         || children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+            .any(|(c1, c2)| !Arc::data_ptr_eq(c1, c2))
     {
         expr.with_new_children(children)
     } else {
@@ -255,13 +278,13 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
 /// * `mask` - Boolean values used to determine where to put the `truthy` values
 /// * `truthy` - All values of this array are to scatter according to `mask` into final result.
 fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
-    let truthy = truthy.data();
+    let truthy = truthy.to_data();
 
     // update the mask so that any null values become false
     // (SlicesIterator doesn't respect nulls)
     let mask = and_kleene(mask, &is_not_null(mask)?)?;
 
-    let mut mutable = MutableArrayData::new(vec![truthy], true, mask.len());
+    let mut mutable = MutableArrayData::new(vec![&truthy], true, mask.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
     // fill with falsy values

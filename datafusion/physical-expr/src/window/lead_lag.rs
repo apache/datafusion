@@ -159,7 +159,7 @@ fn shift_with_default_value(
 
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(arrow::array::make_array(array.data_ref().clone()))
+        Ok(array.clone())
     } else if offset == i64::MIN || offset.abs() >= value_len {
         create_empty_array(value, array.data_type(), array.len())
     } else {
@@ -189,33 +189,25 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 
     fn update_state(
         &mut self,
-        state: &WindowAggState,
+        _state: &WindowAggState,
+        idx: usize,
         _range_columns: &[ArrayRef],
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
-        self.state.idx = state.last_calculated_index;
+        self.state.idx = idx;
         Ok(())
     }
 
-    fn get_range(&self, state: &WindowAggState, n_rows: usize) -> Result<Range<usize>> {
+    fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
         if self.shift_offset > 0 {
             let offset = self.shift_offset as usize;
-            let start = if state.last_calculated_index > offset {
-                state.last_calculated_index - offset
-            } else {
-                0
-            };
-            Ok(Range {
-                start,
-                end: state.last_calculated_index + 1,
-            })
+            let start = idx.saturating_sub(offset);
+            let end = idx + 1;
+            Ok(Range { start, end })
         } else {
             let offset = (-self.shift_offset) as usize;
-            let end = min(state.last_calculated_index + offset, n_rows);
-            Ok(Range {
-                start: state.last_calculated_index,
-                end,
-            })
+            let end = min(idx + offset, n_rows);
+            Ok(Range { start: idx, end })
         }
     }
 

@@ -38,7 +38,7 @@ CREATE TABLE test(
 ;
 
 
-query C rowsort
+query T rowsort
 select i_item_desc
 from test
 where d3_date > d2_date + INTERVAL '1 days';
@@ -50,7 +50,7 @@ f
 g
 h
 
-query C rowsort
+query T rowsort
 select i_item_desc
 from test
 where d3_date > d2_date + INTERVAL '5 days';
@@ -59,7 +59,7 @@ g
 h
 
 # date and other predicate
-query C rowsort
+query T rowsort
 select i_item_desc
 from test
 where d3_date > d2_date + INTERVAL '5 days' AND i_item_desc != 'g';
@@ -67,7 +67,7 @@ where d3_date > d2_date + INTERVAL '5 days' AND i_item_desc != 'g';
 h
 
 # swap predicate order
-query C rowsort
+query T rowsort
 select i_item_desc
 from test
 where i_item_desc != 'g' AND d3_date > d2_date + INTERVAL '5 days';
@@ -75,7 +75,7 @@ where i_item_desc != 'g' AND d3_date > d2_date + INTERVAL '5 days';
 h
 
 ## Use OR
-query C rowsort
+query T rowsort
 select i_item_desc from test
 where d3_date > d2_date + INTERVAL '5 days'
    OR d3_date = d2_date + INTERVAL '3 days';
@@ -83,3 +83,24 @@ where d3_date > d2_date + INTERVAL '5 days'
 d
 g
 h
+
+## Plan error when compare Utf8 and timestamp in where clause
+statement error Error during planning: Timestamp\(Nanosecond, Some\("\+00:00"\)\) \+ Utf8 can't be evaluated because there isn't a common type to coerce the types to
+select i_item_desc from test
+where d3_date > now() + '5 days';
+
+# DATE minus DATE
+query error DataFusion error: Error during planning: Unsupported argument types\. Can not evaluate Date32 \- Date32
+SELECT DATE '2023-04-09' - DATE '2023-04-02';
+
+# DATE minus Timestamp
+query ?
+SELECT DATE '2023-04-09' - '2000-01-01T00:00:00'::timestamp;
+----
+0 years 0 mons 8499 days 0 hours 0 mins 0.000000000 secs
+
+# Timestamp minus DATE
+query ?
+SELECT '2023-01-01T00:00:00'::timestamp - DATE '2021-01-01';
+----
+0 years 0 mons 730 days 0 hours 0 mins 0.000000000 secs

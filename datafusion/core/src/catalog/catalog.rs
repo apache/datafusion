@@ -124,6 +124,26 @@ pub trait CatalogProvider: Sync + Send {
             "Registering new schemas is not supported".to_string(),
         ))
     }
+
+    /// Removes a schema from this catalog. Implementations of this method should return
+    /// errors if the schema exists but cannot be dropped. For example, in DataFusion's
+    /// default in-memory catalog, [`MemoryCatalogProvider`], a non-empty schema
+    /// will only be successfully dropped when `cascade` is true.
+    /// This is equivalent to how DROP SCHEMA works in PostgreSQL.
+    ///
+    /// Implementations of this method should return None if schema with `name`
+    /// does not exist.
+    ///
+    /// By default returns a "Not Implemented" error
+    fn deregister_schema(
+        &self,
+        _name: &str,
+        _cascade: bool,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Err(DataFusionError::NotImplemented(
+            "Deregistering new schemas is not supported".to_string(),
+        ))
+    }
 }
 
 /// Simple in-memory implementation of a catalog.
@@ -160,13 +180,38 @@ impl CatalogProvider for MemoryCatalogProvider {
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         Ok(self.schemas.insert(name.into(), schema))
     }
+
+    fn deregister_schema(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        if let Some(schema) = self.schema(name) {
+            let table_names = schema.table_names();
+            match (table_names.is_empty(), cascade) {
+                (true, _) | (false, true) => {
+                    let (_, removed) = self.schemas.remove(name).unwrap();
+                    Ok(Some(removed))
+                }
+                (false, false) => Err(DataFusionError::Execution(format!(
+                    "Cannot drop schema {} because other tables depend on it: {}",
+                    name,
+                    itertools::join(table_names.iter(), ", ")
+                ))),
+            }
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::schema::MemorySchemaProvider;
-
     use super::*;
+    use crate::catalog::schema::MemorySchemaProvider;
+    use crate::datasource::empty::EmptyTable;
+    use crate::datasource::TableProvider;
+    use arrow::datatypes::Schema;
 
     #[test]
     fn default_register_schema_not_supported() {
@@ -193,5 +238,39 @@ mod tests {
             Ok(_) => panic!("unexpected OK"),
             Err(e) => assert_eq!(e.to_string(), "This feature is not implemented: Registering new schemas is not supported"),
         };
+    }
+
+    #[test]
+    fn memory_catalog_dereg_nonempty_schema() {
+        let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
+
+        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
+        let test_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
+            as Arc<dyn TableProvider>;
+        schema.register_table("t".into(), test_table).unwrap();
+
+        cat.register_schema("foo", schema.clone()).unwrap();
+
+        assert!(
+            cat.deregister_schema("foo", false).is_err(),
+            "dropping empty schema without cascade should error"
+        );
+        assert!(cat.deregister_schema("foo", true).unwrap().is_some());
+    }
+
+    #[test]
+    fn memory_catalog_dereg_empty_schema() {
+        let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
+
+        let schema = Arc::new(MemorySchemaProvider::new()) as Arc<dyn SchemaProvider>;
+        cat.register_schema("foo", schema.clone()).unwrap();
+
+        assert!(cat.deregister_schema("foo", false).unwrap().is_some());
+    }
+
+    #[test]
+    fn memory_catalog_dereg_missing() {
+        let cat = Arc::new(MemoryCatalogProvider::new()) as Arc<dyn CatalogProvider>;
+        assert!(cat.deregister_schema("foo", false).unwrap().is_none());
     }
 }

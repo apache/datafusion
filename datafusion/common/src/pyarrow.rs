@@ -17,13 +17,15 @@
 
 //! PyArrow
 
-use crate::{DataFusionError, ScalarValue};
 use arrow::array::ArrayData;
-use arrow::pyarrow::PyArrowConvert;
+use arrow::pyarrow::{FromPyArrow, ToPyArrow};
+use arrow_array::Array;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::PyErr;
 use pyo3::types::PyList;
 use pyo3::{FromPyObject, IntoPy, PyAny, PyObject, PyResult, Python};
+
+use crate::{DataFusionError, ScalarValue};
 
 impl From<DataFusionError> for PyErr {
     fn from(err: DataFusionError) -> PyErr {
@@ -31,7 +33,7 @@ impl From<DataFusionError> for PyErr {
     }
 }
 
-impl PyArrowConvert for ScalarValue {
+impl FromPyArrow for ScalarValue {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let py = value.py();
         let typ = value.getattr("type")?;
@@ -48,11 +50,13 @@ impl PyArrowConvert for ScalarValue {
 
         Ok(scalar)
     }
+}
 
+impl ToPyArrow for ScalarValue {
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
         let array = self.to_array();
         // convert to pyarrow array using C data interface
-        let pyarray = array.data().to_pyarrow(py)?;
+        let pyarray = array.to_data().to_pyarrow(py)?;
         let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
 
         Ok(pyscalar)
@@ -73,10 +77,11 @@ impl IntoPy<PyObject> for ScalarValue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use pyo3::prepare_freethreaded_python;
     use pyo3::py_run;
     use pyo3::types::PyDict;
+
+    use super::*;
 
     fn init_python() {
         prepare_freethreaded_python();

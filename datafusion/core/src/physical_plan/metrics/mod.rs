@@ -19,8 +19,6 @@
 
 mod baseline;
 mod builder;
-mod composite;
-mod tracker;
 mod value;
 
 use parking_lot::Mutex;
@@ -35,12 +33,10 @@ use hashbrown::HashMap;
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use composite::CompositeMetricsSet;
-pub use tracker::MemTrackingMetrics;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
-/// [`super::ExecutionPlan`] execution.
+/// [`ExecutionPlan`] execution.
 ///
 /// Typically [`Metric`]s are not created directly, but instead
 /// are created using [`MetricBuilder`] or methods on
@@ -66,17 +62,19 @@ pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 ///  // As well as from the metrics set
 ///  assert_eq!(metrics.clone_inner().output_rows(), Some(13));
 /// ```
+///
+/// [`ExecutionPlan`]: super::ExecutionPlan
 
 #[derive(Debug)]
 pub struct Metric {
-    /// The value the metric
+    /// The value of the metric
     value: MetricValue,
 
     /// arbitrary name=value pairs identifiying this metric
     labels: Vec<Label>,
 
     /// To which partition of an operators output did this metric
-    /// apply? If None means all partitions.
+    /// apply? If `None` then means all partitions.
     partition: Option<usize>,
 }
 
@@ -150,23 +148,25 @@ impl Metric {
         &self.labels
     }
 
-    /// return a reference to the value of this metric
+    /// Return a reference to the value of this metric
     pub fn value(&self) -> &MetricValue {
         &self.value
     }
 
-    /// return a mutable reference to the value of this metric
+    /// Return a mutable reference to the value of this metric
     pub fn value_mut(&mut self) -> &mut MetricValue {
         &mut self.value
     }
 
-    /// return a reference to the partition
+    /// Return a reference to the partition
     pub fn partition(&self) -> Option<usize> {
         self.partition
     }
 }
 
 /// A snapshot of the metrics for a particular ([`ExecutionPlan`]).
+///
+/// [`ExecutionPlan`]: super::ExecutionPlan
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
     metrics: Vec<Arc<Metric>>,
@@ -183,41 +183,41 @@ impl MetricsSet {
         self.metrics.push(metric)
     }
 
-    /// Returns an interator across all metrics
+    /// Returns an iterator across all metrics
     pub fn iter(&self) -> impl Iterator<Item = &Arc<Metric>> {
         self.metrics.iter()
     }
 
-    /// convenience: return the number of rows produced, aggregated
-    /// across partitions or None if no metric is present
+    /// Convenience: return the number of rows produced, aggregated
+    /// across partitions or `None` if no metric is present
     pub fn output_rows(&self) -> Option<usize> {
         self.sum(|metric| matches!(metric.value(), MetricValue::OutputRows(_)))
             .map(|v| v.as_usize())
     }
 
-    /// convenience: return the count of spills, aggregated
-    /// across partitions or None if no metric is present
+    /// Convenience: return the count of spills, aggregated
+    /// across partitions or `None` if no metric is present
     pub fn spill_count(&self) -> Option<usize> {
         self.sum(|metric| matches!(metric.value(), MetricValue::SpillCount(_)))
             .map(|v| v.as_usize())
     }
 
-    /// convenience: return the total byte size of spills, aggregated
-    /// across partitions or None if no metric is present
+    /// Convenience: return the total byte size of spills, aggregated
+    /// across partitions or `None` if no metric is present
     pub fn spilled_bytes(&self) -> Option<usize> {
         self.sum(|metric| matches!(metric.value(), MetricValue::SpilledBytes(_)))
             .map(|v| v.as_usize())
     }
 
-    /// convenience: return the amount of elapsed CPU time spent,
-    /// aggregated across partitions or None if no metric is present
+    /// Convenience: return the amount of elapsed CPU time spent,
+    /// aggregated across partitions or `None` if no metric is present
     pub fn elapsed_compute(&self) -> Option<usize> {
         self.sum(|metric| matches!(metric.value(), MetricValue::ElapsedCompute(_)))
             .map(|v| v.as_usize())
     }
 
     /// Sums the values for metrics for which `f(metric)` returns
-    /// true, and returns the value. Returns None if no metrics match
+    /// `true`, and returns the value. Returns `None` if no metrics match
     /// the predicate.
     pub fn sum<F>(&self, mut f: F) -> Option<MetricValue>
     where
@@ -241,8 +241,8 @@ impl MetricsSet {
         Some(accum)
     }
 
-    /// returns the sum of all the metrics with the specified name
-    /// the returned set.
+    /// Returns the sum of all the metrics with the specified name
+    /// in the returned set.
     pub fn sum_by_name(&self, metric_name: &str) -> Option<MetricValue> {
         self.sum(|m| match m.value() {
             MetricValue::Count { name, .. } => name == metric_name,
@@ -258,7 +258,7 @@ impl MetricsSet {
         })
     }
 
-    /// Returns returns a new derived `MetricsSet` where all metrics
+    /// Returns a new derived `MetricsSet` where all metrics
     /// that had the same name have been
     /// aggregated together. The resulting `MetricsSet` has all
     /// metrics with `Partition=None`
@@ -298,7 +298,7 @@ impl MetricsSet {
         self
     }
 
-    /// remove all timestamp metrics (for more compact display
+    /// Remove all timestamp metrics (for more compact display)
     pub fn timestamps_removed(self) -> Self {
         let Self { metrics } = self;
 
@@ -312,7 +312,7 @@ impl MetricsSet {
 }
 
 impl Display for MetricsSet {
-    /// format the MetricsSet as a single string
+    /// Format the [`MetricsSet`] as a single string
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut is_first = true;
         for i in self.metrics.iter() {
@@ -328,15 +328,17 @@ impl Display for MetricsSet {
     }
 }
 
-/// A set of [`Metric`] for an individual "operator" (e.g. `&dyn
+/// A set of [`Metric`]s for an individual "operator" (e.g. `&dyn
 /// ExecutionPlan`).
 ///
-/// This structure is intended as a convenience for [`super::ExecutionPlan`]
+/// This structure is intended as a convenience for [`ExecutionPlan`]
 /// implementations so they can generate different streams for multiple
 /// partitions but easily report them together.
 ///
 /// Each `clone()` of this structure will add metrics to the same
 /// underlying metrics set
+///
+/// [`ExecutionPlan`]: super::ExecutionPlan
 #[derive(Default, Debug, Clone)]
 pub struct ExecutionPlanMetricsSet {
     inner: Arc<Mutex<MetricsSet>>,
@@ -355,14 +357,14 @@ impl ExecutionPlanMetricsSet {
         self.inner.lock().push(metric)
     }
 
-    /// Return a clone of the inner MetricsSet
+    /// Return a clone of the inner [`MetricsSet`]
     pub fn clone_inner(&self) -> MetricsSet {
         let guard = self.inner.lock();
         (*guard).clone()
     }
 }
 
-/// name=value pairs identifiying a metric. This concept is called various things
+/// `name=value` pairs identifiying a metric. This concept is called various things
 /// in various different systems:
 ///
 /// "labels" in
@@ -374,7 +376,7 @@ impl ExecutionPlanMetricsSet {
 /// etc.
 ///
 /// As the name and value are expected to mostly be constant strings,
-/// use a `Cow` to avoid copying / allocations in this common case.
+/// use a [`Cow`] to avoid copying / allocations in this common case.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
     name: Cow<'static, str>,
@@ -382,7 +384,7 @@ pub struct Label {
 }
 
 impl Label {
-    /// Create a new Label
+    /// Create a new [`Label`]
     pub fn new(
         name: impl Into<Cow<'static, str>>,
         value: impl Into<Cow<'static, str>>,
@@ -392,12 +394,12 @@ impl Label {
         Self { name, value }
     }
 
-    /// Return the name of this label
+    /// Returns the name of this label
     pub fn name(&self) -> &str {
         self.name.as_ref()
     }
 
-    /// Return the value of this label
+    /// Returns the value of this label
     pub fn value(&self) -> &str {
         self.value.as_ref()
     }

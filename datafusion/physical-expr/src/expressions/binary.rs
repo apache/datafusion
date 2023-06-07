@@ -19,13 +19,13 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
-use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
     add_dyn, add_scalar_dyn as add_dyn_scalar, divide_dyn_opt,
-    divide_scalar_dyn as divide_dyn_scalar, modulus, modulus_scalar, multiply_dyn,
+    divide_scalar_dyn as divide_dyn_scalar, modulus_dyn,
+    modulus_scalar_dyn as modulus_dyn_scalar, multiply_dyn,
     multiply_scalar_dyn as multiply_dyn_scalar, subtract_dyn,
     subtract_scalar_dyn as subtract_dyn_scalar,
 };
@@ -48,38 +48,51 @@ use arrow::compute::kernels::comparison::{
     eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
     lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
-use arrow::compute::kernels::comparison::{
-    eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
-};
+use arrow::compute::{cast, CastOptions};
 use arrow::datatypes::*;
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
+
+use datafusion_expr::type_coercion::{is_decimal, is_timestamp, is_utf8_or_large_utf8};
 use kernels::{
-    bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
-    bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
-    bitwise_xor, bitwise_xor_scalar,
+    bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
+    bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
+    bitwise_shift_right_dyn_scalar, bitwise_xor_dyn, bitwise_xor_dyn_scalar,
 };
 use kernels_arrow::{
-    add_decimal_dyn_scalar, add_dyn_decimal, divide_decimal_dyn_scalar,
-    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_bool,
-    is_distinct_from_decimal, is_distinct_from_null, is_distinct_from_utf8,
-    is_not_distinct_from, is_not_distinct_from_bool, is_not_distinct_from_decimal,
-    is_not_distinct_from_null, is_not_distinct_from_utf8, modulus_decimal,
-    modulus_decimal_scalar, multiply_decimal_dyn_scalar, multiply_dyn_decimal,
-    subtract_decimal_dyn_scalar, subtract_dyn_decimal,
+    add_decimal_dyn_scalar, add_dyn_decimal, add_dyn_temporal, divide_decimal_dyn_scalar,
+    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_binary,
+    is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_f32,
+    is_distinct_from_f64, is_distinct_from_null, is_distinct_from_utf8,
+    is_not_distinct_from, is_not_distinct_from_binary, is_not_distinct_from_bool,
+    is_not_distinct_from_decimal, is_not_distinct_from_f32, is_not_distinct_from_f64,
+    is_not_distinct_from_null, is_not_distinct_from_utf8, modulus_decimal_dyn_scalar,
+    modulus_dyn_decimal, multiply_decimal_dyn_scalar, multiply_dyn_decimal,
+    subtract_decimal_dyn_scalar, subtract_dyn_decimal, subtract_dyn_temporal,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
+use self::kernels_arrow::{
+    add_dyn_temporal_left_scalar, add_dyn_temporal_right_scalar,
+    subtract_dyn_temporal_left_scalar, subtract_dyn_temporal_right_scalar,
+};
+
 use super::column::Column;
+use crate::expressions::cast_column;
+use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use crate::intervals::{apply_operator, Interval};
 use crate::physical_expr::down_cast_any_ref;
 use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
-use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
+use datafusion_common::cast::as_boolean_array;
+
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::type_coercion::binary::binary_operator_data_type;
+use datafusion_expr::type_coercion::binary::{
+    coercion_decimal_mathematics_type, get_result_type,
+};
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
@@ -118,33 +131,44 @@ impl BinaryExpr {
 
 impl std::fmt::Display for BinaryExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} {} {}", self.left, self.op, self.right)
+        // Put parentheses around child binary expressions so that we can see the difference
+        // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
+        // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
+        // equivalent and the parentheses are not necessary.
+
+        fn write_child(
+            f: &mut std::fmt::Formatter,
+            expr: &dyn PhysicalExpr,
+            precedence: u8,
+        ) -> std::fmt::Result {
+            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                let p = child.op.precedence();
+                if p == 0 || p < precedence {
+                    write!(f, "({child})")?;
+                } else {
+                    write!(f, "{child}")?;
+                }
+            } else {
+                write!(f, "{expr}")?;
+            }
+
+            Ok(())
+        }
+
+        let precedence = self.op.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
     }
 }
 
 macro_rules! compute_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(v_i128), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(ll, v_i128)?))
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}($LEFT, v_i128)?))
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
-        }
-    }};
-}
-
-macro_rules! compute_decimal_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = as_decimal128_array($LEFT).unwrap();
-        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
-                ll,
-                $RIGHT.try_into()?,
-            )?))
-        } else {
-            // when the $RIGHT is a NULL, generate a NULL array of LEFT's datatype
-            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
         }
     }};
 }
@@ -157,16 +181,44 @@ macro_rules! compute_decimal_op {
     }};
 }
 
+macro_rules! compute_f32_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _f32>]}(ll, rr)?))
+    }};
+}
+
+macro_rules! compute_f64_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _f64>]}(ll, rr)?))
+    }};
+}
+
 macro_rules! compute_null_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _null>]}(&ll, &rr)?))
     }};
 }
@@ -177,12 +229,27 @@ macro_rules! compute_utf8_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new(paste::expr! {[<$OP _utf8>]}(&ll, &rr)?))
+    }};
+}
+
+/// Invoke a compute kernel on a pair of binary data arrays
+macro_rules! compute_binary_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast left side array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast right side array");
+        Ok(Arc::new(paste::expr! {[<$OP _binary>]}(&ll, &rr)?))
     }};
 }
 
@@ -192,8 +259,10 @@ macro_rules! compute_utf8_op_scalar {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+            .expect("compute_op failed to downcast left side array");
+        if let ScalarValue::Utf8(Some(string_value))
+        | ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT
+        {
             Ok(Arc::new(paste::expr! {[<$OP _utf8_scalar>]}(
                 &ll,
                 &string_value,
@@ -281,25 +350,6 @@ macro_rules! compute_bool_op {
     }};
 }
 
-/// Invoke a compute kernel on a data array and a scalar value
-/// LEFT is array, RIGHT is scalar value
-macro_rules! compute_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        if $RIGHT.is_null() {
-            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
-        } else {
-            let ll = $LEFT
-                .as_any()
-                .downcast_ref::<$DT>()
-                .expect("compute_op failed to downcast array");
-            Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
-                &ll,
-                $RIGHT.try_into()?,
-            )?))
-        }
-    }};
-}
-
 /// Invoke a dyn compute kernel on a data array and a scalar value
 /// LEFT is Primitive or Dictionary array of numeric values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
@@ -345,12 +395,14 @@ macro_rules! compute_primitive_op_dyn_scalar {
 /// LEFT is Decimal or Dictionary array of decimal values, RIGHT is scalar value
 /// OP_TYPE is the return type of scalar function
 macro_rules! compute_primitive_decimal_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr, $RET_TYPE:expr) => {{
         // generate the scalar function name, such as add_decimal_dyn_scalar,
         // from the $OP parameter (which could have a value of add) and the
         // suffix _decimal_dyn_scalar
         if let Some(value) = $RIGHT {
-            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}($LEFT, value)?)
+            Ok(paste::expr! {[<$OP _decimal_dyn_scalar>]}(
+                $LEFT, value, $RET_TYPE,
+            )?)
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -365,11 +417,11 @@ macro_rules! compute_op {
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast left side array");
         let rr = $RIGHT
             .as_any()
             .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
+            .expect("compute_op failed to downcast right side array");
         Ok(Arc::new($OP(&ll, &rr)?))
     }};
     // invoke unary operator
@@ -386,6 +438,7 @@ macro_rules! binary_string_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on string arrays",
                 other, stringify!($OP)
@@ -397,41 +450,16 @@ macro_rules! binary_string_array_op {
 /// Invoke a compute kernel on a pair of arrays
 /// The binary_primitive_array_op macro only evaluates for primitive types
 /// like integers and floats.
-macro_rules! binary_primitive_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
-            DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_op!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_op!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_op!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_op!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
-            other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for binary operation '{}' on primitive arrays",
-                other, stringify!($OP)
-            ))),
-        }
-    }};
-}
-
-/// Invoke a compute kernel on a pair of arrays
-/// The binary_primitive_array_op macro only evaluates for primitive types
-/// like integers and floats.
 macro_rules! binary_primitive_array_op_dyn {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         match $LEFT.data_type() {
             DataType::Decimal128(_, _) => {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             DataType::Dictionary(_, value_type)
                 if matches!(value_type.as_ref(), &DataType::Decimal128(_, _)) =>
             {
-                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT)?)
+                Ok(paste::expr! {[<$OP _decimal>]}(&$LEFT, &$RIGHT, $RET_TYPE)?)
             }
             _ => Ok(Arc::new(
                 $OP(&$LEFT, &$RIGHT).map_err(|err| DataFusionError::ArrowError(err))?,
@@ -444,13 +472,13 @@ macro_rules! binary_primitive_array_op_dyn {
 /// The binary_primitive_array_op_dyn_scalar macro only evaluates for primitive
 /// types like integers and floats.
 macro_rules! binary_primitive_array_op_dyn_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $RET_TYPE:expr) => {{
         // unwrap underlying (non dictionary) value
         let right = unwrap_dict_value($RIGHT);
         let op_type = $LEFT.data_type();
 
         let result: Result<Arc<dyn Array>> = match right {
-            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type),
+            ScalarValue::Decimal128(v, _, _) => compute_primitive_decimal_op_dyn_scalar!($LEFT, v, $OP, op_type, $RET_TYPE),
             ScalarValue::Int8(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int8Type),
             ScalarValue::Int16(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int16Type),
             ScalarValue::Int32(v) => compute_primitive_op_dyn_scalar!($LEFT, v, $OP, op_type, Int32Type),
@@ -471,32 +499,6 @@ macro_rules! binary_primitive_array_op_dyn_scalar {
     }}
 }
 
-/// Invoke a compute kernel on an array and a scalar
-/// The binary_primitive_array_op_scalar macro only evaluates for primitive
-/// types like integers and floats.
-macro_rules! binary_primitive_array_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Decimal128(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
-            DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_op_scalar!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
-            other => Err(DataFusionError::Internal(format!(
-                "Data type {:?} not supported for scalar operation '{}' on primitive array",
-                other, stringify!($OP)
-            ))),
-        };
-        Some(result)
-    }};
-}
-
 /// The binary_array_op macro includes types that extend beyond the primitive,
 /// such as Utf8 strings.
 #[macro_export]
@@ -513,9 +515,13 @@ macro_rules! binary_array_op {
             DataType::UInt16 => compute_op!($LEFT, $RIGHT, $OP, UInt16Array),
             DataType::UInt32 => compute_op!($LEFT, $RIGHT, $OP, UInt32Array),
             DataType::UInt64 => compute_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
+            DataType::Float32 => compute_f32_op!($LEFT, $RIGHT, $OP, Float32Array),
+            DataType::Float64 => compute_f64_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
+            DataType::Binary => compute_binary_op!($LEFT, $RIGHT, $OP, BinaryArray),
+            DataType::LargeBinary => compute_binary_op!($LEFT, $RIGHT, $OP, LargeBinaryArray),
+            DataType::LargeUtf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, LargeStringArray),
+
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
@@ -632,7 +638,7 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+        if let ScalarValue::Utf8(Some(string_value))|ScalarValue::LargeUtf8(Some(string_value)) = $RIGHT {
             let flag = if $FLAG { Some("i") } else { None };
             let mut array =
                 paste::expr! {[<$OP _utf8_scalar>]}(&ll, &string_value, flag)?;
@@ -656,7 +662,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
-        binary_operator_data_type(
+        get_result_type(
             &self.left.data_type(input_schema)?,
             &self.op,
             &self.right.data_type(input_schema)?,
@@ -673,35 +679,35 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = left_value.data_type();
         let right_data_type = right_value.data_type();
 
-        match (&left_value, &left_data_type, &right_value, &right_data_type) {
-            // Types are equal => valid
-            (_, l, _, r) if l == r => {}
-            // Allow comparing a dictionary value with its corresponding scalar value
-            (
-                ColumnarValue::Array(_),
-                DataType::Dictionary(_, dict_t),
-                ColumnarValue::Scalar(_),
-                scalar_t,
-            )
-            | (
-                ColumnarValue::Scalar(_),
-                scalar_t,
-                ColumnarValue::Array(_),
-                DataType::Dictionary(_, dict_t),
-            ) if dict_t.as_ref() == scalar_t => {}
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
-                    self.op, left_data_type, right_data_type
-                )));
-            }
-        }
+        let schema = batch.schema();
+        let input_schema = schema.as_ref();
+
+        // Coerce decimal types to the same scale and precision
+        let coerced_type = coercion_decimal_mathematics_type(
+            &self.op,
+            &left_data_type,
+            &right_data_type,
+        );
+        let (left_value, right_value) = if let Some(coerced_type) = coerced_type {
+            let options = CastOptions::default();
+            let left_value = cast_column(&left_value, &coerced_type, Some(&options))?;
+            let right_value = cast_column(&right_value, &coerced_type, Some(&options))?;
+            (left_value, right_value)
+        } else {
+            // No need to coerce if it is not decimal or not math operation
+            (left_value, right_value)
+        };
+
+        let result_type = self.data_type(input_schema)?;
 
         // Attempt to use special kernels if one input is scalar and the other is an array
         let scalar_result = match (&left_value, &right_value) {
             (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
                 // if left is array and right is literal - use scalar operations
-                self.evaluate_array_scalar(array, scalar.clone())?
+                self.evaluate_array_scalar(array, scalar.clone(), &result_type)?
+                    .map(|r| {
+                        r.and_then(|a| to_result_type_array(&self.op, a, &result_type))
+                    })
             }
             (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
                 // if right is literal and left is array - reverse operator and parameters
@@ -719,8 +725,14 @@ impl PhysicalExpr for BinaryExpr {
             left_value.into_array(batch.num_rows()),
             right_value.into_array(batch.num_rows()),
         );
-        self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
-            .map(|a| ColumnarValue::Array(a))
+        self.evaluate_with_resolved_args(
+            left,
+            &left_data_type,
+            right,
+            &right_data_type,
+            &result_type,
+        )
+        .map(|a| ColumnarValue::Array(a))
     }
 
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -785,6 +797,45 @@ impl PhysicalExpr for BinaryExpr {
             }
             _ => context.with_boundaries(None),
         }
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        // Get children intervals:
+        let left_interval = children[0];
+        let right_interval = children[1];
+        // Calculate current node's interval:
+        apply_operator(&self.op, left_interval, right_interval)
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Vec<Option<Interval>>> {
+        // Get children intervals. Graph brings
+        let left_interval = children[0];
+        let right_interval = children[1];
+        let (left, right) = if self.op.is_logic_operator() {
+            // TODO: Currently, this implementation only supports the AND operator
+            //       and does not require any further propagation. In the future,
+            //       upon adding support for additional logical operators, this
+            //       method will require modification to support propagating the
+            //       changes accordingly.
+            return Ok(vec![]);
+        } else if self.op.is_comparison_operator() {
+            if interval == &Interval::CERTAINLY_FALSE {
+                // TODO: We will handle strictly false clauses by negating
+                //       the comparison operator (e.g. GT to LE, LT to GE)
+                //       once open/closed intervals are supported.
+                return Ok(vec![]);
+            }
+            // Propagate the comparison operator.
+            propagate_comparison(&self.op, left_interval, right_interval)?
+        } else {
+            // Propagate the arithmetic operator.
+            propagate_arithmetic(&self.op, interval, left_interval, right_interval)?
+        };
+        Ok(vec![left, right])
     }
 }
 
@@ -957,16 +1008,16 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::UInt64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
-            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
-            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
-            ScalarValue::Time32Second(_) => compute_op_scalar!($LEFT, right, $OP, Time32SecondArray),
-            ScalarValue::Time32Millisecond(_) => compute_op_scalar!($LEFT, right, $OP, Time32MillisecondArray),
-            ScalarValue::Time64Microsecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64MicrosecondArray),
-            ScalarValue::Time64Nanosecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64NanosecondArray),
-            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
-            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
-            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),
-            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampNanosecondArray),
+            ScalarValue::Date32(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Date64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time32Second(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time32Millisecond(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time64Microsecond(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::Time64Nanosecond(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampSecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampMillisecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampMicrosecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::TimestampNanosecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on dyn array",
                 other, stringify!($OP)))
@@ -990,6 +1041,37 @@ pub(crate) fn array_eq_scalar(lhs: &dyn Array, rhs: &ScalarValue) -> Result<Arra
     )?
 }
 
+/// Casts dictionary array to result type for binary numerical operators. Such operators
+/// between array and scalar produce a dictionary array other than primitive array of the
+/// same operators between array and array. This leads to inconsistent result types causing
+/// errors in the following query execution. For such operators between array and scalar,
+/// we cast the dictionary array to primitive array.
+fn to_result_type_array(
+    op: &Operator,
+    array: ArrayRef,
+    result_type: &DataType,
+) -> Result<ArrayRef> {
+    if array.data_type() == result_type {
+        Ok(array)
+    } else if op.is_numerical_operators() {
+        match array.data_type() {
+            DataType::Dictionary(_, value_type) => {
+                if value_type.as_ref() == result_type {
+                    Ok(cast(&array, result_type)?)
+                } else {
+                    Err(DataFusionError::Internal(format!(
+                            "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
+                            value_type, result_type, op
+                        )))
+                }
+            }
+            _ => Ok(array),
+        }
+    } else {
+        Ok(array)
+    }
+}
+
 impl BinaryExpr {
     /// Evaluate the expression of the left input is an array and
     /// right is literal - use scalar operations
@@ -997,76 +1079,71 @@ impl BinaryExpr {
         &self,
         array: &dyn Array,
         scalar: ScalarValue,
+        result_type: &DataType,
     ) -> Result<Option<Result<ArrayRef>>> {
+        use Operator::*;
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
-            Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
+            Lt => binary_array_op_dyn_scalar!(array, scalar, lt, bool_type),
+            LtEq => binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type),
+            Gt => binary_array_op_dyn_scalar!(array, scalar, gt, bool_type),
+            GtEq => binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type),
+            Eq => binary_array_op_dyn_scalar!(array, scalar, eq, bool_type),
+            NotEq => binary_array_op_dyn_scalar!(array, scalar, neq, bool_type),
+            Plus => {
+                binary_primitive_array_op_dyn_scalar!(array, scalar, add, result_type)
             }
-            Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
+            Minus => binary_primitive_array_op_dyn_scalar!(
+                array,
+                scalar,
+                subtract,
+                result_type
+            ),
+            Multiply => binary_primitive_array_op_dyn_scalar!(
+                array,
+                scalar,
+                multiply,
+                result_type
+            ),
+            Divide => {
+                binary_primitive_array_op_dyn_scalar!(array, scalar, divide, result_type)
             }
-            Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
+            Modulo => {
+                binary_primitive_array_op_dyn_scalar!(array, scalar, modulus, result_type)
             }
-            Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
-            }
-            Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
-            }
-            Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
-            }
-            Operator::Plus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, add)
-            }
-            Operator::Minus => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, subtract)
-            }
-            Operator::Multiply => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, multiply)
-            }
-            Operator::Divide => {
-                binary_primitive_array_op_dyn_scalar!(array, scalar, divide)
-            }
-            Operator::Modulo => {
-                // todo: change to binary_primitive_array_op_dyn_scalar! once modulo is implemented
-                binary_primitive_array_op_scalar!(array, scalar, modulus)
-            }
-            Operator::RegexMatch => binary_string_array_flag_op_scalar!(
+            RegexMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 false,
                 false
             ),
-            Operator::RegexIMatch => binary_string_array_flag_op_scalar!(
+            RegexIMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 false,
                 true
             ),
-            Operator::RegexNotMatch => binary_string_array_flag_op_scalar!(
+            RegexNotMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 true,
                 false
             ),
-            Operator::RegexNotIMatch => binary_string_array_flag_op_scalar!(
+            RegexNotIMatch => binary_string_array_flag_op_scalar!(
                 array,
                 scalar,
                 regexp_is_match,
                 true,
                 true
             ),
-            Operator::BitwiseAnd => bitwise_and_scalar(array, scalar),
-            Operator::BitwiseOr => bitwise_or_scalar(array, scalar),
-            Operator::BitwiseXor => bitwise_xor_scalar(array, scalar),
-            Operator::BitwiseShiftRight => bitwise_shift_right_scalar(array, scalar),
-            Operator::BitwiseShiftLeft => bitwise_shift_left_scalar(array, scalar),
+            BitwiseAnd => bitwise_and_dyn_scalar(array, scalar),
+            BitwiseOr => bitwise_or_dyn_scalar(array, scalar),
+            BitwiseXor => bitwise_xor_dyn_scalar(array, scalar),
+            BitwiseShiftRight => bitwise_shift_right_dyn_scalar(array, scalar),
+            BitwiseShiftLeft => bitwise_shift_left_dyn_scalar(array, scalar),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1081,26 +1158,15 @@ impl BinaryExpr {
         scalar: ScalarValue,
         array: &ArrayRef,
     ) -> Result<Option<Result<ArrayRef>>> {
+        use Operator::*;
         let bool_type = &DataType::Boolean;
         let scalar_result = match &self.op {
-            Operator::Lt => {
-                binary_array_op_dyn_scalar!(array, scalar, gt, bool_type)
-            }
-            Operator::LtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type)
-            }
-            Operator::Gt => {
-                binary_array_op_dyn_scalar!(array, scalar, lt, bool_type)
-            }
-            Operator::GtEq => {
-                binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type)
-            }
-            Operator::Eq => {
-                binary_array_op_dyn_scalar!(array, scalar, eq, bool_type)
-            }
-            Operator::NotEq => {
-                binary_array_op_dyn_scalar!(array, scalar, neq, bool_type)
-            }
+            Lt => binary_array_op_dyn_scalar!(array, scalar, gt, bool_type),
+            LtEq => binary_array_op_dyn_scalar!(array, scalar, gt_eq, bool_type),
+            Gt => binary_array_op_dyn_scalar!(array, scalar, lt, bool_type),
+            GtEq => binary_array_op_dyn_scalar!(array, scalar, lt_eq, bool_type),
+            Eq => binary_array_op_dyn_scalar!(array, scalar, eq, bool_type),
+            NotEq => binary_array_op_dyn_scalar!(array, scalar, neq, bool_type),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1113,15 +1179,17 @@ impl BinaryExpr {
         left_data_type: &DataType,
         right: Arc<dyn Array>,
         right_data_type: &DataType,
+        result_type: &DataType,
     ) -> Result<ArrayRef> {
+        use Operator::*;
         match &self.op {
-            Operator::Lt => lt_dyn(&left, &right),
-            Operator::LtEq => lt_eq_dyn(&left, &right),
-            Operator::Gt => gt_dyn(&left, &right),
-            Operator::GtEq => gt_eq_dyn(&left, &right),
-            Operator::Eq => eq_dyn(&left, &right),
-            Operator::NotEq => neq_dyn(&left, &right),
-            Operator::IsDistinctFrom => {
+            Lt => lt_dyn(&left, &right),
+            LtEq => lt_eq_dyn(&left, &right),
+            Gt => gt_dyn(&left, &right),
+            GtEq => gt_eq_dyn(&left, &right),
+            Eq => eq_dyn(&left, &right),
+            NotEq => neq_dyn(&left, &right),
+            IsDistinctFrom => {
                 match (left_data_type, right_data_type) {
                     // exchange lhs and rhs when lhs is Null, since `binary_array_op` is
                     // always try to down cast array according to $LEFT expression.
@@ -1131,19 +1199,21 @@ impl BinaryExpr {
                     _ => binary_array_op!(left, right, is_distinct_from),
                 }
             }
-            Operator::IsNotDistinctFrom => {
-                binary_array_op!(left, right, is_not_distinct_from)
+            IsNotDistinctFrom => binary_array_op!(left, right, is_not_distinct_from),
+            Plus => binary_primitive_array_op_dyn!(left, right, add_dyn, result_type),
+            Minus => {
+                binary_primitive_array_op_dyn!(left, right, subtract_dyn, result_type)
             }
-            Operator::Plus => binary_primitive_array_op_dyn!(left, right, add_dyn),
-            Operator::Minus => binary_primitive_array_op_dyn!(left, right, subtract_dyn),
-            Operator::Multiply => {
-                binary_primitive_array_op_dyn!(left, right, multiply_dyn)
+            Multiply => {
+                binary_primitive_array_op_dyn!(left, right, multiply_dyn, result_type)
             }
-            Operator::Divide => {
-                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt)
+            Divide => {
+                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt, result_type)
             }
-            Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
-            Operator::And => {
+            Modulo => {
+                binary_primitive_array_op_dyn!(left, right, modulus_dyn, result_type)
+            }
+            And => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, and_kleene)
                 } else {
@@ -1155,7 +1225,7 @@ impl BinaryExpr {
                     )))
                 }
             }
-            Operator::Or => {
+            Or => {
                 if left_data_type == &DataType::Boolean {
                     boolean_op!(&left, &right, or_kleene)
                 } else {
@@ -1165,24 +1235,24 @@ impl BinaryExpr {
                     )))
                 }
             }
-            Operator::RegexMatch => {
+            RegexMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, false, false)
             }
-            Operator::RegexIMatch => {
+            RegexIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, false, true)
             }
-            Operator::RegexNotMatch => {
+            RegexNotMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, false)
             }
-            Operator::RegexNotIMatch => {
+            RegexNotIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
             }
-            Operator::BitwiseAnd => bitwise_and(left, right),
-            Operator::BitwiseOr => bitwise_or(left, right),
-            Operator::BitwiseXor => bitwise_xor(left, right),
-            Operator::BitwiseShiftRight => bitwise_shift_right(left, right),
-            Operator::BitwiseShiftLeft => bitwise_shift_left(left, right),
-            Operator::StringConcat => {
+            BitwiseAnd => bitwise_and_dyn(left, right),
+            BitwiseOr => bitwise_or_dyn(left, right),
+            BitwiseXor => bitwise_xor_dyn(left, right),
+            BitwiseShiftRight => bitwise_shift_right_dyn(left, right),
+            BitwiseShiftLeft => bitwise_shift_left_dyn(left, right),
+            StringConcat => {
                 binary_string_array_op!(left, right, concat_elements)
             }
         }
@@ -1200,12 +1270,50 @@ pub fn binary(
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let lhs_type = &lhs.data_type(input_schema)?;
     let rhs_type = &rhs.data_type(input_schema)?;
-    if !lhs_type.eq(rhs_type) {
+    if (is_utf8_or_large_utf8(lhs_type) && is_timestamp(rhs_type))
+        || (is_timestamp(lhs_type) && is_utf8_or_large_utf8(rhs_type))
+    {
+        return Err(DataFusionError::Plan(format!(
+            "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
+        )));
+    }
+    if !lhs_type.eq(rhs_type) && (!is_decimal(lhs_type) && !is_decimal(rhs_type)) {
         return Err(DataFusionError::Internal(format!(
             "The type of {lhs_type} {op:?} {rhs_type} of binary physical should be same"
         )));
     }
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
+}
+
+pub fn resolve_temporal_op(
+    lhs: &ArrayRef,
+    sign: i32,
+    rhs: &ArrayRef,
+) -> Result<ArrayRef> {
+    match sign {
+        1 => add_dyn_temporal(lhs, rhs),
+        -1 => subtract_dyn_temporal(lhs, rhs),
+        other => Err(DataFusionError::Internal(format!(
+            "Undefined operation for temporal types {other}"
+        ))),
+    }
+}
+
+pub fn resolve_temporal_op_scalar(
+    arr: &ArrayRef,
+    sign: i32,
+    scalar: &ScalarValue,
+    swap: bool,
+) -> Result<ArrayRef> {
+    match (sign, swap) {
+        (1, false) => add_dyn_temporal_right_scalar(arr, scalar),
+        (1, true) => add_dyn_temporal_left_scalar(scalar, arr),
+        (-1, false) => subtract_dyn_temporal_right_scalar(arr, scalar),
+        (-1, true) => subtract_dyn_temporal_left_scalar(scalar, arr),
+        _ => Err(DataFusionError::Internal(
+            "Undefined operation for temporal types".to_string(),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1217,7 +1325,7 @@ mod tests {
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
     use datafusion_common::{ColumnStatistics, Result, Statistics};
-    use datafusion_expr::type_coercion::binary::coerce_types;
+    use datafusion_expr::type_coercion::binary::{coerce_types, math_decimal_coercion};
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -1321,10 +1429,10 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let result_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            let common_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
 
-            let left = try_cast(col("a", &schema)?, &schema, result_type.clone())?;
-            let right = try_cast(col("b", &schema)?, &schema, result_type)?;
+            let left = try_cast(col("a", &schema)?, &schema, common_type.clone())?;
+            let right = try_cast(col("b", &schema)?, &schema, common_type)?;
 
             // verify that we can construct the expression
             let expression = binary(left, $OP, right, &schema)?;
@@ -1566,16 +1674,28 @@ mod tests {
             vec![0i64, 0i64, 1i64],
         );
         test_coercion!(
-            Int16Array,
-            DataType::Int16,
-            vec![1i16, 2i16, 3i16],
-            Int64Array,
-            DataType::Int64,
-            vec![10i64, 4i64, 5i64],
+            UInt16Array,
+            DataType::UInt16,
+            vec![1u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 4u64, 5u64],
+            Operator::BitwiseAnd,
+            UInt64Array,
+            DataType::UInt64,
+            vec![0u64, 0u64, 1u64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![1u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 4u64, 5u64],
             Operator::BitwiseOr,
-            Int64Array,
-            DataType::Int64,
-            vec![11i64, 6i64, 7i64],
+            UInt64Array,
+            DataType::UInt64,
+            vec![11u64, 6u64, 7u64],
         );
         test_coercion!(
             Int16Array,
@@ -1588,6 +1708,18 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![9i64, 4i64, 6i64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![3u16, 2u16, 3u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![10u64, 6u64, 5u64],
+            Operator::BitwiseXor,
+            UInt64Array,
+            DataType::UInt64,
+            vec![9u64, 4u64, 6u64],
         );
         Ok(())
     }
@@ -1679,11 +1811,11 @@ mod tests {
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(3), None]);
-        let a = DictionaryArray::try_new(&keys, &a)?;
+        let a = DictionaryArray::try_new(keys, Arc::new(a))?;
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
         let keys = Int8Array::from(vec![0, 1, 1, 2, 1]);
-        let b = DictionaryArray::try_new(&keys, &b)?;
+        let b = DictionaryArray::try_new(keys, Arc::new(b))?;
 
         apply_arithmetic::<Int32Type>(
             Arc::new(schema),
@@ -1727,13 +1859,13 @@ mod tests {
             ],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
                 Some(value + 3),
@@ -1742,14 +1874,14 @@ mod tests {
             ],
             10,
             0,
-        );
-        let b = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let b = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic(
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Plus,
-            create_decimal_array(&[Some(247), None, None, Some(247), Some(246)], 10, 0),
+            create_decimal_array(&[Some(247), None, None, Some(247), Some(246)], 11, 0),
         )?;
 
         Ok(())
@@ -1788,13 +1920,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(2)?;
-        dict_builder.append_null();
-        dict_builder.append(3)?;
-        dict_builder.append(6)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(2), None, Some(3), Some(6)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -1826,18 +1953,22 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array = create_decimal_array(
-            &[Some(value + 1), None, Some(value), Some(value + 2)],
-            10,
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value + 1),
+                Some(value),
+                None,
+                Some(value + 2),
+                Some(value + 1),
+            ],
+            11,
             0,
-        );
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -1847,7 +1978,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(1), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -1898,11 +2029,11 @@ mod tests {
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(3), None]);
-        let a = DictionaryArray::try_new(&keys, &a)?;
+        let a = DictionaryArray::try_new(keys, Arc::new(a))?;
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
         let keys = Int8Array::from(vec![0, 1, 1, 2, 1]);
-        let b = DictionaryArray::try_new(&keys, &b)?;
+        let b = DictionaryArray::try_new(keys, Arc::new(b))?;
 
         apply_arithmetic::<Int32Type>(
             Arc::new(schema),
@@ -1946,13 +2077,13 @@ mod tests {
             ],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
                 Some(value + 3),
@@ -1961,14 +2092,14 @@ mod tests {
             ],
             10,
             0,
-        );
-        let b = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let b = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic(
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Minus,
-            create_decimal_array(&[Some(-1), None, None, Some(1), Some(0)], 10, 0),
+            create_decimal_array(&[Some(-1), None, None, Some(1), Some(0)], 11, 0),
         )?;
 
         Ok(())
@@ -2007,13 +2138,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(0)?;
-        dict_builder.append_null();
-        dict_builder.append(1)?;
-        dict_builder.append(4)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(0), None, Some(1), Some(4)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2045,18 +2171,22 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array = create_decimal_array(
-            &[Some(value - 1), None, Some(value - 2), Some(value)],
-            10,
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value - 1),
+                Some(value - 2),
+                None,
+                Some(value),
+                Some(value - 1),
+            ],
+            11,
             0,
-        );
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2066,7 +2196,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(1), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -2109,11 +2239,11 @@ mod tests {
 
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let keys = Int8Array::from(vec![Some(0), None, Some(1), Some(3), None]);
-        let a = DictionaryArray::try_new(&keys, &a)?;
+        let a = DictionaryArray::try_new(keys, Arc::new(a))?;
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
         let keys = Int8Array::from(vec![0, 1, 1, 2, 1]);
-        let b = DictionaryArray::try_new(&keys, &b)?;
+        let b = DictionaryArray::try_new(keys, Arc::new(b))?;
 
         apply_arithmetic::<Int32Type>(
             Arc::new(schema),
@@ -2160,10 +2290,10 @@ mod tests {
         )) as ArrayRef;
 
         let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
                 Some(value + 3),
@@ -2172,8 +2302,8 @@ mod tests {
             ],
             10,
             0,
-        );
-        let b = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let b = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic(
             Arc::new(schema),
@@ -2181,7 +2311,7 @@ mod tests {
             Operator::Multiply,
             create_decimal_array(
                 &[Some(15252), None, None, Some(15252), Some(15129)],
-                10,
+                21,
                 0,
             ),
         )?;
@@ -2222,13 +2352,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(2)?;
-        dict_builder.append_null();
-        dict_builder.append(4)?;
-        dict_builder.append(10)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(2), None, Some(4), Some(10)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2260,15 +2385,16 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array =
-            create_decimal_array(&[Some(246), None, Some(244), Some(248)], 10, 0);
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(246), Some(244), None, Some(248), Some(246)],
+            21,
+            0,
+        ));
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2278,7 +2404,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -2331,7 +2457,7 @@ mod tests {
 
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
         let keys = Int8Array::from(vec![0, 1, 1, 2, 1]);
-        let b = DictionaryArray::try_new(&keys, &b)?;
+        let b = DictionaryArray::try_new(keys, Arc::new(b))?;
 
         apply_arithmetic::<Int32Type>(
             Arc::new(schema),
@@ -2375,13 +2501,13 @@ mod tests {
             ],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
         let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
-        let decimal_array = create_decimal_array(
+        let decimal_array = Arc::new(create_decimal_array(
             &[
                 Some(value + 1),
                 Some(value + 3),
@@ -2390,14 +2516,24 @@ mod tests {
             ],
             10,
             0,
-        );
-        let b = DictionaryArray::try_new(&keys, &decimal_array)?;
+        ));
+        let b = DictionaryArray::try_new(keys, decimal_array)?;
 
         apply_arithmetic(
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Divide,
-            create_decimal_array(&[Some(0), None, None, Some(1), Some(1)], 10, 0),
+            create_decimal_array(
+                &[
+                    Some(99193548387), // 0.99193548387
+                    None,
+                    None,
+                    Some(100813008130), // 1.0081300813
+                    Some(100000000000), // 1.0
+                ],
+                21,
+                11,
+            ),
         )?;
 
         Ok(())
@@ -2436,13 +2572,8 @@ mod tests {
 
         let a = dict_builder.finish();
 
-        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
-
-        dict_builder.append(0)?;
-        dict_builder.append_null();
-        dict_builder.append(1)?;
-        dict_builder.append(2)?;
-        let expected = dict_builder.finish();
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(0), None, Some(1), Some(2)]);
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2474,15 +2605,22 @@ mod tests {
             &[Some(value), None, Some(value - 1), Some(value + 1)],
             10,
             0,
-        )) as ArrayRef;
+        ));
 
         let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let a = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
 
-        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
-        let decimal_array =
-            create_decimal_array(&[Some(61), None, Some(61), Some(62)], 10, 0);
-        let expected = DictionaryArray::try_new(&keys, &decimal_array)?;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(6150000000000),
+                Some(6100000000000),
+                None,
+                Some(6200000000000),
+                Some(6150000000000),
+            ],
+            21,
+            11,
+        ));
 
         apply_arithmetic_scalar(
             Arc::new(schema),
@@ -2492,7 +2630,7 @@ mod tests {
                 Box::new(DataType::Int8),
                 Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
             ),
-            Arc::new(expected),
+            decimal_array,
         )?;
 
         Ok(())
@@ -2512,6 +2650,197 @@ mod tests {
             vec![a, b],
             Operator::Modulo,
             Int32Array::from(vec![0, 0, 2, 8, 0]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "dictionary_expressions")]
+    fn modulus_op_dict() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ),
+        ]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+        dict_builder.append(0)?;
+
+        let a = dict_builder.finish();
+
+        let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
+        let keys = Int8Array::from(vec![0, 1, 1, 2, 1]);
+        let b = DictionaryArray::try_new(keys, Arc::new(b))?;
+
+        apply_arithmetic::<Int32Type>(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b)],
+            Operator::Modulo,
+            Int32Array::from(vec![Some(0), None, Some(0), Some(1), Some(0)]),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "dictionary_expressions")]
+    fn modulus_op_dict_decimal() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Decimal128(10, 0)),
+                ),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(DataType::Decimal128(10, 0)),
+                ),
+                true,
+            ),
+        ]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value),
+                Some(value + 2),
+                Some(value - 1),
+                Some(value + 1),
+            ],
+            10,
+            0,
+        ));
+
+        let keys = Int8Array::from(vec![Some(0), Some(2), None, Some(3), Some(0)]);
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
+
+        let keys = Int8Array::from(vec![Some(0), None, Some(3), Some(2), Some(2)]);
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value + 1),
+                Some(value + 3),
+                Some(value),
+                Some(value + 2),
+            ],
+            10,
+            0,
+        ));
+        let b = DictionaryArray::try_new(keys, decimal_array)?;
+
+        apply_arithmetic(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(b)],
+            Operator::Modulo,
+            create_decimal_array(&[Some(123), None, None, Some(1), Some(0)], 10, 0),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modulus_op_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Modulo,
+            ScalarValue::Int32(Some(2)),
+            Arc::new(Int32Array::from(vec![1, 0, 1, 0, 1])),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modules_op_dict_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            true,
+        )]);
+
+        let mut dict_builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
+
+        dict_builder.append(1)?;
+        dict_builder.append_null();
+        dict_builder.append(2)?;
+        dict_builder.append(5)?;
+
+        let a = dict_builder.finish();
+
+        let expected: PrimitiveArray<Int32Type> =
+            PrimitiveArray::from(vec![Some(1), None, Some(0), Some(1)]);
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Modulo,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Int32(Some(2))),
+            ),
+            Arc::new(expected),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn modulus_op_dict_scalar_decimal() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(10, 0)),
+            ),
+            true,
+        )]);
+
+        let value = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        ));
+
+        let keys = Int8Array::from(vec![0, 2, 1, 3, 0]);
+        let a = DictionaryArray::try_new(keys, decimal_array)?;
+
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(1), Some(0), None, Some(0), Some(1)],
+            10,
+            0,
+        ));
+
+        apply_arithmetic_scalar(
+            Arc::new(schema),
+            vec![Arc::new(a)],
+            Operator::Modulo,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Decimal128(Some(2), 10, 0)),
+            ),
+            decimal_array,
         )?;
 
         Ok(())
@@ -2557,10 +2886,10 @@ mod tests {
     ) -> Result<()> {
         let left_type = left.data_type();
         let right_type = right.data_type();
-        let result_type = coerce_types(left_type, &op, right_type)?;
+        let common_type = coerce_types(left_type, &op, right_type)?;
 
-        let left_expr = try_cast(col("a", schema)?, schema, result_type.clone())?;
-        let right_expr = try_cast(col("b", schema)?, schema, result_type)?;
+        let left_expr = try_cast(col("a", schema)?, schema, common_type.clone())?;
+        let right_expr = try_cast(col("b", schema)?, schema, common_type)?;
         let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
@@ -3187,7 +3516,6 @@ mod tests {
         // build a left deep tree ((((a + a) + a) + a ....
         let tree_depth: i32 = 100;
         let expr = (0..tree_depth)
-            .into_iter()
             .map(|_| col("a", schema.as_ref()).unwrap())
             .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema))
             .unwrap();
@@ -3217,6 +3545,97 @@ mod tests {
             .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap()
+    }
+
+    #[test]
+    fn comparison_dict_decimal_scalar_expr_test() -> Result<()> {
+        // scalar of decimal compare with dictionary decimal array
+        let value_i128 = 123;
+        let decimal_scalar = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Decimal128(Some(value_i128), 25, 3)),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Decimal128(25, 3)),
+            ),
+            true,
+        )]));
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        ));
+
+        let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, decimal_array)?) as ArrayRef;
+
+        // array = scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Eq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+        // array != scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::NotEq,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+        //  array < scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Lt,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        //  array <= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::LtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+        // array > scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::Gt,
+            &BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // array >= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &dictionary,
+            &decimal_scalar,
+            Operator::GtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        Ok(())
     }
 
     #[test]
@@ -3573,38 +3992,47 @@ mod tests {
         Ok(())
     }
 
-    fn apply_arithmetic_op(
+    fn apply_decimal_arithmetic_op(
         schema: &SchemaRef,
         left: &ArrayRef,
         right: &ArrayRef,
         op: Operator,
         expected: ArrayRef,
     ) -> Result<()> {
-        let op_type = coerce_types(left.data_type(), &op, right.data_type())?;
-        let left_expr = if left.data_type().eq(&op_type) {
-            col("a", schema)?
+        let (lhs_op_type, rhs_op_type) =
+            math_decimal_coercion(left.data_type(), right.data_type());
+
+        let (left_expr, lhs_type) = if let Some(lhs_op_type) = lhs_op_type {
+            (
+                try_cast(col("a", schema)?, schema, lhs_op_type.clone())?,
+                lhs_op_type,
+            )
         } else {
-            try_cast(col("a", schema)?, schema, op_type.clone())?
+            (col("a", schema)?, left.data_type().clone())
         };
 
-        let right_expr = if right.data_type().eq(&op_type) {
-            col("b", schema)?
+        let (right_expr, rhs_type) = if let Some(rhs_op_type) = rhs_op_type {
+            (
+                try_cast(col("b", schema)?, schema, rhs_op_type.clone())?,
+                rhs_op_type,
+            )
         } else {
-            try_cast(col("b", schema)?, schema, op_type.clone())?
+            (col("b", schema)?, right.data_type().clone())
         };
 
         let coerced_schema = Schema::new(vec![
             Field::new(
                 schema.field(0).name(),
-                op_type.clone(),
+                lhs_type,
                 schema.field(0).is_nullable(),
             ),
             Field::new(
                 schema.field(1).name(),
-                op_type,
+                rhs_type,
                 schema.field(1).is_nullable(),
             ),
         ]);
+
         let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
@@ -3644,7 +4072,7 @@ mod tests {
             13,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -3655,18 +4083,18 @@ mod tests {
 
         // subtract: decimal array subtract int32 array
         let schema = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Int32, true),
             Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Int32, true),
         ]));
         let expect = Arc::new(create_decimal_array(
             &[Some(-12177), None, Some(-12178), Some(-12276)],
             13,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
-            &int32_array,
             &decimal_array,
+            &int32_array,
             Operator::Minus,
             expect,
         )
@@ -3678,10 +4106,10 @@ mod tests {
             21,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
-            &int32_array,
             &decimal_array,
+            &int32_array,
             Operator::Multiply,
             expect,
         )
@@ -3702,7 +4130,7 @@ mod tests {
             23,
             11,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -3721,7 +4149,7 @@ mod tests {
             10,
             2,
         )) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &int32_array,
             &decimal_array,
@@ -3764,7 +4192,7 @@ mod tests {
             Some(124.22),
             Some(125.24),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -3784,7 +4212,7 @@ mod tests {
             Some(121.78),
             Some(122.76),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -3800,7 +4228,7 @@ mod tests {
             Some(150.06),
             Some(153.76),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -3820,7 +4248,7 @@ mod tests {
             Some(100.81967213114754),
             Some(100.0),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -3840,7 +4268,7 @@ mod tests {
             Some(1.0000000000000027),
             Some(8.881784197001252e-16),
         ])) as ArrayRef;
-        apply_arithmetic_op(
+        apply_decimal_arithmetic_op(
             &schema,
             &float64_array,
             &decimal_array,
@@ -3883,7 +4311,11 @@ mod tests {
             schema,
             vec![left_decimal_array, right_decimal_array],
             Operator::Divide,
-            create_decimal_array(&[Some(123456700), None], 25, 3),
+            create_decimal_array(
+                &[Some(12345670000000000000000000000000000), None],
+                38,
+                29,
+            ),
         )?;
 
         Ok(())
@@ -3894,16 +4326,32 @@ mod tests {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
             Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
-        let mut result = bitwise_and(left.clone(), right.clone())?;
+        let mut result = bitwise_and_dyn(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or(left.clone(), right.clone())?;
+        result = bitwise_or_dyn(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(13), None, Some(15)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor(left.clone(), right.clone())?;
+        result = bitwise_xor_dyn(left.clone(), right.clone())?;
         let expected = Int32Array::from(vec![Some(13), None, Some(12)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        let left =
+            Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right =
+            Arc::new(UInt32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
+        let mut result = bitwise_and_dyn(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_or_dyn(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(13), None, Some(15)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor_dyn(left.clone(), right.clone())?;
+        let expected = UInt32Array::from(vec![Some(13), None, Some(12)]);
         assert_eq!(result.as_ref(), &expected);
 
         Ok(())
@@ -3914,14 +4362,25 @@ mod tests {
         let input = Arc::new(Int32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
         let modules =
             Arc::new(Int32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
-        let mut result = bitwise_shift_left(input.clone(), modules.clone())?;
+        let mut result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
 
         let expected = Int32Array::from(vec![Some(8), None, Some(2560)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_shift_right(result.clone(), modules.clone())?;
+        result = bitwise_shift_right_dyn(result.clone(), modules.clone())?;
         assert_eq!(result.as_ref(), &input);
 
+        let input =
+            Arc::new(UInt32Array::from(vec![Some(2), None, Some(10)])) as ArrayRef;
+        let modules =
+            Arc::new(UInt32Array::from(vec![Some(2), Some(4), Some(8)])) as ArrayRef;
+        let mut result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
+
+        let expected = UInt32Array::from(vec![Some(8), None, Some(2560)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right_dyn(result.clone(), modules.clone())?;
+        assert_eq!(result.as_ref(), &input);
         Ok(())
     }
 
@@ -3929,11 +4388,17 @@ mod tests {
     fn bitwise_shift_array_overflow_test() -> Result<()> {
         let input = Arc::new(Int32Array::from(vec![Some(2)])) as ArrayRef;
         let modules = Arc::new(Int32Array::from(vec![Some(100)])) as ArrayRef;
-        let result = bitwise_shift_left(input.clone(), modules.clone())?;
+        let result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
 
         let expected = Int32Array::from(vec![Some(32)]);
         assert_eq!(result.as_ref(), &expected);
 
+        let input = Arc::new(UInt32Array::from(vec![Some(2)])) as ArrayRef;
+        let modules = Arc::new(UInt32Array::from(vec![Some(100)])) as ArrayRef;
+        let result = bitwise_shift_left_dyn(input.clone(), modules.clone())?;
+
+        let expected = UInt32Array::from(vec![Some(32)]);
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 
@@ -3941,16 +4406,31 @@ mod tests {
     fn bitwise_scalar_test() -> Result<()> {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3i32);
-        let mut result = bitwise_and_scalar(&left, right.clone()).unwrap()?;
+        let mut result = bitwise_and_dyn_scalar(&left, right.clone()).unwrap()?;
         let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_or_scalar(&left, right.clone()).unwrap()?;
+        result = bitwise_or_dyn_scalar(&left, right.clone()).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(11)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_xor_scalar(&left, right).unwrap()?;
+        result = bitwise_xor_dyn_scalar(&left, right).unwrap()?;
         let expected = Int32Array::from(vec![Some(15), None, Some(8)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        let left =
+            Arc::new(UInt32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right = ScalarValue::from(3u32);
+        let mut result = bitwise_and_dyn_scalar(&left, right.clone()).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_or_dyn_scalar(&left, right.clone()).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(15), None, Some(11)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_xor_dyn_scalar(&left, right).unwrap()?;
+        let expected = UInt32Array::from(vec![Some(15), None, Some(8)]);
         assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
@@ -3959,14 +4439,25 @@ mod tests {
     fn bitwise_shift_scalar_test() -> Result<()> {
         let input = Arc::new(Int32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
         let module = ScalarValue::from(10i32);
-        let mut result = bitwise_shift_left_scalar(&input, module.clone()).unwrap()?;
+        let mut result =
+            bitwise_shift_left_dyn_scalar(&input, module.clone()).unwrap()?;
 
         let expected = Int32Array::from(vec![Some(2048), None, Some(4096)]);
         assert_eq!(result.as_ref(), &expected);
 
-        result = bitwise_shift_right_scalar(&result, module).unwrap()?;
+        result = bitwise_shift_right_dyn_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
 
+        let input = Arc::new(UInt32Array::from(vec![Some(2), None, Some(4)])) as ArrayRef;
+        let module = ScalarValue::from(10u32);
+        let mut result =
+            bitwise_shift_left_dyn_scalar(&input, module.clone()).unwrap()?;
+
+        let expected = UInt32Array::from(vec![Some(2048), None, Some(4096)]);
+        assert_eq!(result.as_ref(), &expected);
+
+        result = bitwise_shift_right_dyn_scalar(&result, module).unwrap()?;
+        assert_eq!(result.as_ref(), &input);
         Ok(())
     }
 
@@ -4249,5 +4740,101 @@ mod tests {
         assert_eq!(predicate_boundaries.selectivity, Some(0.5));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_display_and_or_combo() {
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::And,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::And,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "1 AND 2 AND 3 AND 4");
+
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::Or,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::Or,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "1 OR 2 OR 3 OR 4");
+
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::And,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::And,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "1 AND 2 OR 3 AND 4");
+
+        let expr = BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(1)),
+                Operator::Or,
+                lit(ScalarValue::from(2)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::from(3)),
+                Operator::Or,
+                lit(ScalarValue::from(4)),
+            )),
+        );
+        assert_eq!(expr.to_string(), "(1 OR 2) AND (3 OR 4)");
+    }
+
+    #[test]
+    fn test_to_result_type_array() {
+        let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let keys = Int8Array::from(vec![Some(0), None, Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, values).unwrap()) as ArrayRef;
+
+        // Casting Dictionary to Int32
+        let casted =
+            to_result_type_array(&Operator::Plus, dictionary.clone(), &DataType::Int32)
+                .unwrap();
+        assert_eq!(
+            &casted,
+            &(Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(4)]))
+                as ArrayRef)
+        );
+
+        // Array has same datatype as result type, no casting
+        let casted = to_result_type_array(
+            &Operator::Plus,
+            dictionary.clone(),
+            dictionary.data_type(),
+        )
+        .unwrap();
+        assert_eq!(&casted, &dictionary);
+
+        // Not numerical operator, no casting
+        let casted =
+            to_result_type_array(&Operator::Eq, dictionary.clone(), &DataType::Int32)
+                .unwrap();
+        assert_eq!(&casted, &dictionary);
     }
 }

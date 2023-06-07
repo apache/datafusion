@@ -18,12 +18,11 @@
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use datafusion_row::layout::RowType::{Compact, WordAligned};
 use datafusion_row::reader::read_as_batch;
 use datafusion_row::writer::write_batch_unchecked;
 use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
@@ -31,29 +30,6 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_with_parquet() -> Result<()> {
-    let ctx = SessionContext::new();
-    let state = ctx.state();
-    let task_ctx = state.task_ctx();
-    let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    let exec =
-        get_exec(&state, "alltypes_plain.parquet", projection.as_ref(), None).await?;
-    let schema = exec.schema().clone();
-
-    let batches = collect(exec, task_ctx).await?;
-    assert_eq!(1, batches.len());
-    let batch = &batches[0];
-
-    let mut vector = vec![0; 20480];
-    let row_offsets =
-        { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone(), Compact) };
-    let output_batch = { read_as_batch(&vector, schema, &row_offsets, Compact)? };
-    assert_eq!(*batch, output_batch);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_with_parquet_word_aligned() -> Result<()> {
     let ctx = SessionContext::new();
     let state = ctx.state();
     let task_ctx = state.task_ctx();
@@ -67,9 +43,8 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
     let batch = &batches[0];
 
     let mut vector = vec![0; 20480];
-    let row_offsets =
-        { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone(), WordAligned) };
-    let output_batch = { read_as_batch(&vector, schema, &row_offsets, WordAligned)? };
+    let row_offsets = { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone()) };
+    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
     assert_eq!(*batch, output_batch);
 
     Ok(())
@@ -112,10 +87,10 @@ async fn get_exec(
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols: vec![],
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
-            &[],
+            None,
         )
         .await?;
     Ok(exec)

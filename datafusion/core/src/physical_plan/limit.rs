@@ -19,7 +19,7 @@
 
 use futures::stream::Stream;
 use futures::stream::StreamExt;
-use log::debug;
+use log::trace;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use crate::physical_plan::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
 use super::expressions::PhysicalSortExpr;
 use super::{
@@ -39,7 +39,7 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Limit execution plan
 #[derive(Debug)]
@@ -136,7 +136,7 @@ impl ExecutionPlan for GlobalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!(
+        trace!(
             "Start GlobalLimitExec::execute for partition: {}",
             partition
         );
@@ -320,7 +320,7 @@ impl ExecutionPlan for LocalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(partition, context)?;
         Ok(Box::pin(LimitStream::new(
@@ -462,7 +462,16 @@ impl LimitStream {
                 .iter()
                 .map(|col| col.slice(0, col.len().min(batch_rows)))
                 .collect();
-            Some(RecordBatch::try_new(batch.schema(), limited_columns).unwrap())
+            let options =
+                RecordBatchOptions::new().with_row_count(Option::from(batch_rows));
+            Some(
+                RecordBatch::try_new_with_options(
+                    batch.schema(),
+                    limited_columns,
+                    &options,
+                )
+                .unwrap(),
+            )
         }
     }
 }
@@ -577,6 +586,36 @@ mod tests {
             test::make_partition(6),
             test::make_partition(6),
             test::make_partition(6),
+        ];
+        let input = test::exec::TestStream::new(batches);
+
+        let index = input.index();
+        assert_eq!(index.value(), 0);
+
+        // limit of six needs to consume the entire first record batch
+        // (6 rows) and stop immediately
+        let baseline_metrics = BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let limit_stream =
+            LimitStream::new(Box::pin(input), 0, Some(6), baseline_metrics);
+        assert_eq!(index.value(), 0);
+
+        let results = collect(Box::pin(limit_stream)).await.unwrap();
+        let num_rows: usize = results.into_iter().map(|b| b.num_rows()).sum();
+        // Only 6 rows should have been produced
+        assert_eq!(num_rows, 6);
+
+        // Only the first batch should be consumed
+        assert_eq!(index.value(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn limit_no_column() -> Result<()> {
+        let batches = vec![
+            test::make_batch_no_column(6),
+            test::make_batch_no_column(6),
+            test::make_batch_no_column(6),
         ];
         let input = test::exec::TestStream::new(batches);
 

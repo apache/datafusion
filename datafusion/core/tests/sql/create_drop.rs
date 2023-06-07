@@ -15,103 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::execution::context::SessionState;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::test_util::TestTableFactory;
 
 use super::*;
 
 #[tokio::test]
-async fn sql_create_table_if_not_exists() -> Result<()> {
-    // the information schema used to introduce cyclic Arcs
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    // Create table
-    ctx.sql("CREATE TABLE y AS VALUES (1,2,3)")
-        .await?
-        .collect()
-        .await?;
-
-    // Create table again
-    let result = ctx
-        .sql("CREATE TABLE IF NOT EXISTS y AS VALUES (1,2,3)")
-        .await?
-        .collect()
-        .await?;
-
-    assert_eq!(result, Vec::new());
-
-    // Create external table
-    ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
-        .await?
-        .collect()
-        .await?;
-
-    // Create external table again
-    let result = ctx.sql("CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
-        .await?
-        .collect()
-        .await?;
-
-    assert_eq!(result, Vec::new());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn sql_create_table_exists() -> Result<()> {
-    // the information schema used to introduce cyclic Arcs
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    // Create table
-    ctx.sql("CREATE TABLE y AS VALUES (1,2,3)")
-        .await?
-        .collect()
-        .await?;
-
-    // Create table again without if not exist
-    let result = ctx.sql("CREATE TABLE y AS VALUES (1,2,3)").await;
-
-    match result {
-        Err(DataFusionError::Execution(err_msg)) => {
-            assert_eq!(err_msg, "Table 'y' already exists");
-        }
-        _ => {
-            panic!("expect create table failed");
-        }
-    }
-
-    // Create external table
-    ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
-        .await?
-        .collect()
-        .await?;
-
-    // Create external table again without if not exist
-    let result = ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
-        .await;
-
-    match result {
-        Err(DataFusionError::Execution(err_msg)) => {
-            assert_eq!(err_msg, "Table 'aggregate_simple' already exists");
-        }
-        _ => {
-            panic!("expect create table failed");
-        }
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut cfg = RuntimeConfig::new();
-    cfg.table_factories
-        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    state
+        .table_factories_mut()
+        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
+    let ctx = SessionContext::with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();
@@ -126,12 +45,14 @@ async fn create_custom_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_table_with_ddl() -> Result<()> {
-    let mut cfg = RuntimeConfig::new();
-    cfg.table_factories
-        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    state
+        .table_factories_mut()
+        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
+    let ctx = SessionContext::with_state(state);
 
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
     ctx.sql(sql).await.unwrap();
@@ -149,49 +70,6 @@ async fn create_external_table_with_ddl() -> Result<()> {
     assert_eq!(&DataType::Int32, table_schema.field(0).data_type());
     assert_eq!(&DataType::Utf8, table_schema.field(1).data_type());
     assert_eq!(&DataType::Boolean, table_schema.field(2).data_type());
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn create_bad_custom_table() {
-    let ctx = SessionContext::new();
-
-    let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
-    let res = ctx.sql(sql).await;
-    match res {
-        Ok(_) => panic!("Registration of tables without factories should fail"),
-        Err(e) => {
-            assert!(
-                e.to_string().contains("Unable to find factory for"),
-                "Registration of tables without factories should throw correct error"
-            )
-        }
-    }
-}
-
-#[tokio::test]
-async fn create_csv_table_empty_file() -> Result<()> {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    let sql = "CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/empty.csv'";
-    ctx.sql(sql).await.unwrap();
-    let sql =
-        "select column_name, data_type, ordinal_position from information_schema.columns";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------------+-----------+------------------+",
-        "| column_name | data_type | ordinal_position |",
-        "+-------------+-----------+------------------+",
-        "| c1          | Utf8      | 0                |",
-        "| c2          | Utf8      | 1                |",
-        "| c3          | Utf8      | 2                |",
-        "+-------------+-----------+------------------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
 
     Ok(())
 }

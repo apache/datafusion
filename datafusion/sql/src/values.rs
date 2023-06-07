@@ -16,16 +16,15 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use arrow_schema::DataType;
-use datafusion_common::{DFSchema, DataFusionError, Result};
-use datafusion_expr::{lit, Cast, Expr, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{Expr as SQLExpr, Values as SQLValues};
+use datafusion_common::{DFSchema, Result};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use sqlparser::ast::Values as SQLValues;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(super) fn sql_values_to_plan(
         &self,
         values: SQLValues,
-        param_data_types: &[DataType],
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         let SQLValues {
             explicit_row: _,
@@ -38,42 +37,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|row| {
                 row.into_iter()
-                    .map(|v| match v {
-                        SQLExpr::Value(value) => {
-                            self.parse_value(value, param_data_types)
-                        }
-                        SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
-                            op,
-                            *expr,
-                            &schema,
-                            &mut PlannerContext::new(),
-                        ),
-                        SQLExpr::BinaryOp { left, op, right } => self
-                            .parse_sql_binary_op(
-                                *left,
-                                op,
-                                *right,
-                                &schema,
-                                &mut PlannerContext::new(),
-                            ),
-                        SQLExpr::TypedString { data_type, value } => {
-                            Ok(Expr::Cast(Cast::new(
-                                Box::new(lit(value)),
-                                self.convert_data_type(&data_type)?,
-                            )))
-                        }
-                        SQLExpr::Cast { expr, data_type } => Ok(Expr::Cast(Cast::new(
-                            Box::new(self.sql_expr_to_logical_expr(
-                                *expr,
-                                &schema,
-                                &mut PlannerContext::new(),
-                            )?),
-                            self.convert_data_type(&data_type)?,
-                        ))),
-                        other => Err(DataFusionError::NotImplemented(format!(
-                            "Unsupported value {other:?} in a values list expression"
-                        ))),
-                    })
+                    .map(|v| self.sql_to_expr(v, &schema, planner_context))
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;

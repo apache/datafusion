@@ -23,12 +23,11 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::{Column, DFSchema};
+use crate::utils::quote_identifier;
+use crate::{Column, DFSchema, OwnedTableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
-#[cfg(feature = "jit")]
-use cranelift_module::ModuleError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
@@ -84,9 +83,6 @@ pub enum DataFusionError {
     /// Errors originating from outside DataFusion's core codebase.
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
     External(GenericError),
-    #[cfg(feature = "jit")]
-    /// Error occurs during code generation
-    JITError(ModuleError),
     /// Error with additional context
     Context(String, Box<DataFusionError>),
     /// Errors originating from either mapping LogicalPlans to/from Substrait plans
@@ -97,10 +93,7 @@ pub enum DataFusionError {
 #[macro_export]
 macro_rules! context {
     ($desc:expr, $err:expr) => {
-        datafusion_common::DataFusionError::Context(
-            format!("{} at {}:{}", $desc, file!(), line!()),
-            Box::new($err),
-        )
+        $err.context(format!("{} at {}:{}", $desc, file!(), line!()))
     };
 }
 
@@ -120,29 +113,41 @@ macro_rules! plan_err {
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
-    AmbiguousReference {
-        qualifier: Option<String>,
+    AmbiguousReference { field: Column },
+    /// Schema contains duplicate qualified field name
+    DuplicateQualifiedField {
+        qualifier: Box<OwnedTableReference>,
         name: String,
     },
-    /// Schema contains duplicate qualified field name
-    DuplicateQualifiedField { qualifier: String, name: String },
     /// Schema contains duplicate unqualified field name
     DuplicateUnqualifiedField { name: String },
     /// No field with this name
     FieldNotFound {
-        field: Column,
+        field: Box<Column>,
         valid_fields: Vec<Column>,
     },
 }
 
 /// Create a "field not found" DataFusion::SchemaError
-pub fn field_not_found(
-    qualifier: Option<String>,
+pub fn field_not_found<R: Into<OwnedTableReference>>(
+    qualifier: Option<R>,
     name: &str,
     schema: &DFSchema,
 ) -> DataFusionError {
     DataFusionError::SchemaError(SchemaError::FieldNotFound {
-        field: Column::new(qualifier, name),
+        field: Box::new(Column::new(qualifier, name)),
+        valid_fields: schema
+            .fields()
+            .iter()
+            .map(|f| f.qualified_column())
+            .collect(),
+    })
+}
+
+/// Convenience wrapper over [`field_not_found`] for when there is no qualifier
+pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionError {
+    DataFusionError::SchemaError(SchemaError::FieldNotFound {
+        field: Box::new(Column::new_unqualified(name)),
         valid_fields: schema
             .fields()
             .iter()
@@ -158,25 +163,14 @@ impl Display for SchemaError {
                 field,
                 valid_fields,
             } => {
-                write!(f, "No field named ")?;
-                if let Some(q) = &field.relation {
-                    write!(f, "'{}'.'{}'", q, field.name)?;
-                } else {
-                    write!(f, "'{}'", field.name)?;
-                }
+                write!(f, "No field named {}", field.quoted_flat_name())?;
                 if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
                         valid_fields
                             .iter()
-                            .map(|field| {
-                                if let Some(q) = &field.relation {
-                                    format!("'{}'.'{}'", q, field.name)
-                                } else {
-                                    format!("'{}'", field.name)
-                                }
-                            })
+                            .map(|field| field.quoted_flat_name())
                             .collect::<Vec<String>>()
                             .join(", ")
                     )?;
@@ -186,20 +180,32 @@ impl Display for SchemaError {
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
                     f,
-                    "Schema contains duplicate qualified field name '{qualifier}'.'{name}'"
+                    "Schema contains duplicate qualified field name {}.{}",
+                    qualifier.to_quoted_string(),
+                    quote_identifier(name)
                 )
             }
             Self::DuplicateUnqualifiedField { name } => {
                 write!(
                     f,
-                    "Schema contains duplicate unqualified field name '{name}'"
+                    "Schema contains duplicate unqualified field name {}",
+                    quote_identifier(name)
                 )
             }
-            Self::AmbiguousReference { qualifier, name } => {
-                if let Some(q) = qualifier {
-                    write!(f, "Schema contains qualified field name '{q}'.'{name}' and unqualified field name '{name}' which would be ambiguous")
+            Self::AmbiguousReference { field } => {
+                if field.relation.is_some() {
+                    write!(
+                        f,
+                        "Schema contains qualified field name {} and unqualified field name {} which would be ambiguous",
+                        field.quoted_flat_name(),
+                        quote_identifier(&field.name)
+                    )
                 } else {
-                    write!(f, "Ambiguous reference to unqualified field '{name}'")
+                    write!(
+                        f,
+                        "Ambiguous reference to unqualified field {}",
+                        field.quoted_flat_name()
+                    )
                 }
             }
         }
@@ -207,6 +213,12 @@ impl Display for SchemaError {
 }
 
 impl Error for SchemaError {}
+
+impl From<std::fmt::Error> for DataFusionError {
+    fn from(_e: std::fmt::Error) -> Self {
+        DataFusionError::Execution("Fail to format".to_string())
+    }
+}
 
 impl From<io::Error> for DataFusionError {
     fn from(e: io::Error) -> Self {
@@ -264,13 +276,6 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
-#[cfg(feature = "jit")]
-impl From<ModuleError> for DataFusionError {
-    fn from(e: ModuleError) -> Self {
-        DataFusionError::JITError(e)
-    }
-}
-
 impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
         DataFusionError::External(err)
@@ -315,10 +320,6 @@ impl Display for DataFusionError {
             DataFusionError::External(ref desc) => {
                 write!(f, "External error: {desc}")
             }
-            #[cfg(feature = "jit")]
-            DataFusionError::JITError(ref desc) => {
-                write!(f, "JIT error: {desc}")
-            }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
                 write!(f, "Object Store error: {desc}")
@@ -352,8 +353,6 @@ impl Error for DataFusionError {
             DataFusionError::Execution(_) => None,
             DataFusionError::ResourcesExhausted(_) => None,
             DataFusionError::External(e) => Some(e.as_ref()),
-            #[cfg(feature = "jit")]
-            DataFusionError::JITError(e) => Some(e),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
         }
@@ -402,6 +401,11 @@ impl DataFusionError {
         }
         // return last checkpoint (which may be the original error)
         last_datafusion_error
+    }
+
+    /// wraps self in Self::Context with a description
+    pub fn context(self, description: impl Into<String>) -> Self {
+        Self::Context(description.into(), Box::new(self))
     }
 }
 
@@ -482,22 +486,18 @@ mod test {
         );
     }
 
-    /// Model what happens when implementing SendableRecrordBatchStream:
+    /// Model what happens when implementing SendableRecordBatchStream:
     /// DataFusion code needs to return an ArrowError
-    #[allow(clippy::try_err)]
     fn return_arrow_error() -> arrow::error::Result<()> {
         // Expect the '?' to work
-        Err(DataFusionError::Plan("foo".to_string()))?;
-        Ok(())
+        Err(DataFusionError::Plan("foo".to_string()).into())
     }
 
     /// Model what happens when using arrow kernels in DataFusion
     /// code: need to turn an ArrowError into a DataFusionError
-    #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        Err(ArrowError::SchemaError("bar".to_string()))?;
-        Ok(())
+        Err(ArrowError::SchemaError("bar".to_string()).into())
     }
 
     fn do_root_test(e: DataFusionError, exp: DataFusionError) {

@@ -19,17 +19,27 @@
 
 use crate::{
     command::{Command, OutputFormat},
-    helper::CliHelper,
+    helper::{unescape_input, CliHelper},
+    object_storage::{
+        get_gcs_object_store_builder, get_oss_object_store_builder,
+        get_s3_object_store_builder,
+    },
     print_options::PrintOptions,
 };
-use datafusion::error::Result;
-use datafusion::prelude::SessionContext;
+use datafusion::{
+    datasource::listing::ListingTableUrl,
+    error::{DataFusionError, Result},
+    logical_expr::{CreateExternalTable, DdlStatement},
+};
+use datafusion::{logical_expr::LogicalPlan, prelude::SessionContext};
+use object_store::ObjectStore;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::time::Instant;
+use std::{fs::File, sync::Arc};
+use url::Url;
 
 /// run and execute SQL statements and commands from a file, against a context with the given print options
 pub async fn exec_from_lines(
@@ -48,9 +58,12 @@ pub async fn exec_from_lines(
                 let line = line.trim_end();
                 query.push_str(line);
                 if line.ends_with(';') {
-                    match exec_and_print(ctx, print_options, query).await {
-                        Ok(_) => {}
-                        Err(err) => println!("{:?}", err),
+                    match unescape_input(line) {
+                        Ok(sql) => match exec_and_print(ctx, print_options, sql).await {
+                            Ok(_) => {}
+                            Err(err) => eprintln!("{err}"),
+                        },
+                        Err(err) => eprintln!("{err}"),
                     }
                     query = "".to_owned();
                 } else {
@@ -67,7 +80,7 @@ pub async fn exec_from_lines(
     if !query.is_empty() {
         match exec_and_print(ctx, print_options, query).await {
             Ok(_) => {}
-            Err(err) => println!("{:?}", err),
+            Err(err) => println!("{err}"),
         }
     }
 }
@@ -92,7 +105,7 @@ pub async fn exec_from_repl(
     ctx: &mut SessionContext,
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
-    let mut rl = Editor::<CliHelper>::new()?;
+    let mut rl = Editor::new()?;
     rl.set_helper(Some(CliHelper::default()));
     rl.load_history(".history").ok();
 
@@ -101,7 +114,7 @@ pub async fn exec_from_repl(
     loop {
         match rl.readline("❯ ") {
             Ok(line) if line.starts_with('\\') => {
-                rl.add_history_entry(line.trim_end());
+                rl.add_history_entry(line.trim_end())?;
                 let command = line.split_whitespace().collect::<Vec<_>>().join(" ");
                 if let Ok(cmd) = &command[1..].parse::<Command>() {
                     match cmd {
@@ -112,7 +125,7 @@ pub async fn exec_from_repl(
                                     if let Err(e) =
                                         command.execute(&mut print_options).await
                                     {
-                                        eprintln!("{}", e)
+                                        eprintln!("{e}")
                                     }
                                 } else {
                                     eprintln!(
@@ -126,7 +139,7 @@ pub async fn exec_from_repl(
                         }
                         _ => {
                             if let Err(e) = cmd.execute(ctx, &mut print_options).await {
-                                eprintln!("{}", e)
+                                eprintln!("{e}")
                             }
                         }
                     }
@@ -135,10 +148,13 @@ pub async fn exec_from_repl(
                 }
             }
             Ok(line) => {
-                rl.add_history_entry(line.trim_end());
-                match exec_and_print(ctx, &print_options, line).await {
-                    Ok(_) => {}
-                    Err(err) => eprintln!("{:?}", err),
+                rl.add_history_entry(line.trim_end())?;
+                match unescape_input(&line) {
+                    Ok(sql) => match exec_and_print(ctx, &print_options, sql).await {
+                        Ok(_) => {}
+                        Err(err) => eprintln!("{err}"),
+                    },
+                    Err(err) => eprintln!("{err}"),
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -165,9 +181,169 @@ async fn exec_and_print(
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();
-    let df = ctx.sql(&sql).await?;
+
+    let plan = ctx.state().create_logical_plan(&sql).await?;
+    let df = match &plan {
+        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+            create_external_table(ctx, cmd).await?;
+            ctx.execute_logical_plan(plan).await?
+        }
+        _ => ctx.execute_logical_plan(plan).await?,
+    };
+
     let results = df.collect().await?;
     print_options.print_batches(&results, now)?;
 
     Ok(())
+}
+
+async fn create_external_table(
+    ctx: &SessionContext,
+    cmd: &CreateExternalTable,
+) -> Result<()> {
+    let table_path = ListingTableUrl::parse(&cmd.location)?;
+    let scheme = table_path.scheme();
+    let url: &Url = table_path.as_ref();
+
+    // registering the cloud object store dynamically using cmd.options
+    let store = match scheme {
+        "s3" => {
+            let builder = get_s3_object_store_builder(url, cmd).await?;
+            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        "oss" => {
+            let builder = get_oss_object_store_builder(url, cmd)?;
+            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        "gs" | "gcs" => {
+            let builder = get_gcs_object_store_builder(url, cmd)?;
+            Arc::new(builder.build()?) as Arc<dyn ObjectStore>
+        }
+        _ => {
+            // for other types, try to get from the object_store_registry
+            ctx.runtime_env()
+                .object_store_registry
+                .get_store(url)
+                .map_err(|_| {
+                    DataFusionError::Execution(format!(
+                        "Unsupported object store scheme: {}",
+                        scheme
+                    ))
+                })?
+        }
+    };
+
+    ctx.runtime_env().register_object_store(url, store);
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
+        let ctx = SessionContext::new();
+        let plan = ctx.state().create_logical_plan(&sql).await?;
+
+        match &plan {
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
+                create_external_table(&ctx, cmd)?;
+            }
+            _ => assert!(false),
+        };
+
+        ctx.runtime_env()
+            .object_store(ListingTableUrl::parse(location)?)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_s3() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let region = "fake_us-east-2";
+        let session_token = "fake_session_token";
+        let location = "s3://bucket/path/file.parquet";
+
+        // Missing region
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}') LOCATION '{location}'");
+        let err = create_external_table_test(location, &sql)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Missing region"));
+
+        // Should be OK
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'region' '{region}', 'session_token' '{session_token}') LOCATION '{location}'");
+        create_external_table_test(location, &sql).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_oss() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let endpoint = "fake_endpoint";
+        let location = "oss://bucket/path/file.parquet";
+
+        // Should be OK
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'endpoint' '{endpoint}') LOCATION '{location}'");
+        create_external_table_test(location, &sql).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_object_store_table_gcs() -> Result<()> {
+        let service_account_path = "fake_service_account_path";
+        let service_account_key =
+            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\"}";
+        let application_credentials_path = "fake_application_credentials_path";
+        let location = "gcs://bucket/path/file.parquet";
+
+        // for service_account_path
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('service_account_path' '{service_account_path}') LOCATION '{location}'");
+        let err = create_external_table_test(location, &sql)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No such file or directory"));
+
+        // for service_account_key
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('service_account_key' '{service_account_key}') LOCATION '{location}'");
+        let err = create_external_table_test(location, &sql)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No RSA key found in pem file"));
+
+        // for application_credentials_path
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET
+            OPTIONS('application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
+        let err = create_external_table_test(location, &sql)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("A configuration file was passed"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_external_table_local_file() -> Result<()> {
+        let location = "/path/to/file.parquet";
+
+        // Ensure that local files are also registered
+        let sql =
+            format!("CREATE EXTERNAL TABLE test STORED AS PARQUET LOCATION '{location}'");
+        let err = create_external_table_test(location, &sql)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No such file or directory"));
+
+        Ok(())
+    }
 }

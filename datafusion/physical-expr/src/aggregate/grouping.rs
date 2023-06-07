@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
@@ -89,5 +90,19 @@ impl AggregateExpr for Grouping {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for Grouping {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
     }
 }

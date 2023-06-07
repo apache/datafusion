@@ -18,15 +18,15 @@
 [package]
 name = "datafusion-expr"
 description = "Logical plan and expression representation for DataFusion query engine"
-version = "18.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "datafusion", "logical", "plan", "expressions" ]
-edition = "2021"
-rust-version = "1.62"
+keywords = ["datafusion", "logical", "plan", "expressions"]
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion_expr"
@@ -36,11 +36,13 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "32.0.0", default-features = false }
-datafusion-common = { path = "../common", version = "18.0.0" }
-log = "^0.4"
-sqlparser = "0.30"
+arrow = { workspace = true }
+datafusion-common = { path = "../common", version = "26.0.0" }
+lazy_static = { version = "^1.4.0" }
+sqlparser = "0.34"
+strum = { version = "0.24", features = ["derive"] }
+strum_macros = "0.24"
 
 [dev-dependencies]
-ctor = "0.1.22"
+ctor = "0.2.0"
 env_logger = "0.10"

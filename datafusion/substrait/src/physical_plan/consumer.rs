@@ -20,8 +20,8 @@ use chrono::DateTime;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use object_store::ObjectMeta;
@@ -91,6 +91,7 @@ pub async fn from_substrait_rel(
                                 last_modified: last_modified.into(),
                                 location: path.into(),
                                 size,
+                                e_tag: None,
                             },
                             partition_values: vec![],
                             range: None,
@@ -112,7 +113,7 @@ pub async fn from_substrait_rel(
                         projection: None,
                         limit: None,
                         table_partition_cols: vec![],
-                        output_ordering: None,
+                        output_ordering: vec![],
                         infinite_source: false,
                     };
 

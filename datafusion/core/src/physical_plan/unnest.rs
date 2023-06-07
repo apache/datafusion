@@ -24,13 +24,13 @@ use arrow::array::{
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_execution::TaskContext;
 use futures::Stream;
 use futures::StreamExt;
-use log::debug;
+use log::trace;
 use std::time::Instant;
 use std::{any::Any, sync::Arc};
 
-use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, expressions::Column, DisplayFormatType,
     Distribution, EquivalenceProperties, ExecutionPlan, Partitioning, PhysicalExpr,
@@ -77,8 +77,8 @@ impl ExecutionPlan for UnnestExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// If the plan does not support pipelining, but its input(s) are
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
     }
@@ -142,7 +142,7 @@ impl ExecutionPlan for UnnestExec {
     }
 
     fn statistics(&self) -> Statistics {
-        self.input.statistics()
+        Default::default()
     }
 }
 
@@ -208,7 +208,7 @@ impl UnnestStream {
                     Some(result)
                 }
                 other => {
-                    debug!(
+                    trace!(
                         "Processed {} probe-side input batches containing {} rows and \
                         produced {} output batches containing {} rows in {} ms",
                         self.num_input_batches,
@@ -248,11 +248,9 @@ fn build_batch(
                 .unwrap();
             unnest_batch(batch, schema, column, list_array)
         }
-        _ => {
-            return Err(DataFusionError::Execution(format!(
-                "Invalid unnest column {column}"
-            )));
-        }
+        _ => Err(DataFusionError::Execution(format!(
+            "Invalid unnest column {column}"
+        ))),
     }
 }
 

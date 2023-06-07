@@ -29,11 +29,8 @@ use arrow::{
 };
 use chrono::{Datelike, Duration};
 use datafusion::{
-    datasource::{provider_as_source, TableProvider},
-    physical_plan::{
-        accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
-        ExecutionPlanVisitor,
-    },
+    datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
+    physical_plan::{accept, metrics::MetricsSet, ExecutionPlan, ExecutionPlanVisitor},
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -46,6 +43,14 @@ mod custom_reader;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
+mod schema_coercion;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
+}
 
 // ----------------------
 // Begin test fixture
@@ -59,6 +64,7 @@ enum Scenario {
     Float64,
     Decimal,
     DecimalLargePrecision,
+    PeriodsInColumnNames,
 }
 
 enum Unit {
@@ -139,7 +145,7 @@ impl ContextWithParquet {
         let file = match unit {
             Unit::RowGroup => make_test_file_rg(scenario).await,
             Unit::Page => {
-                let config = config.config_options_mut();
+                let config = config.options_mut();
                 config.execution.parquet.enable_page_index = true;
                 make_test_file_page(scenario).await
             }
@@ -454,6 +460,25 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
     .unwrap()
 }
 
+/// returns a batch with two columns (note "service.name" is the name
+/// of the column. It is *not* a table named service.name
+///
+/// name | service.name
+fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
+    let num_rows = service_name_values.len();
+    let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
+    let service_name: StringArray = service_name_values.iter().map(Some).collect();
+
+    let schema = Schema::new(vec![
+        Field::new("name", name.data_type().clone(), true),
+        // note the column name has a period in it!
+        Field::new("service.name", service_name.data_type().clone(), true),
+    ]);
+    let schema = Arc::new(schema);
+
+    RecordBatch::try_new(schema, vec![Arc::new(name), Arc::new(service_name)]).unwrap()
+}
+
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Timestamps => {
@@ -505,10 +530,29 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 38, 2),
             ]
         }
+        Scenario::PeriodsInColumnNames => {
+            vec![
+                // all frontend
+                make_names_batch(
+                    "HTTP GET / DISPATCH",
+                    vec!["frontend", "frontend", "frontend", "frontend", "frontend"],
+                ),
+                // both frontend and backend
+                make_names_batch(
+                    "HTTP PUT / DISPATCH",
+                    vec!["frontend", "frontend", "backend", "backend", "backend"],
+                ),
+                // all backend
+                make_names_batch(
+                    "HTTP GET / DISPATCH",
+                    vec!["backend", "backend", "backend", "backend", "backend"],
+                ),
+            ]
+        }
     }
 }
 
-/// Create a test parquet file with varioud data types
+/// Create a test parquet file with various data types
 async fn make_test_file_rg(scenario: Scenario) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_pruning")

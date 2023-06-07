@@ -16,20 +16,20 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int64Array, Int8Array, StringArray};
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::physical_plan::file_format::{
+use datafusion::datasource::physical_plan::{
     FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::{collect, Statistics};
 use datafusion::prelude::SessionContext;
-use datafusion_common::DataFusionError;
+use datafusion_common::Result;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt};
 use object_store::memory::InMemory;
@@ -82,7 +82,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            output_ordering: None,
+            output_ordering: vec![],
             infinite_source: false,
         },
         None,
@@ -119,7 +119,7 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
         file_meta: FileMeta,
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
-    ) -> Result<Box<dyn AsyncFileReader + Send>, DataFusionError> {
+    ) -> Result<Box<dyn AsyncFileReader + Send>> {
         let metadata = file_meta
             .extensions
             .as_ref()
@@ -147,15 +147,15 @@ impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
 
 fn create_batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
     columns.into_iter().fold(
-        RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
+        RecordBatch::new_empty(Arc::new(Schema::empty())),
         |batch, (field_name, arr)| add_to_batch(&batch, field_name, arr.clone()),
     )
 }
 
 fn add_to_batch(batch: &RecordBatch, field_name: &str, array: ArrayRef) -> RecordBatch {
-    let mut fields = batch.schema().fields().clone();
+    let mut fields = SchemaBuilder::from(batch.schema().fields());
     fields.push(Field::new(field_name, array.data_type().clone(), true));
-    let schema = Arc::new(Schema::new(fields));
+    let schema = Arc::new(fields.finish());
 
     let mut columns = batch.columns().to_vec();
     columns.push(array);
@@ -185,6 +185,7 @@ async fn store_parquet_in_memory(
                     .expect("creating path"),
                 last_modified: chrono::DateTime::from(SystemTime::now()),
                 size: buf.len(),
+                e_tag: None,
             };
 
             (meta, Bytes::from(buf))

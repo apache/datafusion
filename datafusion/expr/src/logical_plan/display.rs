@@ -16,8 +16,10 @@
 // under the License.
 //! This module provides logic for displaying LogicalPlans in various styles
 
-use crate::{LogicalPlan, PlanVisitor};
+use crate::LogicalPlan;
 use arrow::datatypes::Schema;
+use datafusion_common::tree_node::{TreeNodeVisitor, VisitRecursion};
+use datafusion_common::DataFusionError;
 use std::fmt;
 
 /// Formats plans with a single line per node. For example:
@@ -45,10 +47,13 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
-    type Error = fmt::Error;
+impl<'a, 'b> TreeNodeVisitor for IndentVisitor<'a, 'b> {
+    type N = LogicalPlan;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, fmt::Error> {
+    fn pre_visit(
+        &mut self,
+        plan: &LogicalPlan,
+    ) -> datafusion_common::Result<VisitRecursion> {
         if self.indent > 0 {
             writeln!(self.f)?;
         }
@@ -63,12 +68,15 @@ impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
         }
 
         self.indent += 1;
-        Ok(true)
+        Ok(VisitRecursion::Continue)
     }
 
-    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, fmt::Error> {
+    fn post_visit(
+        &mut self,
+        _plan: &LogicalPlan,
+    ) -> datafusion_common::Result<VisitRecursion> {
         self.indent -= 1;
-        Ok(true)
+        Ok(VisitRecursion::Continue)
     }
 }
 
@@ -184,10 +192,13 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
     }
 }
 
-impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
-    type Error = fmt::Error;
+impl<'a, 'b> TreeNodeVisitor for GraphvizVisitor<'a, 'b> {
+    type N = LogicalPlan;
 
-    fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, fmt::Error> {
+    fn pre_visit(
+        &mut self,
+        plan: &LogicalPlan,
+    ) -> datafusion_common::Result<VisitRecursion> {
         let id = self.graphviz_builder.next_id();
 
         // Create a new graph node for `plan` such as
@@ -207,7 +218,8 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
             "    {}[shape=box label={}]",
             id,
             GraphvizBuilder::quoted(&label)
-        )?;
+        )
+        .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
 
         // Create an edge to our parent node, if any
         //  parent_id -> id
@@ -215,21 +227,23 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
             writeln!(
                 self.f,
                 "    {parent_id} -> {id} [arrowhead=none, arrowtail=normal, dir=back]"
-            )?;
+            )
+            .map_err(|_e| DataFusionError::Internal("Fail to format".to_string()))?;
         }
 
         self.parent_ids.push(id);
-        Ok(true)
+        Ok(VisitRecursion::Continue)
     }
 
-    fn post_visit(&mut self, _plan: &LogicalPlan) -> Result<bool, fmt::Error> {
+    fn post_visit(
+        &mut self,
+        _plan: &LogicalPlan,
+    ) -> datafusion_common::Result<VisitRecursion> {
         // always be non-empty as pre_visit always pushes
         // So it should always be Ok(true)
         let res = self.parent_ids.pop();
-        match res {
-            Some(_) => Ok(true),
-            None => Err(fmt::Error),
-        }
+        res.ok_or(DataFusionError::Internal("Fail to format".to_string()))
+            .map(|_| VisitRecursion::Continue)
     }
 }
 
@@ -241,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_display_empty_schema() {
-        let schema = Schema::new(vec![]);
+        let schema = Schema::empty();
         assert_eq!("[]", format!("{}", display_schema(&schema)));
     }
 

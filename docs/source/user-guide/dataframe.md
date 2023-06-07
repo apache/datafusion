@@ -72,7 +72,7 @@ execution. The plan is evaluated (executed) when an action method is invoked, su
 | limit               | Limit the number of rows returned from this DataFrame.                                                                                     |
 | repartition         | Repartition a DataFrame based on a logical partitioning scheme.                                                                            |
 | sort                | Sort the DataFrame by the specified sorting expressions. Any expression can be turned into a sort expression by calling its `sort` method. |
-| select              | Create a projection based on arbitrary expressions. Example: `df..select(vec![col("c1"), abs(col("c2"))])?`                                |
+| select              | Create a projection based on arbitrary expressions. Example: `df.select(vec![col("c1"), abs(col("c2"))])?`                                 |
 | select_columns      | Create a projection based on column names. Example: `df.select_columns(&["id", "name"])?`.                                                 |
 | union               | Calculate the union of two DataFrames, preserving duplicate rows. The two DataFrames must have exactly the same schema.                    |
 | union_distinct      | Calculate the distinct union of two DataFrames. The two DataFrames must have exactly the same schema.                                      |

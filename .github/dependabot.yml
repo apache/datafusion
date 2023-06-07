@@ -22,8 +22,12 @@ updates:
     schedule:
       interval: daily
     open-pull-requests-limit: 10
-    target-branch: master
+    target-branch: main
     labels: [auto-dependencies]
+    ignore:
+      # arrow is bumped manually
+      - dependency-name: "arrow*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -17,33 +17,39 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use crate::error::{DataFusionError, Result, SharedResult};
-use crate::logical_expr::JoinType;
-use crate::physical_plan::expressions::Column;
-use crate::physical_plan::SchemaRef;
 use arrow::array::{
-    new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
     UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::ScalarValue;
-use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
 use std::cmp::max;
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::usize;
 
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{ScalarValue, SharedResult};
+
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
+
+use crate::error::{DataFusionError, Result};
+use crate::logical_expr::JoinType;
+use crate::physical_plan::expressions::Column;
+
+use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
+use crate::physical_plan::SchemaRef;
 use crate::physical_plan::{
     ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
 /// The on clause of the join, as vector of (left, right) columns.
 pub type JoinOn = Vec<(Column, Column)>;
@@ -127,11 +133,11 @@ pub fn adjust_right_output_partitioning(
                 .into_iter()
                 .map(|expr| {
                     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-                        Some(col) => Ok(Some(Arc::new(Column::new(
+                        Some(col) => Ok(Transformed::Yes(Arc::new(Column::new(
                             col.name(),
                             left_columns_len + col.index(),
                         )))),
-                        None => Ok(None),
+                        None => Ok(Transformed::No(e)),
                     })
                     .unwrap()
                 })
@@ -220,13 +226,32 @@ pub fn cross_join_equivalence_properties(
     new_properties
 }
 
+impl Display for JoinSide {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JoinSide::Left => write!(f, "left"),
+            JoinSide::Right => write!(f, "right"),
+        }
+    }
+}
+
 /// Used in ColumnIndex to distinguish which side the index is for
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum JoinSide {
     /// Left side of the join
     Left,
     /// Right side of the join
     Right,
+}
+
+impl JoinSide {
+    /// Inverse the join side
+    pub fn negate(&self) -> Self {
+        match self {
+            JoinSide::Left => JoinSide::Right,
+            JoinSide::Right => JoinSide::Left,
+        }
+    }
 }
 
 /// Information about the index and placement (left or right) of the columns
@@ -326,7 +351,7 @@ pub fn build_join_schema(
     right: &Schema,
     join_type: &JoinType,
 ) -> (Schema, Vec<ColumnIndex>) {
-    let (fields, column_indices): (Vec<Field>, Vec<ColumnIndex>) = match join_type {
+    let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             let left_fields = left
                 .fields()
@@ -392,7 +417,7 @@ pub fn build_join_schema(
             .unzip(),
     };
 
-    (Schema::new(fields), column_indices)
+    (fields.finish(), column_indices)
 }
 
 /// A [`OnceAsync`] can be used to run an async closure once, with subsequent calls
@@ -710,14 +735,15 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-/// In the end of join execution, need to use bit map of the matched indices to generate the final left and
-/// right indices.
+/// In the end of join execution, need to use bit map of the matched
+/// indices to generate the final left and right indices.
 ///
 /// For example:
-/// left_bit_map: [true, false, true, true, false]
-/// join_type: `Left`
 ///
-/// The result is: ([1,4], [null, null])
+/// 1. left_bit_map: `[true, false, true, true, false]`
+/// 2. join_type: `Left`
+///
+/// The result is: `([1,4], [null, null])`
 pub(crate) fn get_final_indices_from_bit_map(
     left_bit_map: &BooleanBufferBuilder,
     join_type: JoinType,
@@ -742,26 +768,26 @@ pub(crate) fn get_final_indices_from_bit_map(
     (left_indices, right_indices)
 }
 
-/// Use the `left_indices` and `right_indices` to restructure tuples, and apply the `filter` to
-/// all of them to get the matched left and right indices.
 pub(crate) fn apply_join_filter_to_indices(
-    left: &RecordBatch,
-    right: &RecordBatch,
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
+    build_input_buffer: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
     filter: &JoinFilter,
+    build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    if left_indices.is_empty() && right_indices.is_empty() {
-        return Ok((left_indices, right_indices));
+    if build_indices.is_empty() && probe_indices.is_empty() {
+        return Ok((build_indices, probe_indices));
     };
 
     let intermediate_batch = build_batch_from_indices(
         filter.schema(),
-        left,
-        right,
-        PrimitiveArray::from(left_indices.data().clone()),
-        PrimitiveArray::from(right_indices.data().clone()),
+        build_input_buffer,
+        probe_batch,
+        build_indices.clone(),
+        probe_indices.clone(),
         filter.column_indices(),
+        build_side,
     )?;
     let filter_result = filter
         .expression()
@@ -769,53 +795,61 @@ pub(crate) fn apply_join_filter_to_indices(
         .into_array(intermediate_batch.num_rows());
     let mask = as_boolean_array(&filter_result)?;
 
-    let left_filtered = PrimitiveArray::<UInt64Type>::from(
-        compute::filter(&left_indices, mask)?.data().clone(),
-    );
-    let right_filtered = PrimitiveArray::<UInt32Type>::from(
-        compute::filter(&right_indices, mask)?.data().clone(),
-    );
-
-    Ok((left_filtered, right_filtered))
+    let left_filtered = compute::filter(&build_indices, mask)?;
+    let right_filtered = compute::filter(&probe_indices, mask)?;
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
 }
 
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_from_indices(
     schema: &Schema,
-    left: &RecordBatch,
-    right: &RecordBatch,
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
+    build_input_buffer: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_indices: UInt64Array,
+    probe_indices: UInt32Array,
     column_indices: &[ColumnIndex],
+    build_side: JoinSide,
 ) -> Result<RecordBatch> {
+    if schema.fields().is_empty() {
+        let options = RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(build_indices.len()));
+
+        return Ok(RecordBatch::try_new_with_options(
+            Arc::new(schema.clone()),
+            vec![],
+            &options,
+        )?);
+    }
+
     // build the columns of the new [RecordBatch]:
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
 
     for column_index in column_indices {
-        let array = match column_index.side {
-            JoinSide::Left => {
-                let array = left.column(column_index.index);
-                if array.is_empty() || left_indices.null_count() == left_indices.len() {
-                    // Outer join would generate a null index when finding no match at our side.
-                    // Therefore, it's possible we are empty but need to populate an n-length null array,
-                    // where n is the length of the index array.
-                    assert_eq!(left_indices.null_count(), left_indices.len());
-                    new_null_array(array.data_type(), left_indices.len())
-                } else {
-                    compute::take(array.as_ref(), &left_indices, None)?
-                }
+        let array = if column_index.side == build_side {
+            let array = build_input_buffer.column(column_index.index);
+            if array.is_empty() || build_indices.null_count() == build_indices.len() {
+                // Outer join would generate a null index when finding no match at our side.
+                // Therefore, it's possible we are empty but need to populate an n-length null array,
+                // where n is the length of the index array.
+                assert_eq!(build_indices.null_count(), build_indices.len());
+                new_null_array(array.data_type(), build_indices.len())
+            } else {
+                compute::take(array.as_ref(), &build_indices, None)?
             }
-            JoinSide::Right => {
-                let array = right.column(column_index.index);
-                if array.is_empty() || right_indices.null_count() == right_indices.len() {
-                    assert_eq!(right_indices.null_count(), right_indices.len());
-                    new_null_array(array.data_type(), right_indices.len())
-                } else {
-                    compute::take(array.as_ref(), &right_indices, None)?
-                }
+        } else {
+            let array = probe_batch.column(column_index.index);
+            if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
+                assert_eq!(probe_indices.null_count(), probe_indices.len());
+                new_null_array(array.data_type(), probe_indices.len())
+            } else {
+                compute::take(array.as_ref(), &probe_indices, None)?
             }
         };
         columns.push(array);
@@ -917,6 +951,23 @@ pub(crate) fn get_anti_indices(
         .collect::<UInt32Array>()
 }
 
+/// Get unmatched and deduplicated indices
+pub(crate) fn get_anti_u64_indices(
+    row_count: usize,
+    input_indices: &UInt64Array,
+) -> UInt64Array {
+    let mut bitmap = BooleanBufferBuilder::new(row_count);
+    bitmap.append_n(row_count, false);
+    input_indices.iter().flatten().for_each(|v| {
+        bitmap.set_bit(v as usize, true);
+    });
+
+    // get the anti index
+    (0..row_count)
+        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u64))
+        .collect::<UInt64Array>()
+}
+
 /// Get matched and deduplicated indices
 pub(crate) fn get_semi_indices(
     row_count: usize,
@@ -934,9 +985,89 @@ pub(crate) fn get_semi_indices(
         .collect::<UInt32Array>()
 }
 
+/// Get matched and deduplicated indices
+pub(crate) fn get_semi_u64_indices(
+    row_count: usize,
+    input_indices: &UInt64Array,
+) -> UInt64Array {
+    let mut bitmap = BooleanBufferBuilder::new(row_count);
+    bitmap.append_n(row_count, false);
+    input_indices.iter().flatten().for_each(|v| {
+        bitmap.set_bit(v as usize, true);
+    });
+
+    // get the semi index
+    (0..row_count)
+        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u64))
+        .collect::<UInt64Array>()
+}
+
+/// Metrics for build & probe joins
+#[derive(Clone, Debug)]
+pub(crate) struct BuildProbeJoinMetrics {
+    /// Total time for collecting build-side of join
+    pub(crate) build_time: metrics::Time,
+    /// Number of batches consumed by build-side
+    pub(crate) build_input_batches: metrics::Count,
+    /// Number of rows consumed by build-side
+    pub(crate) build_input_rows: metrics::Count,
+    /// Memory used by build-side in bytes
+    pub(crate) build_mem_used: metrics::Gauge,
+    /// Total time for joining probe-side batches to the build-side batches
+    pub(crate) join_time: metrics::Time,
+    /// Number of batches consumed by probe-side of this operator
+    pub(crate) input_batches: metrics::Count,
+    /// Number of rows consumed by probe-side this operator
+    pub(crate) input_rows: metrics::Count,
+    /// Number of batches produced by this operator
+    pub(crate) output_batches: metrics::Count,
+    /// Number of rows produced by this operator
+    pub(crate) output_rows: metrics::Count,
+}
+
+impl BuildProbeJoinMetrics {
+    pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
+        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+
+        let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
+
+        let build_input_batches =
+            MetricBuilder::new(metrics).counter("build_input_batches", partition);
+
+        let build_input_rows =
+            MetricBuilder::new(metrics).counter("build_input_rows", partition);
+
+        let build_mem_used =
+            MetricBuilder::new(metrics).gauge("build_mem_used", partition);
+
+        let input_batches =
+            MetricBuilder::new(metrics).counter("input_batches", partition);
+
+        let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
+
+        let output_batches =
+            MetricBuilder::new(metrics).counter("output_batches", partition);
+
+        let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+
+        Self {
+            build_time,
+            build_input_batches,
+            build_input_rows,
+            build_mem_used,
+            join_time,
+            input_batches,
+            input_rows,
+            output_batches,
+            output_rows,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::Fields;
     use arrow::error::Result as ArrowResult;
     use arrow::{datatypes::DataType, error::ArrowError};
     use datafusion_common::ScalarValue;
@@ -1073,7 +1204,7 @@ mod tests {
                 .iter()
                 .cloned()
                 .chain(right_out.fields().iter().cloned())
-                .collect();
+                .collect::<Fields>();
 
             let expected_schema = Schema::new(expected_fields);
             assert_eq!(

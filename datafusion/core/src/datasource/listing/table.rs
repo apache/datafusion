@@ -21,20 +21,23 @@ use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_common::ToDFSchema;
 use datafusion_expr::expr::Sort;
-use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_optimizer::utils::conjunction;
+use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::datasource::{
     file_format::{
-        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
-        FileFormat,
+        arrow::ArrowFormat, avro::AvroFormat, csv::CsvFormat, json::JsonFormat,
+        parquet::ParquetFormat, FileFormat,
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
@@ -42,15 +45,11 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
-use crate::physical_plan::file_format::partition_type_wrap;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
-    physical_plan::{
-        empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
-        Statistics,
-    },
+    physical_plan::{empty::EmptyExec, project_schema, ExecutionPlan, Statistics},
 };
 
 use super::PartitionedFile;
@@ -134,6 +133,7 @@ impl ListingTableConfig {
             .map_err(|_| DataFusionError::Internal(err_msg))?;
 
         let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::ARROW => Arc::new(ArrowFormat::default()),
             FileType::AVRO => Arc::new(AvroFormat::default()),
             FileType::CSV => Arc::new(
                 CsvFormat::default().with_file_compression_type(file_compression_type),
@@ -211,10 +211,7 @@ pub struct ListingOptions {
     /// The file format
     pub format: Arc<dyn FileFormat>,
     /// The expected partition column names in the folder structure.
-    /// For example `Vec["a", "b"]` means that the two first levels of
-    /// partitioning expected should be named "a" and "b":
-    /// - If there is a third level of partitioning it will be ignored.
-    /// - Files that don't follow this partitioning will be ignored.
+    /// See [Self::with_table_partition_cols] for details
     pub table_partition_cols: Vec<(String, DataType)>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
@@ -223,7 +220,7 @@ pub struct ListingOptions {
     /// Group files to avoid that the number of partitions exceeds
     /// this limit
     pub target_partitions: usize,
-    /// Optional pre-known sort order. Must be `SortExpr`s.
+    /// Optional pre-known sort order(s). Must be `SortExpr`s.
     ///
     /// DataFusion may take advantage of this ordering to omit sorts
     /// or use more efficient algorithms. Currently sortedness must be
@@ -232,7 +229,12 @@ pub struct ListingOptions {
     /// parquet metadata.
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
-    pub file_sort_order: Option<Vec<Expr>>,
+    /// NOTE: This attribute stores all equivalent orderings (the outer `Vec`)
+    ///       where each ordering consists of an individual lexicographic
+    ///       ordering (encapsulated by a `Vec<Expr>`). If there aren't
+    ///       multiple equivalent orderings, the outer `Vec` will have a
+    ///       single element.
+    pub file_sort_order: Vec<Vec<Expr>>,
     /// Infinite source means that the input is not guaranteed to end.
     /// Currently, CSV, JSON, and AVRO formats are supported.
     /// In order to support infinite inputs, DataFusion may adjust query
@@ -254,7 +256,7 @@ impl ListingOptions {
             table_partition_cols: vec![],
             collect_stat: true,
             target_partitions: 1,
-            file_sort_order: None,
+            file_sort_order: vec![],
             infinite_source: false,
         }
     }
@@ -296,7 +298,45 @@ impl ListingOptions {
         self
     }
 
-    /// Set table partition column names on [`ListingOptions`] and returns self.
+    /// Set `table partition columns` on [`ListingOptions`] and returns self.
+    ///
+    /// "partition columns," used to support [Hive Partitioning], are
+    /// columns added to the data that is read, based on the folder
+    /// structure where the data resides.
+    ///
+    /// For example, give the following files in your filesystem:
+    ///
+    /// ```text
+    /// /mnt/nyctaxi/year=2022/month=01/tripdata.parquet
+    /// /mnt/nyctaxi/year=2021/month=12/tripdata.parquet
+    /// /mnt/nyctaxi/year=2021/month=11/tripdata.parquet
+    /// ```
+    ///
+    /// A [`ListingTable`] created at `/mnt/nyctaxi/` with partition
+    /// columns "year" and "month" will include new `year` and `month`
+    /// columns while reading the files. The `year` column would have
+    /// value `2022` and the `month` column would have value `01` for
+    /// the rows read from
+    /// `/mnt/nyctaxi/year=2022/month=01/tripdata.parquet`
+    ///
+    ///# Notes
+    ///
+    /// - If only one level (e.g. `year` in the example above) is
+    /// specified, the other levels are ignored but the files are
+    /// still read.
+    ///
+    /// - Files that don't follow this partitioning scheme will be
+    /// ignored.
+    ///
+    /// - Since the columns have the same value for all rows read from
+    /// each individual file (such as dates), they are typically
+    /// dictionary encoded for efficiency. You may use
+    /// [`wrap_partition_type_in_dict`] to request a
+    /// dictionary-encoded type.
+    ///
+    /// - The partition columns are solely extracted from the file path. Especially they are NOT part of the parquet files itself.
+    ///
+    /// # Example
     ///
     /// ```
     /// # use std::sync::Arc;
@@ -304,6 +344,8 @@ impl ListingOptions {
     /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
+    /// // listing options for files with paths such as  `/mnt/data/col_a=x/col_b=y/data.parquet`
+    /// // `col_a` and `col_b` will be included in the data read from those files
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
     ///   ))
@@ -313,6 +355,9 @@ impl ListingOptions {
     /// assert_eq!(listing_options.table_partition_cols, vec![("col_a".to_string(), DataType::Utf8),
     ///     ("col_b".to_string(), DataType::Utf8)]);
     /// ```
+    ///
+    /// [Hive Partitioning]: https://docs.cloudera.com/HDPDocuments/HDP2/HDP-2.1.3/bk_system-admin-guide/content/hive_partitioned_tables.html
+    /// [`wrap_partition_type_in_dict`]: crate::datasource::physical_plan::wrap_partition_type_in_dict
     pub fn with_table_partition_cols(
         mut self,
         table_partition_cols: Vec<(String, DataType)>,
@@ -365,9 +410,9 @@ impl ListingOptions {
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
-    ///  let file_sort_order = Some(vec![
+    ///  let file_sort_order = vec![vec![
     ///    col("a").sort(true, true)
-    ///  ]);
+    ///  ]];
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -376,7 +421,7 @@ impl ListingOptions {
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
-    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
+    pub fn with_file_sort_order(mut self, file_sort_order: Vec<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
         self
     }
@@ -489,7 +534,7 @@ impl StatisticsCache {
 ///   .with_listing_options(listing_options)
 ///   .with_schema(resolved_schema);
 ///
-/// // Create a a new TableProvider
+/// // Create a new TableProvider
 /// let provider = Arc::new(ListingTable::try_new(config)?);
 ///
 /// // This provider can now be read as a dataframe:
@@ -534,20 +579,16 @@ impl ListingTable {
         })?;
 
         // Add the partition columns to the file schema
-        let mut table_fields = file_schema.fields().clone();
+        let mut builder = SchemaBuilder::from(file_schema.fields());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
-            table_fields.push(Field::new(
-                part_col_name,
-                partition_type_wrap(part_col_type.clone()),
-                false,
-            ));
+            builder.push(Field::new(part_col_name, part_col_type.clone(), false));
         }
         let infinite_source = options.infinite_source;
 
         let table = Self {
             table_paths: config.table_paths,
             file_schema,
-            table_schema: Arc::new(Schema::new(table_fields)),
+            table_schema: Arc::new(builder.finish()),
             options,
             definition: None,
             collected_statistics: Default::default(),
@@ -574,16 +615,12 @@ impl ListingTable {
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
-    fn try_create_output_ordering(&self) -> Result<Option<Vec<PhysicalSortExpr>>> {
-        let file_sort_order =
-            if let Some(file_sort_order) = self.options.file_sort_order.as_ref() {
-                file_sort_order
-            } else {
-                return Ok(None);
-            };
+    fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
+        let mut all_sort_orders = vec![];
 
-        // convert each expr to a physical sort expr
-        let sort_exprs = file_sort_order
+        for exprs in &self.options.file_sort_order {
+            // Construct PhsyicalSortExpr objects from Expr objects:
+            let sort_exprs = exprs
             .iter()
             .map(|expr| {
                 if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
@@ -599,7 +636,7 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Only support single column references in output_ordering, got {expr:?}")
+                            format!("Expected single column references in output_ordering, got {expr:?}")
                         ))
                     }
                 } else {
@@ -609,8 +646,9 @@ impl ListingTable {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-
-        Ok(Some(sort_exprs))
+            all_sort_orders.push(sort_exprs);
+        }
+        Ok(all_sort_orders)
     }
 }
 
@@ -661,6 +699,20 @@ impl TableProvider for ListingTable {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        let filters = if let Some(expr) = conjunction(filters.to_vec()) {
+            // NOTE: Use the table schema (NOT file schema) here because `expr` may contain references to partition columns.
+            let table_df_schema = self.table_schema.as_ref().clone().to_dfschema()?;
+            let filters = create_physical_expr(
+                &expr,
+                &table_df_schema,
+                &self.table_schema,
+                state.execution_props(),
+            )?;
+            Some(filters)
+        } else {
+            None
+        };
+
         // create the execution plan
         self.options
             .format
@@ -677,7 +729,7 @@ impl TableProvider for ListingTable {
                     table_partition_cols,
                     infinite_source: self.infinite_source,
                 },
-                filters,
+                filters.as_ref(),
             )
             .await
     }
@@ -706,6 +758,63 @@ impl TableProvider for ListingTable {
 
     fn get_table_definition(&self) -> Option<&str> {
         self.definition.as_deref()
+    }
+
+    async fn insert_into(
+        &self,
+        state: &SessionState,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Check that the schema of the plan matches the schema of this table.
+        if !input.schema().eq(&self.schema()) {
+            return Err(DataFusionError::Plan(
+                // Return an error if schema of the input query does not match with the table schema.
+                "Inserting query must have the same schema with the table.".to_string(),
+            ));
+        }
+
+        if self.table_paths().len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Writing to a table backed by multiple files is not supported yet"
+                    .to_owned(),
+            ));
+        }
+
+        let table_path = &self.table_paths()[0];
+        // Get the object store for the table path.
+        let store = state.runtime_env().object_store(table_path)?;
+
+        let file_list_stream = pruned_partition_list(
+            store.as_ref(),
+            table_path,
+            &[],
+            &self.options.file_extension,
+            &self.options.table_partition_cols,
+        )
+        .await?;
+
+        let file_groups = file_list_stream.try_collect::<Vec<_>>().await?;
+
+        if file_groups.len() > 1 {
+            return Err(DataFusionError::Plan(
+                "Datafusion currently supports tables from single partition and/or file."
+                    .to_owned(),
+            ));
+        }
+
+        // Sink related option, apart from format
+        let config = FileSinkConfig {
+            object_store_url: self.table_paths()[0].object_store(),
+            file_groups,
+            output_schema: input.schema(),
+            table_partition_cols: self.options.table_partition_cols.clone(),
+            writer_mode: crate::datasource::file_format::FileWriterMode::Append,
+        };
+
+        self.options()
+            .format
+            .create_writer_physical_plan(input, state, config)
+            .await
     }
 }
 
@@ -778,16 +887,24 @@ impl ListingTable {
 mod tests {
     use super::*;
     use crate::datasource::file_format::file_type::GetExt;
+    use crate::datasource::{provider_as_source, MemTable};
+    use crate::physical_plan::collect;
     use crate::prelude::*;
     use crate::{
+        assert_batches_eq,
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
         execution::options::ReadOptions,
         logical_expr::{col, lit},
         test::{columns, object_store::register_test_store},
     };
-    use arrow::datatypes::DataType;
+    use arrow::csv;
+    use arrow::datatypes::{DataType, Schema};
+    use arrow::error::Result as ArrowResult;
+    use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
+    use datafusion_common::from_slice::FromSlice;
+    use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::fs::File;
     use tempfile::TempDir;
@@ -904,40 +1021,38 @@ mod tests {
 
         // (file_sort_order, expected_result)
         let cases = vec![
-            (None, Ok(None)),
-            // empty list
-            (Some(vec![]), Ok(Some(vec![]))),
+            (vec![], Ok(vec![])),
             // not a sort expr
             (
-                Some(vec![col("string_col")]),
+                vec![vec![col("string_col")]],
                 Err("Expected Expr::Sort in output_ordering, but got string_col"),
             ),
             // sort expr, but non column
             (
-                Some(vec![
+                vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
-                ]),
-                Err("Only support single column references in output_ordering, got int_col + Int32(1)"),
+                ]],
+                Err("Expected single column references in output_ordering, got int_col + Int32(1)"),
             ),
             // ok with one column
             (
-                Some(vec![col("string_col").sort(true, false)]),
-                Ok(Some(vec![PhysicalSortExpr {
+                vec![vec![col("string_col").sort(true, false)]],
+                Ok(vec![vec![PhysicalSortExpr {
                     expr: physical_col("string_col", &schema).unwrap(),
                     options: SortOptions {
                         descending: false,
                         nulls_first: false,
                     },
-                }]))
+                }]])
 
             ),
             // ok with two columns, different options
             (
-                Some(vec![
+                vec![vec![
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
-                ]),
-                Ok(Some(vec![
+                ]],
+                Ok(vec![vec![
                     PhysicalSortExpr {
                         expr: physical_col("string_col", &schema).unwrap(),
                         options: SortOptions {
@@ -952,7 +1067,7 @@ mod tests {
                             nulls_first: true,
                         },
                     },
-                ]))
+                ]])
 
             ),
 
@@ -996,10 +1111,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(FileType::AVRO.get_ext())
-            .with_table_partition_cols(vec![(
-                String::from("p1"),
-                partition_type_wrap(DataType::Utf8),
-            )])
+            .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
@@ -1276,6 +1388,24 @@ mod tests {
         Ok(Arc::new(table))
     }
 
+    fn load_empty_schema_csv_table(
+        schema: SchemaRef,
+        temp_path: &str,
+    ) -> Result<Arc<dyn TableProvider>> {
+        File::create(temp_path)?;
+        let table_path = ListingTableUrl::parse(temp_path).unwrap();
+
+        let file_format = CsvFormat::default();
+        let listing_options = ListingOptions::new(Arc::new(file_format));
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_options)
+            .with_schema(schema);
+
+        let table = ListingTable::try_new(config)?;
+        Ok(Arc::new(table))
+    }
+
     /// Check that the files listed by the table match the specified `output_partitioning`
     /// when the object store contains `files`.
     async fn assert_list_files_for_scan_grouping(
@@ -1353,6 +1483,7 @@ mod tests {
                 .unwrap()
                 .into(),
             size: 1024,
+            e_tag: None,
         };
 
         let cache = StatisticsCache::default();
@@ -1377,5 +1508,168 @@ mod tests {
         let mut meta2 = meta;
         meta2.location = Path::from("test2");
         assert!(cache.get(&meta2).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_append_plan_to_external_table_stored_as_csv() -> Result<()> {
+        let file_type = FileType::CSV;
+        let file_compression_type = FileCompressionType::UNCOMPRESSED;
+
+        // Create the initial context, schema, and batch.
+        let session_ctx = SessionContext::new();
+        // Create a new schema with one field called "a" of type Int32
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            DataType::Int32,
+            false,
+        )]));
+
+        // Create a new batch of data to insert into the table
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(arrow_array::Int32Array::from_slice([1, 2, 3]))],
+        )?;
+
+        // Filename with extension
+        let filename = format!(
+            "path{}",
+            file_type
+                .to_owned()
+                .get_ext_with_compression(file_compression_type.clone())
+                .unwrap()
+        );
+
+        // Define batch size for file reader
+        let batch_size = batch.num_rows();
+
+        // Create a temporary directory and a CSV file within it.
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().join(filename);
+
+        let initial_table =
+            load_empty_schema_csv_table(schema.clone(), path.to_str().unwrap())?;
+        session_ctx.register_table("t", initial_table)?;
+        // Create and register the source table with the provided schema and inserted data
+        let source_table = Arc::new(MemTable::try_new(
+            schema.clone(),
+            vec![vec![batch.clone(), batch.clone()]],
+        )?);
+        session_ctx.register_table("source", source_table.clone())?;
+        // Convert the source table into a provider so that it can be used in a query
+        let source = provider_as_source(source_table);
+        // Create a table scan logical plan to read from the source table
+        let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
+        // Create an insert plan to insert the source data into the initial table
+        let insert_into_table =
+            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema)?.build()?;
+        // Create a physical plan from the insert plan
+        let plan = session_ctx
+            .state()
+            .create_physical_plan(&insert_into_table)
+            .await?;
+
+        // Execute the physical plan and collect the results
+        let res = collect(plan, session_ctx.task_ctx()).await?;
+        // Insert returns the number of rows written, in our case this would be 6.
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &res);
+        // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
+        let file = File::open(path.clone())?;
+        let reader = csv::ReaderBuilder::new(schema.clone())
+            .has_header(true)
+            .with_batch_size(batch_size)
+            .build(file)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
+        let batches = reader
+            .collect::<Vec<ArrowResult<RecordBatch>>>()
+            .into_iter()
+            .collect::<ArrowResult<Vec<RecordBatch>>>()
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
+        // Define the expected result as a vector of strings.
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "+---------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &batches);
+
+        // Create a physical plan from the insert plan
+        let plan = session_ctx
+            .state()
+            .create_physical_plan(&insert_into_table)
+            .await?;
+
+        // Again, execute the physical plan and collect the results
+        let res = collect(plan, session_ctx.task_ctx()).await?;
+        // Insert returns the number of rows written, in our case this would be 6.
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 6     |",
+            "+-------+",
+        ];
+
+        // Assert that the batches read from the file match the expected result.
+        assert_batches_eq!(expected, &res);
+
+        // Open the CSV file, read its contents as a record batch, and collect the batches into a vector.
+        let file = File::open(path.clone())?;
+        let reader = csv::ReaderBuilder::new(schema.clone())
+            .has_header(true)
+            .with_batch_size(batch_size)
+            .build(file)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+
+        let batches = reader
+            .collect::<Vec<ArrowResult<RecordBatch>>>()
+            .into_iter()
+            .collect::<ArrowResult<Vec<RecordBatch>>>()
+            .map_err(|e| DataFusionError::Internal(e.to_string()));
+
+        // Define the expected result after the second append.
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "| 1       |",
+            "| 2       |",
+            "| 3       |",
+            "+---------+",
+        ];
+
+        // Assert that the batches read from the file after the second append match the expected result.
+        assert_batches_eq!(expected, &batches?);
+
+        // Return Ok if the function
+        Ok(())
     }
 }

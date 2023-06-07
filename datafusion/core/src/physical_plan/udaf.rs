@@ -31,6 +31,7 @@ use crate::error::Result;
 use crate::physical_plan::PhysicalExpr;
 pub use datafusion_expr::AggregateUDF;
 
+use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;
 use std::sync::Arc;
 
 /// Creates a physical expression of the UDAF, that includes all necessary type coercion.
@@ -62,6 +63,13 @@ pub struct AggregateFunctionExpr {
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
+}
+
+impl AggregateFunctionExpr {
+    /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
+    pub fn fun(&self) -> &AggregateUDF {
+        &self.fun
+    }
 }
 
 impl AggregateExpr for AggregateFunctionExpr {
@@ -100,5 +108,24 @@ impl AggregateExpr for AggregateFunctionExpr {
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for AggregateFunctionExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.fun == x.fun
+                    && self.args.len() == x.args.len()
+                    && self
+                        .args
+                        .iter()
+                        .zip(x.args.iter())
+                        .all(|(this_arg, other_arg)| this_arg.eq(other_arg))
+            })
+            .unwrap_or(false)
     }
 }

@@ -131,6 +131,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 fun,
                                 args,
                                 filter,
+                                order_by,
                                 ..
                             }) => {
                                 // is_single_distinct_agg ensure args.len=1
@@ -144,6 +145,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
                                     filter.clone(),
+                                    order_by.clone(),
                                 )))
                             }
                             _ => Ok(aggr_expr.clone()),
@@ -398,6 +400,7 @@ mod tests {
                         AggregateFunction::Max,
                         vec![col("b")],
                         true,
+                        None,
                         None,
                     )),
                 ],

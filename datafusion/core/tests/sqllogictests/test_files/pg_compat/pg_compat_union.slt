@@ -151,7 +151,7 @@ SELECT * FROM (
 5
 
 
-query I  rowsort
+query I rowsort
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1
@@ -165,7 +165,7 @@ SELECT * FROM (
 4
 
 
-query I  rowsort
+query I rowsort
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1

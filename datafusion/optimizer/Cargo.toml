@@ -18,36 +18,40 @@
 [package]
 name = "datafusion-optimizer"
 description = "DataFusion Query Optimizer"
-version = "18.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
 keywords = [ "datafusion", "query", "optimizer" ]
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [lib]
 name = "datafusion_optimizer"
 path = "src/lib.rs"
 
 [features]
-default = ["unicode_expressions"]
-unicode_expressions = []
+crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
+default = ["unicode_expressions", "crypto_expressions", "regex_expressions"]
+dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
+regex_expressions = ["datafusion-physical-expr/regex_expressions"]
+unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
-arrow = { version = "32.0.0", features = ["prettyprint"] }
+arrow = { workspace = true }
 async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
-datafusion-common = { path = "../common", version = "18.0.0" }
-datafusion-expr = { path = "../expr", version = "18.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "18.0.0" }
-hashbrown = { version = "0.13", features = ["raw"] }
+datafusion-common = { path = "../common", version = "26.0.0" }
+datafusion-expr = { path = "../expr", version = "26.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "26.0.0", default-features = false }
+hashbrown = { version = "0.14", features = ["raw"] }
+itertools = "0.10"
 log = "^0.4"
-regex-syntax = "0.6.28"
+regex-syntax = "0.7.1"
 
 [dev-dependencies]
-ctor = "0.1.22"
-datafusion-sql = { path = "../sql", version = "18.0.0" }
+ctor = "0.2.0"
+datafusion-sql = { path = "../sql", version = "26.0.0" }
 env_logger = "0.10.0"

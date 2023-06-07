@@ -29,10 +29,10 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 
-use crate::execution::context::TaskContext;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_execution::TaskContext;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -96,7 +96,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
@@ -295,7 +295,6 @@ mod tests {
     use crate::config::ConfigOptions;
     use crate::datasource::MemTable;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
     use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
@@ -308,12 +307,7 @@ mod tests {
 
         let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
-        let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
-        let coalesce = projection
-            .input()
-            .as_any()
-            .downcast_ref::<CoalesceBatchesExec>()
-            .unwrap();
+        let coalesce = plan.as_any().downcast_ref::<CoalesceBatchesExec>().unwrap();
         assert_eq!(1234, coalesce.target_batch_size);
         Ok(())
     }
@@ -325,13 +319,7 @@ mod tests {
 
         let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
-        let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
-        // projection should directly wrap filter with no coalesce step
-        let _filter = projection
-            .input()
-            .as_any()
-            .downcast_ref::<FilterExec>()
-            .unwrap();
+        let _filter = plan.as_any().downcast_ref::<FilterExec>().unwrap();
         Ok(())
     }
 

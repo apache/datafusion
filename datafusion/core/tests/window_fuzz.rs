@@ -26,18 +26,19 @@ use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, BoundedWindowAggExec, WindowAggExec,
+    create_window_expr, BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
 };
+use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion_expr::{
     AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
     WindowFrameUnits, WindowFunction,
 };
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
@@ -45,57 +46,119 @@ use test_utils::add_empty_batches;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::physical_plan::windows::PartitionSearchMode::{
+        Linear, PartiallySorted, Sorted,
+    };
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn single_order_by_test() {
-        let n = 100;
-        let distincts = vec![1, 100];
-        for distinct in distincts {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn window_bounded_window_random_comparison() -> Result<()> {
+        // make_staggered_batches gives result sorted according to a, b, c
+        // In the test cases first entry represents partition by columns
+        // Second entry represents order by columns.
+        // Third entry represents search mode.
+        // In sorted mode physical plans are in the form for WindowAggExec
+        //```
+        // WindowAggExec
+        //   MemoryExec]
+        // ```
+        // and in the form for BoundedWindowAggExec
+        // ```
+        // BoundedWindowAggExec
+        //   MemoryExec
+        // ```
+        // In Linear and PartiallySorted mode physical plans are in the form for WindowAggExec
+        //```
+        // WindowAggExec
+        //   SortExec(required by window function)
+        //     MemoryExec]
+        // ```
+        // and in the form for BoundedWindowAggExec
+        // ```
+        // BoundedWindowAggExec
+        //   MemoryExec
+        // ```
+        let test_cases = vec![
+            (vec!["a"], vec!["a"], Sorted),
+            (vec!["a"], vec!["b"], Sorted),
+            (vec!["a"], vec!["a", "b"], Sorted),
+            (vec!["a"], vec!["b", "c"], Sorted),
+            (vec!["a"], vec!["a", "b", "c"], Sorted),
+            (vec!["b"], vec!["a"], Linear),
+            (vec!["b"], vec!["a", "b"], Linear),
+            (vec!["b"], vec!["a", "c"], Linear),
+            (vec!["b"], vec!["a", "b", "c"], Linear),
+            (vec!["c"], vec!["a"], Linear),
+            (vec!["c"], vec!["a", "b"], Linear),
+            (vec!["c"], vec!["a", "c"], Linear),
+            (vec!["c"], vec!["a", "b", "c"], Linear),
+            (vec!["b", "a"], vec!["a"], Sorted),
+            (vec!["b", "a"], vec!["b"], Sorted),
+            (vec!["b", "a"], vec!["c"], Sorted),
+            (vec!["b", "a"], vec!["a", "b"], Sorted),
+            (vec!["b", "a"], vec!["b", "c"], Sorted),
+            (vec!["b", "a"], vec!["a", "c"], Sorted),
+            (vec!["b", "a"], vec!["a", "b", "c"], Sorted),
+            (vec!["c", "b"], vec!["a"], Linear),
+            (vec!["c", "b"], vec!["a", "b"], Linear),
+            (vec!["c", "b"], vec!["a", "c"], Linear),
+            (vec!["c", "b"], vec!["a", "b", "c"], Linear),
+            (vec!["c", "a"], vec!["a"], PartiallySorted(vec![1])),
+            (vec!["c", "a"], vec!["b"], PartiallySorted(vec![1])),
+            (vec!["c", "a"], vec!["c"], PartiallySorted(vec![1])),
+            (vec!["c", "a"], vec!["a", "b"], PartiallySorted(vec![1])),
+            (vec!["c", "a"], vec!["b", "c"], PartiallySorted(vec![1])),
+            (vec!["c", "a"], vec!["a", "c"], PartiallySorted(vec![1])),
+            (
+                vec!["c", "a"],
+                vec!["a", "b", "c"],
+                PartiallySorted(vec![1]),
+            ),
+            (vec!["c", "b", "a"], vec!["a"], Sorted),
+            (vec!["c", "b", "a"], vec!["b"], Sorted),
+            (vec!["c", "b", "a"], vec!["c"], Sorted),
+            (vec!["c", "b", "a"], vec!["a", "b"], Sorted),
+            (vec!["c", "b", "a"], vec!["b", "c"], Sorted),
+            (vec!["c", "b", "a"], vec!["a", "c"], Sorted),
+            (vec!["c", "b", "a"], vec!["a", "b", "c"], Sorted),
+        ];
+        let n = 300;
+        let n_distincts = vec![10, 20];
+        for n_distinct in n_distincts {
             let mut handles = Vec::new();
             for i in 0..n {
+                let idx = i % test_cases.len();
+                let (pb_cols, ob_cols, search_mode) = test_cases[idx].clone();
                 let job = tokio::spawn(run_window_test(
-                    make_staggered_batches::<true>(1000, distinct, i),
-                    i,
-                    vec!["a"],
-                    vec![],
+                    make_staggered_batches::<true>(1000, n_distinct, i as u64),
+                    i as u64,
+                    pb_cols,
+                    ob_cols,
+                    search_mode,
                 ));
                 handles.push(job);
             }
             for job in handles {
-                job.await.unwrap();
+                job.await.unwrap()?;
             }
         }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn order_by_with_partition_test() {
-        let n = 100;
-        let distincts = vec![1, 100];
-        for distinct in distincts {
-            // since we have sorted pairs (a,b) to not violate per partition soring
-            // partition should be field a, order by should be field b
-            let mut handles = Vec::new();
-            for i in 0..n {
-                let job = tokio::spawn(run_window_test(
-                    make_staggered_batches::<true>(1000, distinct, i),
-                    i,
-                    vec!["b"],
-                    vec!["a"],
-                ));
-                handles.push(job);
-            }
-            for job in handles {
-                job.await.unwrap();
-            }
-        }
+        Ok(())
     }
 }
 
 fn get_random_function(
     schema: &SchemaRef,
     rng: &mut StdRng,
+    is_linear: bool,
 ) -> (WindowFunction, Vec<Arc<dyn PhysicalExpr>>, String) {
-    let mut args = vec![col("x", schema).unwrap()];
+    let mut args = if is_linear {
+        // In linear test for the test version with WindowAggExec we use insert SortExecs to the plan to be able to generate
+        // same result with BoundedWindowAggExec which doesn't use any SortExec. To make result
+        // non-dependent on table order. We should use column a in the window function
+        // (Given that we do not use ROWS for the window frame. ROWS also introduces dependency to the table order.).
+        vec![col("a", schema).unwrap()]
+    } else {
+        vec![col("x", schema).unwrap()]
+    };
     let mut window_fn_map = HashMap::new();
     // HashMap values consists of tuple first element is WindowFunction, second is additional argument
     // window function requires if any. For most of the window functions additional argument is empty
@@ -127,20 +190,45 @@ fn get_random_function(
             vec![],
         ),
     );
-    window_fn_map.insert(
-        "row_number",
-        (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::RowNumber),
-            vec![],
-        ),
-    );
-    window_fn_map.insert(
-        "rank",
-        (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
-            vec![],
-        ),
-    );
+    if !is_linear {
+        // row_number, rank, lead, lag doesn't use its window frame to calculate result. Their results are calculated
+        // according to table scan order. This adds the dependency to table order. Hence do not use these functions in
+        // Partition by linear test.
+        window_fn_map.insert(
+            "row_number",
+            (
+                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::RowNumber),
+                vec![],
+            ),
+        );
+        window_fn_map.insert(
+            "rank",
+            (
+                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+                vec![],
+            ),
+        );
+        window_fn_map.insert(
+            "lead",
+            (
+                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+                vec![
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                ],
+            ),
+        );
+        window_fn_map.insert(
+            "lag",
+            (
+                WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+                vec![
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                ],
+            ),
+        );
+    }
     window_fn_map.insert(
         "first_value",
         (
@@ -162,26 +250,6 @@ fn get_random_function(
             vec![lit(ScalarValue::Int64(Some(rng.gen_range(1..10))))],
         ),
     );
-    window_fn_map.insert(
-        "lead",
-        (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
-            vec![
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
-            ],
-        ),
-    );
-    window_fn_map.insert(
-        "lag",
-        (
-            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
-            vec![
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
-            ],
-        ),
-    );
 
     let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
@@ -193,17 +261,17 @@ fn get_random_function(
     (window_fn.clone(), args, fn_name.to_string())
 }
 
-fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
+fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
     struct Utils {
         val: i32,
         is_preceding: bool,
     }
     let first_bound = Utils {
-        val: rng.gen_range(0..50),
+        val: rng.gen_range(0..10),
         is_preceding: rng.gen_range(0..2) == 0,
     };
     let second_bound = Utils {
-        val: rng.gen_range(0..50),
+        val: rng.gen_range(0..10),
         is_preceding: rng.gen_range(0..2) == 0,
     };
     let (start_bound, end_bound) =
@@ -225,11 +293,17 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
     let units = if rand_num < 1 {
         WindowFrameUnits::Range
     } else if rand_num < 2 {
-        WindowFrameUnits::Rows
+        if is_linear {
+            // In linear test we sort data for WindowAggExec
+            // However, we do not sort data for BoundedWindowExec
+            // Since sorting is unstable, to make sure final result are comparable after sorting
+            // We shouldn't use Rows. This would add dependency to the table order.
+            WindowFrameUnits::Range
+        } else {
+            WindowFrameUnits::Rows
+        }
     } else {
-        // For now we do not support GROUPS in BoundedWindowAggExec implementation
-        // TODO: once GROUPS handling is available, use WindowFrameUnits::GROUPS in randomized tests also.
-        WindowFrameUnits::Range
+        WindowFrameUnits::Groups
     };
     match units {
         // In range queries window frame boundaries should match column type
@@ -256,8 +330,8 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
             }
             window_frame
         }
-        // In window queries, window frame boundary should be Uint64
-        WindowFrameUnits::Rows => {
+        // Window frame boundary should be UInt64 for both ROWS and GROUPS frames:
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
             let start_bound = if start_bound.is_preceding {
                 WindowFrameBound::Preceding(ScalarValue::UInt64(Some(
                     start_bound.val as u64,
@@ -286,10 +360,10 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
                 window_frame.start_bound =
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None));
             }
+            // We never use UNBOUNDED FOLLOWING in test. Because that case is not prunable and
+            // should work only with WindowAggExec
             window_frame
         }
-        // Once GROUPS support is added construct window frame for this case also
-        _ => todo!(),
     }
 }
 
@@ -298,25 +372,27 @@ fn get_random_window_frame(rng: &mut StdRng) -> WindowFrame {
 async fn run_window_test(
     input1: Vec<RecordBatch>,
     random_seed: u64,
-    orderby_columns: Vec<&str>,
     partition_by_columns: Vec<&str>,
-) {
+    orderby_columns: Vec<&str>,
+    search_mode: PartitionSearchMode,
+) -> Result<()> {
+    let is_linear = !matches!(search_mode, PartitionSearchMode::Sorted);
     let mut rng = StdRng::seed_from_u64(random_seed);
     let schema = input1[0].schema();
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::with_config(session_config);
-    let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng);
+    let (window_fn, args, fn_name) = get_random_function(&schema, &mut rng, is_linear);
 
-    let window_frame = get_random_window_frame(&mut rng);
+    let window_frame = get_random_window_frame(&mut rng, is_linear);
     let mut orderby_exprs = vec![];
-    for column in orderby_columns {
+    for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
             expr: col(column, &schema).unwrap(),
             options: SortOptions::default(),
         })
     }
     let mut partitionby_exprs = vec![];
-    for column in partition_by_columns {
+    for column in &partition_by_columns {
         partitionby_exprs.push(col(column, &schema).unwrap());
     }
     let mut sort_keys = vec![];
@@ -327,13 +403,35 @@ async fn run_window_test(
         })
     }
     for order_by_expr in &orderby_exprs {
-        sort_keys.push(order_by_expr.clone())
+        if !sort_keys.contains(order_by_expr) {
+            sort_keys.push(order_by_expr.clone())
+        }
     }
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
-    let exec1 = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
-    );
+    let source_sort_keys = vec![
+        PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: Default::default(),
+        },
+        PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: Default::default(),
+        },
+        PhysicalSortExpr {
+            expr: col("c", &schema)?,
+            options: Default::default(),
+        },
+    ];
+    let memory_exec =
+        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap();
+    let memory_exec = memory_exec.with_sort_information(source_sort_keys.clone());
+    let mut exec1 = Arc::new(memory_exec) as Arc<dyn ExecutionPlan>;
+    // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
+    // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
+    if is_linear {
+        exec1 = Arc::new(SortExec::new(sort_keys.clone(), exec1)) as _;
+    }
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
@@ -349,12 +447,14 @@ async fn run_window_test(
             exec1,
             schema.clone(),
             vec![],
-            Some(sort_keys.clone()),
         )
         .unwrap(),
+    ) as _;
+    let exec2 = Arc::new(
+        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+            .unwrap()
+            .with_sort_information(source_sort_keys.clone()),
     );
-    let exec2 =
-        Arc::new(MemoryExec::try_new(&[input1.clone()], schema.clone(), None).unwrap());
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
@@ -370,17 +470,20 @@ async fn run_window_test(
             exec2,
             schema.clone(),
             vec![],
-            Some(sort_keys),
+            search_mode,
         )
         .unwrap(),
-    );
-
+    ) as Arc<dyn ExecutionPlan>;
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(usual_window_exec, task_ctx.clone()).await.unwrap();
 
     let collected_running = collect(running_window_exec, task_ctx.clone())
         .await
         .unwrap();
+
+    // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
+    // Otherwise it means that we cannot generate result in running mode.
+    assert!(collected_running.len() > collected_usual.len());
     // compare
     let usual_formatted = pretty_format_batches(&collected_usual).unwrap().to_string();
     let running_formatted = pretty_format_batches(&collected_running)
@@ -401,44 +504,44 @@ async fn run_window_test(
         assert_eq!(
             (i, usual_line),
             (i, running_line),
-            "Inconsistent result for window_fn: {window_fn:?}, args:{args:?}"
+            "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}"
         );
     }
+    Ok(())
 }
 
 /// Return randomly sized record batches with:
-/// two sorted int32 columns 'a', 'b' ranged from 0..len / DISTINCT as columns
-/// two random int32 columns 'x', 'y' as other columns
+/// three sorted int32 columns 'a', 'b', 'c' ranged from 0..DISTINCT as columns
+/// one random int32 column x
 fn make_staggered_batches<const STREAM: bool>(
     len: usize,
-    distinct: usize,
+    n_distinct: usize,
     random_seed: u64,
 ) -> Vec<RecordBatch> {
     // use a random number generator to pick a random sized output
     let mut rng = StdRng::seed_from_u64(random_seed);
-    let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
-    let mut input3: Vec<i32> = vec![0; len];
+    let mut input123: Vec<(i32, i32, i32)> = vec![(0, 0, 0); len];
     let mut input4: Vec<i32> = vec![0; len];
-    input12.iter_mut().for_each(|v| {
+    input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..(len / distinct)) as i32,
-            rng.gen_range(0..(len / distinct)) as i32,
+            rng.gen_range(0..n_distinct) as i32,
+            rng.gen_range(0..n_distinct) as i32,
+            rng.gen_range(0..n_distinct) as i32,
         )
     });
-    rng.fill(&mut input3[..]);
+    input123.sort();
     rng.fill(&mut input4[..]);
-    input12.sort();
-    let input1 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.0));
-    let input2 = Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.1));
-    let input3 = Int32Array::from_iter_values(input3.into_iter());
+    let input1 = Int32Array::from_iter_values(input123.iter().map(|k| k.0));
+    let input2 = Int32Array::from_iter_values(input123.iter().map(|k| k.1));
+    let input3 = Int32Array::from_iter_values(input123.iter().map(|k| k.2));
     let input4 = Int32Array::from_iter_values(input4.into_iter());
 
     // split into several record batches
     let mut remainder = RecordBatch::try_from_iter(vec![
         ("a", Arc::new(input1) as ArrayRef),
         ("b", Arc::new(input2) as ArrayRef),
-        ("x", Arc::new(input3) as ArrayRef),
-        ("y", Arc::new(input4) as ArrayRef),
+        ("c", Arc::new(input3) as ArrayRef),
+        ("x", Arc::new(input4) as ArrayRef),
     ])
     .unwrap();
 

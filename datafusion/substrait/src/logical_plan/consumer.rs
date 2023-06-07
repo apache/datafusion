@@ -16,12 +16,14 @@
 // under the License.
 
 use async_recursion::async_recursion;
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{DFField, DFSchema, DFSchemaRef};
-use datafusion::logical_expr::expr;
 use datafusion::logical_expr::{
-    aggregate_function, BinaryExpr, Case, Expr, LogicalPlan, Operator,
+    aggregate_function, window_function::find_df_window_func, BinaryExpr,
+    BuiltinScalarFunction, Case, Expr, LogicalPlan, Operator,
 };
-use datafusion::logical_expr::{build_join_schema, LogicalPlanBuilder};
+use datafusion::logical_expr::{build_join_schema, Extension, LogicalPlanBuilder};
+use datafusion::logical_expr::{expr, Cast, WindowFrameBound, WindowFrameUnits};
 use datafusion::prelude::JoinType;
 use datafusion::sql::TableReference;
 use datafusion::{
@@ -30,11 +32,15 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
+use substrait::proto::expression::Literal;
 use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
         field_reference::ReferenceType::DirectReference, literal::LiteralType,
-        reference_segment::ReferenceType::StructField, MaskExpression, RexType,
+        reference_segment::ReferenceType::StructField,
+        window_function::bound as SubstraitBound,
+        window_function::bound::Kind as BoundKind, window_function::Bound,
+        MaskExpression, RexType,
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
@@ -44,11 +50,24 @@ use substrait::proto::{
     sort_field::{SortDirection, SortKind::*},
     AggregateFunction, Expression, Plan, Rel, Type,
 };
+use substrait::proto::{FunctionArgument, SortField};
 
 use datafusion::logical_expr::expr::Sort;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
+
+use crate::variation_const::{
+    DATE_32_TYPE_REF, DATE_64_TYPE_REF, DECIMAL_128_TYPE_REF, DECIMAL_256_TYPE_REF,
+    DEFAULT_CONTAINER_TYPE_REF, DEFAULT_TYPE_REF, LARGE_CONTAINER_TYPE_REF,
+    TIMESTAMP_MICRO_TYPE_REF, TIMESTAMP_MILLI_TYPE_REF, TIMESTAMP_NANO_TYPE_REF,
+    TIMESTAMP_SECOND_TYPE_REF, UNSIGNED_INTEGER_TYPE_REF,
+};
+
+enum ScalarFunctionType {
+    Builtin(BuiltinScalarFunction),
+    Op(Operator),
+}
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
     match name {
@@ -81,6 +100,20 @@ pub fn name_to_op(name: &str) -> Result<Operator> {
             "Unsupported function name: {name:?}"
         ))),
     }
+}
+
+fn name_to_op_or_scalar_function(name: &str) -> Result<ScalarFunctionType> {
+    if let Ok(op) = name_to_op(name) {
+        return Ok(ScalarFunctionType::Op(op));
+    }
+
+    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
+        return Ok(ScalarFunctionType::Builtin(fun));
+    }
+
+    Err(DataFusionError::NotImplemented(format!(
+        "Unsupported function name: {name:?}"
+    )))
 }
 
 /// Convert Substrait Plan to DataFusion DataFrame
@@ -138,13 +171,25 @@ pub async fn from_substrait_rel(
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
-                let input = LogicalPlanBuilder::from(
+                let mut input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
-                    let x = from_substrait_rex(e, input.schema(), extensions).await?;
-                    exprs.push(x.as_ref().clone());
+                    let x =
+                        from_substrait_rex(e, input.clone().schema(), extensions).await?;
+                    // if the expression is WindowFunction, wrap in a Window relation
+                    //   before returning and do not add to list of this Projection's expression list
+                    // otherwise, add expression to the Projection's expression list
+                    match &*x {
+                        Expr::WindowFunction(_) => {
+                            input = input.window(vec![x.as_ref().clone()])?;
+                            exprs.push(x.as_ref().clone());
+                        }
+                        _ => {
+                            exprs.push(x.as_ref().clone());
+                        }
+                    }
                 }
                 input.project(exprs)?.build()
             } else {
@@ -192,45 +237,8 @@ pub async fn from_substrait_rel(
                 let input = LogicalPlanBuilder::from(
                     from_substrait_rel(ctx, input, extensions).await?,
                 );
-                let mut sorts: Vec<Expr> = vec![];
-                for s in &sort.sorts {
-                    let expr = from_substrait_rex(
-                        s.expr.as_ref().unwrap(),
-                        input.schema(),
-                        extensions,
-                    )
-                    .await?;
-                    let asc_nullfirst = match &s.sort_kind {
-                        Some(k) => match k {
-                            Direction(d) => {
-                                let direction : SortDirection = unsafe {
-                                    ::std::mem::transmute(*d)
-                                };
-                                match direction {
-                                    SortDirection::AscNullsFirst => Ok((true, true)),
-                                    SortDirection::AscNullsLast => Ok((true, false)),
-                                    SortDirection::DescNullsFirst => Ok((false, true)),
-                                    SortDirection::DescNullsLast => Ok((false, false)),
-                                    SortDirection::Clustered =>
-                                        Err(DataFusionError::NotImplemented("Sort with direction clustered is not yet supported".to_string()))
-                                    ,
-                                    SortDirection::Unspecified =>
-                                        Err(DataFusionError::NotImplemented("Unspecified sort direction is invalid".to_string()))
-                                }
-                            }
-                            ComparisonFunctionReference(_) => {
-                                Err(DataFusionError::NotImplemented("Sort using comparison function reference is not supported".to_string()))
-                            },
-                        },
-                        None => Err(DataFusionError::NotImplemented("Sort without sort kind is invalid".to_string()))
-                    };
-                    let (asc, nulls_first) = asc_nullfirst.unwrap();
-                    sorts.push(Expr::Sort(Sort {
-                        expr: Box::new(expr.as_ref().clone()),
-                        asc,
-                        nulls_first,
-                    }));
-                }
+                let sorts =
+                    from_substrait_sorts(&sort.sorts, input.schema(), extensions).await?;
                 input.sort(sorts)?.build()
             } else {
                 Err(DataFusionError::NotImplemented(
@@ -289,6 +297,8 @@ pub async fn from_substrait_rel(
                                 input.schema(),
                                 extensions,
                                 filter,
+                                // TODO: Add parsing of order_by also
+                                None,
                                 distinct,
                             )
                             .await
@@ -316,11 +326,25 @@ pub async fn from_substrait_rel(
                 from_substrait_rel(ctx, join.right.as_ref().unwrap(), extensions).await?,
             );
             let join_type = from_substrait_jointype(join.r#type)?;
-            let schema =
-                build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
+            // The join condition expression needs full input schema and not the output schema from join since we lose columns from
+            // certain join types such as semi and anti joins
+            // - if left and right schemas are different, we combine (join) the schema to include all fields
+            // - if left and right schemas are the same, we handle the duplicate fields by using `build_join_schema()`, which discard the unused schema
+            // TODO: Handle duplicate fields error for other join types (non-semi/anti). The current approach does not work due to Substrait's inability
+            //       to encode aliases
+            let join_schema = match left.schema().join(right.schema()) {
+                Ok(schema) => Ok(schema),
+                Err(DataFusionError::SchemaError(
+                    datafusion::common::SchemaError::DuplicateQualifiedField {
+                        qualifier: _,
+                        name: _,
+                    },
+                )) => build_join_schema(left.schema(), right.schema(), &join_type),
+                Err(e) => Err(e),
+            };
             let on = from_substrait_rex(
                 join.expression.as_ref().unwrap(),
-                &schema,
+                &join_schema?,
                 extensions,
             )
             .await?;
@@ -399,8 +423,6 @@ pub async fn from_substrait_rel(
                                         .iter()
                                         .map(|i| scan.projected_schema.field(*i).clone())
                                         .collect();
-                                    // clippy thinks this clone is redundant but it is not
-                                    #[allow(clippy::redundant_clone)]
                                     let mut scan = scan.clone();
                                     scan.projection = Some(column_indices);
                                     scan.projected_schema =
@@ -424,6 +446,55 @@ pub async fn from_substrait_rel(
                 "Only NamedTable reads are supported".to_string(),
             )),
         },
+        Some(RelType::ExtensionLeaf(extension)) => {
+            let Some(ext_detail) = &extension.detail else {
+                return Err(DataFusionError::Substrait(
+                    "Unexpected empty detail in ExtensionLeafRel".to_string(),
+                ));
+            };
+            let plan = ctx
+                .state()
+                .serializer_registry()
+                .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
+        Some(RelType::ExtensionSingle(extension)) => {
+            let Some(ext_detail) = &extension.detail else {
+                return Err(DataFusionError::Substrait(
+                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
+                ));
+            };
+            let plan = ctx
+                .state()
+                .serializer_registry()
+                .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+            let Some(input_rel) = &extension.input else {
+                return Err(DataFusionError::Substrait(
+                    "ExtensionSingleRel doesn't contains input rel. Try use ExtensionLeafRel instead".to_string()
+                ));
+            };
+            let input_plan = from_substrait_rel(ctx, input_rel, extensions).await?;
+            let plan = plan.from_template(&plan.expressions(), &[input_plan]);
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
+        Some(RelType::ExtensionMulti(extension)) => {
+            let Some(ext_detail) = &extension.detail else {
+                return Err(DataFusionError::Substrait(
+                    "Unexpected empty detail in ExtensionSingleRel".to_string(),
+                ));
+            };
+            let plan = ctx
+                .state()
+                .serializer_registry()
+                .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
+            let mut inputs = Vec::with_capacity(extension.inputs.len());
+            for input in &extension.inputs {
+                let input_plan = from_substrait_rel(ctx, input, extensions).await?;
+                inputs.push(input_plan);
+            }
+            let plan = plan.from_template(&plan.expressions(), &inputs);
+            Ok(LogicalPlan::Extension(Extension { node: plan }))
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported RelType: {:?}",
             rel.rel_type
@@ -440,17 +511,104 @@ fn from_substrait_jointype(join_type: i32) -> Result<JoinType> {
             join_rel::JoinType::Outer => Ok(JoinType::Full),
             join_rel::JoinType::Anti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::Semi => Ok(JoinType::LeftSemi),
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "unsupported join type {substrait_join_type:?}"
-                )))
-            }
+            _ => Err(DataFusionError::Internal(format!(
+                "unsupported join type {substrait_join_type:?}"
+            ))),
         }
     } else {
-        return Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Internal(format!(
             "invalid join type variant {join_type:?}"
-        )));
+        )))
     }
+}
+
+/// Convert Substrait Sorts to DataFusion Exprs
+pub async fn from_substrait_sorts(
+    substrait_sorts: &Vec<SortField>,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Vec<Expr>> {
+    let mut sorts: Vec<Expr> = vec![];
+    for s in substrait_sorts {
+        let expr = from_substrait_rex(s.expr.as_ref().unwrap(), input_schema, extensions)
+            .await?;
+        let asc_nullfirst = match &s.sort_kind {
+            Some(k) => match k {
+                Direction(d) => {
+                    let Some(direction) = SortDirection::from_i32(*d) else {
+                        return Err(DataFusionError::NotImplemented(
+                            format!("Unsupported Substrait SortDirection value {d}"),
+                        ))
+                    };
+
+                    match direction {
+                        SortDirection::AscNullsFirst => Ok((true, true)),
+                        SortDirection::AscNullsLast => Ok((true, false)),
+                        SortDirection::DescNullsFirst => Ok((false, true)),
+                        SortDirection::DescNullsLast => Ok((false, false)),
+                        SortDirection::Clustered => Err(DataFusionError::NotImplemented(
+                            "Sort with direction clustered is not yet supported"
+                                .to_string(),
+                        )),
+                        SortDirection::Unspecified => {
+                            Err(DataFusionError::NotImplemented(
+                                "Unspecified sort direction is invalid".to_string(),
+                            ))
+                        }
+                    }
+                }
+                ComparisonFunctionReference(_) => Err(DataFusionError::NotImplemented(
+                    "Sort using comparison function reference is not supported"
+                        .to_string(),
+                )),
+            },
+            None => Err(DataFusionError::NotImplemented(
+                "Sort without sort kind is invalid".to_string(),
+            )),
+        };
+        let (asc, nulls_first) = asc_nullfirst.unwrap();
+        sorts.push(Expr::Sort(Sort {
+            expr: Box::new(expr.as_ref().clone()),
+            asc,
+            nulls_first,
+        }));
+    }
+    Ok(sorts)
+}
+
+/// Convert Substrait Expressions to DataFusion Exprs
+pub async fn from_substrait_rex_vec(
+    exprs: &Vec<Expression>,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Vec<Expr>> {
+    let mut expressions: Vec<Expr> = vec![];
+    for expr in exprs {
+        let expression = from_substrait_rex(expr, input_schema, extensions).await?;
+        expressions.push(expression.as_ref().clone());
+    }
+    Ok(expressions)
+}
+
+/// Convert Substrait FunctionArguments to DataFusion Exprs
+pub async fn from_substriat_func_args(
+    arguments: &Vec<FunctionArgument>,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Vec<Expr>> {
+    let mut args: Vec<Expr> = vec![];
+    for arg in arguments {
+        let arg_expr = match &arg.arg_type {
+            Some(ArgType::Value(e)) => {
+                from_substrait_rex(e, input_schema, extensions).await
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Aggregated function argument non-Value type not supported".to_string(),
+            )),
+        };
+        args.push(arg_expr?.as_ref().clone());
+    }
+    Ok(args)
 }
 
 /// Convert Substrait AggregateFunction to DataFusion Expr
@@ -459,6 +617,7 @@ pub async fn from_substrait_agg_func(
     input_schema: &DFSchema,
     extensions: &HashMap<u32, &String>,
     filter: Option<Box<Expr>>,
+    order_by: Option<Vec<Expr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let mut args: Vec<Expr> = vec![];
@@ -489,6 +648,7 @@ pub async fn from_substrait_agg_func(
         args,
         distinct,
         filter,
+        order_by,
     })))
 }
 
@@ -507,10 +667,14 @@ pub async fn from_substrait_rex(
                         "Direct reference StructField with child is not supported"
                             .to_string(),
                     )),
-                    None => Ok(Arc::new(Expr::Column(Column {
-                        relation: None,
-                        name: input_schema.field(x.field as usize).name().to_string(),
-                    }))),
+                    None => {
+                        let column =
+                            input_schema.field(x.field as usize).qualified_column();
+                        Ok(Arc::new(Expr::Column(Column {
+                            relation: column.relation,
+                            name: column.name,
+                        })))
+                    }
                 },
                 _ => Err(DataFusionError::NotImplemented(
                     "Direct reference with types other than StructField is not supported"
@@ -582,102 +746,154 @@ pub async fn from_substrait_rex(
                 else_expr,
             })))
         }
-        Some(RexType::ScalarFunction(f)) => {
-            assert!(f.arguments.len() == 2);
-            let op = match extensions.get(&f.function_reference) {
-                Some(fname) => name_to_op(fname),
-                None => Err(DataFusionError::NotImplemented(format!(
-                    "Aggregated function not found: function reference = {:?}",
-                    f.function_reference
-                ))),
-            };
-            match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
+        Some(RexType::ScalarFunction(f)) => match f.arguments.len() {
+            // BinaryExpr or ScalarFunction
+            2 => match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
                 (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
-                    Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(
-                            from_substrait_rex(l, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone(),
-                        ),
-                        op: op?,
-                        right: Box::new(
-                            from_substrait_rex(r, input_schema, extensions)
-                                .await?
-                                .as_ref()
-                                .clone(),
-                        ),
-                    })))
+                    let op_or_fun = match extensions.get(&f.function_reference) {
+                        Some(fname) => name_to_op_or_scalar_function(fname),
+                        None => Err(DataFusionError::NotImplemented(format!(
+                            "Aggregated function not found: function reference = {:?}",
+                            f.function_reference
+                        ))),
+                    };
+                    match op_or_fun {
+                        Ok(ScalarFunctionType::Op(op)) => {
+                            return Ok(Arc::new(Expr::BinaryExpr(BinaryExpr {
+                                left: Box::new(
+                                    from_substrait_rex(l, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ),
+                                op,
+                                right: Box::new(
+                                    from_substrait_rex(r, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ),
+                            })))
+                        }
+                        Ok(ScalarFunctionType::Builtin(fun)) => {
+                            Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
+                                fun,
+                                args: vec![
+                                    from_substrait_rex(l, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                    from_substrait_rex(r, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone(),
+                                ],
+                            })))
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 (l, r) => Err(DataFusionError::NotImplemented(format!(
                     "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
+            },
+            // ScalarFunction
+            _ => {
+                let fun = match extensions.get(&f.function_reference) {
+                    Some(fname) => BuiltinScalarFunction::from_str(fname),
+                    None => Err(DataFusionError::NotImplemented(format!(
+                        "Aggregated function not found: function reference = {:?}",
+                        f.function_reference
+                    ))),
+                };
+
+                let mut args: Vec<Expr> = vec![];
+                for arg in f.arguments.iter() {
+                    match &arg.arg_type {
+                        Some(ArgType::Value(e)) => {
+                            args.push(
+                                from_substrait_rex(e, input_schema, extensions)
+                                    .await?
+                                    .as_ref()
+                                    .clone(),
+                            );
+                        }
+                        e => {
+                            return Err(DataFusionError::NotImplemented(format!(
+                                "Invalid arguments for scalar function: {e:?}"
+                            )))
+                        }
+                    }
+                }
+
+                Ok(Arc::new(Expr::ScalarFunction(expr::ScalarFunction {
+                    fun: fun?,
+                    args,
+                })))
             }
-        }
+        },
         Some(RexType::Literal(lit)) => {
-            match &lit.literal_type {
-                Some(LiteralType::I8(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int8(Some(*n as i8)))))
-                }
-                Some(LiteralType::I16(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int16(Some(*n as i16)))))
-                }
-                Some(LiteralType::I32(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int32(Some(*n)))))
-                }
-                Some(LiteralType::I64(n)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Int64(Some(*n)))))
-                }
-                Some(LiteralType::Boolean(b)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Boolean(Some(*b)))))
-                }
-                Some(LiteralType::Date(d)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Date32(Some(*d)))))
-                }
-                Some(LiteralType::Fp32(f)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Float32(Some(*f)))))
-                }
-                Some(LiteralType::Fp64(f)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
-                }
-                Some(LiteralType::Decimal(d)) => {
-                    let value: [u8; 16] = d.value.clone().try_into().or(Err(
-                        DataFusionError::Substrait(
-                            "Failed to parse decimal value".to_string(),
-                        ),
-                    ))?;
-                    let p = d.precision.try_into().map_err(|e| {
-                        DataFusionError::Substrait(format!(
-                            "Failed to parse decimal precision: {e}"
-                        ))
-                    })?;
-                    let s = d.scale.try_into().map_err(|e| {
-                        DataFusionError::Substrait(format!(
-                            "Failed to parse decimal scale: {e}"
-                        ))
-                    })?;
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Decimal128(
-                        Some(std::primitive::i128::from_le_bytes(value)),
-                        p,
-                        s,
-                    ))))
-                }
-                Some(LiteralType::String(s)) => {
-                    Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(Some(s.clone())))))
-                }
-                Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(
-                    ScalarValue::Binary(Some(b.clone())),
+            let scalar_value = from_substrait_literal(lit)?;
+            Ok(Arc::new(Expr::Literal(scalar_value)))
+        }
+        Some(RexType::Cast(cast)) => match cast.as_ref().r#type.as_ref() {
+            Some(output_type) => Ok(Arc::new(Expr::Cast(Cast::new(
+                Box::new(
+                    from_substrait_rex(
+                        cast.as_ref().input.as_ref().unwrap().as_ref(),
+                        input_schema,
+                        extensions,
+                    )
+                    .await?
+                    .as_ref()
+                    .clone(),
+                ),
+                from_substrait_type(output_type)?,
+            )))),
+            None => Err(DataFusionError::Substrait(
+                "Cast experssion without output type is not allowed".to_string(),
+            )),
+        },
+        Some(RexType::WindowFunction(window)) => {
+            let fun = match extensions.get(&window.function_reference) {
+                Some(function_name) => Ok(find_df_window_func(function_name)),
+                None => Err(DataFusionError::NotImplemented(format!(
+                    "Window function not found: function anchor = {:?}",
+                    &window.function_reference
                 ))),
-                Some(LiteralType::Null(ntype)) => {
-                    Ok(Arc::new(Expr::Literal(from_substrait_null(ntype)?)))
-                }
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported literal_type: {:?}",
-                        lit.literal_type
-                    )))
-                }
-            }
+            };
+            let order_by =
+                from_substrait_sorts(&window.sorts, input_schema, extensions).await?;
+            // Substrait does not encode WindowFrameUnits so we're using a simple logic to determine the units
+            // If there is no `ORDER BY`, then by default, the frame counts each row from the lower up to upper boundary
+            // If there is `ORDER BY`, then by default, each frame is a range starting from unbounded preceding to current row
+            // TODO: Consider the cases where window frame is specified in query and is different from default
+            let units = if order_by.is_empty() {
+                WindowFrameUnits::Rows
+            } else {
+                WindowFrameUnits::Range
+            };
+            Ok(Arc::new(Expr::WindowFunction(expr::WindowFunction {
+                fun: fun?.unwrap(),
+                args: from_substriat_func_args(
+                    &window.arguments,
+                    input_schema,
+                    extensions,
+                )
+                .await?,
+                partition_by: from_substrait_rex_vec(
+                    &window.partitions,
+                    input_schema,
+                    extensions,
+                )
+                .await?,
+                order_by,
+                window_frame: datafusion::logical_expr::WindowFrame {
+                    units,
+                    start_bound: from_substrait_bound(&window.lower_bound, true)?,
+                    end_bound: from_substrait_bound(&window.upper_bound, false)?,
+                },
+            })))
         }
         _ => Err(DataFusionError::NotImplemented(
             "unsupported rex_type".to_string(),
@@ -685,20 +901,342 @@ pub async fn from_substrait_rex(
     }
 }
 
+fn from_substrait_type(dt: &substrait::proto::Type) -> Result<DataType> {
+    match &dt.kind {
+        Some(s_kind) => match s_kind {
+            r#type::Kind::Bool(_) => Ok(DataType::Boolean),
+            r#type::Kind::I8(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int8),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt8),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::I16(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int16),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt16),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::I32(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int32),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt32),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::I64(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(DataType::Int64),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(DataType::UInt64),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::Fp32(_) => Ok(DataType::Float32),
+            r#type::Kind::Fp64(_) => Ok(DataType::Float64),
+            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
+                TIMESTAMP_SECOND_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Second, None))
+                }
+                TIMESTAMP_MILLI_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+                }
+                TIMESTAMP_MICRO_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+                }
+                TIMESTAMP_NANO_TYPE_REF => {
+                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                }
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::Date(date) => match date.type_variation_reference {
+                DATE_32_TYPE_REF => Ok(DataType::Date32),
+                DATE_64_TYPE_REF => Ok(DataType::Date64),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::Binary(binary) => match binary.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::Binary),
+                LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeBinary),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::FixedBinary(fixed) => {
+                Ok(DataType::FixedSizeBinary(fixed.length))
+            }
+            r#type::Kind::String(string) => match string.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::Utf8),
+                LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeUtf8),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            r#type::Kind::List(list) => {
+                let inner_type =
+                    from_substrait_type(list.r#type.as_ref().ok_or_else(|| {
+                        DataFusionError::Substrait(
+                            "List type must have inner type".to_string(),
+                        )
+                    })?)?;
+                let field = Arc::new(Field::new("list_item", inner_type, true));
+                match list.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_REF => Ok(DataType::List(field)),
+                    LARGE_CONTAINER_TYPE_REF => Ok(DataType::LargeList(field)),
+                    v => Err(DataFusionError::NotImplemented(format!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    )))?,
+                }
+            }
+            r#type::Kind::Decimal(d) => match d.type_variation_reference {
+                DECIMAL_128_TYPE_REF => {
+                    Ok(DataType::Decimal128(d.precision as u8, d.scale as i8))
+                }
+                DECIMAL_256_TYPE_REF => {
+                    Ok(DataType::Decimal256(d.precision as u8, d.scale as i8))
+                }
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ))),
+            },
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unsupported Substrait type: {s_kind:?}"
+            ))),
+        },
+        _ => Err(DataFusionError::NotImplemented(
+            "`None` Substrait kind is not supported".to_string(),
+        )),
+    }
+}
+
+fn from_substrait_bound(
+    bound: &Option<Bound>,
+    is_lower: bool,
+) -> Result<WindowFrameBound> {
+    match bound {
+        Some(b) => match &b.kind {
+            Some(k) => match k {
+                BoundKind::CurrentRow(SubstraitBound::CurrentRow {}) => {
+                    Ok(WindowFrameBound::CurrentRow)
+                }
+                BoundKind::Preceding(SubstraitBound::Preceding { offset }) => Ok(
+                    WindowFrameBound::Preceding(ScalarValue::Int64(Some(*offset))),
+                ),
+                BoundKind::Following(SubstraitBound::Following { offset }) => Ok(
+                    WindowFrameBound::Following(ScalarValue::Int64(Some(*offset))),
+                ),
+                BoundKind::Unbounded(SubstraitBound::Unbounded {}) => {
+                    if is_lower {
+                        Ok(WindowFrameBound::Preceding(ScalarValue::Null))
+                    } else {
+                        Ok(WindowFrameBound::Following(ScalarValue::Null))
+                    }
+                }
+            },
+            None => Err(DataFusionError::Substrait(
+                "WindowFunction missing Substrait Bound kind".to_string(),
+            )),
+        },
+        None => {
+            if is_lower {
+                Ok(WindowFrameBound::Preceding(ScalarValue::Null))
+            } else {
+                Ok(WindowFrameBound::Following(ScalarValue::Null))
+            }
+        }
+    }
+}
+
+pub(crate) fn from_substrait_literal(lit: &Literal) -> Result<ScalarValue> {
+    let scalar_value = match &lit.literal_type {
+        Some(LiteralType::Boolean(b)) => ScalarValue::Boolean(Some(*b)),
+        Some(LiteralType::I8(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int8(Some(*n as i8)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt8(Some(*n as u8)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::I16(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int16(Some(*n as i16)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt16(Some(*n as u16)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::I32(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int32(Some(*n)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt32(Some(*n as u32)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::I64(n)) => match lit.type_variation_reference {
+            DEFAULT_TYPE_REF => ScalarValue::Int64(Some(*n)),
+            UNSIGNED_INTEGER_TYPE_REF => ScalarValue::UInt64(Some(*n as u64)),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::Fp32(f)) => ScalarValue::Float32(Some(*f)),
+        Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
+        Some(LiteralType::Timestamp(t)) => match lit.type_variation_reference {
+            TIMESTAMP_SECOND_TYPE_REF => ScalarValue::TimestampSecond(Some(*t), None),
+            TIMESTAMP_MILLI_TYPE_REF => ScalarValue::TimestampMillisecond(Some(*t), None),
+            TIMESTAMP_MICRO_TYPE_REF => ScalarValue::TimestampMicrosecond(Some(*t), None),
+            TIMESTAMP_NANO_TYPE_REF => ScalarValue::TimestampNanosecond(Some(*t), None),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
+        Some(LiteralType::String(s)) => match lit.type_variation_reference {
+            DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Utf8(Some(s.clone())),
+            LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeUtf8(Some(s.clone())),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::Binary(b)) => match lit.type_variation_reference {
+            DEFAULT_CONTAINER_TYPE_REF => ScalarValue::Binary(Some(b.clone())),
+            LARGE_CONTAINER_TYPE_REF => ScalarValue::LargeBinary(Some(b.clone())),
+            others => {
+                return Err(DataFusionError::Substrait(format!(
+                    "Unknown type variation reference {others}",
+                )));
+            }
+        },
+        Some(LiteralType::FixedBinary(b)) => {
+            ScalarValue::FixedSizeBinary(b.len() as _, Some(b.clone()))
+        }
+        Some(LiteralType::Decimal(d)) => {
+            let value: [u8; 16] =
+                d.value
+                    .clone()
+                    .try_into()
+                    .or(Err(DataFusionError::Substrait(
+                        "Failed to parse decimal value".to_string(),
+                    )))?;
+            let p = d.precision.try_into().map_err(|e| {
+                DataFusionError::Substrait(format!(
+                    "Failed to parse decimal precision: {e}"
+                ))
+            })?;
+            let s = d.scale.try_into().map_err(|e| {
+                DataFusionError::Substrait(format!("Failed to parse decimal scale: {e}"))
+            })?;
+            ScalarValue::Decimal128(
+                Some(std::primitive::i128::from_le_bytes(value)),
+                p,
+                s,
+            )
+        }
+        Some(LiteralType::Null(ntype)) => from_substrait_null(ntype)?,
+        _ => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Unsupported literal_type: {:?}",
+                lit.literal_type
+            )))
+        }
+    };
+
+    Ok(scalar_value)
+}
+
 fn from_substrait_null(null_type: &Type) -> Result<ScalarValue> {
     if let Some(kind) = &null_type.kind {
         match kind {
-            r#type::Kind::I8(_) => Ok(ScalarValue::Int8(None)),
-            r#type::Kind::I16(_) => Ok(ScalarValue::Int16(None)),
-            r#type::Kind::I32(_) => Ok(ScalarValue::Int32(None)),
-            r#type::Kind::I64(_) => Ok(ScalarValue::Int64(None)),
+            r#type::Kind::Bool(_) => Ok(ScalarValue::Boolean(None)),
+            r#type::Kind::I8(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int8(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt8(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::I16(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int16(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt16(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::I32(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int32(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt32(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::I64(integer) => match integer.type_variation_reference {
+                DEFAULT_TYPE_REF => Ok(ScalarValue::Int64(None)),
+                UNSIGNED_INTEGER_TYPE_REF => Ok(ScalarValue::UInt64(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::Fp32(_) => Ok(ScalarValue::Float32(None)),
+            r#type::Kind::Fp64(_) => Ok(ScalarValue::Float64(None)),
+            r#type::Kind::Timestamp(ts) => match ts.type_variation_reference {
+                TIMESTAMP_SECOND_TYPE_REF => Ok(ScalarValue::TimestampSecond(None, None)),
+                TIMESTAMP_MILLI_TYPE_REF => {
+                    Ok(ScalarValue::TimestampMillisecond(None, None))
+                }
+                TIMESTAMP_MICRO_TYPE_REF => {
+                    Ok(ScalarValue::TimestampMicrosecond(None, None))
+                }
+                TIMESTAMP_NANO_TYPE_REF => {
+                    Ok(ScalarValue::TimestampNanosecond(None, None))
+                }
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::Date(date) => match date.type_variation_reference {
+                DATE_32_TYPE_REF => Ok(ScalarValue::Date32(None)),
+                DATE_64_TYPE_REF => Ok(ScalarValue::Date64(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            r#type::Kind::Binary(binary) => match binary.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::Binary(None)),
+                LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeBinary(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
+            // FixedBinary is not supported because `None` doesn't have length
+            r#type::Kind::String(string) => match string.type_variation_reference {
+                DEFAULT_CONTAINER_TYPE_REF => Ok(ScalarValue::Utf8(None)),
+                LARGE_CONTAINER_TYPE_REF => Ok(ScalarValue::LargeUtf8(None)),
+                v => Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported Substrait type variation {v} of type {kind:?}"
+                ))),
+            },
             r#type::Kind::Decimal(d) => Ok(ScalarValue::Decimal128(
                 None,
                 d.precision as u8,
                 d.scale as i8,
             )),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported null kind: {kind:?}"
+                "Unsupported Substrait type: {kind:?}"
             ))),
         }
     } else {

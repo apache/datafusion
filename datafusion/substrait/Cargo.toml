@@ -18,21 +18,25 @@
 [package]
 name = "datafusion-substrait"
 description = "DataFusion Substrait Producer and Consumer"
-license = "Apache-2.0"
-version = "18.0.0"
-edition = "2021"
-rust-version = "1.62"
+version = { workspace = true }
+edition = { workspace = true }
+readme = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+rust-version = { workspace = true }
 
 [dependencies]
 async-recursion = "1.0"
-chrono = "0.4.23"
-datafusion = { version = "18.0.0", path = "../core" }
+chrono = { version = "0.4.23", default-features = false }
+datafusion = { version = "26.0.0", path = "../core" }
 itertools = "0.10.5"
-object_store = "0.5.3"
+object_store = "0.6.1"
 prost = "0.11"
 prost-types = "0.11"
-substrait = "0.4"
+substrait = "0.10.0"
 tokio = "1.17"
 
-[build-dependencies]
-prost-build = { version = "0.9" }
+[features]
+protoc = ["substrait/protoc"]

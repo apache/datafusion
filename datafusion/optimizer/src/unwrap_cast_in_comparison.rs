@@ -24,13 +24,15 @@ use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
+use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
-use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
+use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
 };
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// [`UnwrapCastInComparison`] attempts to remove casts from
@@ -51,7 +53,7 @@ use std::sync::Arc;
 /// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
 ///
 /// If the expression matches one of the forms above, the rule will
-/// ensure the value of `literal` is in within range(min, max) of the
+/// ensure the value of `literal` is in range(min, max) of the
 /// expr's data_type, and if the scalar is within range, the literal
 /// will be casted to the data type of expr on the other side, and the
 /// cast will be removed from the other side.
@@ -120,7 +122,9 @@ struct UnwrapCastExprRewriter {
     schema: DFSchemaRef,
 }
 
-impl ExprRewriter for UnwrapCastExprRewriter {
+impl TreeNodeRewriter for UnwrapCastExprRewriter {
+    type N = Expr;
+
     fn pre_visit(&mut self, _expr: &Expr) -> Result<RewriteRecursion> {
         Ok(RewriteRecursion::Continue)
     }
@@ -189,11 +193,11 @@ impl ExprRewriter for UnwrapCastExprRewriter {
             }
             // For case:
             // try_cast/cast(expr as left_type) in (expr1,expr2,expr3)
-            Expr::InList {
+            Expr::InList(InList {
                 expr: left_expr,
                 list,
                 negated,
-            } => {
+            }) => {
                 if let Some(
                     Expr::TryCast(TryCast {
                         expr: internal_left_expr,
@@ -400,16 +404,36 @@ fn try_cast_literal_to_type(
                     DataType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
                     DataType::UInt64 => ScalarValue::UInt64(Some(value as u64)),
                     DataType::Timestamp(TimeUnit::Second, tz) => {
-                        ScalarValue::TimestampSecond(Some(value as i64), tz.clone())
+                        let value = cast_between_timestamp(
+                            lit_data_type,
+                            DataType::Timestamp(TimeUnit::Second, tz.clone()),
+                            value,
+                        );
+                        ScalarValue::TimestampSecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Millisecond, tz) => {
-                        ScalarValue::TimestampMillisecond(Some(value as i64), tz.clone())
+                        let value = cast_between_timestamp(
+                            lit_data_type,
+                            DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
+                            value,
+                        );
+                        ScalarValue::TimestampMillisecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-                        ScalarValue::TimestampMicrosecond(Some(value as i64), tz.clone())
+                        let value = cast_between_timestamp(
+                            lit_data_type,
+                            DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
+                            value,
+                        );
+                        ScalarValue::TimestampMicrosecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-                        ScalarValue::TimestampNanosecond(Some(value as i64), tz.clone())
+                        let value = cast_between_timestamp(
+                            lit_data_type,
+                            DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
+                            value,
+                        );
+                        ScalarValue::TimestampNanosecond(value, tz.clone())
                     }
                     DataType::Decimal128(p, s) => {
                         ScalarValue::Decimal128(Some(value), *p, *s)
@@ -428,14 +452,40 @@ fn try_cast_literal_to_type(
     }
 }
 
+/// Cast a timestamp value from one unit to another
+fn cast_between_timestamp(from: DataType, to: DataType, value: i128) -> Option<i64> {
+    let value = value as i64;
+    let from_scale = match from {
+        DataType::Timestamp(TimeUnit::Second, _) => 1,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
+        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        _ => return Some(value),
+    };
+
+    let to_scale = match to {
+        DataType::Timestamp(TimeUnit::Second, _) => 1,
+        DataType::Timestamp(TimeUnit::Millisecond, _) => MILLISECONDS,
+        DataType::Timestamp(TimeUnit::Microsecond, _) => MICROSECONDS,
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => NANOSECONDS,
+        _ => return Some(value),
+    };
+
+    match from_scale.cmp(&to_scale) {
+        Ordering::Less => value.checked_mul(to_scale / from_scale),
+        Ordering::Greater => Some(value / (from_scale / to_scale)),
+        Ordering::Equal => Some(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::tree_node::TreeNode;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
-    use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -695,14 +745,22 @@ mod tests {
         Arc::new(
             DFSchema::new_with_metadata(
                 vec![
-                    DFField::new(None, "c1", DataType::Int32, false),
-                    DFField::new(None, "c2", DataType::Int64, false),
-                    DFField::new(None, "c3", DataType::Decimal128(18, 2), false),
-                    DFField::new(None, "c4", DataType::Decimal128(38, 37), false),
-                    DFField::new(None, "c5", DataType::Float32, false),
-                    DFField::new(None, "c6", DataType::UInt32, false),
-                    DFField::new(None, "ts_nano_none", timestamp_nano_none_type(), false),
-                    DFField::new(None, "ts_nano_utf", timestamp_nano_utc_type(), false),
+                    DFField::new_unqualified("c1", DataType::Int32, false),
+                    DFField::new_unqualified("c2", DataType::Int64, false),
+                    DFField::new_unqualified("c3", DataType::Decimal128(18, 2), false),
+                    DFField::new_unqualified("c4", DataType::Decimal128(38, 37), false),
+                    DFField::new_unqualified("c5", DataType::Float32, false),
+                    DFField::new_unqualified("c6", DataType::UInt32, false),
+                    DFField::new_unqualified(
+                        "ts_nano_none",
+                        timestamp_nano_none_type(),
+                        false,
+                    ),
+                    DFField::new_unqualified(
+                        "ts_nano_utf",
+                        timestamp_nano_utc_type(),
+                        false,
+                    ),
                 ],
                 HashMap::new(),
             )
@@ -731,7 +789,7 @@ mod tests {
     }
 
     fn lit_timestamp_nano_utc(ts: i64) -> Expr {
-        let utc = Some("+0:00".to_string());
+        let utc = Some("+0:00".into());
         lit(ScalarValue::TimestampNanosecond(Some(ts), utc))
     }
 
@@ -745,7 +803,7 @@ mod tests {
 
     // this is the type that now() returns
     fn timestamp_nano_utc_type() -> DataType {
-        let utc = Some("+0:00".to_string());
+        let utc = Some("+0:00".into());
         DataType::Timestamp(TimeUnit::Nanosecond, utc)
     }
 
@@ -899,7 +957,7 @@ mod tests {
             TimeUnit::Microsecond,
             TimeUnit::Nanosecond,
         ] {
-            let utc = Some("+0:00".to_string());
+            let utc = Some("+00:00".into());
             // No timezone, utc timezone
             let (lit_tz_none, lit_tz_utc) = match time_unit {
                 TimeUnit::Second => (
@@ -996,7 +1054,7 @@ mod tests {
         // int64 to list
         expect_cast(
             ScalarValue::Int64(Some(12345)),
-            DataType::List(Box::new(Field::new("f", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new("f", DataType::Int32, true))),
             ExpectedCast::NoValue,
         );
     }
@@ -1040,7 +1098,7 @@ mod tests {
                 let cast_array = cast_with_options(
                     &literal_array,
                     &target_type,
-                    &CastOptions { safe: true },
+                    &CastOptions::default(),
                 )
                 .expect("Expected to be cast array with arrow cast kernel");
 
@@ -1069,5 +1127,163 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_try_cast_literal_to_timestamp() {
+        // same timestamp
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123456), None)
+        );
+
+        // TimestampNanosecond to TimestampMicrosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMicrosecond(Some(123), None)
+        );
+
+        // TimestampNanosecond to TimestampMillisecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(Some(0), None));
+
+        // TimestampNanosecond to TimestampSecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampNanosecond(Some(123456), None),
+            &DataType::Timestamp(TimeUnit::Second, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(0), None));
+
+        // TimestampMicrosecond to TimestampNanosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123000), None)
+        );
+
+        // TimestampMicrosecond to TimestampMillisecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMicrosecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(Some(0), None));
+
+        // TimestampMicrosecond to TimestampSecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMicrosecond(Some(123456789), None),
+            &DataType::Timestamp(TimeUnit::Second, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123), None));
+
+        // TimestampMillisecond to TimestampNanosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMillisecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123000000), None)
+        );
+
+        // TimestampMillisecond to TimestampMicrosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMillisecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMicrosecond(Some(123000), None)
+        );
+        // TimestampMillisecond to TimestampSecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampMillisecond(Some(123456789), None),
+            &DataType::Timestamp(TimeUnit::Second, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_scalar, ScalarValue::TimestampSecond(Some(123456), None));
+
+        // TimestampSecond to TimestampNanosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampNanosecond(Some(123000000000), None)
+        );
+
+        // TimestampSecond to TimestampMicrosecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMicrosecond(Some(123000000), None)
+        );
+
+        // TimestampSecond to TimestampMillisecond
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(123), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            new_scalar,
+            ScalarValue::TimestampMillisecond(Some(123000), None)
+        );
+
+        // overflow
+        let new_scalar = try_cast_literal_to_type(
+            &ScalarValue::TimestampSecond(Some(i64::MAX), None),
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_scalar, ScalarValue::TimestampMillisecond(None, None));
     }
 }

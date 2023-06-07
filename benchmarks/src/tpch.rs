@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Fields, SchemaBuilder, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use std::fs;
 use std::ops::{Div, Mul};
@@ -29,6 +29,7 @@ use datafusion::common::cast::{
     as_int64_array, as_string_array,
 };
 use datafusion::common::ScalarValue;
+use datafusion::logical_expr::expr::ScalarFunction;
 use datafusion::logical_expr::Cast;
 use datafusion::prelude::*;
 use datafusion::{
@@ -45,11 +46,9 @@ pub const TPCH_TABLES: &[&str] = &[
 
 /// The `.tbl` file contains a trailing column
 pub fn get_tbl_tpch_table_schema(table: &str) -> Schema {
-    let mut schema = get_tpch_table_schema(table);
-    schema
-        .fields
-        .push(Field::new("__placeholder", DataType::Utf8, false));
-    schema
+    let mut schema = SchemaBuilder::from(get_tpch_table_schema(table).fields);
+    schema.push(Field::new("__placeholder", DataType::Utf8, false));
+    schema.finish()
 }
 
 /// Get the schema for the benchmarks derived from TPC-H
@@ -476,7 +475,7 @@ pub async fn transform_actual_result(
     // we need to round the decimal columns and trim the Utf8 columns
     // we also need to rewrite the batches to use a compatible schema
     let ctx = SessionContext::new();
-    let fields = result[0]
+    let fields: Fields = result[0]
         .schema()
         .fields()
         .iter()
@@ -485,7 +484,7 @@ pub async fn transform_actual_result(
                 Some(i) => f.name()[i + 1..].to_string(),
                 _ => f.name().to_string(),
             };
-            f.clone().with_name(simple_name)
+            f.as_ref().clone().with_name(simple_name)
         })
         .collect();
     let result_schema = SchemaRef::new(Schema::new(fields));
@@ -497,38 +496,37 @@ pub async fn transform_actual_result(
         })
         .collect::<Result<Vec<_>>>()?;
     let table = Arc::new(MemTable::try_new(result_schema.clone(), vec![result])?);
-    let mut df = ctx.read_table(table)?
-        .select(
-            result_schema
-                .fields
-                .iter()
-                .map(|field| {
-                    match field.data_type() {
-                        DataType::Decimal128(_, _) => {
-                            // if decimal, then round it to 2 decimal places like the answers
-                            // round() doesn't support the second argument for decimal places to round to
-                            // this can be simplified to remove the mul and div when
-                            // https://github.com/apache/arrow-datafusion/issues/2420 is completed
-                            // cast it back to an over-sized Decimal with 2 precision when done rounding
-                            let round = Box::new(Expr::ScalarFunction {
-                                fun: datafusion::logical_expr::BuiltinScalarFunction::Round,
-                                args: vec![col(Field::name(field)).mul(lit(100))],
-                            }.div(lit(100)));
-                            Expr::Cast(Cast::new(
-                                    round,
-                                    DataType::Decimal128(15, 2),
-                                )).alias(field.name())
-                        }
-                        DataType::Utf8 => {
-                            // if string, then trim it like the answers got trimmed
-                            trim(col(Field::name(field))).alias(field.name())
-                        }
-                        _ => {
-                            col(field.name())
-                        }
+    let mut df = ctx.read_table(table)?.select(
+        result_schema
+            .fields
+            .iter()
+            .map(|field| {
+                match field.data_type() {
+                    DataType::Decimal128(_, _) => {
+                        // if decimal, then round it to 2 decimal places like the answers
+                        // round() doesn't support the second argument for decimal places to round to
+                        // this can be simplified to remove the mul and div when
+                        // https://github.com/apache/arrow-datafusion/issues/2420 is completed
+                        // cast it back to an over-sized Decimal with 2 precision when done rounding
+                        let round = Box::new(
+                            Expr::ScalarFunction(ScalarFunction::new(
+                                datafusion::logical_expr::BuiltinScalarFunction::Round,
+                                vec![col(Field::name(field)).mul(lit(100))],
+                            ))
+                            .div(lit(100)),
+                        );
+                        Expr::Cast(Cast::new(round, DataType::Decimal128(15, 2)))
+                            .alias(field.name())
                     }
-                }).collect()
-        )?;
+                    DataType::Utf8 => {
+                        // if string, then trim it like the answers got trimmed
+                        trim(col(Field::name(field))).alias(field.name())
+                    }
+                    _ => col(field.name()),
+                }
+            })
+            .collect(),
+    )?;
     if let Some(x) = QUERY_LIMIT[n - 1] {
         df = df.limit(0, Some(x))?;
     }

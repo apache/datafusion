@@ -160,6 +160,7 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn update_state(
         &mut self,
         state: &WindowAggState,
+        _idx: usize,
         _range_columns: &[ArrayRef],
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
@@ -237,7 +238,6 @@ mod tests {
         let result = ranges
             .iter()
             .map(|range| evaluator.evaluate_inside_range(&values, range))
-            .into_iter()
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = as_int32_array(&result)?;

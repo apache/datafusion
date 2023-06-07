@@ -18,8 +18,9 @@
 //! Rewrite for order by expressions
 
 use crate::expr::Sort;
-use crate::expr_rewriter::{normalize_col, rewrite_expr};
-use crate::{Expr, ExprSchemable, LogicalPlan};
+use crate::expr_rewriter::normalize_col;
+use crate::{Cast, Expr, ExprSchemable, LogicalPlan, TryCast};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
@@ -82,7 +83,7 @@ fn rewrite_in_terms_of_projection(
 ) -> Result<Expr> {
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
-    rewrite_expr(expr, |expr| {
+    expr.transform(&|expr| {
         // search for unnormalized names first such as "c1" (such as aliases)
         if let Some(found) = proj_exprs.iter().find(|a| (**a) == expr) {
             let col = Expr::Column(
@@ -90,7 +91,7 @@ fn rewrite_in_terms_of_projection(
                     .to_field(input.schema())
                     .map(|f| f.qualified_column())?,
             );
-            return Ok(col);
+            return Ok(Transformed::Yes(col));
         }
 
         // if that doesn't work, try to match the expression as an
@@ -102,7 +103,7 @@ fn rewrite_in_terms_of_projection(
             e
         } else {
             // The expr is not based on Aggregate plan output. Skip it.
-            return Ok(expr);
+            return Ok(Transformed::No(expr));
         };
 
         // expr is an actual expr like min(t.c2), but we are looking
@@ -116,9 +117,21 @@ fn rewrite_in_terms_of_projection(
 
         // look for the column named the same as this expr
         if let Some(found) = proj_exprs.iter().find(|a| expr_match(&search_col, a)) {
-            return Ok((*found).clone());
+            let found = found.clone();
+            return Ok(Transformed::Yes(match normalized_expr {
+                Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
+                    expr: Box::new(found),
+                    data_type,
+                }),
+                Expr::TryCast(TryCast { expr: _, data_type }) => Expr::TryCast(TryCast {
+                    expr: Box::new(found),
+                    data_type,
+                }),
+                _ => found,
+            }));
         }
-        Ok(expr)
+
+        Ok(Transformed::No(expr))
     })
 }
 
@@ -141,7 +154,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::{
-        avg, col, lit, logical_plan::builder::LogicalTableSource, min, LogicalPlanBuilder,
+        avg, cast, col, lit, logical_plan::builder::LogicalTableSource, min, try_cast,
+        LogicalPlanBuilder,
     };
 
     use super::*;
@@ -238,6 +252,34 @@ mod test {
 
         for case in cases {
             case.run(&agg)
+        }
+    }
+
+    #[test]
+    fn preserve_cast() {
+        let plan = make_input()
+            .project(vec![col("c2").alias("c2")])
+            .unwrap()
+            .project(vec![col("c2").alias("c2")])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![
+            TestCase {
+                desc: "Cast is preserved by rewrite_sort_cols_by_aggs",
+                input: sort(cast(col("c2"), DataType::Int64)),
+                expected: sort(cast(col("c2").alias("c2"), DataType::Int64)),
+            },
+            TestCase {
+                desc: "TryCast is preserved by rewrite_sort_cols_by_aggs",
+                input: sort(try_cast(col("c2"), DataType::Int64)),
+                expected: sort(try_cast(col("c2").alias("c2"), DataType::Int64)),
+            },
+        ];
+
+        for case in cases {
+            case.run(&plan)
         }
     }
 

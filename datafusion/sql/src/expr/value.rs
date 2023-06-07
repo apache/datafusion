@@ -16,11 +16,13 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use arrow::compute::kernels::cast_utils::parse_interval_month_day_nano;
 use arrow_schema::DataType;
-use datafusion_common::{parse_interval, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, Expr};
+use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr::{BinaryExpr, Placeholder};
+use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
-use sqlparser::ast::{DateTimeField, Expr as SQLExpr, Value};
+use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::HashSet;
 
@@ -46,14 +48,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Parse number in sql string, convert to Expr::Literal
     fn parse_sql_number(&self, n: &str) -> Result<Expr> {
-        if n.find('E').is_some() {
-            // not implemented yet
-            // https://github.com/apache/arrow-datafusion/issues/3448
-            Err(DataFusionError::NotImplemented(
-                "sql numeric literals in scientific notation are not supported"
-                    .to_string(),
-            ))
-        } else if let Ok(n) = n.parse::<i64>() {
+        if let Ok(n) = n.parse::<i64>() {
+            Ok(lit(n))
+        } else if let Ok(n) = n.parse::<u64>() {
             Ok(lit(n))
         } else if self.options.parse_float_as_decimal {
             // remove leading zeroes
@@ -97,6 +94,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();
         let idx = match index {
+            Ok(0) => {
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid placeholder, zero is not a valid index: {param}"
+                )));
+            }
             Ok(index) => index - 1,
             Err(_) => {
                 return Err(DataFusionError::Plan(format!(
@@ -112,10 +114,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             param, param_type
         );
 
-        Ok(Expr::Placeholder {
-            id: param,
-            data_type: param_type.cloned(),
-        })
+        Ok(Expr::Placeholder(Placeholder::new(
+            param,
+            param_type.cloned(),
+        )))
     }
 
     pub(super) fn sql_array_literal(
@@ -159,9 +161,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Convert a SQL interval expression to a DataFusion logical plan
+    /// expression
+    ///
+    /// Waiting for this issue to be resolved:
+    /// `<https://github.com/sqlparser-rs/sqlparser-rs/issues/869>`
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn sql_interval_to_expr(
         &self,
         value: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
         leading_field: Option<DateTimeField>,
         leading_precision: Option<u64>,
         last_field: Option<DateTimeField>,
@@ -190,6 +200,92 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => s,
+            // Support expressions like `interval '1 month' + date/timestamp`.
+            // Such expressions are parsed like this by sqlparser-rs
+            //
+            // Interval
+            //   BinaryOp
+            //     Value(StringLiteral)
+            //     Cast
+            //       Value(StringLiteral)
+            //
+            // This code rewrites them to the following:
+            //
+            // BinaryOp
+            //   Interval
+            //     Value(StringLiteral)
+            //   Cast
+            //      Value(StringLiteral)
+            SQLExpr::BinaryOp { left, op, right } => {
+                let df_op = match op {
+                    BinaryOperator::Plus => Operator::Plus,
+                    BinaryOperator::Minus => Operator::Minus,
+                    _ => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported interval operator: {op:?}"
+                        )));
+                    }
+                };
+                match (leading_field, left.as_ref(), right.as_ref()) {
+                    (_, _, SQLExpr::Value(_)) => {
+                        let left_expr = self.sql_interval_to_expr(
+                            *left,
+                            schema,
+                            planner_context,
+                            leading_field,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        let right_expr = self.sql_interval_to_expr(
+                            *right,
+                            schema,
+                            planner_context,
+                            leading_field,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        return Ok(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left_expr),
+                            df_op,
+                            Box::new(right_expr),
+                        )));
+                    }
+                    // In this case, the left node is part of the interval
+                    // expr and the right node is an independent expr.
+                    //
+                    // Leading field is not supported when the right operand
+                    // is not a value.
+                    (None, _, _) => {
+                        let left_expr = self.sql_interval_to_expr(
+                            *left,
+                            schema,
+                            planner_context,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )?;
+                        let right_expr = self.sql_expr_to_logical_expr(
+                            *right,
+                            schema,
+                            planner_context,
+                        )?;
+                        return Ok(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(left_expr),
+                            df_op,
+                            Box::new(right_expr),
+                        )));
+                    }
+                    _ => {
+                        let value = SQLExpr::BinaryOp { left, op, right };
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported interval argument. Expected string literal, got: {value:?}"
+                        )));
+                    }
+                }
+            }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Unsupported interval argument. Expected string literal, got: {value:?}"
@@ -197,11 +293,55 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let leading_field = leading_field
-            .as_ref()
-            .map(|dt| dt.to_string())
-            .unwrap_or_else(|| "second".to_string());
+        let value = if has_units(&value) {
+            // If the interval already contains a unit
+            // `INTERVAL '5 month' rather than `INTERVAL '5' month`
+            // skip the other unit
+            value
+        } else {
+            // leading_field really means the unit if specified
+            // for example, "month" in  `INTERVAL '5' month`
+            match leading_field.as_ref() {
+                Some(leading_field) => {
+                    format!("{value} {leading_field}")
+                }
+                None => {
+                    // default to seconds for the units
+                    // `INTERVAL '5' is parsed as '5 seconds'
+                    format!("{value} seconds")
+                }
+            }
+        };
 
-        Ok(lit(parse_interval(&leading_field, &value)?))
+        let val = parse_interval_month_day_nano(&value)?;
+        Ok(lit(ScalarValue::IntervalMonthDayNano(Some(val))))
     }
+}
+
+// TODO make interval parsing better in arrow-rs / expose `IntervalType`
+fn has_units(val: &str) -> bool {
+    val.ends_with("century")
+        || val.ends_with("centuries")
+        || val.ends_with("decade")
+        || val.ends_with("decades")
+        || val.ends_with("year")
+        || val.ends_with("years")
+        || val.ends_with("month")
+        || val.ends_with("months")
+        || val.ends_with("week")
+        || val.ends_with("weeks")
+        || val.ends_with("day")
+        || val.ends_with("days")
+        || val.ends_with("hour")
+        || val.ends_with("hours")
+        || val.ends_with("minute")
+        || val.ends_with("minutes")
+        || val.ends_with("second")
+        || val.ends_with("seconds")
+        || val.ends_with("millisecond")
+        || val.ends_with("milliseconds")
+        || val.ends_with("microsecond")
+        || val.ends_with("microseconds")
+        || val.ends_with("nanosecond")
+        || val.ends_with("nanoseconds")
 }

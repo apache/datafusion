@@ -20,651 +20,6 @@ use datafusion::datasource::empty::EmptyTable;
 use super::*;
 
 #[tokio::test]
-async fn case_when() -> Result<()> {
-    let ctx = create_case_context()?;
-    let sql = "SELECT \
-        CASE WHEN c1 = 'a' THEN 1 \
-             WHEN c1 = 'b' THEN 2 \
-             END \
-        FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------------------------------------+",
-        "| CASE WHEN t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN t1.c1 = Utf8(\"b\") THEN Int64(2) END |",
-        "+------------------------------------------------------------------------------------+",
-        "| 1                                                                                  |",
-        "| 2                                                                                  |",
-        "|                                                                                    |",
-        "|                                                                                    |",
-        "+------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn case_when_else() -> Result<()> {
-    let ctx = create_case_context()?;
-    let sql = "SELECT \
-        CASE WHEN c1 = 'a' THEN 1 \
-             WHEN c1 = 'b' THEN 2 \
-             ELSE 999 END \
-        FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------------------------------------------------------------------------+",
-        "| CASE WHEN t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN t1.c1 = Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
-        "+----------------------------------------------------------------------------------------------------+",
-        "| 1                                                                                                  |",
-        "| 2                                                                                                  |",
-        "| 999                                                                                                |",
-        "| 999                                                                                                |",
-        "+----------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn case_when_with_base_expr() -> Result<()> {
-    let ctx = create_case_context()?;
-    let sql = "SELECT \
-        CASE c1 WHEN 'a' THEN 1 \
-             WHEN 'b' THEN 2 \
-             END \
-        FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------------------------------------------------------------+",
-        "| CASE t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) END |",
-        "+--------------------------------------------------------------------------+",
-        "| 1                                                                        |",
-        "| 2                                                                        |",
-        "|                                                                          |",
-        "|                                                                          |",
-        "+--------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn case_when_else_with_base_expr() -> Result<()> {
-    let ctx = create_case_context()?;
-    let sql = "SELECT \
-        CASE c1 WHEN 'a' THEN 1 \
-             WHEN 'b' THEN 2 \
-             ELSE 999 END \
-        FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------------------------------------------+",
-        "| CASE t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
-        "+------------------------------------------------------------------------------------------+",
-        "| 1                                                                                        |",
-        "| 2                                                                                        |",
-        "| 999                                                                                      |",
-        "| 999                                                                                      |",
-        "+------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn case_when_else_with_null_contant() -> Result<()> {
-    let ctx = create_case_context()?;
-    let sql = "SELECT \
-        CASE WHEN c1 = 'a' THEN 1 \
-             WHEN NULL THEN 2 \
-             ELSE 999 END \
-        FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------------------------------------------------------------+",
-        "| CASE WHEN t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN NULL THEN Int64(2) ELSE Int64(999) END |",
-        "+---------------------------------------------------------------------------------------+",
-        "| 1                                                                                     |",
-        "| 999                                                                                   |",
-        "| 999                                                                                   |",
-        "| 999                                                                                   |",
-        "+---------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT CASE WHEN NULL THEN 'foo' ELSE 'bar' END";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------+",
-        "| CASE WHEN NULL THEN Utf8(\"foo\") ELSE Utf8(\"bar\") END |",
-        "+------------------------------------------------------+",
-        "| bar                                                  |",
-        "+------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn case_expr_with_null() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "select case when b is null then null else b end from (select a,b from (values (1,null),(2,3)) as t (a,b)) a;";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+----------------------------------------------+",
-        "| CASE WHEN a.b IS NULL THEN NULL ELSE a.b END |",
-        "+----------------------------------------------+",
-        "|                                              |",
-        "| 3                                            |",
-        "+----------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "select case when b is null then null else b end from (select a,b from (values (1,1),(2,3)) as t (a,b)) a;";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+----------------------------------------------+",
-        "| CASE WHEN a.b IS NULL THEN NULL ELSE a.b END |",
-        "+----------------------------------------------+",
-        "| 1                                            |",
-        "| 3                                            |",
-        "+----------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn case_expr_with_nulls() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "select case when b is null then null when b < 3 then null when b >=3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+---------------------------------------------------------------------------------------------------------------------+",
-        "| CASE WHEN a.b IS NULL THEN NULL WHEN a.b < Int64(3) THEN NULL WHEN a.b >= Int64(3) THEN a.b + Int64(1) ELSE a.b END |",
-        "+---------------------------------------------------------------------------------------------------------------------+",
-        "|                                                                                                                     |",
-        "|                                                                                                                     |",
-        "| 4                                                                                                                   |",
-        "+---------------------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "select case b when 1 then null when 2 then null when 3 then b + 1 else b end from (select a,b from (values (1,null),(1,2),(2,3)) as t (a,b)) a;";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+---------------------------------------------------------------------------------------------------------+",
-        "| CASE a.b WHEN Int64(1) THEN NULL WHEN Int64(2) THEN NULL WHEN Int64(3) THEN a.b + Int64(1) ELSE a.b END |",
-        "+---------------------------------------------------------------------------------------------------------+",
-        "|                                                                                                         |",
-        "|                                                                                                         |",
-        "| 4                                                                                                       |",
-        "+---------------------------------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_not() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(false),
-            None,
-            Some(true),
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT NOT c1 FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------+",
-        "| NOT test.c1 |",
-        "+-------------+",
-        "| true        |",
-        "|             |",
-        "| false       |",
-        "+-------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_sum_cast() {
-    let ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&ctx).await;
-    // c8 = i32; c6 = i64
-    let sql = "SELECT c8 + c6 FROM aggregate_test_100";
-    // check that the physical and logical schemas are equal
-    execute(&ctx, sql).await;
-}
-
-#[tokio::test]
-async fn query_is_null() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float64Array::from(vec![
-            Some(1.0),
-            None,
-            Some(f64::NAN),
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS NULL FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------+",
-        "| test.c1 IS NULL |",
-        "+-----------------+",
-        "| false           |",
-        "| true            |",
-        "| false           |",
-        "+-----------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_not_null() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Float64Array::from(vec![
-            Some(1.0),
-            None,
-            Some(f64::NAN),
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS NOT NULL FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| test.c1 IS NOT NULL |",
-        "+---------------------+",
-        "| true                |",
-        "| false               |",
-        "| true                |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_true() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(true),
-            Some(false),
-            None,
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS TRUE as t FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+",
-        "| t     |",
-        "+-------+",
-        "| true  |",
-        "| false |",
-        "| false |",
-        "+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_false() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(true),
-            Some(false),
-            None,
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS FALSE as f FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+",
-        "| f     |",
-        "+-------+",
-        "| false |",
-        "| true  |",
-        "| false |",
-        "+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_not_true() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(true),
-            Some(false),
-            None,
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS NOT TRUE as nt FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+",
-        "| nt    |",
-        "+-------+",
-        "| false |",
-        "| true  |",
-        "| true  |",
-        "+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_not_false() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(true),
-            Some(false),
-            None,
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS NOT FALSE as nf FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+",
-        "| nf    |",
-        "+-------+",
-        "| true  |",
-        "| false |",
-        "| true  |",
-        "+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_unknown() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(true),
-            Some(false),
-            None,
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS UNKNOWN as t FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+",
-        "| t     |",
-        "+-------+",
-        "| false |",
-        "| false |",
-        "| true  |",
-        "+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_is_not_unknown() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
-            Some(true),
-            Some(false),
-            None,
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT c1 IS NOT UNKNOWN as t FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+",
-        "| t     |",
-        "+-------+",
-        "| true  |",
-        "| true  |",
-        "| false |",
-        "+-------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_without_from() -> Result<()> {
-    // Test for SELECT <expression> without FROM.
-    // Should evaluate expressions in project position.
-    let ctx = SessionContext::new();
-
-    let sql = "SELECT 1";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+",
-        "| Int64(1) |",
-        "+----------+",
-        "| 1        |",
-        "+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT 1+2, 3/4, cos(0)";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+---------------------+---------------+",
-        "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
-        "+---------------------+---------------------+---------------+",
-        "| 3                   | 0                   | 1             |",
-        "+---------------------+---------------------+---------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn query_scalar_minus_array() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![
-            Some(0),
-            Some(1),
-            None,
-            Some(3),
-        ]))],
-    )?;
-
-    let ctx = SessionContext::new();
-    ctx.register_batch("test", data)?;
-    let sql = "SELECT 4 - c1 FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------+",
-        "| Int64(4) - test.c1 |",
-        "+--------------------+",
-        "| 4                  |",
-        "| 3                  |",
-        "|                    |",
-        "| 1                  |",
-        "+--------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_string_concat_operator() -> Result<()> {
-    let ctx = SessionContext::new();
-    // concat 2 strings
-    let sql = "SELECT 'aa' || 'b'";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------------+",
-        "| Utf8(\"aa\") || Utf8(\"b\") |",
-        "+-------------------------+",
-        "| aab                     |",
-        "+-------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // concat 4 strings as a string concat pipe.
-    let sql = "SELECT 'aa' || 'b' || 'cc' || 'd'";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------------------------+",
-        "| Utf8(\"aa\") || Utf8(\"b\") || Utf8(\"cc\") || Utf8(\"d\") |",
-        "+----------------------------------------------------+",
-        "| aabccd                                             |",
-        "+----------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // concat 2 strings and NULL, output should be NULL
-    let sql = "SELECT 'aa' || NULL || 'd'";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------+",
-        "| Utf8(\"aa\") || NULL || Utf8(\"d\") |",
-        "+---------------------------------+",
-        "|                                 |",
-        "+---------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    // concat 1 strings and 2 numeric
-    let sql = "SELECT 'a' || 42 || 23.3";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------------------------------+",
-        "| Utf8(\"a\") || Int64(42) || Float64(23.3) |",
-        "+-----------------------------------------+",
-        "| a4223.3                                 |",
-        "+-----------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_not_expressions() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "SELECT not(true), not(false)";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------+--------------------+",
-        "| NOT Boolean(true) | NOT Boolean(false) |",
-        "+-------------------+--------------------+",
-        "| false             | true               |",
-        "+-------------------+--------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT null, not(null)";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------+----------+",
-        "| NULL | NOT NULL |",
-        "+------+----------+",
-        "|      |          |",
-        "+------+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT NOT('hi')";
-    let result = plan_and_collect(&ctx, sql).await;
-    match result {
-        Ok(_) => panic!("expected error"),
-        Err(e) => {
-            assert_contains!(e.to_string(),
-                             "NOT 'Literal { value: Utf8(\"hi\") }' can't be evaluated because the expression's type is Utf8, not boolean or NULL"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_negative_expressions() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let sql = "SELECT null, -null";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------+----------+",
-        "| NULL | (- NULL) |",
-        "+------+----------+",
-        "|      |          |",
-        "+------+----------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");
@@ -676,12 +31,19 @@ async fn test_boolean_expressions() -> Result<()> {
 #[tokio::test]
 async fn test_mathematical_expressions_with_null() -> Result<()> {
     test_expression!("sqrt(NULL)", "NULL");
+    test_expression!("cbrt(NULL)", "NULL");
     test_expression!("sin(NULL)", "NULL");
     test_expression!("cos(NULL)", "NULL");
     test_expression!("tan(NULL)", "NULL");
     test_expression!("asin(NULL)", "NULL");
     test_expression!("acos(NULL)", "NULL");
     test_expression!("atan(NULL)", "NULL");
+    test_expression!("sinh(NULL)", "NULL");
+    test_expression!("cosh(NULL)", "NULL");
+    test_expression!("tanh(NULL)", "NULL");
+    test_expression!("asinh(NULL)", "NULL");
+    test_expression!("acosh(NULL)", "NULL");
+    test_expression!("atanh(NULL)", "NULL");
     test_expression!("floor(NULL)", "NULL");
     test_expression!("ceil(NULL)", "NULL");
     test_expression!("round(NULL)", "NULL");
@@ -818,18 +180,12 @@ async fn test_array_literals() -> Result<()> {
 
 #[tokio::test]
 async fn test_struct_literals() -> Result<()> {
-    test_expression!(
-        "STRUCT(1,2,3,4,5)",
-        "{\"c0\": 1, \"c1\": 2, \"c2\": 3, \"c3\": 4, \"c4\": 5}"
-    );
-    test_expression!("STRUCT(Null)", "{\"c0\": null}");
-    test_expression!("STRUCT(2)", "{\"c0\": 2}");
-    test_expression!("STRUCT('1',Null)", "{\"c0\": \"1\", \"c1\": null}");
-    test_expression!("STRUCT(true, false)", "{\"c0\": true, \"c1\": false}");
-    test_expression!(
-        "STRUCT('str1', 'str2')",
-        "{\"c0\": \"str1\", \"c1\": \"str2\"}"
-    );
+    test_expression!("STRUCT(1,2,3,4,5)", "{c0: 1, c1: 2, c2: 3, c3: 4, c4: 5}");
+    test_expression!("STRUCT(Null)", "{c0: }");
+    test_expression!("STRUCT(2)", "{c0: 2}");
+    test_expression!("STRUCT('1',Null)", "{c0: 1, c1: }");
+    test_expression!("STRUCT(true, false)", "{c0: true, c1: false}");
+    test_expression!("STRUCT('str1', 'str2')", "{c0: str1, c1: str2}");
 
     Ok(())
 }
@@ -849,83 +205,83 @@ async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(
         "interval '1'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '1 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '500 milliseconds'",
-        "0 years 0 mons 0 days 0 hours 0 mins 0.500 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs"
     );
     test_expression!(
         "interval '5 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 5.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 5.000000000 secs"
     );
     test_expression!(
         "interval '0.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
     test_expression!(
         "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
     test_expression!(
         "interval '5 minute'",
-        "0 years 0 mons 0 days 0 hours 5 mins 0.000 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 minute 1 second'",
-        "0 years 0 mons 0 days 0 hours 5 mins 1.000 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '1 hour'",
-        "0 years 0 mons 0 days 1 hours 0 mins 0.000 secs"
+        "0 years 0 mons 0 days 1 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 hour'",
-        "0 years 0 mons 0 days 5 hours 0 mins 0.000 secs"
+        "0 years 0 mons 0 days 5 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 day'",
-        "0 years 0 mons 1 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 week'",
-        "0 years 0 mons 7 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 7 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 weeks'",
-        "0 years 0 mons 14 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 14 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 day 1'",
-        "0 years 0 mons 1 days 0 hours 0 mins 1.000 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '0.5'",
-        "0 years 0 mons 0 days 0 hours 0 mins 0.500 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 0.500000000 secs"
     );
     test_expression!(
         "interval '0.5 day 1'",
-        "0 years 0 mons 0 days 12 hours 0 mins 1.000 secs"
+        "0 years 0 mons 0 days 12 hours 0 mins 1.000000000 secs"
     );
     test_expression!(
         "interval '0.49 day'",
-        "0 years 0 mons 0 days 11 hours 45 mins 36.000 secs"
+        "0 years 0 mons 0 days 11 hours 45 mins 36.000000000 secs"
     );
     test_expression!(
         "interval '0.499 day'",
-        "0 years 0 mons 0 days 11 hours 58 mins 33.600 secs"
+        "0 years 0 mons 0 days 11 hours 58 mins 33.600000000 secs"
     );
     test_expression!(
         "interval '0.4999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 51.360 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 51.360000000 secs"
     );
     test_expression!(
         "interval '0.49999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 59.136 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 59.136000000 secs"
     );
     test_expression!(
         "interval '0.49999999999 day'",
@@ -933,69 +289,69 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '5 day'",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs"
     );
     // Hour is ignored, this matches PostgreSQL
     test_expression!(
         "interval '5 day' hour",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
-        "0 years 0 mons 5 days 4 hours 3 mins 2.100 secs"
+        "0 years 0 mons 5 days 4 hours 3 mins 2.100000000 secs"
     );
     // month intervals
     test_expression!(
         "interval '0.5 month'",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '0.5' month",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 month'",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1' MONTH",
-        "0 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '5 month'",
-        "0 years 5 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 5 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '13 month'",
-        "1 years 1 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 13 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '0.5 year'",
-        "0 years 6 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 6 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 year'",
-        "1 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 12 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 decade'",
-        "10 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 120 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 decades'",
-        "20 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 240 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 century'",
-        "100 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 1200 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2 year'",
-        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '2' year",
-        "2 years 0 mons 0 days 0 hours 0 mins 0.00 secs"
+        "0 years 24 mons 0 days 0 hours 0 mins 0.000000000 secs"
     );
     // complex
     test_expression!(
@@ -1190,99 +546,54 @@ async fn test_uuid_expression() -> Result<()> {
 }
 
 #[tokio::test]
-async fn case_with_bool_type_result() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "select case when 'cpu' != 'cpu' then true else false end";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------------------------------------------------------+",
-        "| CASE WHEN Utf8(\"cpu\") != Utf8(\"cpu\") THEN Boolean(true) ELSE Boolean(false) END |",
-        "+---------------------------------------------------------------------------------+",
-        "| false                                                                           |",
-        "+---------------------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn in_list_array() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "SELECT
-            c1 IN ('a', 'c') AS utf8_in_true
-            ,c1 IN ('x', 'y') AS utf8_in_false
-            ,c1 NOT IN ('x', 'y') AS utf8_not_in_true
-            ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
-            ,NULL IN ('a', 'c') AS utf8_in_null
-        FROM aggregate_test_100 WHERE c12 < 0.05";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------+---------------+------------------+-------------------+--------------+",
-        "| utf8_in_true | utf8_in_false | utf8_not_in_true | utf8_not_in_false | utf8_in_null |",
-        "+--------------+---------------+------------------+-------------------+--------------+",
-        "| true         | false         | true             | false             |              |",
-        "| true         | false         | true             | false             |              |",
-        "| true         | false         | true             | false             |              |",
-        "| false        | false         | true             | true              |              |",
-        "| false        | false         | true             | true              |              |",
-        "| false        | false         | true             | true              |              |",
-        "| false        | false         | true             | true              |              |",
-        "+--------------+---------------+------------------+-------------------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_extract_date_part() -> Result<()> {
-    test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000");
+    test_expression!("date_part('YEAR', CAST('2000-01-01' AS DATE))", "2000.0");
     test_expression!(
         "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "2020"
+        "2020.0"
     );
-    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('QUARTER', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "3"
+        "3.0"
     );
-    test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('MONTH', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "9"
+        "9.0"
     );
-    test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1");
+    test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "37"
+        "37.0"
     );
-    test_expression!("date_part('DAY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('DAY', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "8"
+        "8.0"
     );
-    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1");
+    test_expression!("date_part('DOY', CAST('2000-01-01' AS DATE))", "1.0");
     test_expression!(
         "EXTRACT(doy FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "252"
+        "252.0"
     );
-    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6");
+    test_expression!("date_part('DOW', CAST('2000-01-01' AS DATE))", "6.0");
     test_expression!(
         "EXTRACT(dow FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
-        "2"
+        "2.0"
     );
-    test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0");
+    test_expression!("date_part('HOUR', CAST('2000-01-01' AS DATE))", "0.0");
     test_expression!(
         "EXTRACT(hour FROM to_timestamp('2020-09-08T12:03:03+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))",
-        "12"
+        "12.0"
     );
     test_expression!(
         "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
@@ -1298,7 +609,7 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!(
         "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456780"
+        "1.212345678e10"
     );
     test_expression!(
         "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
@@ -1314,8 +625,26 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!(
         "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-        "12123456780"
+        "1.212345678e10"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_extract_epoch() -> Result<()> {
+    test_expression!(
+        "extract(epoch from '1870-01-01T07:29:10.256'::timestamp)",
+        "-3155646649.744"
+    );
+    test_expression!(
+        "extract(epoch from '2000-01-01T00:00:00.000'::timestamp)",
+        "946684800.0"
+    );
+    test_expression!(
+        "extract(epoch from to_timestamp('2000-01-01T00:00:00+00:00'))",
+        "946684800.0"
+    );
+    test_expression!("extract(epoch from NULL::timestamp)", "NULL");
     Ok(())
 }
 
@@ -1445,115 +774,6 @@ async fn test_in_list_scalar() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_boolean_eq_neq() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for eq and neq
-    let sql = "SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| a     | b     | eq    | eq_scalar | neq   | neq_scalar |",
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| true  | true  | true  | true      | false | false      |",
-        "| true  |       |       |           |       | false      |",
-        "| true  | false | false | false     | true  | false      |",
-        "|       | true  |       | true      |       |            |",
-        "|       |       |       |           |       |            |",
-        "|       | false |       | false     |       |            |",
-        "| false | true  | false | true      | true  | true       |",
-        "| false |       |       |           |       | true       |",
-        "| false | false | true  | false     | false | true       |",
-        "+-------+-------+-------+-----------+-------+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn csv_query_boolean_lt_lt_eq() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for < and <=
-    let sql = "SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| a     | b     | lt    | lt_scalar | lt_eq | lt_eq_scalar |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| true  | true  | false | true      | true  | true         |",
-        "| true  |       |       |           |       | true         |",
-        "| true  | false | false | false     | false | true         |",
-        "|       | true  |       | true      |       |              |",
-        "|       |       |       |           |       |              |",
-        "|       | false |       | false     |       |              |",
-        "| false | true  | true  | true      | true  | true         |",
-        "| false |       |       |           |       | true         |",
-        "| false | false | false | false     | true  | true         |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn csv_query_boolean_gt_gt_eq() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for > and >=
-    let sql = "SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| a     | b     | gt    | gt_scalar | gt_eq | gt_eq_scalar |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-        "| true  | true  | false | true      | true  | true         |",
-        "| true  |       |       |           |       | true         |",
-        "| true  | false | true  | false     | true  | true         |",
-        "|       | true  |       | true      |       |              |",
-        "|       |       |       |           |       |              |",
-        "|       | false |       | false     |       |              |",
-        "| false | true  | false | true      | false | false        |",
-        "| false |       |       |           |       | false        |",
-        "| false | false | false | false     | true  | false        |",
-        "+-------+-------+-------+-----------+-------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn csv_query_boolean_distinct_from() {
-    let ctx = SessionContext::new();
-    register_boolean(&ctx).await.unwrap();
-    // verify the plumbing is all hooked up for is distinct from and is not distinct from
-    let sql = "SELECT a, b, \
-               a is distinct from b as df, \
-               b is distinct from true as df_scalar, \
-               a is not distinct from b as ndf, \
-               a is not distinct from true as ndf_scalar \
-               FROM t1";
-    let actual = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| a     | b     | df    | df_scalar | ndf   | ndf_scalar |",
-        "+-------+-------+-------+-----------+-------+------------+",
-        "| true  | true  | false | false     | true  | true       |",
-        "| true  |       | true  | true      | false | true       |",
-        "| true  | false | true  | true      | false | true       |",
-        "|       | true  | true  | false     | false | false      |",
-        "|       |       | false | true      | true  | false      |",
-        "|       | false | true  | true      | false | false      |",
-        "| false | true  | true  | false     | false | false      |",
-        "| false |       | true  | true      | false | false      |",
-        "| false | false | false | true      | true  | false      |",
-        "+-------+-------+-------+-----------+-------+------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
 async fn csv_query_nullif_divide_by_0() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -1575,22 +795,6 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
     assert_eq!(expected, actual);
     Ok(())
 }
-#[tokio::test]
-async fn csv_count_star() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------+-----+------------------------------+",
-        "| COUNT(UInt8(1)) | c   | COUNT(aggregate_test_100.c1) |",
-        "+-----------------+-----+------------------------------+",
-        "| 100             | 100 | 100                          |",
-        "+-----------------+-----+------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
 
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
@@ -1600,19 +804,6 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.6706002946036462"]];
-    assert_float_eq(&expected, &actual);
-    Ok(())
-}
-
-// this query used to deadlock due to the call udf(udf())
-#[tokio::test]
-async fn csv_query_sqrt_sqrt() -> Result<()> {
-    let ctx = create_ctx();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
-    let actual = execute(&ctx, sql).await;
-    // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
-    let expected = vec![vec!["0.9818650561397431"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }
@@ -1644,36 +835,6 @@ async fn nested_subquery() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
-}
-
-#[tokio::test]
-async fn like_nlike_with_null_lt() {
-    let ctx = SessionContext::new();
-    let sql = "SELECT column1 like NULL as col_null, NULL like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+----------+",
-        "| col_null | null_col |",
-        "+----------+----------+",
-        "|          |          |",
-        "|          |          |",
-        "|          |          |",
-        "+----------+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-
-    let sql = "SELECT column1 not like NULL as col_null, NULL not like column1 as null_col from (values('a'), ('b'), (NULL)) as t";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+----------+",
-        "| col_null | null_col |",
-        "+----------+----------+",
-        "|          |          |",
-        "|          |          |",
-        "|          |          |",
-        "+----------+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]

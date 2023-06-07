@@ -32,6 +32,38 @@ use std::sync::Arc;
 
 use crate::utils;
 
+#[cfg(feature = "avro")]
+pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
+    use datafusion::prelude::AvroReadOptions;
+
+    ctx.enable_testdir();
+
+    let table_path = ctx.testdir_path().join("avro");
+    std::fs::create_dir(&table_path).expect("failed to create avro table path");
+
+    let testdata = datafusion::test_util::arrow_test_data();
+    let alltypes_plain_file = format!("{testdata}/avro/alltypes_plain.avro");
+    std::fs::copy(
+        &alltypes_plain_file,
+        format!("{}/alltypes_plain1.avro", table_path.display()),
+    )
+    .unwrap();
+    std::fs::copy(
+        &alltypes_plain_file,
+        format!("{}/alltypes_plain2.avro", table_path.display()),
+    )
+    .unwrap();
+
+    ctx.session_ctx()
+        .register_avro(
+            "alltypes_plain_multi_files",
+            table_path.display().to_string().as_str(),
+            AvroReadOptions::default(),
+        )
+        .await
+        .unwrap();
+}
+
 pub async fn register_aggregate_tables(ctx: &SessionContext) {
     register_aggregate_test_100(ctx).await;
     register_decimal_table(ctx);
@@ -158,4 +190,25 @@ async fn register_aggregate_test_100(ctx: &SessionContext) {
     )
     .await
     .unwrap();
+}
+
+pub async fn register_scalar_tables(ctx: &SessionContext) {
+    register_nan_table(ctx)
+}
+
+/// Register a table with a NaN value (different than NULL, and can
+/// not be created via SQL)
+fn register_nan_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
+
+    let data = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(f64::NAN),
+        ]))],
+    )
+    .unwrap();
+    ctx.register_batch("test_float", data).unwrap();
 }

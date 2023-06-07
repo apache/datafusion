@@ -20,26 +20,20 @@
 
 use std::any::Any;
 use std::sync::Arc;
-use std::task::Poll;
-
-use futures::Stream;
-use tokio::sync::mpsc;
 
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
 
-use super::common::AbortOnDropMany;
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use super::{RecordBatchStream, Statistics};
+use super::stream::{ObservedStream, RecordBatchReceiverStream};
+use super::Statistics;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 
 use super::SendableRecordBatchStream;
-use crate::execution::context::TaskContext;
-use crate::physical_plan::common::spawn_execution;
+use datafusion_execution::TaskContext;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -81,7 +75,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
-    /// If the plan does not support pipelining, but it its input(s) are
+    /// If the plan does not support pipelining, but its input(s) are
     /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
@@ -137,27 +131,17 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // use a stream that allows each sender to put in at
                 // least one result in an attempt to maximize
                 // parallelism.
-                let (sender, receiver) =
-                    mpsc::channel::<Result<RecordBatch>>(input_partitions);
+                let mut builder =
+                    RecordBatchReceiverStream::builder(self.schema(), input_partitions);
 
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.
-                let mut join_handles = Vec::with_capacity(input_partitions);
                 for part_i in 0..input_partitions {
-                    join_handles.push(spawn_execution(
-                        self.input.clone(),
-                        sender.clone(),
-                        part_i,
-                        context.clone(),
-                    ));
+                    builder.run_input(self.input.clone(), part_i, context.clone());
                 }
 
-                Ok(Box::pin(MergeStream {
-                    input: receiver,
-                    schema: self.schema(),
-                    baseline_metrics,
-                    drop_helper: AbortOnDropMany(join_handles),
-                }))
+                let stream = builder.build();
+                Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)))
             }
         }
     }
@@ -183,32 +167,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 }
 
-struct MergeStream {
-    schema: SchemaRef,
-    input: mpsc::Receiver<Result<RecordBatch>>,
-    baseline_metrics: BaselineMetrics,
-    #[allow(unused)]
-    drop_helper: AbortOnDropMany<()>,
-}
-
-impl Stream for MergeStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = self.input.poll_recv(cx);
-        self.baseline_metrics.record_poll(poll)
-    }
-}
-
-impl RecordBatchStream for MergeStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -218,7 +176,9 @@ mod tests {
     use super::*;
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::exec::{
+        assert_strong_count_converges_to_zero, BlockingExec, PanicExec,
+    };
     use crate::test::{self, assert_is_pending};
 
     #[tokio::test]
@@ -269,5 +229,20 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "PanickingStream did panic")]
+    async fn test_panic() {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let panicking_exec = Arc::new(PanicExec::new(Arc::clone(&schema), 2));
+        let coalesce_partitions_exec =
+            Arc::new(CoalescePartitionsExec::new(panicking_exec));
+
+        collect(coalesce_partitions_exec, task_ctx).await.unwrap();
     }
 }

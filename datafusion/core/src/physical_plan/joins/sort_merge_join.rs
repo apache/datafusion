@@ -24,6 +24,7 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt::Formatter;
+use std::mem;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,11 +35,11 @@ use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
 use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -51,8 +52,10 @@ use crate::physical_plan::{
     metrics, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 
 /// join execution plan executes partitions in parallel and combines them into a set of
 /// partitions.
@@ -152,11 +155,13 @@ impl SortMergeJoinExec {
                                         .as_any()
                                         .downcast_ref::<Column>(
                                     ) {
-                                        Some(col) => Ok(Some(Arc::new(Column::new(
-                                            col.name(),
-                                            left_columns_len + col.index(),
-                                        )))),
-                                        None => Ok(None),
+                                        Some(col) => {
+                                            Ok(Transformed::Yes(Arc::new(Column::new(
+                                                col.name(),
+                                                left_columns_len + col.index(),
+                                            ))))
+                                        }
+                                        None => Ok(Transformed::No(e)),
                                     });
                                 Ok(PhysicalSortExpr {
                                     expr: new_expr?,
@@ -221,8 +226,15 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
-        vec![Some(&self.left_sort_exprs), Some(&self.right_sort_exprs)]
+    fn required_input_ordering(&self) -> Vec<Option<Vec<PhysicalSortRequirement>>> {
+        vec![
+            Some(PhysicalSortRequirement::from_sort_exprs(
+                &self.left_sort_exprs,
+            )),
+            Some(PhysicalSortRequirement::from_sort_exprs(
+                &self.right_sort_exprs,
+            )),
+        ]
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -237,6 +249,17 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.output_ordering.as_deref()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        match self.join_type {
+            JoinType::Inner => vec![true, true],
+            JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => vec![true, false],
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                vec![false, true]
+            }
+            _ => vec![false, false],
+        }
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -279,6 +302,15 @@ impl ExecutionPlan for SortMergeJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let left_partitions = self.left.output_partitioning().partition_count();
+        let right_partitions = self.right.output_partitioning().partition_count();
+        if left_partitions != right_partitions {
+            return Err(DataFusionError::Internal(format!(
+                "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+                 consider using RepartitionExec",
+            )));
+        }
+
         let (streamed, buffered, on_streamed, on_buffered) = match self.join_type {
             JoinType::Inner
             | JoinType::Left
@@ -305,6 +337,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         // create output buffer
         let batch_size = context.session_config().batch_size();
 
+        // create memory reservation
+        let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
+            .register(context.memory_pool());
+
         // create join stream
         Ok(Box::pin(SMJStream::try_new(
             self.schema.clone(),
@@ -317,6 +353,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.join_type,
             batch_size,
             SortMergeJoinMetrics::new(partition, &self.metrics),
+            reservation,
         )?))
     }
 
@@ -362,6 +399,9 @@ struct SortMergeJoinMetrics {
     output_batches: metrics::Count,
     /// Number of rows produced by this operator
     output_rows: metrics::Count,
+    /// Peak memory used for buffered data.
+    /// Calculated as sum of peak memory values across partitions
+    peak_mem_used: metrics::Gauge,
 }
 
 impl SortMergeJoinMetrics {
@@ -374,6 +414,7 @@ impl SortMergeJoinMetrics {
         let output_batches =
             MetricBuilder::new(metrics).counter("output_batches", partition);
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
+        let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
 
         Self {
             join_time,
@@ -381,6 +422,7 @@ impl SortMergeJoinMetrics {
             input_rows,
             output_batches,
             output_rows,
+            peak_mem_used,
         }
     }
 }
@@ -445,6 +487,7 @@ struct StreamedBatch {
     // Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
 }
+
 impl StreamedBatch {
     fn new(batch: RecordBatch, on_column: &[Column]) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
@@ -505,15 +548,35 @@ struct BufferedBatch {
     pub join_arrays: Vec<ArrayRef>,
     /// Buffered joined index (null joining buffered)
     pub null_joined: Vec<usize>,
+    /// Size estimation used for reserving / releasing memory
+    pub size_estimation: usize,
 }
+
 impl BufferedBatch {
     fn new(batch: RecordBatch, range: Range<usize>, on_column: &[Column]) -> Self {
         let join_arrays = join_arrays(&batch, on_column);
+
+        // Estimation is calculated as
+        //   inner batch size
+        // + join keys size
+        // + worst case null_joined (as vector capacity * element size)
+        // + Range size
+        // + size of this estimation
+        let size_estimation = batch.get_array_memory_size()
+            + join_arrays
+                .iter()
+                .map(|arr| arr.get_array_memory_size())
+                .sum::<usize>()
+            + batch.num_rows().next_power_of_two() * mem::size_of::<usize>()
+            + mem::size_of::<Range<usize>>()
+            + mem::size_of::<usize>();
+
         BufferedBatch {
             batch,
             range,
             join_arrays,
             null_joined: vec![],
+            size_estimation,
         }
     }
 }
@@ -565,6 +628,8 @@ struct SMJStream {
     pub join_type: JoinType,
     /// Metrics
     pub join_metrics: SortMergeJoinMetrics,
+    /// Memory reservation
+    pub reservation: MemoryReservation,
 }
 
 impl RecordBatchStream for SMJStream {
@@ -682,6 +747,7 @@ impl SMJStream {
         join_type: JoinType,
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         let streamed_schema = streamed.schema();
         let buffered_schema = buffered.schema();
@@ -708,6 +774,7 @@ impl SMJStream {
             batch_size,
             join_type,
             join_metrics,
+            reservation,
         })
     }
 
@@ -763,7 +830,11 @@ impl SMJStream {
                         let head_batch = self.buffered_data.head_batch();
                         if head_batch.range.end == head_batch.batch.num_rows() {
                             self.freeze_dequeuing_buffered()?;
-                            self.buffered_data.batches.pop_front();
+                            if let Some(buffered_batch) =
+                                self.buffered_data.batches.pop_front()
+                            {
+                                self.reservation.shrink(buffered_batch.size_estimation);
+                            }
                         } else {
                             break;
                         }
@@ -789,11 +860,14 @@ impl SMJStream {
                         self.join_metrics.input_batches.add(1);
                         self.join_metrics.input_rows.add(batch.num_rows());
                         if batch.num_rows() > 0 {
-                            self.buffered_data.batches.push_back(BufferedBatch::new(
-                                batch,
-                                0..1,
-                                &self.on_buffered,
-                            ));
+                            let buffered_batch =
+                                BufferedBatch::new(batch, 0..1, &self.on_buffered);
+                            self.reservation.try_grow(buffered_batch.size_estimation)?;
+                            self.join_metrics
+                                .peak_mem_used
+                                .set_max(self.reservation.size());
+
+                            self.buffered_data.batches.push_back(buffered_batch);
                             self.buffered_state = BufferedState::PollingRest;
                         }
                     }
@@ -827,15 +901,19 @@ impl SMJStream {
                             }
                             Poll::Ready(Some(batch)) => {
                                 self.join_metrics.input_batches.add(1);
+                                self.join_metrics.input_rows.add(batch.num_rows());
                                 if batch.num_rows() > 0 {
-                                    self.join_metrics.input_rows.add(batch.num_rows());
-                                    self.buffered_data.batches.push_back(
-                                        BufferedBatch::new(
-                                            batch,
-                                            0..0,
-                                            &self.on_buffered,
-                                        ),
+                                    let buffered_batch = BufferedBatch::new(
+                                        batch,
+                                        0..0,
+                                        &self.on_buffered,
                                     );
+                                    self.reservation
+                                        .try_grow(buffered_batch.size_estimation)?;
+                                    self.join_metrics
+                                        .peak_mem_used
+                                        .set_max(self.reservation.size());
+                                    self.buffered_data.batches.push_back(buffered_batch);
                                 }
                             }
                         }
@@ -1088,6 +1166,7 @@ struct BufferedData {
     /// current scanning offset used in join_partial()
     pub scanning_offset: usize,
 }
+
 impl BufferedData {
     pub fn head_batch(&self) -> &BufferedBatch {
         self.batches.front().unwrap()
@@ -1315,6 +1394,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
 
+    use crate::common::assert_contains;
     use crate::error::Result;
     use crate::logical_expr::JoinType;
     use crate::physical_plan::expressions::Column;
@@ -1325,6 +1405,7 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_i32, columns};
     use crate::{assert_batches_eq, assert_batches_sorted_eq};
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -1673,7 +1754,7 @@ mod tests {
             vec![
                 SortOptions {
                     descending: true,
-                    nulls_first: false
+                    nulls_first: false,
                 };
                 2
             ],
@@ -1983,13 +2064,13 @@ mod tests {
         let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
 
         let expected = vec![
-            "+------------+------------+------------+------------+------------+------------+",
-            "| a1         | b1         | c1         | a2         | b1         | c2         |",
-            "+------------+------------+------------+------------+------------+------------+",
-            "| 1970-01-01 | 2022-04-23 | 1970-01-01 | 1970-01-01 | 2022-04-23 | 1970-01-01 |",
-            "| 1970-01-01 | 2022-04-25 | 1970-01-01 | 1970-01-01 | 2022-04-25 | 1970-01-01 |",
-            "| 1970-01-01 | 2022-04-25 | 1970-01-01 | 1970-01-01 | 2022-04-25 | 1970-01-01 |",
-            "+------------+------------+------------+------------+------------+------------+",
+            "+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+",
+            "| a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |",
+            "+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+",
+            "| 1970-01-01T00:00:00.001 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.007 | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.070 |",
+            "| 1970-01-01T00:00:00.002 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |",
+            "| 1970-01-01T00:00:00.003 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |",
+            "+-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+",
         ];
         // The output order is important as SMJ preserves sortedness
         assert_batches_eq!(expected, &batches);
@@ -2210,6 +2291,137 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn overallocation_single_batch() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![0, 1, 2, 3, 4, 5]),
+            ("b1", &vec![1, 2, 3, 4, 5, 6]),
+            ("c1", &vec![4, 5, 6, 7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![0, 10, 20, 30, 40]),
+            ("b2", &vec![1, 3, 4, 6, 8]),
+            ("c2", &vec![50, 60, 70, 80, 90]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b2", &right.schema())?,
+        )];
+        let sort_options = vec![SortOptions::default(); on.len()];
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+        ];
+
+        for join_type in join_types {
+            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
+            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let session_config = SessionConfig::default().with_batch_size(50);
+            let session_ctx = SessionContext::with_config_rt(session_config, runtime);
+            let task_ctx = session_ctx.task_ctx();
+            let join = join_with_options(
+                left.clone(),
+                right.clone(),
+                on.clone(),
+                join_type,
+                sort_options.clone(),
+                false,
+            )?;
+
+            let stream = join.execute(0, task_ctx)?;
+            let err = common::collect(stream).await.unwrap_err();
+
+            assert_contains!(
+                err.to_string(),
+                "Resources exhausted: Failed to allocate additional"
+            );
+            assert_contains!(err.to_string(), "SMJStream[0]");
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn overallocation_multi_batch() -> Result<()> {
+        let left_batch_1 = build_table_i32(
+            ("a1", &vec![0, 1]),
+            ("b1", &vec![1, 1]),
+            ("c1", &vec![4, 5]),
+        );
+        let left_batch_2 = build_table_i32(
+            ("a1", &vec![2, 3]),
+            ("b1", &vec![1, 1]),
+            ("c1", &vec![6, 7]),
+        );
+        let left_batch_3 = build_table_i32(
+            ("a1", &vec![4, 5]),
+            ("b1", &vec![1, 1]),
+            ("c1", &vec![8, 9]),
+        );
+        let right_batch_1 = build_table_i32(
+            ("a2", &vec![0, 10]),
+            ("b2", &vec![1, 1]),
+            ("c2", &vec![50, 60]),
+        );
+        let right_batch_2 = build_table_i32(
+            ("a2", &vec![20, 30]),
+            ("b2", &vec![1, 1]),
+            ("c2", &vec![70, 80]),
+        );
+        let right_batch_3 =
+            build_table_i32(("a2", &vec![40]), ("b2", &vec![1]), ("c2", &vec![90]));
+        let left =
+            build_table_from_batches(vec![left_batch_1, left_batch_2, left_batch_3]);
+        let right =
+            build_table_from_batches(vec![right_batch_1, right_batch_2, right_batch_3]);
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b2", &right.schema())?,
+        )];
+        let sort_options = vec![SortOptions::default(); on.len()];
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+        ];
+
+        for join_type in join_types {
+            let runtime_config = RuntimeConfig::new().with_memory_limit(100, 1.0);
+            let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+            let session_config = SessionConfig::default().with_batch_size(50);
+            let session_ctx = SessionContext::with_config_rt(session_config, runtime);
+            let task_ctx = session_ctx.task_ctx();
+            let join = join_with_options(
+                left.clone(),
+                right.clone(),
+                on.clone(),
+                join_type,
+                sort_options.clone(),
+                false,
+            )?;
+
+            let stream = join.execute(0, task_ctx)?;
+            let err = common::collect(stream).await.unwrap_err();
+
+            assert_contains!(
+                err.to_string(),
+                "Resources exhausted: Failed to allocate additional"
+            );
+            assert_contains!(err.to_string(), "SMJStream[0]");
+        }
+
         Ok(())
     }
 }

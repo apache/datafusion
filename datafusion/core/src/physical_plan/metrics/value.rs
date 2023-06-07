@@ -129,6 +129,11 @@ impl Gauge {
         self.value.fetch_sub(n, Ordering::Relaxed);
     }
 
+    /// Set metric's value to maximum of `n` and current value
+    pub fn set_max(&self, n: usize) {
+        self.value.fetch_max(n, Ordering::Relaxed);
+    }
+
     /// Set the metric's value to `n` and return the previous value
     pub fn set(&self, n: usize) -> usize {
         // relaxed ordering for operations on `value` poses no issues

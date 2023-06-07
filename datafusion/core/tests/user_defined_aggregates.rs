@@ -18,6 +18,7 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
+use arrow::datatypes::Fields;
 use std::sync::Arc;
 
 use datafusion::{
@@ -44,11 +45,11 @@ async fn test_udf_returning_struct() {
     let ctx = udaf_struct_context();
     let sql = "SELECT first(value, time) from t";
     let expected = vec![
-        "+--------------------------------------------------+",
-        "| first(t.value,t.time)                            |",
-        "+--------------------------------------------------+",
-        "| {\"value\": 2, \"time\": 1970-01-01T00:00:00.000002} |",
-        "+--------------------------------------------------+",
+        "+------------------------------------------------+",
+        "| first(t.value,t.time)                          |",
+        "+------------------------------------------------+",
+        "| {value: 2.0, time: 1970-01-01T00:00:00.000002} |",
+        "+------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await);
 }
@@ -62,7 +63,7 @@ async fn test_udf_returning_struct_sq() {
         "+-----------------+----------------------------+",
         "| sq.first[value] | sq.first[time]             |",
         "+-----------------+----------------------------+",
-        "| 2               | 1970-01-01T00:00:00.000002 |",
+        "| 2.0             | 1970-01-01T00:00:00.000002 |",
         "+-----------------+----------------------------+",
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await);
@@ -151,7 +152,7 @@ impl FirstSelector {
     }
 
     /// Return the schema fields
-    fn fields() -> Vec<Field> {
+    fn fields() -> Fields {
         vec![
             Field::new("value", DataType::Float64, true),
             Field::new(
@@ -160,14 +161,7 @@ impl FirstSelector {
                 true,
             ),
         ]
-    }
-
-    fn update(&mut self, val: f64, time: i64) {
-        // remember the point with the earliest timestamp
-        if time < self.time {
-            self.value = val;
-            self.time = time;
-        }
+        .into()
     }
 
     // output data type
@@ -201,7 +195,7 @@ impl FirstSelector {
 
     /// return this selector as a single scalar (struct) value
     fn to_scalar(&self) -> ScalarValue {
-        ScalarValue::Struct(Some(self.to_state()), Box::new(Self::fields()))
+        ScalarValue::Struct(Some(self.to_state()), Self::fields())
     }
 }
 
@@ -226,7 +220,10 @@ impl Accumulator for FirstSelector {
         // Update the actual values
         for (value, time) in v.iter().zip(t.iter()) {
             if let (Some(time), Some(value)) = (time, value) {
-                self.update(value, time)
+                if time < self.time {
+                    self.value = value;
+                    self.time = time;
+                }
             }
         }
 

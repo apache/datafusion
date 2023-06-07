@@ -23,14 +23,14 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;
-use crate::logical_expr::Expr;
-use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -82,7 +82,7 @@ impl FileFormat for AvroFormat {
         &self,
         _state: &SessionState,
         conf: FileScanConfig,
-        _filters: &[Expr],
+        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(conf);
         Ok(Arc::new(exec))
@@ -96,6 +96,7 @@ mod tests {
     use crate::datasource::file_format::test_util::scan_format;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
+    use arrow::array::{as_string_array, Array};
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_microsecond_array,
@@ -179,13 +180,13 @@ mod tests {
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| 4  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
+            "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
             "| 5  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30332f30312f3039 | 31         | 2009-03-01T00:01:00 |",
-            "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01T00:00:00 |",
+            "| 6  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30342f30312f3039 | 30         | 2009-04-01T00:00:00 |",
             "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01T00:01:00 |",
-            "| 2  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30322f30312f3039 | 30         | 2009-02-01T00:00:00 |",
+            "| 2  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30322f30312f3039 | 30         | 2009-02-01T00:00:00 |",
             "| 3  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 2009-02-01T00:01:00 |",
-            "| 0  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30312f30312f3039 | 30         | 2009-01-01T00:00:00 |",
+            "| 0  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30312f30312f3039 | 30         | 2009-01-01T00:00:00 |",
             "| 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01T00:01:00 |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         ];
@@ -222,6 +223,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_null_bool_alltypes_plain_avro() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let projection = Some(vec![2]);
+        let exec =
+            get_exec(&state, "alltypes_nulls_plain.avro", projection, None).await?;
+
+        let batches = collect(exec, task_ctx).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(1, batches[0].num_rows());
+
+        let array = as_boolean_array(batches[0].column(0))?;
+
+        assert!(array.is_null(0));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn read_i32_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
@@ -241,6 +263,27 @@ mod tests {
         }
 
         assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{values:?}"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_null_i32_alltypes_plain_avro() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let projection = Some(vec![1]);
+        let exec =
+            get_exec(&state, "alltypes_nulls_plain.avro", projection, None).await?;
+
+        let batches = collect(exec, task_ctx).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(1, batches[0].num_rows());
+
+        let array = as_int32_array(batches[0].column(0))?;
+
+        assert!(array.is_null(0));
 
         Ok(())
     }
@@ -346,6 +389,48 @@ mod tests {
             "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
             format!("{values:?}")
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_null_binary_alltypes_plain_avro() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let projection = Some(vec![6]);
+        let exec =
+            get_exec(&state, "alltypes_nulls_plain.avro", projection, None).await?;
+
+        let batches = collect(exec, task_ctx).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(1, batches[0].num_rows());
+
+        let array = as_binary_array(batches[0].column(0))?;
+
+        assert!(array.is_null(0));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_null_string_alltypes_plain_avro() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let projection = Some(vec![0]);
+        let exec =
+            get_exec(&state, "alltypes_nulls_plain.avro", projection, None).await?;
+
+        let batches = collect(exec, task_ctx).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(1, batches[0].num_columns());
+        assert_eq!(1, batches[0].num_rows());
+
+        let array = as_string_array(batches[0].column(0));
+
+        assert!(array.is_null(0));
 
         Ok(())
     }

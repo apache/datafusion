@@ -24,5 +24,5 @@ rm -rf temp 2> /dev/null
 mkdir temp
 cp -rf source/* temp/
 # replace relative URLs with absolute URLs
-sed -i 's/\.\.\/\.\.\/\.\.\//https:\/\/github.com\/apache\/arrow-datafusion\/blob\/master\//g' temp/contributor-guide/index.md
+sed -i -e 's/\.\.\/\.\.\/\.\.\//https:\/\/github.com\/apache\/arrow-datafusion\/blob\/main\//g' temp/contributor-guide/index.md
 make SOURCEDIR=`pwd`/temp html

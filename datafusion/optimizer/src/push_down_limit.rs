@@ -198,9 +198,7 @@ impl OptimizerRule for PushDownLimit {
             LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_) => {
                 // commute
                 let new_limit =
-                    plan.with_new_inputs(&[
-                        (*(child_plan.inputs().get(0).unwrap())).clone()
-                    ])?;
+                    plan.with_new_inputs(&[child_plan.inputs()[0].clone()])?;
                 Some(child_plan.with_new_inputs(&[new_limit])?)
             }
             _ => None,

@@ -18,7 +18,7 @@
 //! Type coercion rules for functions with multiple valid signatures
 //!
 //! Coercion is performed automatically by DataFusion when the types
-//! of arguments passed to a function do not exacty match the types
+//! of arguments passed to a function do not exactly match the types
 //! required by that function. In this case, DataFusion will attempt to
 //! *coerce* the arguments to types accepted by the function by
 //! inserting CAST operations.
@@ -68,6 +68,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_schema::Fields;
     use datafusion_common::DataFusionError;
     use datafusion_expr::Volatility;
 
@@ -79,7 +80,7 @@ mod tests {
                 t.iter()
                     .enumerate()
                     .map(|(i, t)| Field::new(format!("c{i}"), t.clone(), true))
-                    .collect(),
+                    .collect::<Fields>(),
             )
         };
 

@@ -15,18 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`RowWriter`]  writes [`RecordBatch`]es to Vec<u8> to stitch attributes together
+//! [`RowWriter`] writes [`RecordBatch`]es to `Vec<u8>` to stitch attributes together
 
-use crate::layout::{estimate_row_width, RowLayout, RowType};
+use crate::layout::RowLayout;
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
-use datafusion_common::cast::{
-    as_binary_array, as_date32_array, as_date64_array, as_string_array,
-};
+use arrow::util::bit_util::{set_bit_raw, unset_bit_raw};
+use datafusion_common::cast::{as_date32_array, as_date64_array, as_decimal128_array};
 use datafusion_common::Result;
-use std::cmp::max;
 use std::sync::Arc;
 
 /// Append batch from `row_idx` to `output` buffer start from `offset`
@@ -39,9 +36,8 @@ pub fn write_batch_unchecked(
     batch: &RecordBatch,
     row_idx: usize,
     schema: Arc<Schema>,
-    row_type: RowType,
 ) -> Vec<usize> {
-    let mut writer = RowWriter::new(&schema, row_type);
+    let mut writer = RowWriter::new(&schema);
     let mut current_offset = offset;
     let mut offsets = vec![];
     let columns = batch.columns();
@@ -56,14 +52,13 @@ pub fn write_batch_unchecked(
     offsets
 }
 
-/// bench interpreted version write
+/// Bench interpreted version write
 #[inline(never)]
 pub fn bench_write_batch(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
-    row_type: RowType,
 ) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema, row_type);
+    let mut writer = RowWriter::new(&schema);
     let mut lengths = vec![];
 
     for batch in batches.iter().flatten() {
@@ -100,7 +95,7 @@ macro_rules! fn_set_idx {
     };
 }
 
-/// Reusable row writer backed by Vec<u8>
+/// Reusable row writer backed by `Vec<u8>`
 ///
 /// ```text
 ///                             ┌ ─ ─ ─ ─ ─ ─ ─ ─
@@ -120,37 +115,28 @@ macro_rules! fn_set_idx {
 pub struct RowWriter {
     /// Layout on how to write each field
     layout: RowLayout,
-    /// buffer for the current tuple been written.
+    /// Buffer for the current tuple being written.
     data: Vec<u8>,
     /// Length in bytes for the current tuple, 8-bytes word aligned.
     pub(crate) row_width: usize,
-    /// Length in bytes for `variable length data` part of the current tuple.
-    varlena_width: usize,
-    /// Current offset for the next variable length field to write to.
-    varlena_offset: usize,
 }
 
 impl RowWriter {
-    /// new
-    pub fn new(schema: &Schema, row_type: RowType) -> Self {
-        let layout = RowLayout::new(schema, row_type);
-        let init_capacity = estimate_row_width(schema, &layout);
-        let varlena_offset = layout.fixed_part_width();
+    /// New
+    pub fn new(schema: &Schema) -> Self {
+        let layout = RowLayout::new(schema);
+        let init_capacity = layout.fixed_part_width();
         Self {
             layout,
             data: vec![0; init_capacity],
-            row_width: 0,
-            varlena_width: 0,
-            varlena_offset,
+            row_width: init_capacity,
         }
     }
 
     /// Reset the row writer state for new tuple
     pub fn reset(&mut self) {
         self.data.fill(0);
-        self.row_width = 0;
-        self.varlena_width = 0;
-        self.varlena_offset = self.layout.fixed_part_width();
+        self.row_width = self.layout.fixed_part_width();
     }
 
     #[inline]
@@ -225,43 +211,8 @@ impl RowWriter {
         set_idx!(8, self, idx, value)
     }
 
-    fn set_offset_size(&mut self, idx: usize, size: u32) {
-        let offset_and_size: u64 = (self.varlena_offset as u64) << 32 | (size as u64);
-        self.set_u64(idx, offset_and_size);
-    }
-
-    fn set_utf8(&mut self, idx: usize, value: &str) {
-        self.assert_index_valid(idx);
-        let bytes = value.as_bytes();
-        let size = bytes.len();
-        self.set_offset_size(idx, size as u32);
-        let varlena_offset = self.varlena_offset;
-        self.data[varlena_offset..varlena_offset + size].copy_from_slice(bytes);
-        self.varlena_offset += size;
-        self.varlena_width += size;
-    }
-
-    fn set_binary(&mut self, idx: usize, value: &[u8]) {
-        self.assert_index_valid(idx);
-        let size = value.len();
-        self.set_offset_size(idx, size as u32);
-        let varlena_offset = self.varlena_offset;
-        self.data[varlena_offset..varlena_offset + size].copy_from_slice(value);
-        self.varlena_offset += size;
-        self.varlena_width += size;
-    }
-
-    fn current_width(&self) -> usize {
-        self.layout.fixed_part_width() + self.varlena_width
-    }
-
-    /// End each row at 8-byte word boundary.
-    pub(crate) fn end_padding(&mut self) {
-        let payload_width = self.current_width();
-        self.row_width = round_upto_power_of_2(payload_width, 8);
-        if self.data.len() < self.row_width {
-            self.data.resize(self.row_width, 0);
-        }
+    fn set_decimal128(&mut self, idx: usize, value: i128) {
+        set_idx!(16, self, idx, value)
     }
 
     /// Get raw bytes
@@ -293,7 +244,6 @@ pub fn write_row(
         }
     }
 
-    row_writer.end_padding();
     row_writer.row_width
 }
 
@@ -331,7 +281,7 @@ pub(crate) fn write_field_date32(
 ) {
     match as_date32_array(from) {
         Ok(from) => to.set_date32(col_idx, from.value(row_idx)),
-        Err(e) => panic!("{}", e),
+        Err(e) => panic!("{e}"),
     };
 }
 
@@ -345,34 +295,14 @@ pub(crate) fn write_field_date64(
     to.set_date64(col_idx, from.value(row_idx));
 }
 
-pub(crate) fn write_field_utf8(
+pub(crate) fn write_field_decimal128(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
     row_idx: usize,
 ) {
-    let from = as_string_array(from).unwrap();
-    let s = from.value(row_idx);
-    let new_width = to.current_width() + s.as_bytes().len();
-    if new_width > to.data.len() {
-        to.data.resize(max(to.data.capacity(), new_width), 0);
-    }
-    to.set_utf8(col_idx, s);
-}
-
-pub(crate) fn write_field_binary(
-    to: &mut RowWriter,
-    from: &Arc<dyn Array>,
-    col_idx: usize,
-    row_idx: usize,
-) {
-    let from = as_binary_array(from).unwrap();
-    let s = from.value(row_idx);
-    let new_width = to.current_width() + s.len();
-    if new_width > to.data.len() {
-        to.data.resize(max(to.data.capacity(), new_width), 0);
-    }
-    to.set_binary(col_idx, s);
+    let from = as_decimal128_array(from).unwrap();
+    to.set_decimal128(col_idx, from.value(row_idx));
 }
 
 fn write_field(
@@ -397,8 +327,7 @@ fn write_field(
         Float64 => write_field_f64(row, col, col_idx, row_idx),
         Date32 => write_field_date32(row, col, col_idx, row_idx),
         Date64 => write_field_date64(row, col, col_idx, row_idx),
-        Utf8 => write_field_utf8(row, col, col_idx, row_idx),
-        Binary => write_field_binary(row, col, col_idx, row_idx),
+        Decimal128(_, _) => write_field_decimal128(row, col, col_idx, row_idx),
         _ => unimplemented!(),
     }
 }
