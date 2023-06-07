@@ -57,7 +57,6 @@ use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
 use crate::error::{DataFusionError, Result};
 use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
-use crate::logical_expr::JoinType;
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
@@ -78,6 +77,7 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::JoinType;
 
 use super::{
     utils::{OnceAsync, OnceFut},
