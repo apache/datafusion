@@ -165,28 +165,110 @@ mod tests {
         logical_expr::{DdlStatement, LogicalPlan},
         prelude::SessionContext,
     };
+    use object_store::{aws::AmazonS3ConfigKey, gcp::GoogleConfigKey};
 
     use super::*;
 
-    #[ignore] // https://github.com/apache/arrow-rs/issues/4021
     #[tokio::test]
-    async fn oss_object_store_builder() -> Result<()> {
-        let access_key_id = "access_key_id";
-        let secret_access_key = "secret_access_key";
-        let region = "us-east-2";
+    async fn s3_object_store_builder() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let region = "fake_us-east-2";
+        let session_token = "fake_session_token";
         let location = "s3://bucket/path/file.parquet";
+
         let table_url = ListingTableUrl::parse(location)?;
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'region' '{region}') LOCATION '{location}'");
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'region' '{region}', 'session_token' {session_token}) LOCATION '{location}'");
 
         let ctx = SessionContext::new();
         let plan = ctx.state().create_logical_plan(&sql).await?;
 
-        match &plan {
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-                let _builder = get_oss_object_store_builder(table_url.as_ref(), cmd)?;
-                // get the actual configuration information, then assert_eq!
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            let builder = get_s3_object_store_builder(table_url.as_ref(), cmd).await?;
+            // get the actual configuration information, then assert_eq!
+            let config = [
+                (AmazonS3ConfigKey::AccessKeyId, access_key_id),
+                (AmazonS3ConfigKey::SecretAccessKey, secret_access_key),
+                (AmazonS3ConfigKey::Region, region),
+                (AmazonS3ConfigKey::Token, session_token),
+            ];
+            for (key, value) in config {
+                assert_eq!(value, builder.get_config_value(&key).unwrap());
             }
-            _ => assert!(false),
+        } else {
+            return Err(DataFusionError::Plan(
+                "LogicalPlan is not a CreateExternalTable".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oss_object_store_builder() -> Result<()> {
+        let access_key_id = "fake_access_key_id";
+        let secret_access_key = "fake_secret_access_key";
+        let endpoint = "fake_endpoint";
+        let location = "oss://bucket/path/file.parquet";
+
+        let table_url = ListingTableUrl::parse(location)?;
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('access_key_id' '{access_key_id}', 'secret_access_key' '{secret_access_key}', 'endpoint' '{endpoint}') LOCATION '{location}'");
+
+        let ctx = SessionContext::new();
+        let plan = ctx.state().create_logical_plan(&sql).await?;
+
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            let builder = get_oss_object_store_builder(table_url.as_ref(), cmd)?;
+            // get the actual configuration information, then assert_eq!
+            let config = [
+                (AmazonS3ConfigKey::AccessKeyId, access_key_id),
+                (AmazonS3ConfigKey::SecretAccessKey, secret_access_key),
+                (AmazonS3ConfigKey::Endpoint, endpoint),
+            ];
+            for (key, value) in config {
+                assert_eq!(value, builder.get_config_value(&key).unwrap());
+            }
+        } else {
+            return Err(DataFusionError::Plan(
+                "LogicalPlan is not a CreateExternalTable".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gcs_object_store_builder() -> Result<()> {
+        let service_account_path = "fake_service_account_path";
+        let service_account_key =
+            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\"}";
+        let application_credentials_path = "fake_application_credentials_path";
+        let location = "gcs://bucket/path/file.parquet";
+
+        let table_url = ListingTableUrl::parse(location)?;
+        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('service_account_path' '{service_account_path}', 'service_account_key' '{service_account_key}', 'application_credentials_path' '{application_credentials_path}') LOCATION '{location}'");
+
+        let ctx = SessionContext::new();
+        let plan = ctx.state().create_logical_plan(&sql).await?;
+
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            let builder = get_gcs_object_store_builder(table_url.as_ref(), cmd)?;
+            // get the actual configuration information, then assert_eq!
+            let config = [
+                (GoogleConfigKey::ServiceAccount, service_account_path),
+                (GoogleConfigKey::ServiceAccountKey, service_account_key),
+                (
+                    GoogleConfigKey::ApplicationCredentials,
+                    application_credentials_path,
+                ),
+            ];
+            for (key, value) in config {
+                assert_eq!(value, builder.get_config_value(&key).unwrap());
+            }
+        } else {
+            return Err(DataFusionError::Plan(
+                "LogicalPlan is not a CreateExternalTable".to_string(),
+            ));
         }
 
         Ok(())
