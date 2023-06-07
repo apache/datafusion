@@ -99,6 +99,18 @@ SELECT bit_xor(c5), bit_xor(c6), bit_xor(c7), bit_xor(c8), bit_xor(c9) FROM aggr
 ----
 1632751011 5960911605712039654 148 54789 169634700
 
+# csv_query_bit_xor_distinct
+query IIIII
+SELECT bit_xor(distinct c5), bit_xor(distinct c6), bit_xor(distinct c7), bit_xor(distinct c8), bit_xor(distinct c9) FROM aggregate_test_100
+----
+1632751011 5960911605712039654 196 54789 169634700
+
+# csv_query_bit_xor_distinct_expr
+query I
+SELECT bit_xor(distinct c5 % 2) FROM aggregate_test_100
+----
+-2
+
 # csv_query_covariance_1
 query R
 SELECT covar_pop(c2, c12) FROM aggregate_test_100
