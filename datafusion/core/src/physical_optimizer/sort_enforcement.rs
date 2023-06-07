@@ -3017,7 +3017,13 @@ LOCATION 'tests/data/window_2.csv'",
         // LAST_VALUE(amount ORDER BY amount DESC) AS fv2
         // FROM sales_global";
 
-        let sql = "SELECT SUM(c9), LAST_VALUE(c9 ORDER BY c11)
+        // let sql = "SELECT SUM(c9), LAST_VALUE(c9 ORDER BY c11)
+        //                 FROM aggregate_test_100";
+
+        // let sql = "SELECT SUM(c9), FIRST_VALUE(c9 ORDER BY c11 ASC)
+        //                 FROM aggregate_test_100";
+
+        let sql = "SELECT SUM(c9), FIRST_VALUE(c9 ORDER BY c11 DESC), LAST_VALUE(c9 ORDER BY c11 DESC)
                         FROM aggregate_test_100";
 
         let msg = format!("Creating logical plan for '{sql}'");
@@ -3049,7 +3055,7 @@ LOCATION 'tests/data/window_2.csv'",
           (1, 'TUR', 4, '2022-01-03 10:00:00'::timestamp, 'TRY', 100.0),
           (0, 'GRC', 4, '2022-01-03 10:00:00'::timestamp, 'EUR', 80.0)",
         )
-            .await?;
+        .await?;
 
         // let sql = "SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
         //   LAST_VALUE(amount ORDER BY ts DESC) as lv1,

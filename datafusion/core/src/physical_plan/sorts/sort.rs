@@ -592,6 +592,9 @@ impl ExecutionPlan for SortExec {
 
         trace!("End SortExec's input.execute for partition: {}", partition);
 
+        for elem in &self.expr {
+            println!("SortExec print, elem: {:?}, options: {:?}", elem, elem.options);
+        }
         let mut sorter = ExternalSorter::new(
             partition,
             input.schema(),

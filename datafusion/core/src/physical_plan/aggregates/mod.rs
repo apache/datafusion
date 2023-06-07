@@ -463,7 +463,7 @@ fn calc_required_input_ordering(
             // then we append the aggregator ordering requirement to the existing
             // ordering. This way, we can still run with bounded memory.
             mode: GroupByOrderMode::FullyOrdered | GroupByOrderMode::PartiallyOrdered,
-            order_indices
+            order_indices,
         }) = aggregation_ordering
         {
             // Get the section of the input ordering that enables us to run in
@@ -480,7 +480,8 @@ fn calc_required_input_ordering(
                 if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                     requirement.push(req.clone());
                 }
-                if ordering.iter().all(|item| req.expr.ne(&item.expr)) && !is_single_mode {
+                if ordering.iter().all(|item| req.expr.ne(&item.expr)) && !is_single_mode
+                {
                     ordering.push(req.into());
                 }
             }
@@ -490,7 +491,9 @@ fn calc_required_input_ordering(
                 *aggregation_ordering = Some(AggregationOrdering {
                     mode: GroupByOrderMode::Linear,
                     order_indices: vec![],
-                    ordering: PhysicalSortRequirement::to_sort_exprs(aggregator_requirement.clone()),
+                    ordering: PhysicalSortRequirement::to_sort_exprs(
+                        aggregator_requirement.clone(),
+                    ),
                 });
             }
             required_input_ordering = aggregator_requirement;
@@ -517,7 +520,8 @@ fn calc_required_input_ordering(
     // each `aggr_expr` to be able to correctly calculate their result in reverse order.
     if reverse_req {
         aggr_expr
-            .iter_mut().zip(order_by_expr.iter_mut())
+            .iter_mut()
+            .zip(order_by_expr.iter_mut())
             .map(|(elem, ob_expr)| {
                 if is_order_sensitive(elem) {
                     if let Some(reverse) = elem.reverse_expr() {
@@ -1924,6 +1928,8 @@ mod tests {
         let aggr_expr = Arc::new(FirstValue::new(
             Arc::new(col_a.clone()),
             "first1",
+            vec![],
+            vec![],
             DataType::Int32,
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];

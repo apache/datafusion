@@ -30,6 +30,8 @@ use datafusion_expr::Accumulator;
 use datafusion_common::utils::get_row_at_idx;
 use std::any::Any;
 use std::sync::Arc;
+use arrow::compute;
+use arrow_array::cast::AsArray;
 
 /// FIRST_VALUE aggregate expression
 #[derive(Debug)]
@@ -37,6 +39,8 @@ pub struct FirstValue {
     name: String,
     pub data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
+    orderings: Vec<Field>,
+    ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
 impl FirstValue {
@@ -44,12 +48,16 @@ impl FirstValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
+        orderings: Vec<Field>,
+        ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
         data_type: DataType,
     ) -> Self {
         Self {
             name: name.into(),
             data_type,
             expr,
+            orderings,
+            ordering_exprs,
         }
     }
 }
@@ -65,19 +73,38 @@ impl AggregateExpr for FirstValue {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(FirstValueAccumulator::try_new(&self.data_type)?))
+        let ordering_dtypes = self
+            .orderings
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        Ok(Box::new(FirstValueAccumulator::try_new(
+            &self.data_type,
+            &ordering_dtypes,
+        )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
+        let mut fields = vec![Field::new(
             format_state_name(&self.name, "first_value"),
             self.data_type.clone(),
             true,
-        )])
+        )];
+        for field in &self.orderings {
+            fields.push(field.clone());
+        }
+        fields.push(Field::new(
+            format_state_name(&self.name, "is_set"),
+            DataType::Boolean,
+            true,
+        ));
+        Ok(fields)
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        let mut res = vec![self.expr.clone()];
+        res.extend(self.ordering_exprs.clone());
+        res
     }
 
     fn name(&self) -> &str {
@@ -93,14 +120,22 @@ impl AggregateExpr for FirstValue {
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
             name,
-            vec![],
-            vec![],
+            self.orderings.clone(),
+            self.ordering_exprs.clone(),
             self.data_type.clone(),
         )))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(FirstValueAccumulator::try_new(&self.data_type)?))
+        let ordering_dtypes = self
+            .orderings
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        Ok(Box::new(FirstValueAccumulator::try_new(
+            &self.data_type,
+            &ordering_dtypes,
+        )?))
     }
 }
 
@@ -123,39 +158,59 @@ struct FirstValueAccumulator {
     // At the beginning, `is_set` is `false`, this means `first` is not seen yet.
     // Once we see (`is_set=true`) first value, we do not update `first`.
     is_set: bool,
+    orderings: Vec<ScalarValue>,
 }
 
 impl FirstValueAccumulator {
     /// Creates a new `FirstValueAccumulator` for the given `data_type`.
-    pub fn try_new(data_type: &DataType) -> Result<Self> {
+    pub fn try_new(data_type: &DataType, ordering_dtypes: &[DataType]) -> Result<Self> {
+        let mut orderings = vec![];
+        for dtype in ordering_dtypes {
+            orderings.push(ScalarValue::try_from(dtype)?);
+        }
         ScalarValue::try_from(data_type).map(|value| Self {
             first: value,
             is_set: false,
+            orderings,
         })
     }
 }
 
 impl Accumulator for FirstValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            self.first.clone(),
-            ScalarValue::Boolean(Some(self.is_set)),
-        ])
+        let mut res = vec![self.first.clone()];
+        res.extend(self.orderings.clone());
+        res.push(ScalarValue::Boolean(Some(self.is_set)));
+        Ok(res)
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for (idx, elem) in values.iter().enumerate() {
+            println!("idx:{:?}, elem:{:?}", idx, elem);
+        }
         // If we have seen first value, we shouldn't update it
-        let values = &values[0];
-        if !values.is_empty() && !self.is_set {
-            self.first = ScalarValue::try_from_array(values, 0)?;
+        if !values[0].is_empty() && !self.is_set {
+            let row = get_row_at_idx(values, 0)?;
+            println!("row:{:?}", row);
+            // Update with last value in the array.
+            self.first = row[0].clone();
+            self.orderings = row[1..].to_vec();
             self.is_set = true;
         }
         Ok(())
+
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
-        self.update_batch(states)
+        println!("states:{:?}", states);
+        let last_idx = states.len() -1;
+        let is_set_flags = &states[last_idx];
+        let mut filtered_first_vals = vec![];
+        for idx in 0..last_idx-1{
+            filtered_first_vals.push(compute::filter(&states[idx], is_set_flags.as_boolean())?)
+        }
+        self.update_batch(&filtered_first_vals)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -230,6 +285,11 @@ impl AggregateExpr for LastValue {
         for field in &self.orderings {
             fields.push(field.clone());
         }
+        fields.push(Field::new(
+            format_state_name(&self.name, "is_set"),
+            DataType::Boolean,
+            true,
+        ));
         Ok(fields)
     }
 
@@ -252,6 +312,8 @@ impl AggregateExpr for LastValue {
         Some(Arc::new(FirstValue::new(
             self.expr.clone(),
             name,
+            self.orderings.clone(),
+            self.ordering_exprs.clone(),
             self.data_type.clone(),
         )))
     }
@@ -285,6 +347,10 @@ impl PartialEq<dyn Any> for LastValue {
 #[derive(Debug)]
 struct LastValueAccumulator {
     last: ScalarValue,
+    // `is_set` keeps track of whether last value is setted.
+    // This information is used to discriminate genuine Nulls and Nulls that occur because of
+    // empty partition.
+    is_set: bool,
     orderings: Vec<ScalarValue>,
 }
 
@@ -297,6 +363,7 @@ impl LastValueAccumulator {
         }
         Ok(Self {
             last: ScalarValue::try_from(data_type)?,
+            is_set: false,
             orderings,
         })
     }
@@ -306,7 +373,7 @@ impl Accumulator for LastValueAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut res = vec![self.last.clone()];
         res.extend(self.orderings.clone());
-        println!("res len: {:?}", res.len());
+        res.push(ScalarValue::Boolean(Some(self.is_set)));
         Ok(res)
     }
 
@@ -320,13 +387,21 @@ impl Accumulator for LastValueAccumulator {
             // Update with last value in the array.
             self.last = row[0].clone();
             self.orderings = row[1..].to_vec();
+            self.is_set = true;
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
-        self.update_batch(states)
+        println!("states:{:?}", states);
+        let last_idx = states.len() -1;
+        let is_set_flags = &states[last_idx];
+        let mut filtered_first_vals = vec![];
+        for idx in 0..last_idx-1{
+            filtered_first_vals.push(compute::filter(&states[idx], is_set_flags.as_boolean())?)
+        }
+        self.update_batch(&filtered_first_vals)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
