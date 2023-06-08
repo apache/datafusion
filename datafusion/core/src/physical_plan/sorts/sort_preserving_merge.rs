@@ -231,8 +231,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use futures::FutureExt;
-    use tokio_stream::StreamExt;
+    use futures::{FutureExt, StreamExt};
 
     use crate::from_slice::FromSlice;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;

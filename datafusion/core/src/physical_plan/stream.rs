@@ -30,7 +30,6 @@ use log::debug;
 use pin_project_lite::pin_project;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::ReceiverStream;
 
 use super::metrics::BaselineMetrics;
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
@@ -192,18 +191,27 @@ impl RecordBatchReceiverStreamBuilder {
             // unwrap Option / only return the error
             .filter_map(|item| async move { item });
 
+        // Convert the receiver into a stream
+        let rx_stream = futures::stream::unfold(rx, |mut rx| async move {
+            let next_item = rx.recv().await;
+            next_item.map(|next_item| (next_item, rx))
+        });
+
         // Merge the streams together so whichever is ready first
         // produces the batch
-        let inner =
-            futures::stream::select(ReceiverStream::new(rx), check_stream).boxed();
+        let inner = futures::stream::select(rx_stream, check_stream).boxed();
 
         Box::pin(RecordBatchReceiverStream { schema, inner })
     }
 }
 
-/// Adapter for a tokio [`ReceiverStream`] that implements the
-/// [`SendableRecordBatchStream`] interface and propagates panics and
-/// errors.  Use [`Self::builder`] to construct one.
+/// A [`SendableRecordBatchStream`] that combines [`RecordBatch`]es from multiple inputs,
+/// on new tokio Tasks,  increasing the potential parallelism.
+///
+/// This structure also handles propagating panics and cancelling the
+/// underlying tasks correctly.
+///
+/// Use [`Self::builder`] to construct one.
 pub struct RecordBatchReceiverStream {
     schema: SchemaRef,
     inner: BoxStream<'static, Result<RecordBatch>>,

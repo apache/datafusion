@@ -115,7 +115,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
                 window_agg_state.get_mut(partition_row).ok_or_else(|| {
                     DataFusionError::Execution("Cannot find state".to_string())
                 })?;
-            let mut state = &mut window_state.state;
+            let state = &mut window_state.state;
             if self.window_frame.start_bound.is_unbounded() {
                 state.window_frame_range.start =
                     state.window_frame_range.end.saturating_sub(1);
