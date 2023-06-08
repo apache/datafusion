@@ -61,7 +61,19 @@ select make_array(make_array())
 ----
 [[]]
 
-# array_append scalar function
+# array_append scalar function #1
+query ? rowsort
+select array_append(make_array(), 4);
+----
+[4]
+
+# array_append scalar function #2
+query ?? rowsort
+select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
+----
+[[]] [[4]]
+
+# array_append scalar function #3
 query ??? rowsort
 select array_append(make_array(1, 2, 3), 4), array_append(make_array(1.0, 2.0, 3.0), 4.0), array_append(make_array('h', 'e', 'l', 'l'), 'o');
 ----

@@ -150,6 +150,7 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
 }
 
+/// make_array SQL function
 pub fn array_make(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     match values[0].data_type() {
         DataType::Null => Ok(datafusion_expr::ColumnarValue::Scalar(
@@ -225,6 +226,7 @@ pub fn array_append(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 (DataType::UInt16, DataType::UInt16) => append!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => append!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => append!(arr, element, UInt64Array),
+                (DataType::Null, _) => return array(&args[1..]),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_append is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
