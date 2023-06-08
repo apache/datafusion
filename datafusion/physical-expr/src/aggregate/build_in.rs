@@ -26,7 +26,7 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use crate::{expressions, AggregateExpr, PhysicalExpr};
+use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::aggregate_function::{return_type, sum_type_of_avg};
@@ -39,7 +39,7 @@ pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    orderings: &[Arc<dyn PhysicalExpr>],
+    ordering_reqs: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -50,6 +50,10 @@ pub fn create_aggregate_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let rt_type = return_type(fun, &input_phy_types)?;
+    let orderings = ordering_reqs
+        .iter()
+        .map(|e| e.expr.clone())
+        .collect::<Vec<_>>();
     let ordering_types = orderings
         .iter()
         .map(|e| e.data_type(input_schema))
@@ -143,11 +147,22 @@ pub fn create_aggregate_expr(
                 input_phy_types[0].clone(),
             ))
         }
-        (AggregateFunction::ArrayAgg, false) => Arc::new(expressions::ArrayAgg::new(
-            input_phy_exprs[0].clone(),
-            name,
-            input_phy_types[0].clone(),
-        )),
+        (AggregateFunction::ArrayAgg, false) => {
+            if ordering_reqs.is_empty() {
+                Arc::new(expressions::ArrayAgg::new(
+                    input_phy_exprs[0].clone(),
+                    name,
+                    input_phy_types[0].clone(),
+                ))
+            } else {
+                Arc::new(expressions::OrderSensitiveArrayAgg::new(
+                    input_phy_exprs[0].clone(),
+                    name,
+                    input_phy_types.clone(),
+                    ordering_reqs.to_vec(),
+                ))
+            }
+        }
         (AggregateFunction::ArrayAgg, true) => {
             Arc::new(expressions::DistinctArrayAgg::new(
                 input_phy_exprs[0].clone(),

@@ -2897,9 +2897,12 @@ mod tests {
 
 mod tmp_tests {
     use crate::assert_batches_eq;
+    use crate::datasource::MemTable;
     use crate::physical_plan::{collect, displayable, ExecutionPlan};
     use crate::prelude::SessionContext;
     use arrow::util::pretty::print_batches;
+    use arrow_array::{Float32Array, Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use std::sync::Arc;
@@ -3088,6 +3091,123 @@ LOCATION 'tests/data/window_2.csv'",
         print_plan(&physical_plan)?;
         let batches = collect(physical_plan, ctx.task_ctx()).await?;
         print_batches(&batches)?;
+        assert_eq!(0, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_array_agg() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::with_config(config);
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE aggregate_test_100 (
+          c1  VARCHAR NOT NULL,
+          c2  TINYINT NOT NULL,
+          c3  SMALLINT NOT NULL,
+          c4  SMALLINT,
+          c5  INT,
+          c6  BIGINT NOT NULL,
+          c7  SMALLINT NOT NULL,
+          c8  INT NOT NULL,
+          c9  BIGINT UNSIGNED NOT NULL,
+          c10 VARCHAR NOT NULL,
+          c11 FLOAT NOT NULL,
+          c12 DOUBLE NOT NULL,
+          c13 VARCHAR NOT NULL
+        )
+        STORED AS CSV
+        WITH HEADER ROW
+        LOCATION '../../testing/data/csv/aggregate_test_100.csv'",
+        )
+        .await?;
+
+        let sql = "SELECT ARRAY_AGG(c9 ORDER BY c11 ASC)
+                         FROM aggregate_test_100";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+        let expected = vec![
+            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| ARRAY_AGG(aggregate_test_100.c9)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |",
+            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+            "| [1534194097, 3862393166, 3998790955, 243203849, 3717551163, 3766999078, 1243785310, 3566741189, 1865307672, 2705709344, 1491205016, 63044568, 2093538928, 774637006, 2861911482, 473294098, 557517119, 2306130875, 141047417, 145294611, 2293105904, 2307004493, 2610290479, 662099130, 811650497, 2669374863, 1157161427, 3473924576, 1538863055, 4268716378, 2778168728, 1013876852, 1098639440, 3126475872, 3188005828, 754775609, 2592330556, 520189543, 466439833, 3577318119, 431948861, 933879086, 3542840110, 2939920218, 1000948272, 1454057357, 4144173353, 3457053821, 3314983189, 538589788, 3570297463, 2818832252, 2525744318, 559847112, 3276123488, 3275293996, 3198969145, 1229567292, 1289293657, 141680161, 3593959807, 2502326480, 326151275, 2125812933, 3521368277, 2496054700, 2712615025, 4216440507, 2214035726, 4076864659, 3023531799, 3455216719, 3759340273, 2830981072, 2013662838, 1088543984, 4061635107, 3373581039, 28774375, 2042457019, 3398507249, 4229654142, 1787652631, 1365198901, 879082834, 2844041986, 974297360, 2861376515, 3342719438, 598822671, 1824517658, 2424630722, 1842680163, 3625286410, 4015442341, 225513085, 3105312559, 1995343206, 1362369177, 3959216334] |",
+            "+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        // assert_eq!(0, 1);
+        Ok(())
+    }
+
+    fn get_test_data() -> Result<(SchemaRef, Vec<RecordBatch>)> {
+        let fields = vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Float32, true),
+            Field::new("c", DataType::Float32, true),
+        ];
+        let schema = Schema::new(fields);
+        let mut batches = vec![];
+        let arr1: Int32Array = [Some(1), Some(2), Some(3)].into_iter().collect();
+        let arr2: Float32Array = [Some(3.0), Some(2.5), Some(1.5)].into_iter().collect();
+        let arr3: Float32Array = [Some(3.0), Some(2.5), Some(1.5)].into_iter().collect();
+        let columns = vec![
+            Arc::new(arr1) as _,
+            Arc::new(arr2) as _,
+            Arc::new(arr3) as _,
+        ];
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
+        batches.push(batch);
+
+        let arr1: Int32Array = [Some(1), Some(2), Some(3)].into_iter().collect();
+        let arr2: Float32Array = [Some(3.0), Some(2.5), Some(1.5)].into_iter().collect();
+        let arr3: Float32Array = [Some(3.0), Some(2.5), Some(1.5)].into_iter().collect();
+        let columns = vec![
+            Arc::new(arr1) as _,
+            Arc::new(arr2) as _,
+            Arc::new(arr3) as _,
+        ];
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
+        batches.push(batch);
+        Ok((Arc::new(schema) as _, batches))
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_array_agg2() -> Result<()> {
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::with_config(config);
+        let (schema, batches) = get_test_data()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+        ctx.register_table("table1", Arc::new(mem_table))?;
+
+        // let sql = "SELECT ARRAY_AGG(a ORDER BY b ASC)
+        //                  FROM table1";
+
+        let sql = "SELECT ARRAY_AGG(a ORDER BY b ASC)
+                         FROM table1";
+
+        // let sql = "SELECT ARRAY_AGG(a)
+        //                  FROM table1";
+
+        let msg = format!("Creating logical plan for '{sql}'");
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
+        print_plan(&physical_plan)?;
+        let batches = collect(physical_plan, ctx.task_ctx()).await?;
+        print_batches(&batches)?;
+        let expected = vec![
+            "+---------------------+",
+            "| ARRAY_AGG(table1.a) |",
+            "+---------------------+",
+            "| [3, 3, 2, 2, 1, 1]  |",
+            "+---------------------+",
+        ];
+        assert_batches_eq!(expected, &batches);
         assert_eq!(0, 1);
         Ok(())
     }

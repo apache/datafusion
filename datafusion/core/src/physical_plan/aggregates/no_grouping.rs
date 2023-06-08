@@ -25,6 +25,7 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_array::Array;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -139,6 +140,15 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result = finalize_aggregation(&this.accumulators, &this.mode)
                             .and_then(|columns| {
+                                for col in &columns {
+                                    println!(
+                                        "col: {:?}, dtype:{:?}",
+                                        col,
+                                        col.data_type()
+                                    );
+                                }
+                                println!("columns returned: {:?}", columns);
+                                println!("schema:{:?}", this.schema);
                                 RecordBatch::try_new(this.schema.clone(), columns)
                                     .map_err(Into::into)
                             })

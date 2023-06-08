@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregate::row_accumulator::RowAccumulator;
-use crate::expressions::{ArrayAgg, FirstValue, LastValue};
+use crate::expressions::{ArrayAgg, FirstValue, LastValue, OrderSensitiveArrayAgg};
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
@@ -31,6 +31,7 @@ pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
+pub(crate) mod array_agg_ordered;
 pub(crate) mod average;
 pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
@@ -139,5 +140,5 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<FirstValue>()
         || aggr_expr.as_any().is::<LastValue>()
-        || aggr_expr.as_any().is::<ArrayAgg>()
+        || aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
 }

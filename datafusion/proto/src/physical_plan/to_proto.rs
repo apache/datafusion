@@ -68,7 +68,6 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .collect::<Result<Vec<_>>>()?;
 
         let mut distinct = false;
-        let mut ordering_exprs: Vec<protobuf::PhysicalExprNode> = vec![];
         let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
             Ok(AggregateFunction::Avg.into())
         } else if a.as_any().downcast_ref::<Sum>().is_some() {
@@ -153,12 +152,8 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         {
             Ok(AggregateFunction::ApproxMedian.into())
         } else if a.as_any().is::<expressions::FirstValue>() {
-            ordering_exprs = expressions[1..].to_vec();
-            expressions = vec![expressions[0].clone()];
             Ok(AggregateFunction::FirstValueAgg.into())
         } else if a.as_any().is::<expressions::LastValue>() {
-            ordering_exprs = expressions[1..].to_vec();
-            expressions = vec![expressions[0].clone()];
             Ok(AggregateFunction::LastValueAgg.into())
         } else {
             if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
@@ -167,7 +162,8 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         protobuf::PhysicalAggregateExprNode {
                             aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
                             expr: expressions,
-                            ordering_expr: ordering_exprs,
+                            /// TODO: Add proper handling here
+                            ordering_expr: vec![],
                             distinct,
                         },
                     )),
@@ -188,7 +184,8 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         ),
                     ),
                     expr: expressions,
-                    ordering_expr: ordering_exprs,
+                    /// TODO: Add proper handling here
+                    ordering_expr: vec![],
                     distinct,
                 },
             )),

@@ -1514,7 +1514,7 @@ pub struct PhysicalAggregateExprNode {
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(message, repeated, tag = "5")]
-    pub ordering_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    pub ordering_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
