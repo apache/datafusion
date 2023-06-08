@@ -152,7 +152,9 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 pub fn array_make(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     if matches!(&values[0], ColumnarValue::Array(_)) {
-        return Ok(datafusion_expr::ColumnarValue::Scalar(ScalarValue::new_list(Some(vec![]),DataType::Null))); 
+        return Ok(datafusion_expr::ColumnarValue::Scalar(
+            ScalarValue::new_list(Some(vec![]), DataType::Null),
+        ));
     }
     array(values)
 }
