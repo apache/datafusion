@@ -52,9 +52,7 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    /// Create a new in-memory table from the provided schema and record batches.
-    /// If the provided schema and record batches' schema do not match,
-    /// the function returns an error.
+    /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
         if partitions
             .iter()
@@ -73,26 +71,6 @@ impl MemTable {
                 "Mismatch between schema and batches".to_string(),
             ))
         }
-    }
-
-    /// Create a new in-memory table from the record batches.
-    /// In case of empty table, the schema is inferred from the input plan.
-    pub fn new_not_registered(
-        schema: SchemaRef,
-        partitions: Vec<Vec<RecordBatch>>,
-    ) -> Self {
-        let schema = partitions
-            .first()
-            .and_then(|f| f.first())
-            .map(|first| first.schema())
-            .unwrap_or(schema);
-
-        let batches = partitions
-            .into_iter()
-            .map(|e| Arc::new(RwLock::new(e)))
-            .collect::<Vec<_>>();
-
-        Self { schema, batches }
     }
 
     /// Create a mem table by reading from another data source
