@@ -300,6 +300,7 @@ pub fn array_prepend(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 (DataType::UInt16, DataType::UInt16) => prepend!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => prepend!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => prepend!(arr, element, UInt64Array),
+                (DataType::Null, _) => return array(&args[..1]),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_prepend is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
