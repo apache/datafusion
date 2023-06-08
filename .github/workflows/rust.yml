@@ -96,7 +96,10 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+        run: |
+          cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -152,7 +155,10 @@ jobs:
           rust-version: stable
       # Note: this does not include dictionary_expressions to reduce codegen
       - name: Run doctests
-        run: cargo test --doc --features avro,json
+        run: |
+          cargo test --doc --features avro,json
+          cd datafusion-cli
+          cargo test --doc --all-features
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -173,6 +179,8 @@ jobs:
         run: |
           export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
           cargo doc --document-private-items --no-deps --workspace
+          cd datafusion-cli
+          cargo doc --document-private-items --no-deps
 
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
@@ -271,6 +279,8 @@ jobs:
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
           cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
@@ -304,6 +314,8 @@ jobs:
         shell: bash
         run: |
           cargo test --lib --tests --bins --features avro,json,dictionary_expressions
+          cd datafusion-cli
+          cargo test --lib --tests --bins --all-features
         env:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
