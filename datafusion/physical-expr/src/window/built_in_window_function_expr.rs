@@ -24,11 +24,13 @@ use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;
 
-/// A window expression that evaluates a window function.
+/// Evaluates a window function by instantiating a
+/// `[PartitionEvaluator]` for calculating the values.
 ///
 /// Note that unlike aggregation based window functions, window
-/// functions normally ignore the window frame spec with the exception
-/// of `first_value`, `last_value`, and `nth_value`.
+/// functions such as `rank` ignore the values in the window frame,
+/// but others such as `first_value`, `last_value`, and
+/// `nth_value` need the value.
 ///
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
@@ -47,9 +49,10 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         "BuiltInWindowFunctionExpr: default name"
     }
 
-    /// Evaluate window function's arguments against the batch and
-    /// return an array ref. Typically, the resulting vector is a
-    /// single element vector.
+    /// Evaluate window function's arguments against the input window
+    /// batch and return an [`ArrayRef`].
+    ///
+    /// Typically, the resulting vector is a single element vector.
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         self.expressions()
             .iter()
@@ -58,23 +61,35 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
             .collect()
     }
 
-    /// Create a [`PartitionEvaluator`] to evaluate data on a particular partition.
+    /// Create a [`PartitionEvaluator`] for evaluating data on a
+    /// particular partition.
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Construct Reverse Expression that produces the same result
-    /// on a reversed window. Retuns `None` if not possible.
+    /// Construct a reverse expression that produces the same result on
+    /// a reversed window. This information is used by the DataFusion
+    /// optimizer to potentially avoid resorting the data if possible.
+    ///
+    /// Returns `None` if the function can not be reversed or if is
+    /// not known to be possible (the default).
     ///
     /// For example, the reverse of `lead(10)` is `lag(10)`.
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         None
     }
 
+    /// Can the window function be incrementally computed using
+    /// bounded memory?
+    ///
+    /// If this function returns true, [`Self::create_evaluator`] must
+    /// implement [`PartitionEvaluator::evaluate_stateful`]
     fn supports_bounded_execution(&self) -> bool {
         false
     }
 
-    /// If returns true, [`Self::create_evaluator`] must implement
-    /// [`PartitionEvaluator::evaluate_inside_range`]
+    /// Does the window function use the values from its window frame?
+    ///
+    /// If this function returns true, [`Self::create_evaluator`] must
+    /// implement [`PartitionEvaluator::evaluate_inside_range`]
     fn uses_window_frame(&self) -> bool {
         false
     }

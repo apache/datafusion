@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 /// Common trait for [window function] implementations,
 ///
-/// Aggregate Window Expressions that have the form
+/// Aggregate Window Expressions have the form
 ///
 /// ```text
 /// OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)
@@ -42,7 +42,7 @@ use std::sync::Arc;
 ///
 /// e.g cumulative window frames uses `PlainAggregateWindowExpr`.
 ///
-/// Aggregate Window Expressions that have the form
+/// Aggregate Window Expressions have the form
 ///
 /// ```text
 /// OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)

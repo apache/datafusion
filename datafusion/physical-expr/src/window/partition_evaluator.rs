@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! partition evaluation module
+//! Partition evaluation module
 
 use crate::window::window_expr::BuiltinWindowState;
 use crate::window::WindowAggState;
@@ -28,7 +28,7 @@ use std::ops::Range;
 /// Partition evaluator for Window Functions
 ///
 /// An implementation of this trait is created and used for each
-/// partition defined by the OVER clause.
+/// partition defined by an `OVER` clause.
 ///
 /// For example, evaluating `window_func(val) OVER (PARTITION BY col)`
 /// on the following data:
@@ -46,46 +46,54 @@ use std::ops::Range;
 /// Will instantiate three `PartitionEvaluator`s, one each for the
 /// partitions defined by `col=A`, `col=B`, and `col=C`.
 ///
-/// There are two types of `PartitionEvaluator`:
+/// Depending on the declared features in
+/// [`BuiltInWindowFunctionExpr`] different methods will be called on
+/// this trait.
+///
+/// There are two modes of `PartitionEvaluator`:
 ///
 /// # Stateless `PartitionEvaluator`
 ///
-/// In this case, [`PartitionEvaluator::evaluate`] is called for the
-/// entire partition / window function.
+/// In this case, [`Self::evaluate`], [`Self::evaluate_with_rank`] or
+/// [`Self::evaluate_inside_range`] is called with values for the
+/// entire partition.
 ///
 /// # Stateful `PartitionEvaluator`
 ///
-/// This is used for XXXX. In this case YYYYY
+/// In this case, [`Self::evaluate_stateful`] is called to
+/// incrementally compute window results with bounded memory.
 ///
+/// For such window functions, results are calculated incrementally,
+/// and the previous state is stored (as [`BuiltinWindowState`]) to
+/// calculate the correct output.
+///
+/// For example, when computing `ROW_NUMBER` incrementally,
+/// [`Self::evaluate_stateful`] will be called multiple times with
+/// different batches. For all batches after the first, the output
+/// `row_number` must start from last `row_number` produced for the
+/// previous batch. The previous row number is saved and restored as
+/// the state.
+///
+/// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
 pub trait PartitionEvaluator: Debug + Send {
     /// Whether the evaluator should be evaluated with rank
     ///
     /// If `include_rank` is true, then [`Self::evaluate_with_rank`]
     /// will be called for each partition, which includes the
-    /// `rank`. For example:
-    ///
-    /// ```text
-    /// col | rank
-    /// --- + ----
-    ///  A  | 1
-    ///  A  | 1
-    ///  C  | 2
-    ///  D  | 3
-    ///  D  | 3
-    /// ```
+    /// `rank`.
     fn include_rank(&self) -> bool {
         false
     }
 
-    /// Returns state of the Built-in Window Function (only used for stateful evaluation)
+    /// Returns state of the window function (only used for stateful evaluation)
     fn state(&self) -> Result<BuiltinWindowState> {
         // If we do not use state we just return Default
         Ok(BuiltinWindowState::Default)
     }
 
-    /// Updates the internal state for Built-in window function, if desired.
+    /// Updates the internal state for window function (only used for stateful evaluation)
     ///
-    /// `state`: is useful to update internal state for Built-in window function.
+    /// `state`: is useful to update internal state for window function.
     /// `idx`: is the index of last row for which result is calculated.
     /// `range_columns`: is the result of order by column values. It is used to calculate rank boundaries
     /// `sort_partition_points`: is the boundaries of each rank in the range_column. It is used to update rank.
@@ -100,14 +108,14 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// Sets the internal state for Built-in window function, if supported
+    /// Sets the internal state for window function, if supported
     fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "set_state is not implemented for this window function".to_string(),
         ))
     }
 
-    /// Gets the range where Built-in window function result is calculated.
+    /// Gets the range where the window function result is calculated.
     ///
     /// `idx`: is the index of last row for which result is calculated.
     /// `n_rows`: is the number of rows of the input record batch (Used during bound check)
@@ -117,7 +125,9 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// Evaluate the partition evaluator against the partition
+    /// Called for window functions that *do not use* values from the
+    /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
+    /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`).
     fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),
@@ -131,7 +141,33 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// Evaluate the partition evaluator against the partition but with rank
+    /// [`PartitionEvaluator::evaluate_with_rank`] is called for window
+    /// functions that only need the rank of a row within its window
+    /// frame.
+    ///
+    /// Evaluate the partition evaluator against the partition using
+    /// the row ranks. For example, `RANK(col)` produces
+    ///
+    /// ```text
+    /// col | rank
+    /// --- + ----
+    ///  A  | 1
+    ///  A  | 1
+    ///  C  | 3
+    ///  D  | 4
+    ///  D  | 5
+    /// ```
+    ///
+    /// For this case, `num_rows` would be `5` and the
+    /// `ranks_in_partition` would be called with
+    ///
+    /// ```text
+    /// [
+    ///   (0,1),
+    ///   (2,2),
+    ///   (3,4),
+    /// ]
+    /// ```
     ///
     /// See [`Self::include_rank`] for more details
     fn evaluate_with_rank(
@@ -144,7 +180,11 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// evaluate window function result inside given range
+    /// Called for window functions that use values from window frame,
+    /// such as `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE` and produce a
+    /// single value for every row in the partition.
+    ///
+    /// Returns a [`ScalarValue`] that is the value of the window function for the entire partition
     fn evaluate_inside_range(
         &self,
         _values: &[ArrayRef],
