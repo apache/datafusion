@@ -151,12 +151,12 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 }
 
 pub fn array_make(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if matches!(&values[0], ColumnarValue::Array(_)) {
-        return Ok(datafusion_expr::ColumnarValue::Scalar(
+    match values[0].data_type() {
+        DataType::Null => Ok(datafusion_expr::ColumnarValue::Scalar(
             ScalarValue::new_list(Some(vec![]), DataType::Null),
-        ));
+        )),
+        _ => array(values),
     }
-    array(values)
 }
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
