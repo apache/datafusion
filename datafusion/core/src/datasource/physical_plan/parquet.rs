@@ -612,12 +612,14 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
+/// Default parquet reader factory.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
 }
 
 impl DefaultParquetFileReaderFactory {
+    /// Create a factory.
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
         Self { store }
     }
