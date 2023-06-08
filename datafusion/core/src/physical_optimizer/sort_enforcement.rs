@@ -2967,7 +2967,7 @@ LOCATION 'tests/data/window_2.csv'",
     #[tokio::test]
     #[ignore]
     async fn test_subquery() -> Result<()> {
-        let config = SessionConfig::new().with_target_partitions(8);
+        let config = SessionConfig::new().with_target_partitions(4);
         let ctx = SessionContext::with_config(config);
         ctx.sql(
             "CREATE TABLE sales_global (zip_code INT,
@@ -3024,8 +3024,15 @@ LOCATION 'tests/data/window_2.csv'",
         // let sql = "SELECT SUM(c9), FIRST_VALUE(c9 ORDER BY c11 ASC)
         //                 FROM aggregate_test_100";
 
-        let sql = "SELECT SUM(c9), FIRST_VALUE(c9 ORDER BY c11 DESC), LAST_VALUE(c9 ORDER BY c11 DESC)
-                        FROM aggregate_test_100";
+        // let sql = "SELECT SUM(c9), FIRST_VALUE(c9 ORDER BY c11 DESC), LAST_VALUE(c9 ORDER BY c11 DESC)
+        //                 FROM aggregate_test_100";
+
+        // let sql = "SELECT c1, FIRST_VALUE(c9 ORDER BY c11 ASC)
+        //                  FROM aggregate_test_100
+        //                  GROUP BY c1";
+
+        let sql = "SELECT FIRST_VALUE(c9 ORDER BY c11 ASC)
+                         FROM aggregate_test_100";
 
         let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);

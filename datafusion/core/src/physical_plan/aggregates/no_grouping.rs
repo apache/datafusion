@@ -111,6 +111,7 @@ impl AggregateStream {
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
+                        println!("no grouping batch received aggregate:{:?}", batch);
                         let timer = elapsed_compute.timer();
                         let result = aggregate_batch(
                             &this.mode,
@@ -144,7 +145,7 @@ impl AggregateStream {
                             .record_output(&this.baseline_metrics);
 
                         timer.done();
-
+                        println!("result produced no group aggregator:{:?}", result);
                         result
                     }
                 };

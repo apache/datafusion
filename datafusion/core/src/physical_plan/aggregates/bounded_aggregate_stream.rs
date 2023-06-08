@@ -258,6 +258,7 @@ impl Stream for BoundedAggregateStream {
                     match ready!(self.input.poll_next_unpin(cx)) {
                         // new batch to aggregate
                         Some(Ok(batch)) => {
+                            println!("batch received aggregate:{:?}", batch);
                             let timer = elapsed_compute.timer();
                             let result = self.group_aggregate_batch(batch);
                             timer.done();
