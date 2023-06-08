@@ -17,18 +17,12 @@
 
 //! Execution plan for reading Parquet files
 
-use fmt::Debug;
-use std::any::Any;
-use std::cmp::min;
-use std::fmt;
-use std::fs;
-use std::ops::Range;
-use std::sync::Arc;
-
-use crate::physical_plan::file_format::file_stream::{
+use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
+use crate::datasource::physical_plan::{
+    parquet::page_filter::PagePruningPredicate, FileMeta, FileScanConfig, SchemaAdapter,
+};
 use crate::{
     config::ConfigOptions,
     datasource::listing::FileRange,
@@ -37,13 +31,19 @@ use crate::{
     physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         common::AbortOnDropSingle,
-        expressions::PhysicalSortExpr,
-        file_format::{FileMeta, FileScanConfig, SchemaAdapter},
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
         Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_physical_expr::PhysicalSortExpr;
+use fmt::Debug;
+use std::any::Any;
+use std::cmp::min;
+use std::fmt;
+use std::fs;
+use std::ops::Range;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
@@ -65,7 +65,7 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 
 mod metrics;
-mod page_filter;
+pub mod page_filter;
 mod row_filter;
 mod row_groups;
 
@@ -612,12 +612,14 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
+/// Default parquet reader factory.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
 }
 
 impl DefaultParquetFileReaderFactory {
+    /// Create a factory.
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
         Self { store }
     }

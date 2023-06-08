@@ -90,7 +90,8 @@ select i_item_desc from test
 where d3_date > now() + '5 days';
 
 # DATE minus DATE
-query error DataFusion error: Error during planning: Unsupported argument types\. Can not evaluate Date32 \- Date32
+# https://github.com/apache/arrow-rs/issues/4383
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Cast error: Cannot perform arithmetic operation between array of type Date32 and array of type Date32
 SELECT DATE '2023-04-09' - DATE '2023-04-02';
 
 # DATE minus Timestamp

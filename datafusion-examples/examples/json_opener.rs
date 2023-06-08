@@ -21,14 +21,13 @@ use arrow_schema::{DataType, Field, Schema};
 use datafusion::{
     assert_batches_eq,
     datasource::{
-        file_format::file_type::FileCompressionType, listing::PartitionedFile,
+        file_format::file_type::FileCompressionType,
+        listing::PartitionedFile,
         object_store::ObjectStoreUrl,
+        physical_plan::{FileScanConfig, FileStream, JsonOpener},
     },
     error::Result,
-    physical_plan::{
-        file_format::{FileScanConfig, FileStream, JsonOpener},
-        metrics::ExecutionPlanMetricsSet,
-    },
+    physical_plan::metrics::ExecutionPlanMetricsSet,
 };
 use futures::StreamExt;
 use object_store::ObjectStore;

@@ -45,7 +45,6 @@ use datafusion_common::cast::{
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use std::borrow::Borrow;
 use std::sync::Arc;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
@@ -77,10 +76,7 @@ where
     let array = as_generic_string_array::<T>(args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
-    array
-        .iter()
-        .map(|x| x.map(op.borrow()).transpose())
-        .collect()
+    array.iter().map(|x| x.map(&op).transpose()).collect()
 }
 
 // given an function that maps a `&str` to a arrow native type,

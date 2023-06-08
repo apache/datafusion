@@ -27,8 +27,8 @@ use arrow::{
 };
 
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
-use crate::error::Result;
 use crate::physical_plan::PhysicalExpr;
+use datafusion_common::Result;
 pub use datafusion_expr::AggregateUDF;
 
 use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;

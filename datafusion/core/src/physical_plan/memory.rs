@@ -22,10 +22,10 @@ use super::{
     common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use core::fmt;
+use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};

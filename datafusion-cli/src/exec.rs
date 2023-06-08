@@ -248,7 +248,7 @@ mod tests {
 
         match &plan {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-                create_external_table(&ctx, cmd)?;
+                create_external_table(&ctx, cmd).await?;
             }
             _ => assert!(false),
         };
@@ -327,7 +327,7 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("A configuration file was passed"));
+        assert!(err.to_string().contains("No such file or directory"));
 
         Ok(())
     }
