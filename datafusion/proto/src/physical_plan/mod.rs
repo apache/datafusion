@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::file_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
@@ -32,7 +33,6 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
-use datafusion::physical_plan::file_format::{AvroExec, CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::CrossJoinExec;
@@ -1276,14 +1276,16 @@ mod roundtrip_tests {
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        datasource::listing::PartitionedFile,
+        datasource::{
+            listing::PartitionedFile,
+            physical_plan::{FileScanConfig, ParquetExec},
+        },
         logical_expr::{JoinType, Operator},
         physical_plan::{
             aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
             expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
-            file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
             joins::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},

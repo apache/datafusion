@@ -22,10 +22,9 @@ use std::sync::Arc;
 
 use datafusion_common::display::StringifiedPlan;
 
-use crate::{
-    error::{DataFusionError, Result},
-    physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics},
-};
+use datafusion_common::{DataFusionError, Result};
+
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use log::trace;
 

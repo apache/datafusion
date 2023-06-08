@@ -23,7 +23,6 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use log::{debug, trace};
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::common::spawn_buffered;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -33,6 +32,7 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortRequirement};
 
@@ -231,10 +231,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use futures::FutureExt;
-    use tokio_stream::StreamExt;
+    use futures::{FutureExt, StreamExt};
 
-    use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
@@ -247,6 +245,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
+    use arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
 
     use super::*;
 

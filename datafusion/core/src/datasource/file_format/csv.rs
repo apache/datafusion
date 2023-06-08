@@ -45,11 +45,11 @@ use crate::datasource::file_format::{
     AbortMode, AbortableWrite, AsyncPutWriter, BatchSerializer, MultiPart,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
-use crate::error::Result;
-use crate::execution::context::SessionState;
-use crate::physical_plan::file_format::{
+use crate::datasource::physical_plan::{
     CsvExec, FileGroupDisplay, FileMeta, FileScanConfig, FileSinkConfig,
 };
+use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::Statistics;
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};

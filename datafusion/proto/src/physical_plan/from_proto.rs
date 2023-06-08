@@ -24,6 +24,7 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
@@ -32,7 +33,6 @@ use datafusion::physical_plan::expressions::{
     date_time_interval_expr, GetIndexedFieldExpr,
 };
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
-use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,

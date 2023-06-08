@@ -39,10 +39,10 @@ use parquet::{
 };
 use std::sync::Arc;
 
-use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use crate::physical_plan::file_format::parquet::{
+use crate::datasource::physical_plan::parquet::{
     from_bytes_to_i128, parquet_to_arrow_decimal_type,
 };
+use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
 use super::metrics::ParquetFileMetrics;
 
@@ -101,7 +101,7 @@ use super::metrics::ParquetFileMetrics;
 /// So we can entirely skip rows 0->199 and 250->299 as we know they
 /// can not contain rows that match the predicate.
 #[derive(Debug)]
-pub(crate) struct PagePruningPredicate {
+pub struct PagePruningPredicate {
     predicates: Vec<PruningPredicate>,
 }
 

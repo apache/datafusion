@@ -24,6 +24,7 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_physical_expr::expressions::Column;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -41,9 +42,8 @@ use datafusion_common::{ScalarValue, SharedResult};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
-use crate::physical_plan::expressions::Column;
+use datafusion_common::JoinType;
+use datafusion_common::{DataFusionError, Result};
 
 use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
