@@ -329,30 +329,34 @@ pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .collect();
     let data_type = arrays[0].data_type();
     match data_type {
-        DataType::List(..) => {
-            let list_arrays =
-                downcast_vec!(arrays, ListArray).collect::<Result<Vec<&ListArray>>>()?;
-            let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-            let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-            let array_data: Vec<_> =
-                list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-            let array_data = array_data.iter().collect();
-            let mut mutable =
-                MutableArrayData::with_capacities(array_data, false, capacity);
+        DataType::List(field) => match field.data_type() {
+            DataType::Null => return array_concat(&args[1..]),
+            _ => {
+                let list_arrays = downcast_vec!(arrays, ListArray)
+                    .collect::<Result<Vec<&ListArray>>>()?;
+                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
+                let capacity =
+                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+                let array_data: Vec<_> =
+                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+                let array_data = array_data.iter().collect();
+                let mut mutable =
+                    MutableArrayData::with_capacities(array_data, false, capacity);
 
-            for (i, a) in list_arrays.iter().enumerate() {
-                mutable.extend(i, 0, a.len())
+                for (i, a) in list_arrays.iter().enumerate() {
+                    mutable.extend(i, 0, a.len())
+                }
+
+                let builder = mutable.into_builder();
+                let list = builder
+                    .len(1)
+                    .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
+                    .build()
+                    .unwrap();
+
+                return Ok(ColumnarValue::Array(Arc::new(make_array(list))));
             }
-
-            let builder = mutable.into_builder();
-            let list = builder
-                .len(1)
-                .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-                .build()
-                .unwrap();
-
-            return Ok(ColumnarValue::Array(Arc::new(make_array(list))));
-        }
+        },
         _ => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
         ))),
@@ -882,8 +886,12 @@ pub fn trim_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let list_array = downcast_arg!(arr, ListArray);
     let values = list_array.value(0);
+    if values.len() <= n {
+        return Ok(datafusion_expr::ColumnarValue::Scalar(
+            ScalarValue::new_list(Some(vec![]), DataType::Null),
+        ));
+    }
     let res = values.slice(0, values.len() - n);
-
     let mut scalars = vec![];
     for i in 0..res.len() {
         scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&res, i)?));
