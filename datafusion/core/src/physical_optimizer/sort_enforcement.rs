@@ -998,8 +998,7 @@ mod tests {
 
     fn create_test_schema() -> Result<SchemaRef> {
         let nullable_column = Field::new("nullable_col", DataType::Int32, true);
-        let non_nullable_column =
-            Field::new("non_nullable_col", DataType::Boolean, false);
+        let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
         let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
 
         Ok(schema)
