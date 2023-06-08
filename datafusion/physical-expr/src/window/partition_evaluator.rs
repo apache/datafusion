@@ -89,6 +89,7 @@ use std::ops::Range;
 /// the state.
 ///
 /// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
+/// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
 pub trait PartitionEvaluator: Debug + Send {
     /// Can this evaluator be evaluated with (only) rank
     ///
