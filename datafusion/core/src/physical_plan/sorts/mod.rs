@@ -20,7 +20,7 @@
 mod builder;
 mod cursor;
 mod index;
-mod merge;
+pub mod merge;
 pub mod sort;
 pub mod sort_preserving_merge;
 mod stream;

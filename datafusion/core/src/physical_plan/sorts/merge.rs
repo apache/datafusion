@@ -52,7 +52,7 @@ macro_rules! merge_helper {
 }
 
 /// Perform a streaming merge of [`SendableRecordBatchStream`]
-pub(crate) fn streaming_merge(
+pub fn streaming_merge(
     streams: Vec<SendableRecordBatchStream>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
