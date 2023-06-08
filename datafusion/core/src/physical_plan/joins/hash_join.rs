@@ -53,10 +53,6 @@ use std::{any::Any, usize, vec};
 use datafusion_common::cast::{as_dictionary_array, as_string_array};
 use datafusion_execution::memory_pool::MemoryReservation;
 
-use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
-use crate::error::{DataFusionError, Result};
-use crate::execution::{context::TaskContext, memory_pool::MemoryConsumer};
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
     get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
@@ -77,7 +73,11 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use arrow::array::BooleanBufferBuilder;
+use arrow::datatypes::TimeUnit;
 use datafusion_common::JoinType;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::{memory_pool::MemoryConsumer, TaskContext};
 
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -1270,7 +1270,6 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq,
         common::assert_contains,
-        execution::runtime_env::{RuntimeConfig, RuntimeEnv},
         physical_plan::{
             common,
             expressions::Column,
@@ -1282,6 +1281,7 @@ mod tests {
         test::exec::MockExec,
         test::{build_table_i32, columns},
     };
+    use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     use super::*;
 
