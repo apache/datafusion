@@ -186,11 +186,18 @@ pub fn return_type(
             ))),
         },
         BuiltinScalarFunction::Cardinality => Ok(DataType::UInt64),
-        BuiltinScalarFunction::MakeArray => Ok(DataType::List(Arc::new(Field::new(
-            "item",
-            input_expr_types[0].clone(),
-            true,
-        )))),
+        BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
+            0 => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Null,
+                true,
+            )))),
+            _ => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                input_expr_types[0].clone(),
+                true,
+            )))),
+        },
         BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
             DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
                 "item",

@@ -271,6 +271,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::CurrentDate
                 | BuiltinScalarFunction::CurrentTime
                 | BuiltinScalarFunction::Uuid
+                | BuiltinScalarFunction::MakeArray
         )
     }
     /// Returns the [Volatility] of the builtin function.
