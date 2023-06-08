@@ -246,12 +246,13 @@ mod tests {
         let ctx = SessionContext::new();
         let plan = ctx.state().create_logical_plan(sql).await?;
 
-        match &plan {
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-                create_external_table(&ctx, cmd).await?;
-            }
-            _ => unreachable!(),
-        };
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            create_external_table(&ctx, cmd).await?;
+        } else {
+            return Err(DataFusionError::Plan(
+                "LogicalPlan is not a CreateExternalTable".to_string(),
+            ));
+        }
 
         ctx.runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
