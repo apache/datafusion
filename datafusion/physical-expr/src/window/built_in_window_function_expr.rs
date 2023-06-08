@@ -25,13 +25,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Evaluates a window function by instantiating a
-/// `[PartitionEvaluator]` for calculating the values.
+/// `[PartitionEvaluator]` for calculating the function's output in
+/// that partition.
 ///
-/// Note that unlike aggregation based window functions, window
+/// Note that unlike aggregation based window functions, some window
 /// functions such as `rank` ignore the values in the window frame,
 /// but others such as `first_value`, `last_value`, and
 /// `nth_value` need the value.
-///
+#[allow(rustdoc::private_intra_doc_links)]
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -61,16 +62,17 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
             .collect()
     }
 
-    /// Create a [`PartitionEvaluator`] for evaluating data on a
-    /// particular partition.
+    /// Create a [`PartitionEvaluator`] for evaluating the function on
+    /// a particular partition.
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Construct a reverse expression that produces the same result on
-    /// a reversed window. This information is used by the DataFusion
-    /// optimizer to potentially avoid resorting the data if possible.
+    /// Construct a new [`BuiltInWindowFunctionExpr`] that produces
+    /// the same result as this function on a window with reverse
+    /// order. The return value of this function is used by the
+    /// DataFusion optimizer to avoid resorting the data when
+    /// possible.
     ///
-    /// Returns `None` if the function can not be reversed or if is
-    /// not known to be possible (the default).
+    /// Returns `None` (the default) if no reverse is known (or possible).
     ///
     /// For example, the reverse of `lead(10)` is `lag(10)`.
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {

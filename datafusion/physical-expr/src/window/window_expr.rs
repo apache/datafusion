@@ -32,24 +32,27 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Common trait for [window function] implementations,
+/// Common trait for [window function] implementations
 ///
-/// Aggregate Window Expressions have the form
+/// # Aggregate Window Expressions
+///
+/// These expressions take the form
 ///
 /// ```text
 /// OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)
 /// ```
 ///
-/// e.g cumulative window frames uses `PlainAggregateWindowExpr`.
+/// For example, cumulative window frames uses `PlainAggregateWindowExpr`.
 ///
-/// Aggregate Window Expressions have the form
+/// # Non Aggregate Window Expressions
+///
+/// The expressions have the form
 ///
 /// ```text
 /// OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)
 /// ```
 ///
-/// e.g sliding window frames use [`SlidingAggregateWindowExpr`].
-///
+/// For example, sliding window frames use [`SlidingAggregateWindowExpr`].
 ///
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 /// [`PlainAggregateWindowExpr`]: crate::window::PlainAggregateWindowExpr

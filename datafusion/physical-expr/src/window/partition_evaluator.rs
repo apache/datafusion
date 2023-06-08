@@ -27,8 +27,11 @@ use std::ops::Range;
 
 /// Partition evaluator for Window Functions
 ///
+/// # Background
+///
 /// An implementation of this trait is created and used for each
-/// partition defined by an `OVER` clause.
+/// partition defined by an `OVER` clause and is instantiated by
+/// [`BuiltInWindowFunctionExpr::create_evaluator`]
 ///
 /// For example, evaluating `window_func(val) OVER (PARTITION BY col)`
 /// on the following data:
@@ -36,21 +39,34 @@ use std::ops::Range;
 /// ```text
 /// col | val
 /// --- + ----
-///  A  | 1
-///  A  | 1
-///  C  | 2
-///  D  | 3
-///  D  | 3
+///  A  | 10
+///  A  | 10
+///  C  | 20
+///  D  | 30
+///  D  | 30
 /// ```
 ///
 /// Will instantiate three `PartitionEvaluator`s, one each for the
 /// partitions defined by `col=A`, `col=B`, and `col=C`.
 ///
-/// Depending on the declared features in
-/// [`BuiltInWindowFunctionExpr`] different methods will be called on
-/// this trait.
+/// ```text
+/// col | val
+/// --- + ----
+///  A  | 10     <--- partition 1
+///  A  | 10
 ///
-/// There are two modes of `PartitionEvaluator`:
+/// col | val
+/// --- + ----
+///  C  | 20     <--- partition 2
+///
+/// col | val
+/// --- + ----
+///  D  | 30     <--- partition 3
+///  D  | 30
+/// ```
+///
+/// Different methods on this trait will be called depending on the
+/// capabilities described by [`BuiltInWindowFunctionExpr`]:
 ///
 /// # Stateless `PartitionEvaluator`
 ///
@@ -60,12 +76,10 @@ use std::ops::Range;
 ///
 /// # Stateful `PartitionEvaluator`
 ///
-/// In this case, [`Self::evaluate_stateful`] is called to
-/// incrementally compute window results with bounded memory.
-///
-/// For such window functions, results are calculated incrementally,
-/// and the previous state is stored (as [`BuiltinWindowState`]) to
-/// calculate the correct output.
+/// In this case, [`Self::evaluate_stateful`] is called to calculate
+/// the results of the window function incrementally for each new
+/// batch, saving and restoring any state needed to do so as
+/// [`BuiltinWindowState`].
 ///
 /// For example, when computing `ROW_NUMBER` incrementally,
 /// [`Self::evaluate_stateful`] will be called multiple times with
@@ -76,7 +90,7 @@ use std::ops::Range;
 ///
 /// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
 pub trait PartitionEvaluator: Debug + Send {
-    /// Whether the evaluator should be evaluated with rank
+    /// Can this evaluator be evaluated with (only) rank
     ///
     /// If `include_rank` is true, then [`Self::evaluate_with_rank`]
     /// will be called for each partition, which includes the
@@ -85,13 +99,17 @@ pub trait PartitionEvaluator: Debug + Send {
         false
     }
 
-    /// Returns state of the window function (only used for stateful evaluation)
+    /// Returns the internal state of the window function
+    ///
+    /// Only used for stateful evaluation
     fn state(&self) -> Result<BuiltinWindowState> {
         // If we do not use state we just return Default
         Ok(BuiltinWindowState::Default)
     }
 
-    /// Updates the internal state for window function (only used for stateful evaluation)
+    /// Updates the internal state for window function
+    ///
+    /// Only used for stateful evaluation
     ///
     /// `state`: is useful to update internal state for window function.
     /// `idx`: is the index of last row for which result is calculated.
@@ -108,7 +126,9 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// Sets the internal state for window function, if supported
+    /// Sets the internal state for window function
+    ///
+    /// Only used for stateful evaluation
     fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "set_state is not implemented for this window function".to_string(),
@@ -118,7 +138,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Gets the range where the window function result is calculated.
     ///
     /// `idx`: is the index of last row for which result is calculated.
-    /// `n_rows`: is the number of rows of the input record batch (Used during bound check)
+    /// `n_rows`: is the number of rows of the input record batch (Used during bounds check)
     fn get_range(&self, _idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         Err(DataFusionError::NotImplemented(
             "get_range is not implemented for this window function".to_string(),
@@ -134,7 +154,9 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// Evaluate window function result inside given range
+    /// Evaluate window function result inside given range.
+    ///
+    /// Only used for stateful evaluation
     fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_stateful is not implemented by default".into(),
