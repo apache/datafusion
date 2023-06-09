@@ -182,16 +182,12 @@ impl Accumulator for ArrayAggAccumulator {
         let n_row = values[0].len();
         (0..n_row).try_for_each(|index| {
             let row = get_row_at_idx(values, index)?;
-            println!("row:{:?}", row);
-            // let scalar = ScalarValue::try_from_array(arr, index)?;
             self.values.push(row[0].clone());
             self.ordering_values.push(row[1..].to_vec());
             Ok::<(), DataFusionError>(())
         })?;
         if n_row > 0 {
             let row = get_row_at_idx(values, n_row - 1)?;
-            println!("row:{:?}", row);
-            println!("self.orderings:{:?}", self.orderings);
             self.orderings = row[1..].to_vec();
         }
         Ok(())
@@ -201,17 +197,12 @@ impl Accumulator for ArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        for (idx, state) in states.iter().enumerate() {
-            println!("idx:{:?}, state: {:?}", idx, state);
-        }
         if states.len() > 1 {
             let agg_orderings = &states[1];
             if agg_orderings.as_any().is::<ListArray>() {
                 for index in 0..agg_orderings.len() {
                     let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
-                    println!("ordering:{:?}", ordering);
                     let other_ordering = self.convert_struct_to_vec(ordering)?;
-                    println!("ordering after conversion: {:?}", other_ordering);
                     let arr = &states[0];
                     let scalar = ScalarValue::try_from_array(arr, index)?;
                     if let ScalarValue::List(Some(values), _) = scalar {
@@ -296,37 +287,14 @@ impl Accumulator for ArrayAggAccumulator {
             })?;
         }
         Ok(())
-        // println!("other orderings: {:?}", other_orderings);
-        // println!("self ordering_values: {:?}", self.ordering_values);
-        // println!("self values:{:?}", self.values);
-        // // assert!(states.len() == 1, "array_agg states must be singleton!");
-        // let arr = &states[0];
-        // (0..arr.len()).try_for_each(|index| {
-        //     let scalar = ScalarValue::try_from_array(arr, index)?;
-        //     if let ScalarValue::List(Some(values), _) = scalar {
-        //         // while !other_orderings.is_empty() && !self.ordering_values.is_empty(){
-        //         //
-        //         // }
-        //         self.values.extend(values);
-        //         Ok(())
-        //     } else {
-        //         Err(DataFusionError::Internal(
-        //             "array_agg state must be list!".into(),
-        //         ))
-        //     }
-        // })
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        // Ok(vec![self.evaluate()?])
-        println!("before state");
         let mut res = vec![self.evaluate()?];
         if !self.orderings.is_empty() {
             res.push(self.evaluate_orderings()?);
         }
-        println!("after state");
         res.extend(self.orderings.clone());
-        println!("after extend");
         Ok(res)
     }
 

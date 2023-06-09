@@ -60,8 +60,6 @@ pub fn create_aggregate_expr(
         .collect::<Result<Vec<_>>>()?;
     input_phy_types.extend(ordering_types);
     let input_phy_exprs = input_phy_exprs.to_vec();
-    println!("input_phy_exprs: {:?}", input_phy_exprs);
-    println!("orderings: {:?}", orderings);
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, rt_type),

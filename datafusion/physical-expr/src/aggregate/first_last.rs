@@ -51,8 +51,6 @@ impl FirstValue {
         ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
         data_types: Vec<DataType>,
     ) -> Self {
-        println!("ordering_exprs: {:?}", ordering_exprs);
-        println!("data_types: {:?}", data_types);
         Self {
             name: name.into(),
             data_types,
@@ -85,8 +83,6 @@ impl AggregateExpr for FirstValue {
             self.data_types[0].clone(),
             true,
         )];
-        println!("self.ordering_exprs len:{:?}", self.ordering_exprs.len());
-        println!("self.data_types len:{:?}", self.data_types.len());
         for (expr, dtype) in self
             .ordering_exprs
             .iter()
@@ -186,13 +182,9 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for (idx, elem) in values.iter().enumerate() {
-            println!("idx:{:?}, elem:{:?}", idx, elem);
-        }
         // If we have seen first value, we shouldn't update it
         if !values[0].is_empty() && !self.is_set {
             let row = get_row_at_idx(values, 0)?;
-            println!("row:{:?}", row);
             // Update with last value in the array.
             self.first = row[0].clone();
             self.orderings = row[1..].to_vec();
@@ -203,7 +195,6 @@ impl Accumulator for FirstValueAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // FIRST_VALUE(first1, first2, first3, ...)
-        println!("states:{:?}", states);
         let last_idx = states.len() - 1;
         let is_set_flags = &states[last_idx];
         let mut filtered_first_vals = vec![];
@@ -272,8 +263,6 @@ impl AggregateExpr for LastValue {
             self.data_types[0].clone(),
             true,
         )];
-        println!("self.ordering_exprs len:{:?}", self.ordering_exprs.len());
-        println!("self.data_types len:{:?}", self.data_types.len());
         for (expr, dtype) in self
             .ordering_exprs
             .iter()
@@ -374,12 +363,8 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for (idx, elem) in values.iter().enumerate() {
-            println!("idx:{:?}, elem:{:?}", idx, elem);
-        }
         if !values[0].is_empty() {
             let row = get_row_at_idx(values, values[0].len() - 1)?;
-            println!("row:{:?}", row);
             // Update with last value in the array.
             self.last = row[0].clone();
             self.orderings = row[1..].to_vec();
@@ -390,7 +375,6 @@ impl Accumulator for LastValueAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         // LAST_VALUE(last1, last2, last3, ...)
-        println!("states:{:?}", states);
         let last_idx = states.len() - 1;
         let is_set_flags = &states[last_idx];
         let mut filtered_first_vals = vec![];
