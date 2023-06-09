@@ -532,8 +532,8 @@ scalar_expr!(
     ArrayContains,
     array_contains,
     first_array second_array,
-"returns true, if each element of the first array appe
-    aring in the second array, otherwise false."
+"returns true, if each element of the second array appe
+    aring in the first array, otherwise false."
 );
 scalar_expr!(
     ArrayDims,
