@@ -40,7 +40,7 @@
 //! # Examples
 //!
 //! The main entry point for interacting with DataFusion is the
-//! [`SessionContext`].
+//! [`SessionContext`]. [`Expr`]s represent expressions such as `a + b`.
 //!
 //! [`SessionContext`]: execution::context::SessionContext
 //!
