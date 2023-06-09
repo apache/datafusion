@@ -163,7 +163,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                             aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
                             expr: expressions,
                             /// TODO: Add proper handling here
-                            ordering_expr: vec![],
+                            ordering_req: vec![],
                             distinct,
                         },
                     )),
@@ -185,7 +185,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                     ),
                     expr: expressions,
                     /// TODO: Add proper handling here
-                    ordering_expr: vec![],
+                    ordering_req: vec![],
                     distinct,
                 },
             )),

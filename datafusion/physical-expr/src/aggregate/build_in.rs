@@ -39,7 +39,7 @@ pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    ordering_reqs: &[PhysicalSortExpr],
+    ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -50,7 +50,7 @@ pub fn create_aggregate_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let rt_type = return_type(fun, &input_phy_types)?;
-    let ordering_types = ordering_reqs
+    let ordering_types = ordering_req
         .iter()
         .map(|e| e.expr.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
@@ -142,7 +142,7 @@ pub fn create_aggregate_expr(
             ))
         }
         (AggregateFunction::ArrayAgg, false) => {
-            if ordering_reqs.is_empty() {
+            if ordering_req.is_empty() {
                 Arc::new(expressions::ArrayAgg::new(
                     input_phy_exprs[0].clone(),
                     name,
@@ -153,7 +153,7 @@ pub fn create_aggregate_expr(
                     input_phy_exprs[0].clone(),
                     name,
                     input_phy_types.clone(),
-                    ordering_reqs.to_vec(),
+                    ordering_req.to_vec(),
                 ))
             }
         }
@@ -327,13 +327,13 @@ pub fn create_aggregate_expr(
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
             name,
-            ordering_reqs.to_vec(),
+            ordering_req.to_vec(),
             input_phy_types.clone(),
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
-            ordering_reqs.to_vec(),
+            ordering_req.to_vec(),
             input_phy_types.clone(),
         )),
     })

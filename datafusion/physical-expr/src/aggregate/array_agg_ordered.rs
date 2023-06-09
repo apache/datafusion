@@ -171,56 +171,44 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        if states.len() > 1 {
-            let agg_orderings = &states[1];
-            if agg_orderings.as_any().is::<ListArray>() {
-                for index in 0..agg_orderings.len() {
-                    let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
-                    let other_ordering = self.convert_struct_to_vec(ordering)?;
-                    let arr = &states[0];
-                    let scalar = ScalarValue::try_from_array(arr, index)?;
-                    if let ScalarValue::List(Some(values), _) = scalar {
-                        let sort_options = self
-                            .ordering_req
-                            .iter()
-                            .map(|sort_expr| sort_expr.options)
-                            .collect::<Vec<_>>();
-                        let (new_values, new_ordering_values) = merge_ordered_array(
-                            &self.values,
-                            &values,
-                            &self.ordering_values,
-                            &other_ordering,
-                            &sort_options,
-                        )?;
-                        self.values = new_values;
-                        self.ordering_values = new_ordering_values;
-                    } else {
-                        return Err(DataFusionError::Internal(
-                            "array_agg state must be list!".into(),
-                        ));
-                    }
+        // First entry in the state is Array_agg result
+        let array_agg_values = &states[0];
+        // 2nd entry is the history of lexicographical ordered values
+        // that array agg result is inserted. It is similar to ARRAY_AGG result.
+        // However, values inside are ordering expression results
+        let agg_orderings = &states[1];
+        if agg_orderings.as_any().is::<ListArray>() {
+            for index in 0..agg_orderings.len() {
+                let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
+                let other_ordering_values =
+                    self.convert_array_agg_to_orderings(ordering)?;
+                // First entry in the state is Array_agg result
+                let array_agg_res = ScalarValue::try_from_array(array_agg_values, index)?;
+                if let ScalarValue::List(Some(other_values), _) = array_agg_res {
+                    let sort_options = self
+                        .ordering_req
+                        .iter()
+                        .map(|sort_expr| sort_expr.options)
+                        .collect::<Vec<_>>();
+                    let (new_values, new_ordering_values) = merge_ordered_arrays(
+                        &self.values,
+                        &other_values,
+                        &self.ordering_values,
+                        &other_ordering_values,
+                        &sort_options,
+                    )?;
+                    self.values = new_values;
+                    self.ordering_values = new_ordering_values;
+                } else {
+                    return Err(DataFusionError::Internal(
+                        "array_agg state must be list!".into(),
+                    ));
                 }
-            } else {
-                return Err(DataFusionError::Execution(
-                    "Expects to receive list array".to_string(),
-                ));
             }
         } else {
-            if states.is_empty() {
-                return Ok(());
-            }
-            let arr = &states[0];
-            (0..arr.len()).try_for_each(|index| {
-                let scalar = ScalarValue::try_from_array(arr, index)?;
-                if let ScalarValue::List(Some(values), _) = scalar {
-                    self.values.extend(values);
-                    Ok(())
-                } else {
-                    Err(DataFusionError::Internal(
-                        "array_agg state must be list!".into(),
-                    ))
-                }
-            })?;
+            return Err(DataFusionError::Execution(
+                "Expects to receive list array".to_string(),
+            ));
         }
         Ok(())
     }
@@ -231,7 +219,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let last_ordering = if let Some(ordering) = self.ordering_values.last() {
             ordering.clone()
         } else {
-            self.def_ordering()?
+            // In case of ordering is empty, construct ordering as NULL
+            self.datatypes
+                .iter()
+                .skip(1)
+                .map(ScalarValue::try_from)
+                .collect::<Result<Vec<_>>>()?
         };
         res.extend(last_ordering);
         Ok(res)
@@ -253,69 +246,43 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 }
 
 impl OrderSensitiveArrayAggAccumulator {
-    fn def_ordering(&self) -> Result<Vec<ScalarValue>> {
-        self.datatypes
-            .iter()
-            .skip(1)
-            .map(ScalarValue::try_from)
-            .collect::<Result<Vec<_>>>()
-    }
-
-    fn convert_struct_to_vec(
+    fn convert_array_agg_to_orderings(
         &self,
         in_data: ScalarValue,
     ) -> Result<Vec<Vec<ScalarValue>>> {
-        if let ScalarValue::List(elem, _field_ref) = in_data {
-            if let Some(elem) = elem {
-                let mut res = vec![];
-                for struct_vals in elem {
-                    if let ScalarValue::Struct(elem, _fields) = struct_vals {
-                        if let Some(elem) = elem {
-                            res.push(elem);
-                        } else {
-                            return Err(DataFusionError::Execution(
-                                "Cannot receive None".to_string(),
-                            ));
-                        }
-                    } else {
-                        return Err(DataFusionError::Execution(format!(
-                            "Expects to receive ScalarValue::Struct but got:{:?}",
-                            struct_vals.get_datatype()
-                        )));
-                    }
+        if let ScalarValue::List(Some(list_vals), _field_ref) = in_data {
+            list_vals.into_iter().map(|struct_vals| {
+                if let ScalarValue::Struct(Some(orderings), _fields) = struct_vals {
+                    Ok(orderings)
+                } else {
+                    Err(DataFusionError::Execution(format!(
+                        "Expects to receive ScalarValue::Struct(Some(..), _) but got:{:?}",
+                        struct_vals.get_datatype()
+                    )))
                 }
-                Ok(res)
-            } else {
-                Err(DataFusionError::Execution(
-                    "Cannot receive None".to_string(),
-                ))
-            }
+            }).collect::<Result<Vec<_>>>()
         } else {
             Err(DataFusionError::Execution(format!(
-                "Expects to receive ScalarValue::List but got:{:?}",
+                "Expects to receive ScalarValue::List(Some(..), _) but got:{:?}",
                 in_data.get_datatype()
             )))
         }
     }
 
-    fn struct_dtype(&self) -> DataType {
-        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
-        DataType::Struct(Fields::from(fields))
-    }
-
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let mut orderings = vec![];
-        let struct_field =
-            Fields::from(ordering_fields(&self.ordering_req, &self.datatypes[1..]));
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        let struct_field = Fields::from(fields.clone());
         for ordering in &self.ordering_values {
             let res = ScalarValue::Struct(Some(ordering.clone()), struct_field.clone());
             orderings.push(res);
         }
-        Ok(ScalarValue::new_list(Some(orderings), self.struct_dtype()))
+        let struct_type = DataType::Struct(Fields::from(fields));
+        Ok(ScalarValue::new_list(Some(orderings), struct_type))
     }
 }
 
-fn merge_ordered_array(
+fn merge_ordered_arrays(
     lhs_values: &[ScalarValue],
     rhs_values: &[ScalarValue],
     lhs_ordering: &[Vec<ScalarValue>],
@@ -334,6 +301,11 @@ fn merge_ordered_array(
     let rend = rhs_values.len();
     let mut new_values = vec![];
     let mut new_ordering_values = vec![];
+    // Create comparator to decide insertion order of right and left arrays
+    let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| -> Result<bool> {
+        let cmp = compare_rows(current, target, sort_options)?;
+        Ok(cmp.is_lt())
+    };
     while lidx < lend || ridx < rend {
         if lidx == lend {
             new_values.extend(rhs_values[ridx..].to_vec());
@@ -343,21 +315,14 @@ fn merge_ordered_array(
             new_values.extend(lhs_values[lidx..].to_vec());
             new_ordering_values.extend(lhs_ordering[lidx..].to_vec());
             lidx = lend;
+        } else if compare_fn(&lhs_ordering[lidx], &rhs_ordering[ridx])? {
+            new_values.push(lhs_values[lidx].clone());
+            new_ordering_values.push(lhs_ordering[lidx].clone());
+            lidx += 1;
         } else {
-            let compare_fn =
-                |current: &[ScalarValue], target: &[ScalarValue]| -> Result<bool> {
-                    let cmp = compare_rows(current, target, sort_options)?;
-                    Ok(cmp.is_lt())
-                };
-            if compare_fn(&lhs_ordering[lidx], &rhs_ordering[ridx])? {
-                new_values.push(lhs_values[lidx].clone());
-                new_ordering_values.push(lhs_ordering[lidx].clone());
-                lidx += 1;
-            } else {
-                new_values.push(rhs_values[ridx].clone());
-                new_ordering_values.push(rhs_ordering[ridx].clone());
-                ridx += 1;
-            }
+            new_values.push(rhs_values[ridx].clone());
+            new_ordering_values.push(rhs_ordering[ridx].clone());
+            ridx += 1;
         }
     }
 
