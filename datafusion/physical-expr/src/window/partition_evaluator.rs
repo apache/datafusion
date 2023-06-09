@@ -91,15 +91,6 @@ use std::ops::Range;
 /// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
 /// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
 pub trait PartitionEvaluator: Debug + Send {
-    /// Can this evaluator be evaluated with (only) rank
-    ///
-    /// If `include_rank` is true, then [`Self::evaluate_with_rank`]
-    /// will be called for each partition, which includes the
-    /// `rank`.
-    fn include_rank(&self) -> bool {
-        false
-    }
-
     /// Returns the internal state of the window function
     ///
     /// Only used for stateful evaluation
