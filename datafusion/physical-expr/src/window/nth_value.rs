@@ -164,6 +164,12 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED
+    /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
+    /// NTH_VALUE we can memoize result.  Once result is calculated it
+    /// will always stay same. Hence, we do not need to keep past data
+    /// as we process the entire dataset. This feature enables us to
+    /// prune rows from table. The default implementation does nothing
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();

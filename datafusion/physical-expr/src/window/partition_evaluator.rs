@@ -119,10 +119,12 @@ pub trait PartitionEvaluator: Debug + Send {
 
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
     /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
-    /// NTH_VALUE we can memoize result.  Once result is calculated it
-    /// will always stay same. Hence, we do not need to keep past data
-    /// as we process the entire dataset. This feature enables us to
-    /// prune rows from table. The default implementation does nothing
+    /// NTH_VALUE do not need the (unbounded) input once they have
+    /// seen a certain amount of input.
+    ///
+    /// `memoize` is called after each input batch is processed, and
+    /// such functions can save whatever they need and modify
+    /// [`WindowAggState`] appropriately to allow rows to be pruned
     fn memoize(&mut self, _state: &mut WindowAggState) -> Result<()> {
         Ok(())
     }
