@@ -34,7 +34,7 @@ use crate::{
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
-    DescribeTable, StringifiedPlan, UserDefinedLogicalNode,
+    DescribeTable, StringifiedPlan, UserDefinedLogicalNode, WindowUDF,
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
@@ -797,6 +797,20 @@ impl SessionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
+    /// Registers an window UDF within this context.
+    ///
+    /// Note in SQL queries, window function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// - `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
+    /// - `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
+    pub fn register_udwf(&self, f: WindowUDF) {
+        self.state
+            .write()
+            .window_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
     /// Creates a [`DataFrame`] for reading a data source.
     ///
     /// For more control such as reading multiple files, you can use
@@ -1290,6 +1304,10 @@ impl FunctionRegistry for SessionContext {
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         self.state.read().udaf(name)
     }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        self.state.read().udwf(name)
+    }
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
@@ -1340,6 +1358,8 @@ pub struct SessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Window functions registered in the context
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Session configuration
@@ -1483,6 +1503,7 @@ impl SessionState {
             catalog_list,
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
+            window_functions: HashMap::new(),
             serializer_registry: Arc::new(EmptySerializerRegistry),
             config,
             execution_props: ExecutionProps::new(),
@@ -1959,6 +1980,11 @@ impl SessionState {
         &self.aggregate_functions
     }
 
+    /// Return reference to window functions
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
+    }
+
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> Arc<dyn SerializerRegistry> {
         self.serializer_registry.clone()
@@ -1990,6 +2016,10 @@ impl<'a> ContextProvider for SessionContextProvider<'a> {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.state.aggregate_functions().get(name).cloned()
+    }
+
+    fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {
+        self.state.window_functions().get(name).cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
@@ -2039,6 +2069,16 @@ impl FunctionRegistry for SessionState {
             ))
         })
     }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        let result = self.window_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "There is no UDWF named \"{name}\" in the registry"
+            ))
+        })
+    }
 }
 
 impl OptimizerConfig for SessionState {
@@ -2068,6 +2108,7 @@ impl From<&SessionState> for TaskContext {
             state.config.clone(),
             state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
+            state.window_functions.clone(),
             state.runtime_env.clone(),
         )
     }

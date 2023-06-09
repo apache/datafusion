@@ -183,10 +183,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(super) fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
         window_function::find_df_window_func(name)
+            // next check user defined aggregates
             .or_else(|| {
                 self.schema_provider
                     .get_aggregate_meta(name)
                     .map(WindowFunction::AggregateUDF)
+            })
+            // next check user defined window functions
+            .or_else(|| {
+                self.schema_provider
+                    .get_window_meta(name)
+                    .map(WindowFunction::WindowUDF)
             })
             .ok_or_else(|| {
                 DataFusionError::Plan(format!("There is no window function named {name}"))

@@ -17,13 +17,13 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::{BuiltinWindowState, NumRowsState};
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::partition_evaluator::{PartitionEvaluator, PartitionState};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -76,9 +76,11 @@ pub(crate) struct NumRowsEvaluator {
 }
 
 impl PartitionEvaluator for NumRowsEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
+    fn state(&self) -> Result<Option<Box<(dyn PartitionState + 'static)>>> {
         // If we do not use state we just return Default
-        Ok(BuiltinWindowState::NumRows(self.state.clone()))
+        Ok(Some(Box::new(BuiltinWindowState::NumRows(
+            self.state.clone(),
+        ))))
     }
 
     fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {

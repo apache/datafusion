@@ -25,7 +25,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 
-
 /// Trait for the state managed by this partition evaluator
 ///
 /// This follows the existing pattern, but maybe we can improve it :thinking:
@@ -138,7 +137,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Sets the internal state for window function
     ///
     /// Only used for stateful evaluation
-    fn set_state(&mut self, state: Box<dyn PartitionState>) -> Result<()> {
+    fn set_state(&mut self, _state: Box<dyn PartitionState>) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "set_state is not implemented for this window function".to_string(),
         ))

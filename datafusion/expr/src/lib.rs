@@ -42,6 +42,7 @@ mod literal;
 pub mod logical_plan;
 mod nullif;
 mod operator;
+pub mod partition_evaluator;
 mod signature;
 pub mod struct_expressions;
 mod table_source;
@@ -52,9 +53,8 @@ mod udf;
 mod udwf;
 pub mod utils;
 pub mod window_frame;
-pub mod window_function;
-pub mod partition_evaluator;
 pub mod window_frame_state;
+pub mod window_function;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;

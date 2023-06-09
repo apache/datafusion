@@ -21,7 +21,6 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::window::window_expr::{
@@ -37,6 +36,7 @@ use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::window_frame_state::WindowFrameContext;
 use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
@@ -211,12 +211,21 @@ impl WindowExpr for BuiltInWindowExpr {
 
             state.update(&out_col, partition_batch_state)?;
             if self.window_frame.start_bound.is_unbounded() {
-                let mut evaluator_state = evaluator.state()?;
-                if let BuiltinWindowState::NthValue(nth_value_state) =
-                    &mut evaluator_state
-                {
-                    memoize_nth_value(state, nth_value_state)?;
-                    evaluator.set_state(&evaluator_state)?;
+                let Some(evaluator_state) = evaluator.state()? else {
+                    return Ok(())
+                };
+
+                let evaluator_state = evaluator_state
+                    .as_any()
+                    .downcast_ref::<BuiltinWindowState>()
+                    .unwrap();
+
+                if let BuiltinWindowState::NthValue(nth_value_state) = &evaluator_state {
+                    let mut nth_value_state = nth_value_state.clone();
+                    memoize_nth_value(state, &mut nth_value_state)?;
+                    let evaluator_state =
+                        Box::new(BuiltinWindowState::NthValue(nth_value_state));
+                    evaluator.set_state(evaluator_state)?;
                 }
             }
         }

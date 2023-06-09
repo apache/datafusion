@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::partition_evaluator::PartitionEvaluator;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_expr::partition_evaluator::PartitionEvaluator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -46,9 +46,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
     /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "BuiltInWindowFunctionExpr: default name"
-    }
+    fn name(&self) -> &str;
 
     /// Evaluate window function's arguments against the input window
     /// batch and return an [`ArrayRef`].

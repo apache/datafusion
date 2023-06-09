@@ -18,7 +18,6 @@
 //! Defines physical expressions for `first_value`, `last_value`, and `nth_value`
 //! that can evaluated at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::{BuiltinWindowState, NthValueKind, NthValueState};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
@@ -26,6 +25,7 @@ use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::partition_evaluator::{PartitionEvaluator, PartitionState};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -152,9 +152,13 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
+    fn state(
+        &self,
+    ) -> Result<Option<Box<(dyn PartitionState + 'static)>>, DataFusionError> {
         // If we do not use state we just return Default
-        Ok(BuiltinWindowState::NthValue(self.state.clone()))
+        Ok(Some(Box::new(BuiltinWindowState::NthValue(
+            self.state.clone(),
+        ))))
     }
 
     fn update_state(
@@ -169,7 +173,8 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
+    fn set_state(&mut self, state: Box<(dyn PartitionState + 'static)>) -> Result<()> {
+        let state = state.as_any().downcast_ref::<BuiltinWindowState>().unwrap();
         if let BuiltinWindowState::NthValue(nth_value_state) = state {
             self.state = nth_value_state.clone()
         }

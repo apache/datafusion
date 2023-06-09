@@ -24,7 +24,7 @@ use datafusion_common::{
     config::{ConfigOptions, Extensions},
     DataFusionError, Result,
 };
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::{
     config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
@@ -48,6 +48,8 @@ pub struct TaskContext {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    /// Window functions associated with this task context
+    window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
 }
@@ -60,6 +62,7 @@ impl TaskContext {
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
@@ -68,6 +71,7 @@ impl TaskContext {
             session_config,
             scalar_functions,
             aggregate_functions,
+            window_functions,
             runtime,
         }
     }
@@ -92,6 +96,7 @@ impl TaskContext {
             config.set(&k, &v)?;
         }
         let session_config = SessionConfig::from(config);
+        let window_functions = HashMap::new();
 
         Ok(Self::new(
             Some(task_id),
@@ -99,6 +104,7 @@ impl TaskContext {
             session_config,
             scalar_functions,
             aggregate_functions,
+            window_functions,
             runtime,
         ))
     }
@@ -150,6 +156,16 @@ impl FunctionRegistry for TaskContext {
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "There is no UDAF named \"{name}\" in the TaskContext"
+            ))
+        })
+    }
+
+    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+        let result = self.window_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "There is no UDWF named \"{name}\" in the TaskContext"
             ))
         })
     }

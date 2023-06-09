@@ -18,19 +18,19 @@
 //! This module provides utilities for window frame index calculations
 //! depending on the window frame mode: RANGE, ROWS, GROUPS.
 
+use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use arrow::array::ArrayRef;
-use arrow::compute::{concat};
+use arrow::compute::concat;
 use arrow::compute::kernels::sort::SortOptions;
+use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::{compare_rows, get_row_at_idx, search_in_slice};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-
 
 /// State for each unique partition determined according to PARTITION BY column(s)
 #[derive(Debug)]
@@ -42,7 +42,6 @@ pub struct PartitionBatchState {
     /// Number of rows emitted for each partition
     pub n_out_row: usize,
 }
-
 
 #[derive(Debug)]
 pub struct WindowAggState {
@@ -107,6 +106,21 @@ impl WindowAggState {
             partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
         self.is_end = partition_batch_state.is_end;
         Ok(())
+    }
+}
+
+impl WindowAggState {
+    pub fn new(out_type: &DataType) -> Result<Self> {
+        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
+        Ok(Self {
+            window_frame_range: Range { start: 0, end: 0 },
+            window_frame_ctx: None,
+            last_calculated_index: 0,
+            offset_pruned_rows: 0,
+            out_col: empty_out_col,
+            n_row_result_missing: 0,
+            is_end: false,
+        })
     }
 }
 
@@ -629,9 +643,9 @@ fn check_equality(current: &[ScalarValue], target: &[ScalarValue]) -> Result<boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
     use arrow::array::{ArrayRef, Float64Array};
     use datafusion_common::{Result, ScalarValue};
-    use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
     use std::ops::Range;
     use std::sync::Arc;
 

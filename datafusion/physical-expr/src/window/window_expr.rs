@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::partition_evaluator::{PartitionEvaluator, PartitionState};
+use datafusion_expr::window_frame_state::{
+    PartitionBatchState, WindowAggState, WindowFrameContext,
+};
 use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
@@ -337,6 +338,12 @@ pub enum BuiltinWindowState {
     Default,
 }
 
+impl PartitionState for BuiltinWindowState {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Key for IndexMap for each unique partition
 ///
 /// For instance, if window frame is `OVER(PARTITION BY a,b)`,
@@ -352,18 +359,3 @@ pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
-
-impl WindowAggState {
-    pub fn new(out_type: &DataType) -> Result<Self> {
-        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
-        Ok(Self {
-            window_frame_range: Range { start: 0, end: 0 },
-            window_frame_ctx: None,
-            last_calculated_index: 0,
-            offset_pruned_rows: 0,
-            out_col: empty_out_col,
-            n_row_result_missing: 0,
-            is_end: false,
-        })
-    }
-}

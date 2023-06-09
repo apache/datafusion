@@ -198,7 +198,11 @@ fn create_udwf_window_expr(
     name: String,
 ) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
-    let input_types: Vec<_> = input_schema.fields().iter().map(|f| f.data_type().clone()).collect();
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema).map(|dt| dt.clone()))
+        .collect::<Result<_>>()?;
+
     // figure out the output type
     let data_type = (fun.return_type)(&input_types)?;
     Ok(Arc::new(WindowUDFExpr {
@@ -227,7 +231,11 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
 
     fn field(&self) -> Result<Field> {
         let nullable = false;
-        Ok(Field::new(&self.name, self.data_type.as_ref().clone(), nullable))
+        Ok(Field::new(
+            &self.name,
+            self.data_type.as_ref().clone(),
+            nullable,
+        ))
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -235,7 +243,11 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        todo!()
+        (self.fun.partition_evaluator)()
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }
 

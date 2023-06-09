@@ -58,8 +58,7 @@ pub type StateTypeFunction =
 /// Factory that creates a PartitionEvaluator for the given aggregate, given
 /// its return datatype.
 pub type PartitionEvaluatorFunctionFactory =
-    Arc<dyn Fn(&DataType) -> Result<Box<dyn PartitionEvaluator>> + Send + Sync>;
-
+    Arc<dyn Fn() -> Result<Box<dyn PartitionEvaluator>> + Send + Sync>;
 
 macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {

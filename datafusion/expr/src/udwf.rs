@@ -17,9 +17,9 @@
 
 //! Support for user-defined window (UDWF) window functions
 
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
-use crate::{ReturnTypeFunction, Signature};
+use crate::{function::PartitionEvaluatorFunctionFactory, ReturnTypeFunction, Signature};
 
 /// Logical representation of a user-defined window function (UDWF)
 /// A UDAF is different from a UDF in that it is stateful across batches.
@@ -31,8 +31,8 @@ pub struct WindowUDF {
     pub signature: Signature,
     /// Return type
     pub return_type: ReturnTypeFunction,
-    // /// actual implementation
-    // pub accumulator: AccumulatorFunctionImplementation,
+    /// Return the partition functon
+    pub partition_evaluator: PartitionEvaluatorFunctionFactory,
 }
 
 impl Debug for WindowUDF {
@@ -41,10 +41,16 @@ impl Debug for WindowUDF {
     }
 }
 
+/// Defines how the WindowUDF is shown to users
+impl Display for WindowUDF {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        todo!();
-        //self.name == other.name && self.signature == other.signature
+        self.name == other.name && self.signature == other.signature
     }
 }
 
@@ -52,8 +58,8 @@ impl Eq for WindowUDF {}
 
 impl std::hash::Hash for WindowUDF {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // self.name.hash(state);
-        // self.signature.hash(state);
+        self.name.hash(state);
+        self.signature.hash(state);
     }
 }
 

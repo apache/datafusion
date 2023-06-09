@@ -18,13 +18,13 @@
 //! Defines physical expression for `cume_dist` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
+use datafusion_expr::partition_evaluator::PartitionEvaluator;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;

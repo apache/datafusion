@@ -74,7 +74,7 @@ impl fmt::Display for WindowFunction {
             WindowFunction::AggregateFunction(fun) => fun.fmt(f),
             WindowFunction::BuiltInWindowFunction(fun) => fun.fmt(f),
             WindowFunction::AggregateUDF(fun) => std::fmt::Debug::fmt(fun, f),
-            WindowFunction::WindowUDF(fun) => std::fmt::Debug::fmt(fun, f),
+            WindowFunction::WindowUDF(fun) => fun.fmt(f),
         }
     }
 }

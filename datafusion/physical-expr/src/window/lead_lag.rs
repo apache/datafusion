@@ -18,7 +18,6 @@
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::{BuiltinWindowState, LeadLagState};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
@@ -27,6 +26,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::partition_evaluator::{PartitionEvaluator, PartitionState};
 use std::any::Any;
 use std::cmp::min;
 use std::ops::{Neg, Range};
@@ -182,9 +182,13 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
+    fn state(
+        &self,
+    ) -> Result<Option<Box<(dyn PartitionState + 'static)>>, DataFusionError> {
         // If we do not use state we just return Default
-        Ok(BuiltinWindowState::LeadLag(self.state.clone()))
+        Ok(Some(Box::new(BuiltinWindowState::LeadLag(
+            self.state.clone(),
+        ))))
     }
 
     fn update_state(
