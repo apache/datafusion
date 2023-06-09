@@ -88,7 +88,7 @@ pub use like::{like, LikeExpr};
 pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
-pub use not::{bitwise_not, not, NotExpr};
+pub use not::{not, NotExpr};
 pub use nullif::nullif_func;
 pub use try_cast::{try_cast, TryCastExpr};
 
