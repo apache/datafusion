@@ -17,10 +17,10 @@
 
 //! Utilities used in aggregates
 
-use crate::AggregateExpr;
+use crate::{AggregateExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
@@ -102,4 +102,21 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+pub(crate) fn ordering_fields(
+    ordering_req: &[PhysicalSortExpr],
+    data_types: &[DataType],
+) -> Vec<Field> {
+    let mut fields = vec![];
+    for (expr, dtype) in ordering_req.iter().zip(data_types.iter()) {
+        let field = Field::new(
+            expr.to_string().as_str(),
+            dtype.clone(),
+            // Multi partitions may be empty hence field should be nullable.
+            true,
+        );
+        fields.push(field);
+    }
+    fields
 }

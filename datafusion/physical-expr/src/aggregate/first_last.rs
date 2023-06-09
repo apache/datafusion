@@ -17,9 +17,9 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, LexOrdering, PhysicalExpr};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
@@ -39,8 +39,7 @@ pub struct FirstValue {
     name: String,
     pub data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
-    // orderings: Vec<Field>,
-    ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ordering_req: LexOrdering,
 }
 
 impl FirstValue {
@@ -48,14 +47,14 @@ impl FirstValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        ordering_req: LexOrdering,
         data_types: Vec<DataType>,
     ) -> Self {
         Self {
             name: name.into(),
             data_types,
             expr,
-            ordering_exprs,
+            ordering_req,
         }
     }
 }
@@ -83,19 +82,7 @@ impl AggregateExpr for FirstValue {
             self.data_types[0].clone(),
             true,
         )];
-        for (expr, dtype) in self
-            .ordering_exprs
-            .iter()
-            .zip(self.data_types.iter().skip(1))
-        {
-            let field = Field::new(
-                format_state_name(expr.to_string().as_str(), "first_value_nn"),
-                dtype.clone(),
-                // Multi partitions may be empty hence field should be nullable.
-                true,
-            );
-            fields.push(field);
-        }
+        fields.extend(ordering_fields(&self.ordering_req, &self.data_types[1..]));
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
             DataType::Boolean,
@@ -106,7 +93,12 @@ impl AggregateExpr for FirstValue {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut res = vec![self.expr.clone()];
-        res.extend(self.ordering_exprs.clone());
+        let ordering_req_exprs = self
+            .ordering_req
+            .iter()
+            .map(|e| e.expr.clone())
+            .collect::<Vec<_>>();
+        res.extend(ordering_req_exprs.clone());
         res
     }
 
@@ -123,7 +115,7 @@ impl AggregateExpr for FirstValue {
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
             name,
-            self.ordering_exprs.clone(),
+            self.ordering_req.clone(),
             self.data_types.clone(),
         )))
     }
@@ -220,7 +212,7 @@ pub struct LastValue {
     name: String,
     pub data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
-    ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    ordering_req: LexOrdering,
 }
 
 impl LastValue {
@@ -228,14 +220,14 @@ impl LastValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        ordering_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        ordering_req: LexOrdering,
         data_types: Vec<DataType>,
     ) -> Self {
         Self {
             name: name.into(),
             data_types,
             expr,
-            ordering_exprs,
+            ordering_req,
         }
     }
 }
@@ -263,19 +255,7 @@ impl AggregateExpr for LastValue {
             self.data_types[0].clone(),
             true,
         )];
-        for (expr, dtype) in self
-            .ordering_exprs
-            .iter()
-            .zip(self.data_types.iter().skip(1))
-        {
-            let field = Field::new(
-                format_state_name(expr.to_string().as_str(), "last_value_nn"),
-                dtype.clone(),
-                // Multi partitions may be empty hence field should be nullable.
-                true,
-            );
-            fields.push(field);
-        }
+        fields.extend(ordering_fields(&self.ordering_req, &self.data_types[1..]));
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
             DataType::Boolean,
@@ -286,7 +266,12 @@ impl AggregateExpr for LastValue {
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut res = vec![self.expr.clone()];
-        res.extend(self.ordering_exprs.clone());
+        let ordering_req_exprs = self
+            .ordering_req
+            .iter()
+            .map(|e| e.expr.clone())
+            .collect::<Vec<_>>();
+        res.extend(ordering_req_exprs.clone());
         res
     }
 
@@ -303,7 +288,7 @@ impl AggregateExpr for LastValue {
         Some(Arc::new(FirstValue::new(
             self.expr.clone(),
             name,
-            self.ordering_exprs.clone(),
+            self.ordering_req.clone(),
             self.data_types.clone(),
         )))
     }

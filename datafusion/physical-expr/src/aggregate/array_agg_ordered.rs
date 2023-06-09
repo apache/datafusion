@@ -17,13 +17,13 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
+use crate::{AggregateExpr, LexOrdering, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_array::{Array, ListArray};
-use arrow_schema::Fields;
+use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -31,13 +31,13 @@ use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
-/// ARRAY_AGG aggregate expression
+/// ARRAY_AGG aggregate expression, where ordering requirement is given
 #[derive(Debug)]
 pub struct OrderSensitiveArrayAgg {
     name: String,
     data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
-    ordering_exprs: Vec<PhysicalSortExpr>,
+    ordering_req: LexOrdering,
 }
 
 impl OrderSensitiveArrayAgg {
@@ -46,13 +46,13 @@ impl OrderSensitiveArrayAgg {
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_types: Vec<DataType>,
-        ordering_exprs: Vec<PhysicalSortExpr>,
+        ordering_req: LexOrdering,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
             data_types,
-            ordering_exprs,
+            ordering_req,
         }
     }
 }
@@ -71,10 +71,10 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(ArrayAggAccumulator::try_new(
+        Ok(Box::new(OrderSensitiveArrayAggAccumulator::try_new(
             &self.data_types[0],
             &self.data_types[1..],
-            self.ordering_exprs.clone(),
+            self.ordering_req.clone(),
         )?))
     }
 
@@ -84,41 +84,28 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             Field::new("item", self.data_types[0].clone(), true),
             false,
         )];
-        if !self.ordering_exprs.is_empty() {
-            let mut struct_fields = vec![];
-            for dtype in self.data_types[1..].iter() {
-                struct_fields.push(Field::new("dummy", dtype.clone(), true));
-            }
-            fields.push(Field::new_list(
-                format_state_name(&self.name, "array_agg"),
-                Field::new("item", DataType::Struct(Fields::from(struct_fields)), true),
-                false,
-            ));
-        }
-        for (expr, dtype) in self
-            .ordering_exprs
-            .iter()
-            .zip(self.data_types.iter().skip(1))
-        {
-            let field = Field::new(
-                format_state_name(expr.to_string().as_str(), "first_value_nn"),
-                dtype.clone(),
-                // Multi partitions may be empty hence field should be nullable.
+        let orderings = ordering_fields(&self.ordering_req, &self.data_types[1..]);
+        fields.push(Field::new_list(
+            format_state_name(&self.name, "array_agg"),
+            Field::new(
+                "item",
+                DataType::Struct(Fields::from(orderings.clone())),
                 true,
-            );
-            fields.push(field);
-        }
+            ),
+            false,
+        ));
+        fields.extend(orderings);
         Ok(fields)
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut res = vec![self.expr.clone()];
-        let ordering_exprs = self
-            .ordering_exprs
+        let ordering_req_exprs = self
+            .ordering_req
             .iter()
             .map(|e| e.expr.clone())
             .collect::<Vec<_>>();
-        res.extend(ordering_exprs.clone());
+        res.extend(ordering_req_exprs.clone());
         res
     }
 
@@ -141,54 +128,41 @@ impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {
 }
 
 #[derive(Debug)]
-pub(crate) struct ArrayAggAccumulator {
+pub(crate) struct OrderSensitiveArrayAggAccumulator {
     values: Vec<ScalarValue>,
     ordering_values: Vec<Vec<ScalarValue>>,
     datatypes: Vec<DataType>,
-    orderings: Vec<ScalarValue>,
-    sort_exprs: Vec<PhysicalSortExpr>,
+    ordering_req: LexOrdering,
 }
 
-impl ArrayAggAccumulator {
+impl OrderSensitiveArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
     pub fn try_new(
         datatype: &DataType,
         ordering_dtypes: &[DataType],
-        sort_exprs: Vec<PhysicalSortExpr>,
+        ordering_req: LexOrdering,
     ) -> Result<Self> {
-        let mut orderings = vec![];
-        for dtype in ordering_dtypes.iter() {
-            orderings.push(ScalarValue::try_from(dtype)?);
-        }
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
         Ok(Self {
             values: vec![],
             ordering_values: vec![],
             datatypes,
-            orderings,
-            sort_exprs,
+            ordering_req,
         })
     }
 }
 
-impl Accumulator for ArrayAggAccumulator {
+impl Accumulator for OrderSensitiveArrayAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
         }
-        // assert!(values.len() == 1, "array_agg can only take 1 param!");
-        // let arr = &values[0];
         let n_row = values[0].len();
-        (0..n_row).try_for_each(|index| {
+        for index in 0..n_row {
             let row = get_row_at_idx(values, index)?;
             self.values.push(row[0].clone());
             self.ordering_values.push(row[1..].to_vec());
-            Ok::<(), DataFusionError>(())
-        })?;
-        if n_row > 0 {
-            let row = get_row_at_idx(values, n_row - 1)?;
-            self.orderings = row[1..].to_vec();
         }
         Ok(())
     }
@@ -206,58 +180,20 @@ impl Accumulator for ArrayAggAccumulator {
                     let arr = &states[0];
                     let scalar = ScalarValue::try_from_array(arr, index)?;
                     if let ScalarValue::List(Some(values), _) = scalar {
-                        let mut lidx = 0;
-                        let mut ridx = 0;
-                        let lend = self.ordering_values.len();
-                        let rend = other_ordering.len();
-                        let mut new_values = vec![];
-                        let mut new_ordering_values = vec![];
-                        assert_eq!(other_ordering.len(), values.len());
-                        while lidx < lend || ridx < rend {
-                            if lidx == lend {
-                                new_values.extend(values[ridx..].to_vec());
-                                new_ordering_values
-                                    .extend(other_ordering[ridx..].to_vec());
-                                ridx = rend;
-                            } else if ridx == rend {
-                                new_values.extend(self.values[lidx..].to_vec());
-                                new_ordering_values
-                                    .extend(self.ordering_values[lidx..].to_vec());
-                                lidx = lend;
-                            } else {
-                                let sort_options = self
-                                    .sort_exprs
-                                    .iter()
-                                    .map(|sort_expr| sort_expr.options)
-                                    .collect::<Vec<_>>();
-                                let compare_fn =
-                                    |current: &[ScalarValue],
-                                     target: &[ScalarValue]|
-                                     -> Result<bool> {
-                                        let cmp =
-                                            compare_rows(current, target, &sort_options)?;
-                                        // Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
-                                        Ok(cmp.is_lt())
-                                    };
-                                if compare_fn(
-                                    &self.ordering_values[lidx],
-                                    &other_ordering[ridx],
-                                )? {
-                                    new_values.push(self.values[lidx].clone());
-                                    new_ordering_values
-                                        .push(self.ordering_values[lidx].clone());
-                                    lidx += 1;
-                                } else {
-                                    new_values.push(values[ridx].clone());
-                                    new_ordering_values
-                                        .push(other_ordering[ridx].clone());
-                                    ridx += 1;
-                                }
-                            }
-                        }
+                        let sort_options = self
+                            .ordering_req
+                            .iter()
+                            .map(|sort_expr| sort_expr.options)
+                            .collect::<Vec<_>>();
+                        let (new_values, new_ordering_values) = merge_ordered_array(
+                            &self.values,
+                            &values,
+                            &self.ordering_values,
+                            &other_ordering,
+                            &sort_options,
+                        )?;
                         self.values = new_values;
                         self.ordering_values = new_ordering_values;
-                        assert_eq!(self.values.len(), self.ordering_values.len());
                     } else {
                         return Err(DataFusionError::Internal(
                             "array_agg state must be list!".into(),
@@ -291,10 +227,13 @@ impl Accumulator for ArrayAggAccumulator {
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut res = vec![self.evaluate()?];
-        if !self.orderings.is_empty() {
-            res.push(self.evaluate_orderings()?);
-        }
-        res.extend(self.orderings.clone());
+        res.push(self.evaluate_orderings()?);
+        let last_ordering = if let Some(ordering) = self.ordering_values.last() {
+            ordering.clone()
+        } else {
+            self.def_ordering()?
+        };
+        res.extend(last_ordering);
         Ok(res)
     }
 
@@ -313,7 +252,15 @@ impl Accumulator for ArrayAggAccumulator {
     }
 }
 
-impl ArrayAggAccumulator {
+impl OrderSensitiveArrayAggAccumulator {
+    fn def_ordering(&self) -> Result<Vec<ScalarValue>> {
+        self.datatypes
+            .iter()
+            .skip(1)
+            .map(ScalarValue::try_from)
+            .collect::<Result<Vec<_>>>()
+    }
+
     fn convert_struct_to_vec(
         &self,
         in_data: ScalarValue,
@@ -352,24 +299,67 @@ impl ArrayAggAccumulator {
     }
 
     fn struct_dtype(&self) -> DataType {
-        let mut struct_fields = vec![];
-        for dtype in self.datatypes[1..].iter() {
-            struct_fields.push(Field::new("dummy", dtype.clone(), true));
-        }
-        DataType::Struct(Fields::from(struct_fields))
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+        DataType::Struct(Fields::from(fields))
     }
 
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
         let mut orderings = vec![];
+        let struct_field =
+            Fields::from(ordering_fields(&self.ordering_req, &self.datatypes[1..]));
         for ordering in &self.ordering_values {
-            let mut fields = vec![];
-            for expr in ordering {
-                let field = Field::new("dummy", expr.get_datatype(), true);
-                fields.push(field);
-            }
-            let res = ScalarValue::Struct(Some(ordering.clone()), Fields::from(fields));
+            let res = ScalarValue::Struct(Some(ordering.clone()), struct_field.clone());
             orderings.push(res);
         }
         Ok(ScalarValue::new_list(Some(orderings), self.struct_dtype()))
     }
+}
+
+fn merge_ordered_array(
+    lhs_values: &[ScalarValue],
+    rhs_values: &[ScalarValue],
+    lhs_ordering: &[Vec<ScalarValue>],
+    rhs_ordering: &[Vec<ScalarValue>],
+    sort_options: &[SortOptions],
+) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
+    if (lhs_values.len() != lhs_ordering.len()) | (rhs_values.len() != rhs_ordering.len())
+    {
+        return Err(DataFusionError::Execution(
+            "Expects lhs arguments and/or rhs arguments to have same size".to_string(),
+        ));
+    }
+    let mut lidx = 0;
+    let mut ridx = 0;
+    let lend = lhs_values.len();
+    let rend = rhs_values.len();
+    let mut new_values = vec![];
+    let mut new_ordering_values = vec![];
+    while lidx < lend || ridx < rend {
+        if lidx == lend {
+            new_values.extend(rhs_values[ridx..].to_vec());
+            new_ordering_values.extend(rhs_ordering[ridx..].to_vec());
+            ridx = rend;
+        } else if ridx == rend {
+            new_values.extend(lhs_values[lidx..].to_vec());
+            new_ordering_values.extend(lhs_ordering[lidx..].to_vec());
+            lidx = lend;
+        } else {
+            let compare_fn =
+                |current: &[ScalarValue], target: &[ScalarValue]| -> Result<bool> {
+                    let cmp = compare_rows(current, target, sort_options)?;
+                    Ok(cmp.is_lt())
+                };
+            if compare_fn(&lhs_ordering[lidx], &rhs_ordering[ridx])? {
+                new_values.push(lhs_values[lidx].clone());
+                new_ordering_values.push(lhs_ordering[lidx].clone());
+                lidx += 1;
+            } else {
+                new_values.push(rhs_values[ridx].clone());
+                new_ordering_values.push(rhs_ordering[ridx].clone());
+                ridx += 1;
+            }
+        }
+    }
+
+    Ok((new_values, new_ordering_values))
 }

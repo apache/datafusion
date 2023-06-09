@@ -50,13 +50,9 @@ pub fn create_aggregate_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let rt_type = return_type(fun, &input_phy_types)?;
-    let orderings = ordering_reqs
+    let ordering_types = ordering_reqs
         .iter()
-        .map(|e| e.expr.clone())
-        .collect::<Vec<_>>();
-    let ordering_types = orderings
-        .iter()
-        .map(|e| e.data_type(input_schema))
+        .map(|e| e.expr.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     input_phy_types.extend(ordering_types);
     let input_phy_exprs = input_phy_exprs.to_vec();
@@ -331,13 +327,13 @@ pub fn create_aggregate_expr(
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
             name,
-            orderings.to_vec(),
+            ordering_reqs.to_vec(),
             input_phy_types.clone(),
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
-            orderings.to_vec(),
+            ordering_reqs.to_vec(),
             input_phy_types.clone(),
         )),
     })
