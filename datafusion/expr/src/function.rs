@@ -352,7 +352,14 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
-        BuiltinScalarFunction::Struct => Ok(DataType::Struct(Fields::empty())),
+        BuiltinScalarFunction::Struct => {
+            let return_fields = input_expr_types
+                .iter()
+                .enumerate()
+                .map(|(pos, dt)| Field::new(format!("c{pos}"), dt.clone(), true))
+                .collect::<Vec<Field>>();
+            Ok(DataType::Struct(Fields::from(return_fields)))
+        }
 
         BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
             DataType::Float32 => Ok(DataType::Float32),
