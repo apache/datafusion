@@ -495,6 +495,7 @@ impl SessionContext {
         }
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
 
         match (if_not_exists, or_replace, table) {
