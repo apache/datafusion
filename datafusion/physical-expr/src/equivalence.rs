@@ -190,14 +190,15 @@ impl<T: Eq + Hash + Clone> EquivalentClass<T> {
 
     pub fn remove(&mut self, col: &T) -> bool {
         let removed = self.others.remove(col);
-        // If we are removing the head, shift others so that its first entry becomes the new head.
+        // If we are removing the head, adjust others so that its first entry becomes the new head.
         if !removed && *col == self.head {
-            let one_col = self.others.iter().next().cloned();
-            if let Some(col) = one_col {
+            if let Some(col) = self.others.iter().next().cloned() {
                 let removed = self.others.remove(&col);
                 self.head = col;
                 removed
             } else {
+                // We don't allow empty equivalence classes, reject removal if one tries removing
+                // the only element in an equivalence class.
                 false
             }
         } else {
