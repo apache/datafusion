@@ -40,8 +40,8 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
-    is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
+    aggregate_function, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
+    is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
@@ -383,7 +383,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let nex_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &function::signature(&fun),
+                    &fun.signature(),
                 )?;
                 let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
                 Ok(expr)
