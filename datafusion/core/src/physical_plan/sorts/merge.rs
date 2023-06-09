@@ -181,7 +181,6 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(cursor);
-                println!("spm, idx:{:?}, batch:{:?}", idx, batch);
                 self.in_progress.push_batch(idx, batch);
                 Poll::Ready(Ok(()))
             }

@@ -1666,16 +1666,12 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
-            let orderings = order_by.clone().unwrap_or(vec![]);
-            // let orderings = orderings
-            //     .into_iter()
-            //     .map(|elem| elem.expr)
-            //     .collect::<Vec<_>>();
+            let ordering_reqs = order_by.clone().unwrap_or(vec![]);
             let agg_expr = aggregates::create_aggregate_expr(
                 fun,
                 *distinct,
                 &args,
-                &orderings,
+                &ordering_reqs,
                 physical_input_schema,
                 name,
             )?;

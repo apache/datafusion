@@ -25,7 +25,6 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -78,7 +77,6 @@ impl AggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(&context))?;
 
-        println!("agg.aggr_expr:{:?}", agg.aggr_expr);
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
             AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
@@ -112,7 +110,6 @@ impl AggregateStream {
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
-                        println!("no grouping batch received aggregate:{:?}", batch);
                         let timer = elapsed_compute.timer();
                         let result = aggregate_batch(
                             &this.mode,
@@ -140,22 +137,12 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result = finalize_aggregation(&this.accumulators, &this.mode)
                             .and_then(|columns| {
-                                for col in &columns {
-                                    println!(
-                                        "col: {:?}, dtype:{:?}",
-                                        col,
-                                        col.data_type()
-                                    );
-                                }
-                                println!("columns returned: {:?}", columns);
-                                println!("schema:{:?}", this.schema);
                                 RecordBatch::try_new(this.schema.clone(), columns)
                                     .map_err(Into::into)
                             })
                             .record_output(&this.baseline_metrics);
 
                         timer.done();
-                        println!("result produced no group aggregator:{:?}", result);
                         result
                     }
                 };
@@ -213,7 +200,6 @@ fn aggregate_batch(
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
-    println!("expressions:{:?}", expressions);
     // 1.1
     accumulators
         .iter_mut()

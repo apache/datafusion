@@ -574,9 +574,6 @@ impl AggregateExec {
                 }
             })
             .collect::<Vec<_>>();
-        println!("------------------");
-        println!("aggr_expr: {:?}", aggr_expr);
-        println!("order_by_expr: {:?}", order_by_expr);
         let mut aggregator_reverse_reqs = None;
         // Currently we support order-sensitive aggregation only in `Single` mode.
         // For `Final` and `FinalPartitioned` modes, we cannot guarantee they will receive
