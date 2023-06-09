@@ -17,14 +17,16 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
+use crate::equivalence::OrderingEquivalenceBuilder;
+use crate::expressions::Column;
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::{BuiltinWindowState, NumRowsState};
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::SortOptions;
 use datafusion_common::{Result, ScalarValue};
-use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -42,11 +44,6 @@ impl RowNumber {
 }
 
 impl BuiltInWindowFunctionExpr for RowNumber {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = DataType::UInt64;
@@ -59,6 +56,24 @@ impl BuiltInWindowFunctionExpr for RowNumber {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn add_equal_orderings(&self, builder: &mut OrderingEquivalenceBuilder) {
+        // Only the built-in `RowNumber` window function introduces a new
+        // ordering:
+        let schema = builder.schema();
+        if let Some((idx, field)) = schema.column_with_name(self.name()) {
+            let column = Column::new(field.name(), idx);
+            let options = SortOptions {
+                descending: false,
+                nulls_first: false,
+            }; // ASC, NULLS LAST
+            let rhs = PhysicalSortExpr {
+                expr: Arc::new(column) as _,
+                options,
+            };
+            builder.add_equal_conditions(vec![rhs]);
+        }
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {

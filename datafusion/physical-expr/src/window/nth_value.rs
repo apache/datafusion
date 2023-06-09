@@ -26,7 +26,6 @@ use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -95,11 +94,6 @@ impl NthValue {
 }
 
 impl BuiltInWindowFunctionExpr for NthValue {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn field(&self) -> Result<Field> {
         let nullable = true;
         Ok(Field::new(&self.name, self.data_type.clone(), nullable))

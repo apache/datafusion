@@ -25,7 +25,6 @@ use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::Field;
 use arrow_schema::DataType;
 use datafusion_common::Result;
-use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -41,10 +40,6 @@ impl Ntile {
 }
 
 impl BuiltInWindowFunctionExpr for Ntile {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = DataType::UInt64;

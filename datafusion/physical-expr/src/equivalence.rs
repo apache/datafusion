@@ -296,16 +296,18 @@ pub struct OrderingEquivalenceBuilder {
     eq_properties: EquivalenceProperties,
     ordering_eq_properties: OrderingEquivalenceProperties,
     existing_ordering: Vec<PhysicalSortExpr>,
+    schema: SchemaRef,
 }
 
 impl OrderingEquivalenceBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         let eq_properties = EquivalenceProperties::new(schema.clone());
-        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema);
+        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema.clone());
         Self {
             eq_properties,
             ordering_eq_properties,
             existing_ordering: vec![],
+            schema,
         }
     }
 
@@ -356,6 +358,11 @@ impl OrderingEquivalenceBuilder {
                 &new_equivalent_ordering,
             ));
         }
+    }
+
+    /// Return a reference to the schema with which this builder was constructed with
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     pub fn build(self) -> OrderingEquivalenceProperties {
