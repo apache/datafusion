@@ -135,6 +135,16 @@ pub fn return_type(
                 "The {fun} function can only accept fixed size list as the args."
             ))),
         },
+        BuiltinScalarFunction::ArrayContains => match &input_expr_types[0] {
+            DataType::List(field) => Ok(DataType::List(Arc::new(Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            )))),
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept fixed size list as the args."
+            ))),
+        },
         BuiltinScalarFunction::ArrayDims => Ok(DataType::UInt8),
         BuiltinScalarFunction::ArrayFill => Ok(DataType::List(Arc::new(Field::new(
             "item",
@@ -406,6 +416,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
     match fun {
         BuiltinScalarFunction::ArrayAppend => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayConcat => Signature::variadic_any(fun.volatility()),
+        BuiltinScalarFunction::ArrayContains => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayDims => Signature::any(1, fun.volatility()),
         BuiltinScalarFunction::ArrayFill => Signature::any(2, fun.volatility()),
         BuiltinScalarFunction::ArrayLength => Signature::variadic_any(fun.volatility()),

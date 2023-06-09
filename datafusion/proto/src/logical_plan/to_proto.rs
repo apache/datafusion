@@ -1338,6 +1338,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
+            BuiltinScalarFunction::ArrayContains => Self::ArrayContains,
             BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
             BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,

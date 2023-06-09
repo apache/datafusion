@@ -107,6 +107,8 @@ pub enum BuiltinScalarFunction {
     ArrayAppend,
     /// array_concat
     ArrayConcat,
+    /// array_contains
+    ArrayContains,
     /// array_dims
     ArrayDims,
     /// array_fill
@@ -312,6 +314,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Trunc => Volatility::Immutable,
             BuiltinScalarFunction::ArrayAppend => Volatility::Immutable,
             BuiltinScalarFunction::ArrayConcat => Volatility::Immutable,
+            BuiltinScalarFunction::ArrayContains => Volatility::Immutable,
             BuiltinScalarFunction::ArrayDims => Volatility::Immutable,
             BuiltinScalarFunction::ArrayFill => Volatility::Immutable,
             BuiltinScalarFunction::ArrayLength => Volatility::Immutable,
@@ -490,6 +493,7 @@ fn aliases(func: &BuiltinScalarFunction) -> &'static [&'static str] {
         // array functions
         BuiltinScalarFunction::ArrayAppend => &["array_append"],
         BuiltinScalarFunction::ArrayConcat => &["array_concat"],
+        BuiltinScalarFunction::ArrayContains => &["array_contains"],
         BuiltinScalarFunction::ArrayDims => &["array_dims"],
         BuiltinScalarFunction::ArrayFill => &["array_fill"],
         BuiltinScalarFunction::ArrayLength => &["array_length"],
