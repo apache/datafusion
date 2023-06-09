@@ -279,6 +279,18 @@ mod tests {
     }
 
     #[tokio::test]
+    // Test with length <= datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+    async fn roundtrip_inlist_1() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c')").await
+    }
+
+    #[tokio::test]
+    // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+    async fn roundtrip_inlist_2() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c', 'd')").await
+    }
+
+    #[tokio::test]
     async fn simple_scalar_function_abs() -> Result<()> {
         roundtrip("SELECT ABS(a) FROM data").await
     }
@@ -638,6 +650,7 @@ mod tests {
             Field::new("c", DataType::Date32, true),
             Field::new("d", DataType::Boolean, true),
             Field::new("e", DataType::UInt32, true),
+            Field::new("f", DataType::Utf8, true),
         ]);
         explicit_options.schema = Some(&schema);
         ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)

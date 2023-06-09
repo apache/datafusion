@@ -29,7 +29,8 @@ use datafusion::common::DFSchemaRef;
 #[allow(unused_imports)]
 use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{
-    BinaryExpr, Case, Cast, ScalarFunction as DFScalarFunction, Sort, WindowFunction,
+    BinaryExpr, Case, Cast, InList, ScalarFunction as DFScalarFunction, Sort,
+    WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -614,6 +615,47 @@ pub fn to_substrait_rex(
     ),
 ) -> Result<Expression> {
     match expr {
+        Expr::InList(InList {
+            expr,
+            list,
+            negated,
+        }) => {
+            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
+            // negated: expr NOT IN (A, B, ...) --> (expr != A) AND (expr != B) AND (expr != C)
+            let op_for_list = match negated {
+                true => Operator::And,
+                false => Operator::Or,
+            };
+            let op_for_list_item = match negated {
+                true => Operator::NotEq,
+                false => Operator::Eq,
+            };
+
+            let substrait_list = list
+                .iter()
+                .map(|x| to_substrait_rex(x, schema, extension_info))
+                .collect::<Result<Vec<Expression>>>()?;
+            let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
+
+            let init_val = make_binary_op_scalar_func(
+                &substrait_expr,
+                &substrait_list[0],
+                op_for_list_item,
+                extension_info,
+            );
+
+            let res = substrait_list.into_iter().skip(1).fold(init_val, |acc, y| {
+                let val = make_binary_op_scalar_func(
+                    &substrait_expr,
+                    &y,
+                    op_for_list_item,
+                    extension_info,
+                );
+
+                make_binary_op_scalar_func(&acc, &val, op_for_list, extension_info)
+            });
+            Ok(res)
+        }
         Expr::ScalarFunction(DFScalarFunction { fun, args }) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
