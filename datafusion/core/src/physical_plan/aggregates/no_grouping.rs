@@ -143,6 +143,7 @@ impl AggregateStream {
                             .record_output(&this.baseline_metrics);
 
                         timer.done();
+
                         result
                     }
                 };
