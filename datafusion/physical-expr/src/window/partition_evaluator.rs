@@ -182,8 +182,6 @@ pub trait PartitionEvaluator: Debug + Send {
     ///   (3,4),
     /// ]
     /// ```
-    ///
-    /// See [`Self::include_rank`] for more details
     fn evaluate_with_rank(
         &self,
         _num_rows: usize,
