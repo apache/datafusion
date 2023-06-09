@@ -330,7 +330,7 @@ pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let data_type = arrays[0].data_type();
     match data_type {
         DataType::List(field) => match field.data_type() {
-            DataType::Null => return array_concat(&args[1..]),
+            DataType::Null => array_concat(&args[1..]),
             _ => {
                 let list_arrays = downcast_vec!(arrays, ListArray)
                     .collect::<Result<Vec<&ListArray>>>()?;
