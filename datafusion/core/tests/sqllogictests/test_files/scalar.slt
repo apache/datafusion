@@ -917,18 +917,20 @@ SELECT not(1), not(0)
 query ?B
 SELECT null, not(null)
 ----
-NULL true
+NULL NULL
+
+query TT
+SELECT arrow_typeof(null), arrow_typeof(not(null))
+----
+Null Boolean
 
 query B
 SELECT not(null) is true;
 ----
 true
 
-query B
+query error DataFusion error: Internal error: could not cast value to arrow_array::array::boolean_array::BooleanArray\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 select not(a) from (SELECT null a union all select 1) x
-----
--2
-NULL
 
 query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nInternal error: NOT 'Literal \{ value: Utf8\("hi"\) \}' can't be evaluated because the expression's type is Utf8, not boolean or NULL\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 SELECT NOT('hi')
