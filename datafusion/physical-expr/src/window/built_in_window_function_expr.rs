@@ -69,7 +69,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Construct a new [`BuiltInWindowFunctionExpr`] that produces
     /// the same result as this function on a window with reverse
     /// order. The return value of this function is used by the
-    /// DataFusion optimizer to avoid resorting the data when
+    /// DataFusion optimizer to avoid re-sorting the data when
     /// possible.
     ///
     /// Returns `None` (the default) if no reverse is known (or possible).
