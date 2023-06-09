@@ -77,8 +77,7 @@ use std::ops::Range;
 ///
 /// In this case, [`Self::evaluate_stateful`] is called to calculate
 /// the results of the window function incrementally for each new
-/// batch, saving and restoring any state needed to do so as
-/// [`BuiltinWindowState`].
+/// batch.
 ///
 /// For example, when computing `ROW_NUMBER` incrementally,
 /// [`Self::evaluate_stateful`] will be called multiple times with
