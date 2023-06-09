@@ -61,7 +61,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
         use datafusion::physical_plan::expressions;
         use protobuf::AggregateFunction;
 
-        let mut expressions: Vec<protobuf::PhysicalExprNode> = a
+        let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
             .iter()
             .map(|e| e.clone().try_into())

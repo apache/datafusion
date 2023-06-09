@@ -21,9 +21,8 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
-use arrow::compute::sort;
 use arrow::datatypes::{DataType, Field};
-use arrow_array::{Array, ListArray, StructArray};
+use arrow_array::{Array, ListArray};
 use arrow_schema::Fields;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::ScalarValue;
@@ -351,12 +350,11 @@ impl ArrayAggAccumulator {
         &self,
         in_data: ScalarValue,
     ) -> Result<Vec<Vec<ScalarValue>>> {
-        println!("in_data:{:?}", in_data);
-        if let ScalarValue::List(elem, field_ref) = in_data {
+        if let ScalarValue::List(elem, _field_ref) = in_data {
             if let Some(elem) = elem {
                 let mut res = vec![];
                 for struct_vals in elem {
-                    if let ScalarValue::Struct(elem, field) = struct_vals {
+                    if let ScalarValue::Struct(elem, _fields) = struct_vals {
                         if let Some(elem) = elem {
                             res.push(elem);
                         } else {
@@ -402,10 +400,8 @@ impl ArrayAggAccumulator {
                 fields.push(field);
             }
             let res = ScalarValue::Struct(Some(ordering.clone()), Fields::from(fields));
-            println!("struct res:{:?}", res);
             orderings.push(res);
         }
-        println!("evaluate orderings:{:?}", orderings);
         Ok(ScalarValue::new_list(Some(orderings), self.struct_dtype()))
     }
 }

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aggregate::row_accumulator::RowAccumulator;
-use crate::expressions::{ArrayAgg, FirstValue, LastValue, OrderSensitiveArrayAgg};
+use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
