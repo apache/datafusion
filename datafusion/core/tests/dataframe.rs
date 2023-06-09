@@ -24,7 +24,6 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
-use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -342,16 +341,16 @@ async fn join() -> Result<()> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
     // define data.
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
 
@@ -384,8 +383,8 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
         ],
     )
     .unwrap();
@@ -429,8 +428,8 @@ async fn sort_on_distinct_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 3, 4, 5])),
         ],
     )
     .unwrap();
@@ -473,8 +472,8 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 3, 4, 5])),
         ],
     )?;
 
@@ -574,7 +573,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from(vec![1, 10, 10, 100]))],
     )
     .unwrap();
 
@@ -611,7 +610,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from(vec![1, 10, 10, 100]))],
     )?;
 
     let ctx = SessionContext::new();
@@ -1090,13 +1089,13 @@ async fn create_test_table(name: &str) -> Result<DataFrame> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice([
+            Arc::new(StringArray::from(vec![
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
 
@@ -1133,18 +1132,18 @@ fn create_join_context() -> Result<SessionContext> {
     let batch1 = RecordBatch::try_new(
         t1,
         vec![
-            Arc::new(UInt32Array::from_slice([1, 10, 11, 100])),
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([10, 20, 30, 40])),
+            Arc::new(UInt32Array::from(vec![1, 10, 11, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
         ],
     )?;
     // define data.
     let batch2 = RecordBatch::try_new(
         t2,
         vec![
-            Arc::new(UInt32Array::from_slice([3, 10, 13, 100])),
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![3, 10, 13, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
 

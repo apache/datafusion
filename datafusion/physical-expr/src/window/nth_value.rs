@@ -252,7 +252,7 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
         );
-        test_i32_result(first_value, Int32Array::from_iter_values(vec![1; 8]))?;
+        test_i32_result(first_value, Int32Array::from(vec![1; 8]))?;
         Ok(())
     }
 
@@ -287,7 +287,7 @@ mod tests {
             DataType::Int32,
             1,
         )?;
-        test_i32_result(nth_value, Int32Array::from_iter_values(vec![1; 8]))?;
+        test_i32_result(nth_value, Int32Array::from(vec![1; 8]))?;
         Ok(())
     }
 

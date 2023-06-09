@@ -811,7 +811,6 @@ mod tests {
     use super::*;
     use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
-    use crate::from_slice::FromSlice;
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
@@ -839,7 +838,7 @@ mod tests {
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
 
             let expr =
                 create_physical_expr_with_type_coercion(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
@@ -2816,7 +2815,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let execution_props = ExecutionProps::new();
 
-        let col_value: ArrayRef = Arc::new(StringArray::from_slice(["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
         let pattern = lit(r".*-(\d*)");
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr_with_type_coercion(
@@ -2857,7 +2856,7 @@ mod tests {
 
         let col_value = lit("aaa-555");
         let pattern = lit(r".*-(\d*)");
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice([1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
         let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],

@@ -81,43 +81,43 @@ async fn case_builtin_math_expression() {
     let type_values = vec![
         (
             DataType::Int8,
-            Arc::new(Int8Array::from_slice([1])) as ArrayRef,
+            Arc::new(Int8Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::Int16,
-            Arc::new(Int16Array::from_slice([1])) as ArrayRef,
+            Arc::new(Int16Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::Int32,
-            Arc::new(Int32Array::from_slice([1])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::Int64,
-            Arc::new(Int64Array::from_slice([1])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::UInt8,
-            Arc::new(UInt8Array::from_slice([1])) as ArrayRef,
+            Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::UInt16,
-            Arc::new(UInt16Array::from_slice([1])) as ArrayRef,
+            Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::UInt32,
-            Arc::new(UInt32Array::from_slice([1])) as ArrayRef,
+            Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::UInt64,
-            Arc::new(UInt64Array::from_slice([1])) as ArrayRef,
+            Arc::new(UInt64Array::from(vec![1])) as ArrayRef,
         ),
         (
             DataType::Float32,
-            Arc::new(Float32Array::from_slice([1.0_f32])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef,
         ),
         (
             DataType::Float64,
-            Arc::new(Float64Array::from_slice([1.0_f64])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef,
         ),
     ];
 

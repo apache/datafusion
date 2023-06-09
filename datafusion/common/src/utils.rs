@@ -388,24 +388,22 @@ pub mod datafusion_strsim {
 
 #[cfg(test)]
 mod tests {
+    use crate::ScalarValue;
+    use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
     use arrow_array::Array;
     use std::ops::Range;
     use std::sync::Arc;
-
-    use crate::from_slice::FromSlice;
-    use crate::ScalarValue;
-    use crate::ScalarValue::Null;
 
     use super::*;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from(vec![15.0, 13.0, 8.0, 5., 0.0])),
         ];
         let search_tuple: Vec<ScalarValue> = vec![
             ScalarValue::Float64(Some(8.0)),
@@ -478,9 +476,8 @@ mod tests {
     #[test]
     fn test_bisect_linear_left_and_right_diff_sort() -> Result<()> {
         // Descending, left
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
-            4.0, 3.0, 2.0, 1.0, 0.0,
-        ]))];
+        let arrays: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 1.0, 0.0]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(4.0))];
         let ords = [SortOptions {
             descending: true,
@@ -492,9 +489,8 @@ mod tests {
         assert_eq!(res, 0);
 
         // Descending, right
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
-            4.0, 3.0, 2.0, 1.0, 0.0,
-        ]))];
+        let arrays: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from(vec![4.0, 3.0, 2.0, 1.0, 0.0]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(4.0))];
         let ords = [SortOptions {
             descending: true,
@@ -507,7 +503,7 @@ mod tests {
 
         // Ascending, left
         let arrays: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.]))];
+            vec![Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(7.0))];
         let ords = [SortOptions {
             descending: false,
@@ -520,7 +516,7 @@ mod tests {
 
         // Ascending, right
         let arrays: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.]))];
+            vec![Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(7.0))];
         let ords = [SortOptions {
             descending: false,
@@ -532,8 +528,8 @@ mod tests {
         assert_eq!(res, 2);
 
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([10.0, 9.0, 8.0, 7.5, 7., 6.])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from(vec![10.0, 9.0, 8.0, 7.5, 7., 6.])),
         ];
         let search_tuple: Vec<ScalarValue> = vec![
             ScalarValue::Float64(Some(8.0)),
@@ -564,8 +560,8 @@ mod tests {
     #[test]
     fn test_evaluate_partition_ranges() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
-            Arc::new(Float64Array::from_slice([4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
+            Arc::new(Float64Array::from(vec![1.0, 1.0, 1.0, 2.0, 2.0, 2.0])),
+            Arc::new(Float64Array::from(vec![4.0, 4.0, 3.0, 2.0, 1.0, 1.0])),
         ];
         let n_row = arrays[0].len();
         let options: Vec<SortOptions> = vec![
@@ -641,10 +637,10 @@ mod tests {
     #[test]
     fn test_get_arrayref_at_indices() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from(vec![2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from(vec![5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from(vec![15.0, 13.0, 8.0, 5., 0.0])),
         ];
 
         let row_indices_vec: Vec<Vec<u32>> = vec![
