@@ -23,11 +23,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::Result;
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
+use datafusion_common::Result;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;

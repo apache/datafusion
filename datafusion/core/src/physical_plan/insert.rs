@@ -21,13 +21,13 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use core::fmt;
+use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::StreamExt;
 use std::any::Any;

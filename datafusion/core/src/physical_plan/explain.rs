@@ -20,8 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use datafusion_common::{DataFusionError, Result};
+
 use crate::{
-    error::{DataFusionError, Result},
     logical_expr::StringifiedPlan,
     physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics},
 };
