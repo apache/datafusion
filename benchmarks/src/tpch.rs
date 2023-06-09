@@ -15,26 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::{Fields, SchemaBuilder, SchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::SchemaBuilder;
 use std::fs;
-use std::ops::{Div, Mul};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 
-use datafusion::common::cast::{
-    as_date32_array, as_decimal128_array, as_float64_array, as_int32_array,
-    as_int64_array, as_string_array,
-};
-use datafusion::common::ScalarValue;
-use datafusion::logical_expr::expr::ScalarFunction;
-use datafusion::logical_expr::Cast;
 use datafusion::prelude::*;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
-    datasource::MemTable,
     error::{DataFusionError, Result},
 };
 use parquet::basic::Compression;
