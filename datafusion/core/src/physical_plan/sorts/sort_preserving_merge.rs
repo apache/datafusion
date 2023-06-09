@@ -164,6 +164,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             input_partitions
         );
         let schema = self.schema();
+
         match input_partitions {
             0 => Err(DataFusionError::Internal(
                 "SortPreservingMergeExec requires at least one input partition"
