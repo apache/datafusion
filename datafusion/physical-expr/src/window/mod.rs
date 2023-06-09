@@ -22,12 +22,10 @@ pub(crate) mod cume_dist;
 pub(crate) mod lead_lag;
 pub(crate) mod nth_value;
 pub(crate) mod ntile;
-pub(crate) mod partition_evaluator;
 pub(crate) mod rank;
 pub(crate) mod row_number;
 mod sliding_aggregate;
 mod window_expr;
-mod window_frame_state;
 
 pub use aggregate::PlainAggregateWindowExpr;
 pub use built_in::BuiltInWindowExpr;

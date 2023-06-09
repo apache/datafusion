@@ -53,6 +53,8 @@ mod udwf;
 pub mod utils;
 pub mod window_frame;
 pub mod window_function;
+pub mod partition_evaluator;
+pub mod window_frame_state;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;

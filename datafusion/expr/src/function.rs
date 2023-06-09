@@ -19,6 +19,7 @@
 
 use crate::function_err::generate_signature_error_msg;
 use crate::nullif::SUPPORTED_NULLIF_TYPES;
+use crate::partition_evaluator::PartitionEvaluator;
 use crate::type_coercion::functions::data_types;
 use crate::ColumnarValue;
 use crate::{
@@ -53,6 +54,12 @@ pub type AccumulatorFunctionImplementation =
 /// its state, given its return datatype.
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
+
+/// Factory that creates a PartitionEvaluator for the given aggregate, given
+/// its return datatype.
+pub type PartitionEvaluatorFunctionFactory =
+    Arc<dyn Fn(&DataType) -> Result<Box<dyn PartitionEvaluator>> + Send + Sync>;
+
 
 macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {

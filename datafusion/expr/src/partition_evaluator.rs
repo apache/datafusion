@@ -17,13 +17,24 @@
 
 //! Partition evaluation module
 
-use crate::window::window_expr::BuiltinWindowState;
-use crate::window::WindowAggState;
+use crate::window_frame_state::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
+use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
+
+
+/// Trait for the state managed by this partition evaluator
+///
+/// This follows the existing pattern, but maybe we can improve it :thinking:
+
+pub trait PartitionState {
+    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+}
 
 /// Partition evaluator for Window Functions
 ///
@@ -100,12 +111,9 @@ pub trait PartitionEvaluator: Debug + Send {
         false
     }
 
-    /// Returns the internal state of the window function
-    ///
-    /// Only used for stateful evaluation
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::Default)
+    /// Returns the internal state of the window function, if any
+    fn state(&self) -> Result<Option<Box<dyn PartitionState>>> {
+        Ok(None)
     }
 
     /// Updates the internal state for window function
@@ -130,7 +138,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Sets the internal state for window function
     ///
     /// Only used for stateful evaluation
-    fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
+    fn set_state(&mut self, state: Box<dyn PartitionState>) -> Result<()> {
         Err(DataFusionError::NotImplemented(
             "set_state is not implemented for this window function".to_string(),
         ))
