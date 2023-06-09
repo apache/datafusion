@@ -673,6 +673,8 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
             string_concat_internal_coercion(from_type, &LargeUtf8)
         }
+        // TODO: cast between array elements (#6558)
+        (List(_), from_type) | (from_type, List(_)) => Some(from_type.to_owned()),
         _ => None,
     })
 }
@@ -697,6 +699,10 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (LargeUtf8, Utf8) => Some(LargeUtf8),
         (Utf8, LargeUtf8) => Some(LargeUtf8),
         (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
+        // TODO: cast between array elements (#6558)
+        (List(_), List(_)) => Some(lhs_type.clone()),
+        (List(_), _) => Some(lhs_type.clone()),
+        (_, List(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }

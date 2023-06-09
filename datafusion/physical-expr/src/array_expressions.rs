@@ -22,6 +22,7 @@ use arrow::buffer::Buffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field};
 use core::any::type_name;
+use datafusion_common::cast::as_list_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -166,19 +167,17 @@ macro_rules! append {
         let child_array =
             downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let concat = compute::concat(&[child_array, element])?;
+        let cat = compute::concat(&[child_array, element])?;
         let mut scalars = vec![];
-        for i in 0..concat.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                &concat, i,
-            )?));
+        for i in 0..cat.len() {
+            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&cat, i)?));
         }
         scalars
     }};
 }
 
 /// Array_append SQL function
-pub fn array_append(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return Err(DataFusionError::Internal(format!(
             "Array_append function requires two arguments, got {}",
@@ -186,24 +185,10 @@ pub fn array_append(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         )));
     }
 
-    let arr = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
+    let arr = as_list_array(&args[0])?;
+    let element = &args[1];
 
-    let element = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_append function requires scalar element".to_string(),
-            ))
-        }
-    };
-
-    let data_type = arr.data_type();
-    let arrays = match data_type {
-        DataType::List(field) => {
-            match (field.data_type(), element.data_type()) {
+    let scalars = match (arr.value_type(), element.data_type()) {
                 (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => append!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => append!(arr, element, BooleanArray),
@@ -222,16 +207,9 @@ pub fn array_append(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         "Array_append is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
                     )))
                 }
-            }
-        }
-        data_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Array is not type '{data_type:?}'."
-            )))
-        }
     };
 
-    array(arrays.as_slice())
+    Ok(array(scalars.as_slice())?.into_array(1))
 }
 
 macro_rules! prepend {
@@ -239,19 +217,17 @@ macro_rules! prepend {
         let child_array =
             downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let concat = compute::concat(&[element, child_array])?;
+        let cat = compute::concat(&[element, child_array])?;
         let mut scalars = vec![];
-        for i in 0..concat.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                &concat, i,
-            )?));
+        for i in 0..cat.len() {
+            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&cat, i)?));
         }
         scalars
     }};
 }
 
 /// Array_prepend SQL function
-pub fn array_prepend(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return Err(DataFusionError::Internal(format!(
             "Array_prepend function requires two arguments, got {}",
@@ -259,24 +235,10 @@ pub fn array_prepend(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         )));
     }
 
-    let element = match &args[0] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Array_prepend function requires scalar element".to_string(),
-            ))
-        }
-    };
+    let element = &args[0];
+    let arr = as_list_array(&args[1])?;
 
-    let arr = match &args[1] {
-        ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        ColumnarValue::Array(arr) => arr.clone(),
-    };
-
-    let data_type = arr.data_type();
-    let arrays = match data_type {
-        DataType::List(field) => {
-            match (field.data_type(), element.data_type()) {
+    let scalars = match (arr.value_type(), element.data_type()) {
                 (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => prepend!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => prepend!(arr, element, BooleanArray),
@@ -295,57 +257,33 @@ pub fn array_prepend(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         "Array_prepend is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
                     )))
                 }
-            }
-        }
-        data_type => {
-            return Err(DataFusionError::Internal(format!(
-                "Array is not type '{data_type:?}'."
-            )))
-        }
     };
 
-    array(arrays.as_slice())
+    Ok(array(scalars.as_slice())?.into_array(1))
 }
 
 /// Array_concat/Array_cat SQL function
-pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays: Vec<ArrayRef> = args
-        .iter()
-        .map(|x| match x {
-            ColumnarValue::Array(array) => array.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
-        })
-        .collect();
-    let data_type = arrays[0].data_type();
-    match data_type {
-        DataType::List(..) => {
-            let list_arrays =
-                downcast_vec!(arrays, ListArray).collect::<Result<Vec<&ListArray>>>()?;
-            let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-            let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-            let array_data: Vec<_> =
-                list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-            let array_data = array_data.iter().collect();
-            let mut mutable =
-                MutableArrayData::with_capacities(array_data, false, capacity);
+pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let list_arrays =
+        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+    let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
+    let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+    let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+    let array_data = array_data.iter().collect();
+    let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
 
-            for (i, a) in list_arrays.iter().enumerate() {
-                mutable.extend(i, 0, a.len())
-            }
-
-            let builder = mutable.into_builder();
-            let list = builder
-                .len(1)
-                .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-                .build()
-                .unwrap();
-
-            return Ok(ColumnarValue::Array(Arc::new(make_array(list))));
-        }
-        _ => Err(DataFusionError::NotImplemented(format!(
-            "Array is not type '{data_type:?}'."
-        ))),
+    for (i, a) in list_arrays.iter().enumerate() {
+        mutable.extend(i, 0, a.len())
     }
+
+    let builder = mutable.into_builder();
+    let list = builder
+        .len(1)
+        .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
+        .build()
+        .unwrap();
+
+    return Ok(Arc::new(make_array(list)));
 }
 
 macro_rules! fill {
@@ -1096,6 +1034,7 @@ pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
     use super::*;
     use arrow::array::UInt8Array;
+    use arrow::datatypes::Int64Type;
     use datafusion_common::cast::{
         as_generic_string_array, as_list_array, as_uint64_array, as_uint8_array,
     };
@@ -1161,21 +1100,15 @@ mod tests {
     #[test]
     fn test_array_append() {
         // array_append([1, 2, 3], 4) = [1, 2, 3, 4]
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::List(
-                Some(vec![
-                    ScalarValue::Int64(Some(1)),
-                    ScalarValue::Int64(Some(2)),
-                    ScalarValue::Int64(Some(3)),
-                ]),
-                Arc::new(Field::new("item", DataType::Int64, false)),
-            )),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
-        ];
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
+        let int64_array = Arc::new(Int64Array::from(vec![Some(4)])) as ArrayRef;
 
-        let array = array_append(&args)
-            .expect("failed to initialize function array_append")
-            .into_array(1);
+        let args = [list_array, int64_array];
+
+        let array =
+            array_append(&args).expect("failed to initialize function array_append");
         let result =
             as_list_array(&array).expect("failed to initialize function array_append");
 
@@ -1193,21 +1126,15 @@ mod tests {
     #[test]
     fn test_array_prepend() {
         // array_prepend(1, [2, 3, 4]) = [1, 2, 3, 4]
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::List(
-                Some(vec![
-                    ScalarValue::Int64(Some(2)),
-                    ScalarValue::Int64(Some(3)),
-                    ScalarValue::Int64(Some(4)),
-                ]),
-                Arc::new(Field::new("item", DataType::Int64, false)),
-            )),
-        ];
+        let data = vec![Some(vec![Some(2), Some(3), Some(4)])];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
+        let int64_array = Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef;
 
-        let array = array_prepend(&args)
-            .expect("failed to initialize function array_append")
-            .into_array(1);
+        let args = [int64_array, list_array];
+
+        let array =
+            array_prepend(&args).expect("failed to initialize function array_append");
         let result =
             as_list_array(&array).expect("failed to initialize function array_append");
 
@@ -1225,36 +1152,20 @@ mod tests {
     #[test]
     fn test_array_concat() {
         // array_concat([1, 2, 3], [4, 5, 6], [7, 8, 9]) = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::List(
-                Some(vec![
-                    ScalarValue::Int64(Some(1)),
-                    ScalarValue::Int64(Some(2)),
-                    ScalarValue::Int64(Some(3)),
-                ]),
-                Arc::new(Field::new("item", DataType::Int64, false)),
-            )),
-            ColumnarValue::Scalar(ScalarValue::List(
-                Some(vec![
-                    ScalarValue::Int64(Some(4)),
-                    ScalarValue::Int64(Some(5)),
-                    ScalarValue::Int64(Some(6)),
-                ]),
-                Arc::new(Field::new("item", DataType::Int64, false)),
-            )),
-            ColumnarValue::Scalar(ScalarValue::List(
-                Some(vec![
-                    ScalarValue::Int64(Some(7)),
-                    ScalarValue::Int64(Some(8)),
-                    ScalarValue::Int64(Some(9)),
-                ]),
-                Arc::new(Field::new("item", DataType::Int64, false)),
-            )),
-        ];
+        let data = vec![Some(vec![Some(1), Some(2), Some(3)])];
+        let list_array1 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
+        let data = vec![Some(vec![Some(4), Some(5), Some(6)])];
+        let list_array2 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
+        let data = vec![Some(vec![Some(7), Some(8), Some(9)])];
+        let list_array3 =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(data)) as ArrayRef;
 
-        let array = array_concat(&args)
-            .expect("failed to initialize function array_concat")
-            .into_array(1);
+        let args = [list_array1, list_array2, list_array3];
+
+        let array =
+            array_concat(&args).expect("failed to initialize function array_concat");
         let result =
             as_list_array(&array).expect("failed to initialize function array_concat");
 
