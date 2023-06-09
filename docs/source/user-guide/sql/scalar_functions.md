@@ -1380,6 +1380,7 @@ from_unixtime(expression)
 
 - [array_append](#array_append)
 - [array_concat](#array_concat)
+- [array_contains](#array_contains)
 - [array_dims](#array_dims)
 - [array_fill](#array_fill)
 - [array_length](#array_length)
@@ -1421,6 +1422,21 @@ array_concat(array[, ..., array_n])
 - **array**: Array expression to concatenate.
   Can be a constant, column, or function, and any combination of array operators.
 - **array_n**: Subsequent array column or literal array to concatenate.
+
+### `array_contains`
+
+Returns true, if each element of the second array appearing in the first array, otherwise false.
+
+```
+array_contains(first_array, second_array)
+```
+
+#### Arguments
+
+- **first_array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
+- **second_array**: Array expression.
+  Can be a constant, column, or function, and any combination of array operators.
 
 ### `array_dims`
 
