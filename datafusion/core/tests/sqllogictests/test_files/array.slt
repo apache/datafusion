@@ -56,10 +56,10 @@ select make_array()
 []
 
 # array scalar function #7
-query ? rowsort
-select make_array(make_array())
+query ?? rowsort
+select make_array(make_array()), make_array(make_array(make_array()))
 ----
-[[]]
+[[]] [[[]]]
 
 # array_append scalar function #1
 query ? rowsort
@@ -109,6 +109,12 @@ select array_fill(1, make_array(1, 1, 1)), array_fill(2, make_array(2, 2, 2, 2, 
 ----
 [[[1]]] [[[[[2, 2], [2, 2]], [[2, 2], [2, 2]]], [[[2, 2], [2, 2]], [[2, 2], [2, 2]]]], [[[[2, 2], [2, 2]], [[2, 2], [2, 2]]], [[[2, 2], [2, 2]], [[2, 2], [2, 2]]]]]
 
+# array_fill scalar function #3
+query ?
+select array_fill(1, make_array())
+----
+[]
+
 # array_concat scalar function #1
 query ?? rowsort
 select array_concat(make_array(1, 2, 3), make_array(4, 5, 6), make_array(7, 8, 9)), array_concat(make_array([1], [2]), make_array([3], [4]));
@@ -133,13 +139,13 @@ select array_concat(make_array([[1]]), make_array([[2]]));
 ----
 [[[1]], [[2]]]
 
-# array_concat scalar function #6
+# array_concat scalar function #5
 query ? rowsort
 select array_concat(make_array(2, 3), make_array());
 ----
 [2, 3]
 
-# array_concat scalar function #5
+# array_concat scalar function #6
 query ? rowsort
 select array_concat(make_array(), make_array(2, 3));
 ----
@@ -181,6 +187,12 @@ select array_to_string([1, 1, 1], '1'), array_to_string([[1, 2], [3, 4], [5, 6]]
 ----
 11111 1+2+3+4+5+6 3/\3/\3/\3/\3/\3/\3/\3/\3/\3/\3/\3
 
+# array_to_string scalar function #3
+query ?
+select array_to_string(make_array(), ',')
+----
+(empty)
+
 # cardinality scalar function
 query III
 select cardinality(make_array(1, 2, 3, 4, 5)), cardinality([1, 3, 5]), cardinality(make_array('h', 'e', 'l', 'l', 'o'));
@@ -193,7 +205,13 @@ select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3
 ----
 6 18
 
-# trim_array scalar function
+# cardinality scalar function #3
+query II
+select cardinality(make_array()), cardinality(make_array(make_array()))
+----
+0 0
+
+# trim_array scalar function #1
 query ???
 select trim_array(make_array(1, 2, 3, 4, 5), 2), trim_array(['h', 'e', 'l', 'l', 'o'], 3), trim_array([1.0, 2.0, 3.0], 2);
 ----
@@ -210,6 +228,12 @@ query ?
 select array_concat(trim_array(make_array(1, 2, 3), 3), make_array(4, 5), make_array());
 ----
 [4, 5]
+
+# trim_array scalar function #3
+query ??
+select trim_array(make_array(), 0), trim_array(make_array(), 1)
+----
+[] []
 
 # array_length scalar function
 query III rowsort
@@ -235,6 +259,12 @@ select array_length(array_fill(3, [3, 2, 5]), 1), array_length(array_fill(3, [3,
 ----
 3 2 5 NULL
 
+# array_length scalar function #5
+query III rowsort
+select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
+----
+0 0 NULL
+
 # array_dims scalar function
 query III rowsort
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
@@ -247,6 +277,12 @@ select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4])
 ----
 [1, 2, 3] [2, 5, 4]
 
+# array_dims scalar function #3
+query II rowsort
+select array_dims(make_array()), array_dims(make_array(make_array()))
+----
+[0] [1, 0]
+
 # array_ndims scalar function
 query III rowsort
 select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4])), array_ndims(make_array([[[[1], [2]]]]));
@@ -258,3 +294,9 @@ query II rowsort
 select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
 ----
 3 21
+
+# array_ndims scalar function #3
+query II rowsort
+select array_ndims(make_array()), array_ndims(make_array(make_array()))
+----
+1 2

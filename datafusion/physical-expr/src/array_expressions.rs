@@ -425,6 +425,11 @@ pub fn array_fill(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 DataType::UInt16 => fill!(array_values, element, UInt16Array),
                 DataType::UInt32 => fill!(array_values, element, UInt32Array),
                 DataType::UInt64 => fill!(array_values, element, UInt64Array),
+                DataType::Null => {
+                    return Ok(datafusion_expr::ColumnarValue::Scalar(
+                        ScalarValue::new_list(Some(vec![]), DataType::Null),
+                    ))
+                }
                 data_type => {
                     return Err(DataFusionError::Internal(format!(
                         "Array_fill is not implemented for type '{data_type:?}'."
@@ -838,6 +843,7 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::UInt16 => to_string!(arg, arr, &delimeter, UInt16Array),
             DataType::UInt32 => to_string!(arg, arr, &delimeter, UInt32Array),
             DataType::UInt64 => to_string!(arg, arr, &delimeter, UInt64Array),
+            DataType::Null => Ok(arg),
             data_type => Err(DataFusionError::NotImplemented(format!(
                 "Array is not implemented for type '{data_type:?}'."
             ))),
@@ -846,8 +852,13 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let mut arg = String::from("");
     let mut res = compute_array_to_string(&mut arg, arr, delimeter.clone())?.clone();
-    res.truncate(res.len() - delimeter.len());
-    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res))))
+    match res.as_str() {
+        "" => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res)))),
+        _ => {
+            res.truncate(res.len() - delimeter.len());
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res))))
+        }
+    }
 }
 
 /// Trim_array SQL function
