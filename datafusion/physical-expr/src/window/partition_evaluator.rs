@@ -17,7 +17,6 @@
 
 //! Partition evaluation module
 
-use crate::window::window_expr::BuiltinWindowState;
 use crate::window::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
@@ -100,14 +99,6 @@ pub trait PartitionEvaluator: Debug + Send {
         false
     }
 
-    /// Returns the internal state of the window function
-    ///
-    /// Only used for stateful evaluation
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::Default)
-    }
-
     /// Updates the internal state for window function
     ///
     /// Only used for stateful evaluation
@@ -127,13 +118,14 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// Sets the internal state for window function
-    ///
-    /// Only used for stateful evaluation
-    fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "set_state is not implemented for this window function".to_string(),
-        ))
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED
+    /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
+    /// NTH_VALUE we can memoize result.  Once result is calculated it
+    /// will always stay same. Hence, we do not need to keep past data
+    /// as we process the entire dataset. This feature enables us to
+    /// prune rows from table. The default implementation does nothing
+    fn memoize(&mut self, _state: &mut WindowAggState) -> Result<()> {
+        Ok(())
     }
 
     /// Gets the range where the window function result is calculated.

@@ -19,7 +19,7 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, NthValueKind, NthValueState};
+use crate::window::window_expr::{NthValueKind, NthValueState};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
@@ -152,11 +152,6 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::NthValue(self.state.clone()))
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
@@ -169,9 +164,29 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        if let BuiltinWindowState::NthValue(nth_value_state) = state {
-            self.state = nth_value_state.clone()
+    fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
+        let out = &state.out_col;
+        let size = out.len();
+        let (is_prunable, new_prunable) = match self.state.kind {
+            NthValueKind::First => {
+                let n_range =
+                    state.window_frame_range.end - state.window_frame_range.start;
+                (n_range > 0 && size > 0, true)
+            }
+            NthValueKind::Last => (true, false),
+            NthValueKind::Nth(n) => {
+                let n_range =
+                    state.window_frame_range.end - state.window_frame_range.start;
+                (n_range >= (n as usize) && size >= (n as usize), true)
+            }
+        };
+        if is_prunable {
+            if self.state.finalized_result.is_none() && new_prunable {
+                let result = ScalarValue::try_from_array(out, size - 1)?;
+                self.state.finalized_result = Some(result);
+            }
+            state.window_frame_range.start =
+                state.window_frame_range.end.saturating_sub(1);
         }
         Ok(())
     }

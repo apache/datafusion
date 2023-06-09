@@ -24,14 +24,12 @@ use std::sync::Arc;
 use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
-use crate::window::window_expr::{
-    BuiltinWindowState, NthValueKind, NthValueState, WindowFn,
-};
+use crate::window::window_expr::WindowFn;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
-use arrow::array::{new_empty_array, Array, ArrayRef};
+use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
@@ -211,13 +209,7 @@ impl WindowExpr for BuiltInWindowExpr {
 
             state.update(&out_col, partition_batch_state)?;
             if self.window_frame.start_bound.is_unbounded() {
-                let mut evaluator_state = evaluator.state()?;
-                if let BuiltinWindowState::NthValue(nth_value_state) =
-                    &mut evaluator_state
-                {
-                    memoize_nth_value(state, nth_value_state)?;
-                    evaluator.set_state(&evaluator_state)?;
-                }
+                evaluator.memoize(state)?;
             }
         }
         Ok(())
@@ -243,36 +235,4 @@ impl WindowExpr for BuiltInWindowExpr {
             && (!self.expr.uses_window_frame()
                 || !self.window_frame.end_bound.is_unbounded())
     }
-}
-
-// When the window frame has a fixed beginning (e.g UNBOUNDED PRECEDING), for
-// FIRST_VALUE, LAST_VALUE and NTH_VALUE functions: we can memoize result.
-// Once result is calculated it will always stay same. Hence, we do not
-// need to keep past data as we process the entire dataset. This feature
-// enables us to prune rows from  table.
-fn memoize_nth_value(
-    state: &mut WindowAggState,
-    nth_value_state: &mut NthValueState,
-) -> Result<()> {
-    let out = &state.out_col;
-    let size = out.len();
-    let (is_prunable, new_prunable) = match nth_value_state.kind {
-        NthValueKind::First => {
-            let n_range = state.window_frame_range.end - state.window_frame_range.start;
-            (n_range > 0 && size > 0, true)
-        }
-        NthValueKind::Last => (true, false),
-        NthValueKind::Nth(n) => {
-            let n_range = state.window_frame_range.end - state.window_frame_range.start;
-            (n_range >= (n as usize) && size >= (n as usize), true)
-        }
-    };
-    if is_prunable {
-        if nth_value_state.finalized_result.is_none() && new_prunable {
-            let result = ScalarValue::try_from_array(out, size - 1)?;
-            nth_value_state.finalized_result = Some(result);
-        }
-        state.window_frame_range.start = state.window_frame_range.end.saturating_sub(1);
-    }
-    Ok(())
 }

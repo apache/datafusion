@@ -18,7 +18,7 @@
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, NumRowsState};
+use crate::window::window_expr::NumRowsState;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
@@ -76,11 +76,6 @@ pub(crate) struct NumRowsEvaluator {
 }
 
 impl PartitionEvaluator for NumRowsEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::NumRows(self.state.clone()))
-    }
-
     fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
         let start = idx;
         let end = idx + 1;
