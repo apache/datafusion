@@ -828,9 +828,11 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = ctx
-            .runtime_env()
-            .object_store(self.table_paths.get(0).unwrap())?;
+        let store = if let Some(url) = self.table_paths.get(0) {
+            ctx.runtime_env().object_store(url)?
+        } else {
+            return Ok((vec![], Statistics::default()));
+        };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
