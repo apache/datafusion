@@ -437,8 +437,6 @@ pub use datafusion_physical_expr as physical_expr;
 pub use datafusion_row as row;
 pub use datafusion_sql as sql;
 
-pub use common::from_slice;
-
 #[cfg(test)]
 pub mod test;
 pub mod test_util;

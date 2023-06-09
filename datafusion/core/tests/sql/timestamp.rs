@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use datafusion::from_slice::FromSlice;
 use std::ops::Add;
 
 #[tokio::test]
@@ -509,7 +508,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from_slice([10, 20, 30, 40, 50, 60])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
         ],
     )?;
     ctx.register_batch("t1", data).unwrap();

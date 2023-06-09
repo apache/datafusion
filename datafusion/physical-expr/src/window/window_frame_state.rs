@@ -550,14 +550,13 @@ mod tests {
     use crate::window::window_frame_state::WindowFrameStateGroups;
     use arrow::array::{ArrayRef, Float64Array};
     use arrow_schema::SortOptions;
-    use datafusion_common::from_slice::FromSlice;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
     use std::ops::Range;
     use std::sync::Arc;
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
-        let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
+        let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
             5.0, 7.0, 8.0, 8.0, 9., 10., 10., 10., 11.,
         ]))];
         let sort_options = vec![SortOptions {
