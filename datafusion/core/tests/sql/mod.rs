@@ -83,7 +83,6 @@ pub mod arrow_files;
 pub mod create_drop;
 pub mod explain_analyze;
 pub mod expr;
-pub mod functions;
 pub mod group_by;
 pub mod joins;
 pub mod limit;

@@ -480,3 +480,89 @@ SELECT struct(c1,c2,c3,c4,a,b) from simple_struct_test
 
 statement ok
 drop table simple_struct_test
+
+# create aggregate_test_100 table for functions test
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+  c1  VARCHAR NOT NULL,
+  c2  TINYINT NOT NULL,
+  c3  SMALLINT NOT NULL,
+  c4  SMALLINT,
+  c5  INT,
+  c6  BIGINT NOT NULL,
+  c7  SMALLINT NOT NULL,
+  c8  INT NOT NULL,
+  c9  BIGINT UNSIGNED NOT NULL,
+  c10 VARCHAR NOT NULL,
+  c11 FLOAT NOT NULL,
+  c12 DOUBLE NOT NULL,
+  c13 VARCHAR NOT NULL
+)
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+
+# sqrt_f32_vs_f64
+query R
+SELECT avg(sqrt(c11)) FROM aggregate_test_100
+----
+0.658440848589
+
+query R
+SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100
+----
+0.658440848589
+
+query R
+SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100
+----
+0.658440848342
+
+statement ok
+drop table aggregate_test_100
+
+
+# case_sensitive_identifiers_functions
+statement ok
+create table t as values (
+    arrow_cast(2, 'Int8'),
+    arrow_cast(2, 'Int16'),
+    arrow_cast(2, 'Int32'),
+    arrow_cast(2, 'Int64'),
+    arrow_cast(2, 'UInt8'),
+    arrow_cast(2, 'UInt16'),
+    arrow_cast(2, 'UInt32'),
+    arrow_cast(2, 'UInt64'),
+    arrow_cast(2, 'Float32'),
+    arrow_cast(2, 'Float64')
+)
+;
+
+query R
+SELECT sqrt(column1) FROM t
+----
+1.414213562373
+
+query R
+SELECT SQRT(column1) FROM t
+----
+1.414213562373
+
+statement error Error during planning: Invalid function 'SQRT'
+SELECT "SQRT"(column1) FROM t
+
+query R
+SELECT "sqrt"(column1) FROM t
+----
+1.414213562373
+
+# case_builtin_math_expression
+query RRRRRRRRRR
+SELECT sqrt(column1),sqrt(column2),sqrt(column3),sqrt(column4),sqrt(column5),sqrt(column6),sqrt(column7),sqrt(column8),sqrt(column9),sqrt(column10) FROM t
+----
+1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.414213562373 1.4142135 1.414213562373
+
+statement ok
+drop table t
+
