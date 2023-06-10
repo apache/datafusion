@@ -1002,10 +1002,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .index_of_column_by_name(None, &c)?
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
                     if mapping[column_index].is_some() {
-                        return Err(DataFusionError::Plan(format!(
-                            "Column '{}' specified more than once",
-                            c
-                        )));
+                        return Err(DataFusionError::SchemaError(
+                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
+                                name: c,
+                            },
+                        ));
                     } else {
                         mapping[column_index] = Some(i);
                     }
