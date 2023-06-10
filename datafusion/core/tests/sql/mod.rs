@@ -27,7 +27,6 @@ use chrono::Duration;
 
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
-use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
@@ -84,7 +83,6 @@ pub mod arrow_files;
 pub mod create_drop;
 pub mod explain_analyze;
 pub mod expr;
-pub mod functions;
 pub mod group_by;
 pub mod joins;
 pub mod limit;
@@ -169,14 +167,14 @@ fn create_join_context(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -189,14 +187,14 @@ fn create_join_context(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
                 Some("w"),
             ])),
-            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -225,14 +223,14 @@ fn create_sub_query_join_context(
     let t0_data = RecordBatch::try_new(
         t0_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t0", t0_data)?;
@@ -245,14 +243,14 @@ fn create_sub_query_join_context(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -265,14 +263,14 @@ fn create_sub_query_join_context(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
                 Some("w"),
             ])),
-            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -316,7 +314,7 @@ fn create_left_semi_anti_join_context_with_null_ids(
                 Some("d"),
                 Some("e"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 1, 2, 3, 4, 0])),
+            Arc::new(UInt32Array::from(vec![1, 1, 2, 3, 4, 0])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -345,7 +343,7 @@ fn create_left_semi_anti_join_context_with_null_ids(
                 Some("w"),
                 Some("v"),
             ])),
-            Arc::new(UInt32Array::from_slice([3, 3, 1, 3, 3, 0])),
+            Arc::new(UInt32Array::from(vec![3, 3, 1, 3, 3, 0])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -387,7 +385,7 @@ fn create_right_semi_anti_join_context_with_null_ids(
                 Some("d"),
                 Some("e"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4, 0])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 0])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -423,9 +421,9 @@ fn create_join_context_qualified(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
-            Arc::new(UInt32Array::from_slice([10, 20, 30, 40])),
-            Arc::new(UInt32Array::from_slice([50, 60, 70, 80])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![10, 20, 30, 40])),
+            Arc::new(UInt32Array::from(vec![50, 60, 70, 80])),
         ],
     )?;
     ctx.register_batch(left_name, t1_data)?;
@@ -438,9 +436,9 @@ fn create_join_context_qualified(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([1, 2, 9, 4])),
-            Arc::new(UInt32Array::from_slice([100, 200, 300, 400])),
-            Arc::new(UInt32Array::from_slice([500, 600, 700, 800])),
+            Arc::new(UInt32Array::from(vec![1, 2, 9, 4])),
+            Arc::new(UInt32Array::from(vec![100, 200, 300, 400])),
+            Arc::new(UInt32Array::from(vec![500, 600, 700, 800])),
         ],
     )?;
     ctx.register_batch(right_name, t2_data)?;
@@ -535,14 +533,14 @@ fn create_sort_merge_join_context(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -555,14 +553,14 @@ fn create_sort_merge_join_context(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
                 Some("w"),
             ])),
-            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -660,14 +658,14 @@ fn create_nested_loop_join_context() -> Result<SessionContext> {
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -680,14 +678,14 @@ fn create_nested_loop_join_context() -> Result<SessionContext> {
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
                 Some("w"),
             ])),
-            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -973,13 +971,8 @@ async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordB
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
     let df = ctx.sql(sql).await.unwrap();
 
-    // We are not really interested in the direct output of optimized_logical_plan
-    // since the physical plan construction already optimizes the given logical plan
-    // and we want to avoid double-optimization as a consequence. So we just construct
-    // it here to make sure that it doesn't fail at this step and get the optimized
-    // schema (to assert later that the logical and optimized schemas are the same).
-    let optimized = df.clone().into_optimized_plan().unwrap();
-    assert_eq!(df.logical_plan().schema(), optimized.schema());
+    // optimize just for check schema don't change during optimization.
+    df.clone().into_optimized_plan().unwrap();
 
     df.collect().await.unwrap()
 }

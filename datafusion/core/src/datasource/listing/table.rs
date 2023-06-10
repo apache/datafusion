@@ -828,9 +828,11 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = ctx
-            .runtime_env()
-            .object_store(self.table_paths.get(0).unwrap())?;
+        let store = if let Some(url) = self.table_paths.get(0) {
+            ctx.runtime_env().object_store(url)?
+        } else {
+            return Ok((vec![], Statistics::default()));
+        };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
@@ -903,7 +905,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
-    use datafusion_common::from_slice::FromSlice;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::fs::File;
@@ -1527,7 +1528,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         // Filename with extension

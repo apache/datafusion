@@ -22,7 +22,6 @@ pub mod delta;
 mod dfschema;
 pub mod display;
 mod error;
-pub mod from_slice;
 mod join_type;
 pub mod parsers;
 #[cfg(feature = "pyarrow")]

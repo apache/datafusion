@@ -432,13 +432,13 @@ logical_plan
 Sort: t1.c1 ASC NULLS LAST
 --Union
 ----TableScan: t1 projection=[c1]
-----Projection: t2.c1a AS t1.c1
+----Projection: t2.c1a AS c1
 ------TableScan: t2 projection=[c1a]
 physical_plan
 SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 --UnionExec
 ----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], output_ordering=[c1@0 ASC NULLS LAST], has_header=true
-----ProjectionExec: expr=[c1a@0 as t1.c1]
+----ProjectionExec: expr=[c1a@0 as c1]
 ------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1a], output_ordering=[c1a@0 ASC NULLS LAST], has_header=true
 
 statement ok

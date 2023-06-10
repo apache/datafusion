@@ -150,7 +150,7 @@ impl ExternalSorter {
             //
             // The factor of 2 aims to avoid a degenerate case where the
             // memory required for `fetch` is just under the memory available,
-            // causing repeated resorting of data
+            // causing repeated re-sorting of data
             if self.reservation.size() > before / 2
                 || self.reservation.try_grow(size).is_err()
             {

@@ -23,7 +23,6 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::test_util::UnboundedExec;
-use datafusion_common::from_slice::FromSlice;
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalExpr;
@@ -39,7 +38,7 @@ async fn unbounded_repartition() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a2", DataType::UInt32, false)]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
-        vec![Arc::new(UInt32Array::from_slice([1]))],
+        vec![Arc::new(UInt32Array::from(vec![1]))],
     )?;
     let input = Arc::new(UnboundedExec::new(None, batch.clone(), 1));
     let on: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("a2", 0))];
