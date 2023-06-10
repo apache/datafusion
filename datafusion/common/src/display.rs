@@ -93,7 +93,7 @@ impl StringifiedPlan {
         }
     }
 
-    /// returns true if this plan should be displayed. Generally
+    /// Returns true if this plan should be displayed. Generally
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
         match self.plan_type {
