@@ -29,6 +29,7 @@ set datafusion.execution.batch_size = 4096;
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
+
 ####
 # Data Setup
 ####
@@ -48,6 +49,28 @@ AS VALUES
 (22, 'y', 1),
 (44, 'x', 3),
 (55, 'w', 3);
+
+# Left semi anti join
+
+statement ok
+CREATE TABLE lsaj_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+AS VALUES
+(11, 'a', 1),
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4),
+(NULL, 'e', 0);
+
+statement ok
+CREATE TABLE lsaj_t2(t2_id INT UNSIGNED, t2_name VARCHAR, t2_int INT UNSIGNED)
+AS VALUES
+(11, 'z', 3),
+(11, 'z', 3),
+(22, 'y', 1),
+(44, 'x', 3),
+(55, 'w', 3),
+(NULL, 'v', 0);
 
 
 ##########
@@ -880,7 +903,11 @@ set datafusion.optimizer.repartition_joins = false;
 # Reduce left join 1 (to inner join)
 
 query TT
-EXPLAIN select * from join_t1 left join join_t2 on join_t1.t1_id = join_t2.t2_id where join_t2.t2_id < 100
+EXPLAIN
+SELECT *
+FROM join_t1
+LEFT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
+WHERE join_t2.t2_id < 100
 ----
 logical_plan
 Inner Join: join_t1.t1_id = join_t2.t2_id
@@ -1039,9 +1066,23 @@ ORDER BY t1_id
 
 # TODO: sort_merge_join_on_decimal
 
-# TODO: left_semi_join
 
-# TODO: left_semi_join_pushdown
+# TODO: Left semi join
+
+# Left semi join pushdown
+
+query TT
+EXPLAIN
+SELECT lsaj_t1.t1_id, lsaj_t1.t1_name
+FROM lsaj_t1
+LEFT SEMI JOIN lsaj_t2 ON (lsaj_t1.t1_id = lsaj_t2.t2_id and lsaj_t2.t2_int > 1)
+----
+logical_plan
+LeftSemi Join: lsaj_t1.t1_id = lsaj_t2.t2_id
+--TableScan: lsaj_t1 projection=[t1_id, t1_name]
+--Projection: lsaj_t2.t2_id
+----Filter: lsaj_t2.t2_int > UInt32(1)
+------TableScan: lsaj_t2 projection=[t2_id, t2_int]
 
 # TODO: left_anti_join
 
