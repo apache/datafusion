@@ -35,6 +35,9 @@ set datafusion.explain.logical_plan_only = true;
 ####
 
 statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
 CREATE TABLE join_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
 AS VALUES
 (11, 'a', 1),
@@ -72,6 +75,8 @@ AS VALUES
 (55, 'w', 3),
 (NULL, 'v', 0);
 
+statement ok
+set datafusion.execution.target_partitions = 2;
 
 ##########
 ## Joins Tests
@@ -1144,13 +1149,135 @@ ORDER BY t1_id
 33 c
 NULL e
 
-# TODO: error_left_anti_join
+# Error left anti join
+# https://github.com/apache/arrow-datafusion/issues/4366
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query IT
+SELECT t1_id, t1_name
+FROM lsaj_t1
+WHERE NOT EXISTS (SELECT 1 FROM lsaj_t2 WHERE t1_id = t2_id and t1_id > 11)
+ORDER BY t1_id
+----
+11 a
+11 a
+33 c
+NULL e
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query IT
+SELECT t1_id, t1_name
+FROM lsaj_t1
+WHERE NOT EXISTS (SELECT 1 FROM lsaj_t2 WHERE t1_id = t2_id and t1_id > 11)
+ORDER BY t1_id
+----
+11 a
+11 a
+33 c
+NULL e
 
 # TODO: null_aware_left_anti_join
 
 # TODO: right_semi_join
 
-# TODO: join_and_aggregate_on_same_key
+# Join and aggregate on same key
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query TT
+EXPLAIN
+select distinct(join_t1.t1_id)
+from join_t1
+inner join join_t2 on join_t1.t1_id = join_t2.t2_id
+----
+logical_plan
+Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[]]
+--Projection: join_t1.t1_id
+----Inner Join: join_t1.t1_id = join_t2.t2_id
+------TableScan: join_t1 projection=[t1_id]
+------TableScan: join_t2 projection=[t2_id]
+physical_plan
+AggregateExec: mode=Single, gby=[t1_id@0 as t1_id], aggr=[]
+--ProjectionExec: expr=[t1_id@0 as t1_id]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN
+select count(*)
+from (select * from join_t1 inner join join_t2 on join_t1.t1_id = join_t2.t2_id)
+group by t1_id
+----
+logical_plan
+Projection: COUNT(UInt8(1))
+--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[COUNT(UInt8(1))]]
+----Projection: join_t1.t1_id
+------Inner Join: join_t1.t1_id = join_t2.t2_id
+--------TableScan: join_t1 projection=[t1_id]
+--------TableScan: join_t2 projection=[t2_id]
+physical_plan
+ProjectionExec: expr=[COUNT(UInt8(1))@1 as COUNT(UInt8(1))]
+--AggregateExec: mode=Single, gby=[t1_id@0 as t1_id], aggr=[COUNT(UInt8(1))]
+----ProjectionExec: expr=[t1_id@0 as t1_id]
+------CoalesceBatchesExec: target_batch_size=4096
+--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+----------CoalesceBatchesExec: target_batch_size=4096
+------------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+----------CoalesceBatchesExec: target_batch_size=4096
+------------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN
+select count(distinct join_t1.t1_id)
+from join_t1
+inner join join_t2 on join_t1.t1_id = join_t2.t2_id
+----
+logical_plan
+Projection: COUNT(alias1) AS COUNT(DISTINCT join_t1.t1_id)
+--Aggregate: groupBy=[[]], aggr=[[COUNT(alias1)]]
+----Aggregate: groupBy=[[join_t1.t1_id AS alias1]], aggr=[[]]
+------Projection: join_t1.t1_id
+--------Inner Join: join_t1.t1_id = join_t2.t2_id
+----------TableScan: join_t1 projection=[t1_id]
+----------TableScan: join_t2 projection=[t2_id]
+physical_plan
+ProjectionExec: expr=[COUNT(alias1)@0 as COUNT(DISTINCT join_t1.t1_id)]
+--AggregateExec: mode=Final, gby=[], aggr=[COUNT(alias1)]
+----CoalescePartitionsExec
+------AggregateExec: mode=Partial, gby=[], aggr=[COUNT(alias1)]
+--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
+----------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
+------------ProjectionExec: expr=[t1_id@0 as t1_id]
+--------------CoalesceBatchesExec: target_batch_size=4096
+----------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+------------------CoalesceBatchesExec: target_batch_size=4096
+--------------------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[1]
+------------------CoalesceBatchesExec: target_batch_size=4096
+--------------------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
 
 # TODO: reduce_cross_join_with_expr_join_key_all
 
@@ -1220,9 +1347,9 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_3.t2_id AS Int64) * Int64(2)
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_5.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_3
+--SubqueryAlias: __correlated_sq_5
 ----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
 ------TableScan: join_t2 projection=[t2_id]
 
@@ -1249,9 +1376,9 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_5.t2_id AS Int64) * Int64(2)
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_7.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_5
+--SubqueryAlias: __correlated_sq_7
 ----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
 ------TableScan: join_t2 projection=[t2_id]
 
