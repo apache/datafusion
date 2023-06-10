@@ -40,8 +40,10 @@ use datafusion_common::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::Arc;
+
+// backwards compatible
+pub use datafusion_common::{JoinConstraint, JoinType};
 
 use super::DdlStatement;
 
@@ -1126,79 +1128,6 @@ impl ToStringifiedPlan for LogicalPlan {
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan {
         StringifiedPlan::new(plan_type, self.display_indent().to_string())
     }
-}
-
-/// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinType {
-    /// Inner Join
-    Inner,
-    /// Left Join
-    Left,
-    /// Right Join
-    Right,
-    /// Full Join
-    Full,
-    /// Left Semi Join
-    LeftSemi,
-    /// Right Semi Join
-    RightSemi,
-    /// Left Anti Join
-    LeftAnti,
-    /// Right Anti Join
-    RightAnti,
-}
-
-impl JoinType {
-    pub fn is_outer(self) -> bool {
-        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
-    }
-}
-
-impl Display for JoinType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let join_type = match self {
-            JoinType::Inner => "Inner",
-            JoinType::Left => "Left",
-            JoinType::Right => "Right",
-            JoinType::Full => "Full",
-            JoinType::LeftSemi => "LeftSemi",
-            JoinType::RightSemi => "RightSemi",
-            JoinType::LeftAnti => "LeftAnti",
-            JoinType::RightAnti => "RightAnti",
-        };
-        write!(f, "{join_type}")
-    }
-}
-
-impl FromStr for JoinType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "INNER" => Ok(JoinType::Inner),
-            "LEFT" => Ok(JoinType::Left),
-            "RIGHT" => Ok(JoinType::Right),
-            "FULL" => Ok(JoinType::Full),
-            "LEFTSEMI" => Ok(JoinType::LeftSemi),
-            "RIGHTSEMI" => Ok(JoinType::RightSemi),
-            "LEFTANTI" => Ok(JoinType::LeftAnti),
-            "RIGHTANTI" => Ok(JoinType::RightAnti),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "The join type {s} does not exist or is not implemented"
-            ))),
-        }
-    }
-}
-
-/// Join constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinConstraint {
-    /// Join ON
-    On,
-    /// Join USING
-    Using,
 }
 
 /// Produces no rows: An empty relation with an empty schema

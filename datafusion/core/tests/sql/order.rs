@@ -102,7 +102,7 @@ async fn sort_with_duplicate_sort_exprs() -> Result<()> {
         t1_schema.clone(),
         vec![
             Arc::new(Int32Array::from(vec![2, 4, 9, 3, 4])),
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d", "e"])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;

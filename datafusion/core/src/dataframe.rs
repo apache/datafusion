@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use datafusion_common::{DataFusionError, SchemaError};
 use parquet::file::properties::WriterProperties;
 
-use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
@@ -38,6 +37,7 @@ use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
+use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::datasource::{provider_as_source, MemTable, TableProvider};
 use crate::error::Result;
 use crate::execution::{
@@ -48,7 +48,6 @@ use crate::logical_expr::{
     col, utils::find_window_exprs, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning, TableType,
 };
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
@@ -411,7 +410,7 @@ impl DataFrame {
         ];
 
         // first column with function names
-        let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from_slice(
+        let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from(
             supported_describe_functions.clone(),
         ))];
         for field in original_schema_fields {
@@ -435,7 +434,7 @@ impl DataFrame {
                                     cast(column, &DataType::Utf8)?
                                 }
                             }
-                            _ => Arc::new(StringArray::from_slice(["null"])),
+                            _ => Arc::new(StringArray::from(vec!["null"])),
                         }
                     }
                     //Handling error when only boolean/binary column, and in other cases
@@ -446,7 +445,7 @@ impl DataFrame {
                                             or aggregate expression",
                         ) =>
                     {
-                        Arc::new(StringArray::from_slice(["null"]))
+                        Arc::new(StringArray::from(vec!["null"]))
                     }
                     Err(other_err) => {
                         panic!("{other_err}")

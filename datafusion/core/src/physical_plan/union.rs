@@ -30,7 +30,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{DFSchemaRef, DataFusionError};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
 
@@ -41,10 +41,9 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::physical_plan::common::get_meet_of_orderings;
-use crate::{
-    error::Result,
-    physical_plan::{expressions, metrics::BaselineMetrics},
-};
+use crate::physical_plan::stream::ObservedStream;
+use crate::physical_plan::{expressions, metrics::BaselineMetrics};
+use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use tokio::macros::support::thread_rng_n;
 
@@ -243,7 +242,7 @@ impl ExecutionPlan for UnionExec {
 
         warn!("Error in Union: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in Union"
         )))
     }
@@ -417,7 +416,7 @@ impl ExecutionPlan for InterleaveExec {
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in InterleaveExec"
         )))
     }
@@ -557,40 +556,6 @@ impl Stream for CombinedRecordBatchStream {
         } else {
             Pending
         }
-    }
-}
-
-/// Stream wrapper that records `BaselineMetrics` for a particular
-/// partition
-struct ObservedStream {
-    inner: SendableRecordBatchStream,
-    baseline_metrics: BaselineMetrics,
-}
-
-impl ObservedStream {
-    fn new(inner: SendableRecordBatchStream, baseline_metrics: BaselineMetrics) -> Self {
-        Self {
-            inner,
-            baseline_metrics,
-        }
-    }
-}
-
-impl RecordBatchStream for ObservedStream {
-    fn schema(&self) -> arrow::datatypes::SchemaRef {
-        self.inner.schema()
-    }
-}
-
-impl futures::Stream for ObservedStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let poll = self.inner.poll_next_unpin(cx);
-        self.baseline_metrics.record_poll(poll)
     }
 }
 

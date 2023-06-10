@@ -16,10 +16,10 @@
 // under the License.
 
 //! Execution plan for reading Arrow files
-use crate::error::Result;
-use crate::physical_plan::file_format::{
+use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
 };
+use crate::error::Result;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,

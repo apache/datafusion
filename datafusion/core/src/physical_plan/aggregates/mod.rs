@@ -1182,7 +1182,6 @@ fn evaluate_group_by(
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
         get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
         PhysicalGroupBy,
@@ -1201,8 +1200,8 @@ mod tests {
         lit, ApproxDistinct, Column, Count, FirstValue, Median,
     };
     use datafusion_physical_expr::{
-        AggregateExpr, EquivalenceProperties, OrderedColumn,
-        OrderingEquivalenceProperties, PhysicalExpr, PhysicalSortExpr,
+        AggregateExpr, EquivalenceProperties, OrderingEquivalenceProperties,
+        PhysicalExpr, PhysicalSortExpr,
     };
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -1320,16 +1319,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from_slice([2, 3, 4, 4])),
-                        Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
+                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from_slice([2, 3, 3, 4])),
-                        Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
+                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
@@ -1860,8 +1859,14 @@ mod tests {
         eq_properties.add_equal_conditions((&col_a, &col_b));
         let mut ordering_eq_properties = OrderingEquivalenceProperties::new(test_schema);
         ordering_eq_properties.add_equal_conditions((
-            &vec![OrderedColumn::new(col_a.clone(), options1)],
-            &vec![OrderedColumn::new(col_c.clone(), options2)],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_a.clone()) as _,
+                options: options1,
+            }],
+            &vec![PhysicalSortExpr {
+                expr: Arc::new(col_c.clone()) as _,
+                options: options2,
+            }],
         ));
         let mut order_by_exprs = vec![
             None,

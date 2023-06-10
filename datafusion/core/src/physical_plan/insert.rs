@@ -21,13 +21,13 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use core::fmt;
+use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::StreamExt;
 use std::any::Any;
@@ -54,7 +54,11 @@ pub trait DataSink: Display + Debug + Send + Sync {
     /// This method will be called exactly once during each DML
     /// statement. Thus prior to return, the sink should do any commit
     /// or rollback required.
-    async fn write_all(&self, data: SendableRecordBatchStream) -> Result<u64>;
+    async fn write_all(
+        &self,
+        data: SendableRecordBatchStream,
+        context: &Arc<TaskContext>,
+    ) -> Result<u64>;
 }
 
 /// Execution plan for writing record batches to a [`DataSink`]
@@ -163,12 +167,12 @@ impl ExecutionPlan for InsertExec {
             )));
         }
 
-        let data = self.input.execute(0, context)?;
+        let data = self.input.execute(0, context.clone())?;
         let schema = self.schema.clone();
         let sink = self.sink.clone();
 
         let stream = futures::stream::once(async move {
-            sink.write_all(data).await.map(make_count_batch)
+            sink.write_all(data, &context).await.map(make_count_batch)
         })
         .boxed();
 
@@ -202,7 +206,7 @@ impl ExecutionPlan for InsertExec {
 /// +-------+,
 /// ```
 fn make_count_batch(count: u64) -> RecordBatch {
-    let array = Arc::new(UInt64Array::from_iter_values(vec![count])) as ArrayRef;
+    let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
 
     RecordBatch::try_from_iter_with_nullable(vec![("count", array, false)]).unwrap()
 }

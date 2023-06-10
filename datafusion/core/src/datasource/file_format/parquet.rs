@@ -42,11 +42,11 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::DataType;
 use crate::config::ConfigOptions;
 
+use crate::datasource::physical_plan::{ParquetExec, SchemaAdapter};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
 /// The default file extension of parquet files
@@ -379,7 +379,7 @@ fn summarize_min_max(
 /// This component is a subject to **change** in near future and is exposed for low level integrations
 /// through [`ParquetFileReaderFactory`].
 ///
-/// [`ParquetFileReaderFactory`]: crate::physical_plan::file_format::ParquetFileReaderFactory
+/// [`ParquetFileReaderFactory`]: crate::datasource::physical_plan::ParquetFileReaderFactory
 pub async fn fetch_parquet_metadata(
     store: &dyn ObjectStore,
     meta: &ObjectMeta,
@@ -599,7 +599,7 @@ pub(crate) mod test_util {
     }
 
     //// write batches chunk_size rows at a time
-    fn write_in_chunks<W: std::io::Write>(
+    fn write_in_chunks<W: std::io::Write + Send>(
         writer: &mut ArrowWriter<W>,
         batch: &RecordBatch,
         chunk_size: usize,
@@ -618,13 +618,12 @@ mod tests {
     use super::super::test_util::scan_format;
     use crate::physical_plan::collect;
     use std::fmt::{Display, Formatter};
-    use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
-    use crate::physical_plan::file_format::get_scan_files;
+    use crate::datasource::physical_plan::get_scan_files;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
@@ -641,7 +640,7 @@ mod tests {
     use log::error;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
-    use object_store::{GetResult, ListResult, MultipartId};
+    use object_store::{GetOptions, GetResult, ListResult, MultipartId};
     use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
@@ -739,17 +738,13 @@ mod tests {
             Err(object_store::Error::NotImplemented)
         }
 
-        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
-            Err(object_store::Error::NotImplemented)
-        }
-
-        async fn get_range(
+        async fn get_opts(
             &self,
             location: &Path,
-            range: Range<usize>,
-        ) -> object_store::Result<Bytes> {
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
-            self.inner.get_range(location, range).await
+            self.inner.get_opts(location, options).await
         }
 
         async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {

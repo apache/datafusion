@@ -38,9 +38,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::{Stream, StreamExt};
 
-use crate::error::DataFusionError;
-use crate::error::Result;
-use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
@@ -52,6 +49,9 @@ use crate::physical_plan::{
     metrics, DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan,
     Partitioning, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::DataFusionError;
+use datafusion_common::JoinType;
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 
@@ -1395,8 +1395,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use crate::common::assert_contains;
-    use crate::error::Result;
-    use crate::logical_expr::JoinType;
     use crate::physical_plan::expressions::Column;
     use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::joins::SortMergeJoinExec;
@@ -1405,6 +1403,8 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test::{build_table_i32, columns};
     use crate::{assert_batches_eq, assert_batches_sorted_eq};
+    use datafusion_common::JoinType;
+    use datafusion_common::Result;
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
     fn build_table(
