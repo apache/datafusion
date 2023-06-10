@@ -1084,7 +1084,65 @@ LeftSemi Join: lsaj_t1.t1_id = lsaj_t2.t2_id
 ----Filter: lsaj_t2.t2_int > UInt32(1)
 ------TableScan: lsaj_t2 projection=[t2_id, t2_int]
 
-# TODO: left_anti_join
+# Left anti join
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query IT
+SELECT t1_id, t1_name
+FROM lsaj_t1
+WHERE NOT EXISTS (SELECT 1 FROM lsaj_t2 WHERE t1_id = t2_id)
+ORDER BY t1_id
+----
+33 c
+NULL e
+
+query I
+SELECT t1_id
+FROM lsaj_t1
+EXCEPT SELECT t2_id FROM lsaj_t2
+ORDER BY t1_id
+----
+33
+
+query IT
+SELECT t1_id, t1_name
+FROM lsaj_t1
+LEFT ANTI JOIN lsaj_t2 ON (t1_id = t2_id)
+ORDER BY t1_id
+----
+33 c
+NULL e
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query IT
+SELECT t1_id, t1_name
+FROM lsaj_t1
+WHERE NOT EXISTS (SELECT 1 FROM lsaj_t2 WHERE t1_id = t2_id)
+ORDER BY t1_id
+----
+33 c
+NULL e
+
+query I
+SELECT t1_id
+FROM lsaj_t1
+EXCEPT SELECT t2_id FROM lsaj_t2
+ORDER BY t1_id
+----
+33
+
+query IT
+SELECT t1_id, t1_name
+FROM lsaj_t1
+LEFT ANTI JOIN lsaj_t2 ON (t1_id = t2_id)
+ORDER BY t1_id
+----
+33 c
+NULL e
 
 # TODO: error_left_anti_join
 
@@ -1162,9 +1220,9 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_3.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_1
+--SubqueryAlias: __correlated_sq_3
 ----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
 ------TableScan: join_t2 projection=[t2_id]
 
@@ -1191,9 +1249,9 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_3.t2_id AS Int64) * Int64(2)
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_5.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_3
+--SubqueryAlias: __correlated_sq_5
 ----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
 ------TableScan: join_t2 projection=[t2_id]
 

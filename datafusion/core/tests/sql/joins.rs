@@ -575,56 +575,6 @@ async fn left_semi_join() -> Result<()> {
 }
 
 #[tokio::test]
-async fn left_anti_join() -> Result<()> {
-    let test_repartition_joins = vec![true, false];
-    for repartition_joins in test_repartition_joins {
-        let ctx = create_left_semi_anti_join_context_with_null_ids(
-            "t1_id",
-            "t2_id",
-            repartition_joins,
-        )
-        .unwrap();
-
-        let sql = "SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id) ORDER BY t1_id";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+-------+---------+",
-            "| t1_id | t1_name |",
-            "+-------+---------+",
-            "| 33    | c       |",
-            "|       | e       |",
-            "+-------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-
-        let sql = "SELECT t1_id FROM t1 EXCEPT SELECT t2_id FROM t2 ORDER BY t1_id";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+-------+",
-            "| t1_id |",
-            "+-------+",
-            "| 33    |",
-            "+-------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-
-        let sql = "SELECT t1_id, t1_name FROM t1 LEFT ANTI JOIN t2 ON (t1_id = t2_id) ORDER BY t1_id";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+-------+---------+",
-            "| t1_id | t1_name |",
-            "+-------+---------+",
-            "| 33    | c       |",
-            "|       | e       |",
-            "+-------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn error_left_anti_join() -> Result<()> {
     // https://github.com/apache/arrow-datafusion/issues/4366
     let test_repartition_joins = vec![true, false];
