@@ -637,9 +637,16 @@ pub fn to_substrait_rex(
                 .collect::<Result<Vec<Expression>>>()?;
             let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
 
+            if substrait_list.is_empty() {
+                return Err(DataFusionError::Internal(
+                    "Empty list in IN expression".to_string(),
+                ));
+            }
+
+            let first_val = substrait_list.first().unwrap();
             let init_val = make_binary_op_scalar_func(
                 &substrait_expr,
-                &substrait_list[0],
+                first_val,
                 op_for_list_item,
                 extension_info,
             );
