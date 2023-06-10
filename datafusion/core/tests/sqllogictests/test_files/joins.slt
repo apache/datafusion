@@ -1279,11 +1279,98 @@ ProjectionExec: expr=[COUNT(alias1)@0 as COUNT(DISTINCT join_t1.t1_id)]
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
-# TODO: reduce_cross_join_with_expr_join_key_all
+# Reduce cross join with expr join key all (to inner join)
 
-# TODO: reduce_cross_join_with_cast_expr_join_key
+query TT
+EXPLAIN
+select *
+from join_t1
+cross join join_t2
+where join_t1.t1_id + 12 = join_t2.t2_id + 1
+----
+logical_plan
+Inner Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = CAST(join_t2.t2_id AS Int64) + Int64(1)
+--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
-# TODO: reduce_cross_join_with_wildcard_and_expr
+# Reduce cross join with cast expr join key (to inner join)
+
+query TT
+EXPLAIN
+select join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+from join_t1
+cross join join_t2 where join_t1.t1_id + 11 = cast(join_t2.t2_id as BIGINT)
+----
+logical_plan
+Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+--Inner Join: CAST(join_t1.t1_id AS Int64) + Int64(11) = CAST(join_t2.t2_id AS Int64)
+----TableScan: join_t1 projection=[t1_id, t1_name]
+----TableScan: join_t2 projection=[t2_id]
+
+# Reduce cross join with wildcard and expr (to inner join)
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query TT
+EXPLAIN
+select *, join_t1.t1_id + 11
+from join_t1, join_t2
+where join_t1.t1_id + 11 = join_t2.t2_id
+----
+logical_plan
+Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int, join_t2.t2_id, join_t2.t2_name, join_t2.t2_int, CAST(join_t1.t1_id AS Int64) + Int64(11)
+--Inner Join: CAST(join_t1.t1_id AS Int64) + Int64(11) = CAST(join_t2.t2_id AS Int64)
+----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+physical_plan
+ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+--ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: "join_t1.t1_id + Int64(11)", index: 3 }, Column { name: "CAST(join_t2.t2_id AS Int64)", index: 3 })]
+--------CoalescePartitionsExec
+----------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]
+----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query TT
+EXPLAIN
+select *, join_t1.t1_id + 11
+from join_t1, join_t2
+where join_t1.t1_id + 11 = join_t2.t2_id
+----
+logical_plan
+Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int, join_t2.t2_id, join_t2.t2_name, join_t2.t2_int, CAST(join_t1.t1_id AS Int64) + Int64(11)
+--Inner Join: CAST(join_t1.t1_id AS Int64) + Int64(11) = CAST(join_t2.t2_id AS Int64)
+----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
+physical_plan
+ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+--ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "join_t1.t1_id + Int64(11)", index: 3 }, Column { name: "CAST(join_t2.t2_id AS Int64)", index: 3 })]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "join_t1.t1_id + Int64(11)", index: 3 }], 2), input_partitions=2
+------------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "CAST(join_t2.t2_id AS Int64)", index: 3 }], 2), input_partitions=2
+------------ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
 
 # TODO: both_side_expr_key_inner_join
 
