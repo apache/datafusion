@@ -234,3 +234,36 @@ select count(*) from table_without_values;
 
 statement ok
 drop table table_without_values;
+
+
+# test insert with column names
+statement ok
+CREATE TABLE table_without_values(field1 BIGINT NULL, field2 BIGINT NULL);
+
+query II
+insert into table_without_values(field1, field2) values(1, 2);
+----
+1
+
+query II
+insert into table_without_values(field2, field1) values(4, 3);
+----
+1
+
+statement error Error during planning: Column 'field1' specified more than once
+insert into table_without_values(field1, field1) values(5, 6);
+
+statement error Error during planning: Column count doesn't match insert query!
+insert into table_without_values(field1) values(7, 8);
+
+statement error Error during planning: Inserting query must have the same schema with the table.
+insert into table_without_values(field1) values(9);
+
+query II rowsort
+select * from table_without_values;
+----
+1 2
+3 4
+
+statement ok
+drop table table_without_values;
