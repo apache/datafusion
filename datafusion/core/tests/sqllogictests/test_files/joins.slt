@@ -1307,10 +1307,15 @@ Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
 ----TableScan: join_t1 projection=[t1_id, t1_name]
 ----TableScan: join_t2 projection=[t2_id]
 
-# Reduce cross join with wildcard and expr (to inner join)
+
+#####
+# Config setup
+#####
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
+# Reduce cross join with wildcard and expr (to inner join)
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
@@ -1369,10 +1374,72 @@ ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int
 --------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------MemoryExec: partitions=1, partition_sizes=[1]
 
+# Both side expr key inner join
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id + cast(12 as INT UNSIGNED) = join_t2.t2_id + cast(1 as INT UNSIGNED)
+----
+logical_plan
+Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+--Inner Join: join_t1.t1_id + UInt32(12) = join_t2.t2_id + UInt32(1)
+----TableScan: join_t1 projection=[t1_id, t1_name]
+----TableScan: join_t2 projection=[t2_id]
+physical_plan
+ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]
+--ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: "join_t1.t1_id + UInt32(12)", index: 2 }, Column { name: "join_t2.t2_id + UInt32(1)", index: 1 })]
+--------CoalescePartitionsExec
+----------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as join_t1.t1_id + UInt32(12)]
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as join_t2.t2_id + UInt32(1)]
+----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id + cast(12 as INT UNSIGNED) = join_t2.t2_id + cast(1 as INT UNSIGNED)
+----
+logical_plan
+Projection: join_t1.t1_id, join_t2.t2_id, join_t1.t1_name
+--Inner Join: join_t1.t1_id + UInt32(12) = join_t2.t2_id + UInt32(1)
+----TableScan: join_t1 projection=[t1_id, t1_name]
+----TableScan: join_t2 projection=[t2_id]
+physical_plan
+ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]
+--ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "join_t1.t1_id + UInt32(12)", index: 2 }, Column { name: "join_t2.t2_id + UInt32(1)", index: 1 })]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "join_t1.t1_id + UInt32(12)", index: 2 }], 2), input_partitions=2
+------------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as join_t1.t1_id + UInt32(12)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "join_t2.t2_id + UInt32(1)", index: 1 }], 2), input_partitions=2
+------------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as join_t2.t2_id + UInt32(1)]
+--------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------------MemoryExec: partitions=1, partition_sizes=[1]
+
+#####
+# Config teardown
+#####
+
 statement ok
 set datafusion.explain.logical_plan_only = true;
 
-# TODO: both_side_expr_key_inner_join
 
 # TODO: left_side_expr_key_inner_join
 

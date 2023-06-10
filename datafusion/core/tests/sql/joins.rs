@@ -702,64 +702,6 @@ async fn right_semi_join() -> Result<()> {
 }
 
 #[tokio::test]
-async fn both_side_expr_key_inner_join() -> Result<()> {
-    let test_repartition_joins = vec![true, false];
-    for repartition_joins in test_repartition_joins {
-        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
-
-        let sql = "SELECT t1.t1_id, t2.t2_id, t1.t1_name \
-                         FROM t1 \
-                         INNER JOIN t2 \
-                         ON t1.t1_id + cast(12 as INT UNSIGNED)  = t2.t2_id + cast(1 as INT UNSIGNED)";
-
-        let msg = format!("Creating logical plan for '{sql}'");
-        let dataframe = ctx.sql(sql).await.expect(&msg);
-        let physical_plan = dataframe.create_physical_plan().await?;
-
-        let expected = if repartition_joins {
-            vec![
-                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
-                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2), input_partitions=2",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-                "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2), input_partitions=2",
-                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "                MemoryExec: partitions=1, partition_sizes=[1]",
-            ]
-        } else {
-            vec![
-                "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
-                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
-                "        CoalescePartitionsExec",
-                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "              MemoryExec: partitions=1, partition_sizes=[1]",
-                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
-                "            MemoryExec: partitions=1, partition_sizes=[1]",
-            ]
-        };
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        assert_eq!(
-            expected, actual,
-            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-        );
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn left_side_expr_key_inner_join() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
