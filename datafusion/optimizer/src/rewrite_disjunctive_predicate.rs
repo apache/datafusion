@@ -119,7 +119,7 @@ pub struct RewriteDisjunctivePredicate;
 
 impl RewriteDisjunctivePredicate {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 

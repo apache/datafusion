@@ -40,7 +40,7 @@
 //! # Examples
 //!
 //! The main entry point for interacting with DataFusion is the
-//! [`SessionContext`].
+//! [`SessionContext`]. [`Expr`]s represent expressions such as `a + b`.
 //!
 //! [`SessionContext`]: execution::context::SessionContext
 //!
@@ -437,8 +437,6 @@ pub use datafusion_optimizer as optimizer;
 pub use datafusion_physical_expr as physical_expr;
 pub use datafusion_row as row;
 pub use datafusion_sql as sql;
-
-pub use common::from_slice;
 
 #[cfg(test)]
 pub mod test;
