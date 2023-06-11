@@ -229,7 +229,7 @@ select array_concat(trim_array(make_array(1, 2, 3), 3), make_array(4, 5), make_a
 ----
 [4, 5]
 
-# trim_array scalar function #3
+# trim_array scalar function #4
 query ??
 select trim_array(make_array(), 0), trim_array(make_array(), 1)
 ----
