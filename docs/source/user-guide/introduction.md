@@ -22,8 +22,18 @@
 DataFusion is a very fast, extensible query engine for building
 high-quality data-centric systems in [Rust](http://rustlang.org),
 using the [Apache Arrow](https://arrow.apache.org) in-memory format.
+DataFusion is part of the [Apache Arrow](https://arrow.apache.org/)
+project.
 
 DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+
+## Project Goals
+
+DataFusion's goal is to be the query engine of choice for new, fast
+data centric systems such as databases, dataframe libraries, machine
+learning and streaming applications by leveraging the unique features
+of [Rust](https://www.rust-lang.org/) and [Apache
+Arrow](https://arrow.apache.org/).
 
 ## Features
 
@@ -40,18 +50,27 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
   [welcoming community](https://arrow.apache.org/datafusion/contributor-guide/communication.html).
 - A state of the art query optimizer with projection and filter pushdown, sort aware optimizations,
   automatic join reordering, expression coercion, and more.
-- Permissive Apache 2.0 License, Apache Software Foundation governance
-- Written in [Rust](https://www.rust-lang.org/), a modern system language with development
-  productivity similar to Java or Golang, the performance of C++, and
-  [loved by programmers everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
-- Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion
-  with other projects, and to pass plans across language boundaries.
+- Permissive Apache 2.0 License, predictable and well understood [Apache Software Foundation](https://www.apache.org/) governance.
+- Implementation in [Rust](https://www.rust-lang.org/), a modern
+  system language with development productivity similar to Java or
+  Golang, the performance of C++, and [loved by programmers
+  everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
+- Support for [Substrait](https://substrait.io/) formatted query plans,
+  making it easier to integrate DataFusion with other
+  projects, and to pass plans across language boundaries.
 
 ## Use Cases
 
 DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
-building new systems. Here are some examples of systems built using DataFusion:
+building new systems.
+
+While most current usecases are "analytic" or (focusing on data
+throughput) some components of DataFusion such as the plan
+representations, are suitable for "streaming" and "transaction" style
+systems (focused on latency).
+
+Here are some examples of systems built using DataFusion:
 
 - Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]

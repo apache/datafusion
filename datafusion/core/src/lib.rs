@@ -132,7 +132,13 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion supports extension at many points:
+//! DataFusion is designed with a mind towards being a disaggregated
+//! query processing engine. Developers shoudl be able to mix and
+//! extend the part of it they need for their usecase. For example,
+//! just the [`ExecutionEngine`] runtime, or just the [`SqlToRel`] SQL
+//! planner and optimizer.
+//!
+//! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
