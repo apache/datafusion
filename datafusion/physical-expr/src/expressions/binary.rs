@@ -1060,8 +1060,7 @@ fn to_result_type_array(
                     Ok(cast(&array, result_type)?)
                 } else {
                     Err(DataFusionError::Internal(format!(
-                            "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
-                            value_type, result_type, op
+                            "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
                         )))
                 }
             }

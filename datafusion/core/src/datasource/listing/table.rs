@@ -133,8 +133,8 @@ impl ListingTableConfig {
             .map_err(|_| DataFusionError::Internal(err_msg))?;
 
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::ARROW => Arc::new(ArrowFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::ARROW => Arc::new(ArrowFormat),
+            FileType::AVRO => Arc::new(AvroFormat),
             FileType::CSV => Arc::new(
                 CsvFormat::default().with_file_compression_type(file_compression_type),
             ),
