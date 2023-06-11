@@ -244,13 +244,13 @@ mod tests {
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
-        let plan = ctx.state().create_logical_plan(&sql).await?;
+        let plan = ctx.state().create_logical_plan(sql).await?;
 
         match &plan {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
                 create_external_table(&ctx, cmd).await?;
             }
-            _ => assert!(false),
+            _ => unreachable!(),
         };
 
         ctx.runtime_env()
