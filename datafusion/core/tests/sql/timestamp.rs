@@ -565,7 +565,6 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -576,7 +575,7 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let res1 = actual[0][0].as_str();
     let res2 = actual[0][1].as_str();
 
-    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
     let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
     let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
 
