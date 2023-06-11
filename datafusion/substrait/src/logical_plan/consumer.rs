@@ -365,7 +365,7 @@ pub async fn from_substrait_rel(
                                 )),
                             },
                             _ => Err(DataFusionError::Internal(
-                                "invalid join condition expresssion".to_string(),
+                                "invalid join condition expression".to_string(),
                             )),
                         }
                     }
