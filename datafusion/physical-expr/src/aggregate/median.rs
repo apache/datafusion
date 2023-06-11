@@ -196,6 +196,9 @@ impl Accumulator for MedianAccumulator {
                 ScalarValue::UInt64(Some(v)) => ScalarValue::UInt64(Some(v / 2)),
                 ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(v / 2.0)),
                 ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(v / 2.0)),
+                ScalarValue::Decimal128(Some(v), p, s) => {
+                    ScalarValue::Decimal128(Some(v / 2), p, s)
+                }
                 v => {
                     return Err(DataFusionError::Internal(format!(
                         "Unsupported type in MedianAccumulator: {v:?}"
@@ -229,4 +232,141 @@ fn scalar_at_index(
         .try_into()
         .expect("Convert uint32 to usize");
     ScalarValue::try_from_array(array, array_index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
+    use crate::generic_test_op;
+    use arrow::record_batch::RecordBatch;
+    use arrow::{array::*, datatypes::*};
+    use datafusion_common::Result;
+
+    #[test]
+    fn median_decimal() -> Result<()> {
+        // test median
+        let array: ArrayRef = Arc::new(
+            (1..7)
+                .map(Some)
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(10, 4)?,
+        );
+
+        generic_test_op!(
+            array,
+            DataType::Decimal128(10, 4),
+            Median,
+            ScalarValue::Decimal128(Some(3), 10, 4)
+        )
+    }
+
+    #[test]
+    fn median_decimal_with_nulls() -> Result<()> {
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(10, 4)?,
+        );
+        generic_test_op!(
+            array,
+            DataType::Decimal128(10, 4),
+            Median,
+            ScalarValue::Decimal128(Some(3), 10, 4)
+        )
+    }
+
+    #[test]
+    fn median_decimal_all_nulls() -> Result<()> {
+        // test median
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat::<Option<i128>>(None)
+                .take(6)
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(10, 4)?,
+        );
+        generic_test_op!(
+            array,
+            DataType::Decimal128(10, 4),
+            Median,
+            ScalarValue::Decimal128(None, 10, 4)
+        )
+    }
+
+    #[test]
+    fn median_i32_odd() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3_i32))
+    }
+
+    #[test]
+    fn median_i32_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3_i32))
+    }
+
+    #[test]
+    fn median_i32_with_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::from(3i32))
+    }
+
+    #[test]
+    fn median_i32_all_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        generic_test_op!(a, DataType::Int32, Median, ScalarValue::Int32(None))
+    }
+
+    #[test]
+    fn median_u32_odd() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        generic_test_op!(a, DataType::UInt32, Median, ScalarValue::from(3u32))
+    }
+
+    #[test]
+    fn median_u32_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(UInt32Array::from(vec![
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32, 6_u32,
+        ]));
+        generic_test_op!(a, DataType::UInt32, Median, ScalarValue::from(3u32))
+    }
+
+    #[test]
+    fn median_f32_odd() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        generic_test_op!(a, DataType::Float32, Median, ScalarValue::from(3_f32))
+    }
+
+    #[test]
+    fn median_f32_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float32Array::from(vec![
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32, 6_f32,
+        ]));
+        generic_test_op!(a, DataType::Float32, Median, ScalarValue::from(3.5_f32))
+    }
+
+    #[test]
+    fn median_f64_odd() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(a, DataType::Float64, Median, ScalarValue::from(3_f64))
+    }
+
+    #[test]
+    fn median_f64_even() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64, 6_f64,
+        ]));
+        generic_test_op!(a, DataType::Float64, Median, ScalarValue::from(3.5_f64))
+    }
 }
