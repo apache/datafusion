@@ -84,7 +84,7 @@ pub fn generate_signature_error_msg(
         .type_signature
         .to_string_repr()
         .iter()
-        .map(|args_str| format!("\t{}({})", fun, args_str))
+        .map(|args_str| format!("\t{fun}({args_str})"))
         .collect::<Vec<String>>()
         .join("\n");
 
