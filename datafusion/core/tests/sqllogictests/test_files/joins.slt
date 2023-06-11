@@ -1893,7 +1893,55 @@ where join_t1.t1_id + 12 in (select join_t2.t2_id + 1 from join_t2)
 
 # TODO: left_as_inner_table_nested_loop_join
 
-# TODO: exists_subquery_to_join_expr_filter
+# Exists subquery to join expr filter
+
+query TT
+EXPLAIN
+SELECT *
+FROM join_t1
+WHERE EXISTS (
+    SELECT t2_id
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+logical_plan
+LeftSemi Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_19.t2_id AS Int64) * Int64(2)
+--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+--SubqueryAlias: __correlated_sq_19
+----TableScan: join_t2 projection=[t2_id]
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+query ITI
+SELECT *
+FROM join_t1
+WHERE EXISTS (
+    SELECT t2_id
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+22 b 2
+33 c 3
+44 d 4
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+query ITI
+SELECT *
+FROM join_t1
+WHERE EXISTS (
+    SELECT t2_id
+    FROM join_t2
+    WHERE join_t1.t1_id + 1 > join_t2.t2_id * 2
+)
+----
+22 b 2
+33 c 3
+44 d 4
 
 # TODO: exists_subquery_to_join_inner_filter
 
@@ -1921,9 +1969,9 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_19.t2_id AS Int64) * Int64(2)
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_22.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_19
+--SubqueryAlias: __correlated_sq_22
 ----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
 ------TableScan: join_t2 projection=[t2_id]
 
@@ -1950,9 +1998,9 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_21.t2_id AS Int64) * Int64(2)
+LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_24.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_21
+--SubqueryAlias: __correlated_sq_24
 ----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
 ------TableScan: join_t2 projection=[t2_id]
 
