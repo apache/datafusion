@@ -1889,15 +1889,57 @@ where join_t1.t1_id + 12 in (select join_t2.t2_id + 1 from join_t2)
 ----
 44 d 4
 
-# TODO: right_as_inner_table_nested_loop_join
 
-# Left as inner table nested loop join
+#####
+# Configuration setup
+#####
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Right as inner table nested loop join
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+----
+logical_plan
+Inner Join:  Filter: join_t1.t1_id > join_t2.t2_id
+--Filter: join_t1.t1_id > UInt32(10)
+----TableScan: join_t1 projection=[t1_id]
+--Projection: join_t2.t2_id
+----Filter: join_t2.t2_int > UInt32(1)
+------TableScan: join_t2 projection=[t2_id, t2_int]
+physical_plan
+NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: "t1_id", index: 0 }, op: Gt, right: Column { name: "t2_id", index: 1 } }
+--CoalesceBatchesExec: target_batch_size=4096
+----FilterExec: t1_id@0 > 10
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------MemoryExec: partitions=1, partition_sizes=[1]
+--CoalescePartitionsExec
+----ProjectionExec: expr=[t2_id@0 as t2_id]
+------CoalesceBatchesExec: target_batch_size=4096
+--------FilterExec: t2_int@1 > 1
+----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM join_t1
+INNER JOIN join_t2 ON join_t1.t1_id > join_t2.t2_id
+WHERE join_t1.t1_id > 10 AND join_t2.t2_int > 1
+----
+22 11
+33 11
+44 11
+
+# Left as inner table nested loop join
 
 query TT
 EXPLAIN
@@ -1937,11 +1979,16 @@ RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
 44 55
 NULL 22
 
+#####
+# Configuration teardown
+#####
+
 statement ok
 set datafusion.execution.target_partitions = 2;
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
+
 
 # Exists subquery to join expr filter
 

@@ -552,56 +552,6 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-fn create_nested_loop_join_context() -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new()
-            .with_target_partitions(4)
-            .with_batch_size(4096),
-    );
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("t1_id", DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-        Field::new("t1_int", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-            ])),
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("t2_id", DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-        Field::new("t2_int", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                Some("y"),
-                Some("x"),
-                Some("w"),
-            ])),
-            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
 fn get_tpch_table_schema(table: &str) -> Schema {
     match table {
         "customer" => Schema::new(vec![
