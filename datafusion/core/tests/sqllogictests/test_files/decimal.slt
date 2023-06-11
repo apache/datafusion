@@ -124,6 +124,12 @@ select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 Decimal128(14, 10) 0.0000366666
 
 
+query TR
+select arrow_typeof(median(c1)), median(c1) from decimal_simple;
+----
+Decimal128(10, 6) 0.00004
+
+
 query RRIBR rowsort
 select * from decimal_simple where c1=CAST(0.00002 as Decimal(10,8));
 ----
