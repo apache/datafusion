@@ -150,8 +150,8 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
 }
 
-/// make_array SQL function
-pub fn array_make(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+/// `make_array` SQL function
+pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     match values[0].data_type() {
         DataType::Null => Ok(datafusion_expr::ColumnarValue::Scalar(
             ScalarValue::new_list(Some(vec![]), DataType::Null),
@@ -354,7 +354,9 @@ pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     .build()
                     .unwrap();
 
-                return Ok(ColumnarValue::Array(Arc::new(make_array(list))));
+                return Ok(ColumnarValue::Array(Arc::new(arrow::array::make_array(
+                    list,
+                ))));
             }
         },
         _ => Err(DataFusionError::NotImplemented(format!(
