@@ -25,6 +25,7 @@ use async_trait::async_trait;
 
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Expr, TableType};
+use log::debug;
 
 use crate::datasource::TableProvider;
 use crate::execution::context::{SessionState, TaskContext};
@@ -53,10 +54,17 @@ impl StreamingTable {
         schema: SchemaRef,
         partitions: Vec<Arc<dyn PartitionStream>>,
     ) -> Result<Self> {
-        if !partitions.iter().all(|x| schema.contains(x.schema())) {
-            return Err(DataFusionError::Plan(
-                "Mismatch between schema and batches".to_string(),
-            ));
+        for x in partitions.iter() {
+            let partition_schema = x.schema();
+            if !schema.contains(partition_schema) {
+                debug!(
+                    "target schema does not contain partition schema. \
+                        Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
+                );
+                return Err(DataFusionError::Plan(
+                    "Mismatch between schema and batches".to_string(),
+                ));
+            }
         }
 
         Ok(Self {

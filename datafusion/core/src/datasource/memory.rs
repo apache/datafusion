@@ -18,6 +18,7 @@
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
 use futures::StreamExt;
+use log::debug;
 use std::any::Any;
 use std::fmt::{self, Debug, Display};
 use std::sync::Arc;
@@ -55,23 +56,26 @@ pub struct MemTable {
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
-        if partitions
-            .iter()
-            .flatten()
-            .all(|batches| schema.contains(&batches.schema()))
-        {
-            Ok(Self {
-                schema,
-                batches: partitions
-                    .into_iter()
-                    .map(|e| Arc::new(RwLock::new(e)))
-                    .collect::<Vec<_>>(),
-            })
-        } else {
-            Err(DataFusionError::Plan(
-                "Mismatch between schema and batches".to_string(),
-            ))
+        for batches in partitions.iter().flatten() {
+            let batches_schema = batches.schema();
+            if !schema.contains(&batches_schema) {
+                debug!(
+                    "mem table schema does not contain batches schema. \
+                        Target_schema: {schema:?}. Batches Schema: {batches_schema:?}"
+                );
+                return Err(DataFusionError::Plan(
+                    "Mismatch between schema and batches".to_string(),
+                ));
+            }
         }
+
+        Ok(Self {
+            schema,
+            batches: partitions
+                .into_iter()
+                .map(|e| Arc::new(RwLock::new(e)))
+                .collect::<Vec<_>>(),
+        })
     }
 
     /// Create a mem table by reading from another data source
