@@ -42,7 +42,7 @@ use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
     is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -108,7 +108,14 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    from_plan(plan, &new_expr, &new_inputs)
+    // TODO: use from_plan after fix https://github.com/apache/arrow-datafusion/issues/6613
+    match &plan {
+        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
+            new_expr,
+            Arc::new(new_inputs[0].clone()),
+        )?)),
+        _ => from_plan(plan, &new_expr, &new_inputs),
+    }
 }
 
 pub(crate) struct TypeCoercionRewriter {

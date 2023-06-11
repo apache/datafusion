@@ -75,6 +75,7 @@ use datafusion_sql::{
     planner::ParserOptions,
     ResolvedTableReference, TableReference,
 };
+use sqlparser::dialect::dialect_from_str;
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
@@ -97,11 +98,6 @@ use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
-use sqlparser::dialect::{
-    AnsiDialect, BigQueryDialect, ClickHouseDialect, Dialect, GenericDialect,
-    HiveDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, RedshiftSqlDialect,
-    SQLiteDialect, SnowflakeDialect,
-};
 use url::Url;
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
@@ -495,6 +491,7 @@ impl SessionContext {
         }
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
 
         match (if_not_exists, or_replace, table) {
@@ -1674,7 +1671,13 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> Result<datafusion_sql::parser::Statement> {
-        let dialect = create_dialect_from_str(dialect)?;
+        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: \
+                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                     MsSQL, ClickHouse, BigQuery, Ansi."
+            ))
+        })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
             return Err(DataFusionError::NotImplemented(
@@ -2067,28 +2070,6 @@ impl From<&SessionState> for TaskContext {
             state.aggregate_functions.clone(),
             state.runtime_env.clone(),
         )
-    }
-}
-
-// TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/848 is released
-fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
-    match dialect_name.to_lowercase().as_str() {
-        "generic" => Ok(Box::new(GenericDialect)),
-        "mysql" => Ok(Box::new(MySqlDialect {})),
-        "postgresql" | "postgres" => Ok(Box::new(PostgreSqlDialect {})),
-        "hive" => Ok(Box::new(HiveDialect {})),
-        "sqlite" => Ok(Box::new(SQLiteDialect {})),
-        "snowflake" => Ok(Box::new(SnowflakeDialect)),
-        "redshift" => Ok(Box::new(RedshiftSqlDialect {})),
-        "mssql" => Ok(Box::new(MsSqlDialect {})),
-        "clickhouse" => Ok(Box::new(ClickHouseDialect {})),
-        "bigquery" => Ok(Box::new(BigQueryDialect)),
-        "ansi" => Ok(Box::new(AnsiDialect {})),
-        _ => {
-            Err(DataFusionError::Internal(format!(
-                "Unsupported SQL dialect: {dialect_name}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi."
-            )))
-        }
     }
 }
 

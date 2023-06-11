@@ -73,7 +73,9 @@ impl fmt::Display for WindowFunction {
     }
 }
 
-/// An aggregate function that is part of a built-in window function
+/// A [window function] built in to DataFusion
+///
+/// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumIter)]
 pub enum BuiltInWindowFunction {
     /// number of the current row within its partition, counting from 1

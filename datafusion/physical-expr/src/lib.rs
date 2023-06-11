@@ -46,7 +46,6 @@ pub mod window;
 
 // reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
-pub use datafusion_common::from_slice;
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,

@@ -77,6 +77,6 @@ impl PartitionEvaluator for NtileEvaluator {
             let res = i * self.n / num_rows;
             vec.push(res + 1)
         }
-        Ok(Arc::new(UInt64Array::from_iter_values(vec)))
+        Ok(Arc::new(UInt64Array::from(vec)))
     }
 }

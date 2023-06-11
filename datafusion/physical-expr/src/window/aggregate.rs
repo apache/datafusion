@@ -37,12 +37,9 @@ use crate::{
     expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
 };
 
-/// A window expr that takes the form of an aggregate function
-/// Aggregate Window Expressions that have the form
-/// `OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)`
-/// e.g cumulative window frames uses `PlainAggregateWindowExpr`. Where as Aggregate Window Expressions
-/// that have the form `OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)`
-/// e.g sliding window frames uses `SlidingAggregateWindowExpr`.
+/// A window expr that takes the form of an aggregate function.
+///
+/// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct PlainAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,

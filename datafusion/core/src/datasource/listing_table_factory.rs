@@ -78,11 +78,11 @@ impl TableProviderFactory for ListingTableFactory {
                     .with_file_compression_type(file_compression_type),
             ),
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
-            FileType::ARROW => Arc::new(ArrowFormat::default()),
+            FileType::ARROW => Arc::new(ArrowFormat),
         };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
