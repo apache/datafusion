@@ -18,7 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
-use datafusion_expr::function_err::suggest_valid_function;
+use datafusion_expr::function::suggest_valid_function;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::window_frame::regularize;
 use datafusion_expr::{
