@@ -219,26 +219,26 @@ pub fn return_type(
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Float64),
         // DateTrunc always makes nanosecond timestamps
-        BuiltinScalarFunction::DateTrunc => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-        BuiltinScalarFunction::DateBin => {
-            match input_expr_types[1] {
-                DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
-                    Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                    Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
-                }
-                DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                    Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
-                }
-                DataType::Timestamp(TimeUnit::Second, _) => {
-                    Ok(DataType::Timestamp(TimeUnit::Second, None))
-                }
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {fun} function can only accept timestamp as the second arg."
-                ))),
-            }
+        BuiltinScalarFunction::DateTrunc => {
+            Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
         }
+        BuiltinScalarFunction::DateBin => match input_expr_types[1] {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
+                Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Millisecond, None))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Ok(DataType::Timestamp(TimeUnit::Second, None))
+            }
+            _ => Err(DataFusionError::Internal(format!(
+                "The {fun} function can only accept timestamp as the second arg."
+            ))),
+        },
         BuiltinScalarFunction::InitCap => {
             utf8_to_str_type(&input_expr_types[0], "initcap")
         }
