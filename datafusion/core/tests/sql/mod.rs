@@ -407,45 +407,6 @@ fn create_right_semi_anti_join_context_with_null_ids(
     Ok(ctx)
 }
 
-fn create_join_context_qualified(
-    left_name: &str,
-    right_name: &str,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::UInt32, true),
-        Field::new("b", DataType::UInt32, true),
-        Field::new("c", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-            Arc::new(UInt32Array::from(vec![10, 20, 30, 40])),
-            Arc::new(UInt32Array::from(vec![50, 60, 70, 80])),
-        ],
-    )?;
-    ctx.register_batch(left_name, t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::UInt32, true),
-        Field::new("b", DataType::UInt32, true),
-        Field::new("c", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 9, 4])),
-            Arc::new(UInt32Array::from(vec![100, 200, 300, 400])),
-            Arc::new(UInt32Array::from(vec![500, 600, 700, 800])),
-        ],
-    )?;
-    ctx.register_batch(right_name, t2_data)?;
-
-    Ok(ctx)
-}
-
 fn create_hashjoin_datatype_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
@@ -509,58 +470,6 @@ fn create_hashjoin_datatype_context() -> Result<SessionContext> {
                     .unwrap(),
             ),
             Arc::new(dict2),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
-fn create_sort_merge_join_context(
-    column_left: &str,
-    column_right: &str,
-) -> Result<SessionContext> {
-    let mut config = ConfigOptions::new();
-    config.optimizer.prefer_hash_join = false;
-
-    let ctx = SessionContext::with_config(config.into());
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new(column_left, DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-        Field::new("t1_int", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-            ])),
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new(column_right, DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-        Field::new("t2_int", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                Some("y"),
-                Some("x"),
-                Some("w"),
-            ])),
-            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -636,56 +545,6 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
                     .unwrap(),
             ),
             Arc::new(dict2),
-        ],
-    )?;
-    ctx.register_batch("t2", t2_data)?;
-
-    Ok(ctx)
-}
-
-fn create_nested_loop_join_context() -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new()
-            .with_target_partitions(4)
-            .with_batch_size(4096),
-    );
-
-    let t1_schema = Arc::new(Schema::new(vec![
-        Field::new("t1_id", DataType::UInt32, true),
-        Field::new("t1_name", DataType::Utf8, true),
-        Field::new("t1_int", DataType::UInt32, true),
-    ]));
-    let t1_data = RecordBatch::try_new(
-        t1_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
-            Arc::new(StringArray::from(vec![
-                Some("a"),
-                Some("b"),
-                Some("c"),
-                Some("d"),
-            ])),
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-        ],
-    )?;
-    ctx.register_batch("t1", t1_data)?;
-
-    let t2_schema = Arc::new(Schema::new(vec![
-        Field::new("t2_id", DataType::UInt32, true),
-        Field::new("t2_name", DataType::Utf8, true),
-        Field::new("t2_int", DataType::UInt32, true),
-    ]));
-    let t2_data = RecordBatch::try_new(
-        t2_schema,
-        vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
-                Some("z"),
-                Some("y"),
-                Some("x"),
-                Some("w"),
-            ])),
-            Arc::new(UInt32Array::from(vec![3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
