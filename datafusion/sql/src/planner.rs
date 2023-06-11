@@ -58,7 +58,6 @@ pub trait ContextProvider {
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     pub enable_ident_normalization: bool,
-    pub prioritize_udf: bool,
 }
 
 impl Default for ParserOptions {
@@ -66,7 +65,6 @@ impl Default for ParserOptions {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
-            prioritize_udf: false,
         }
     }
 }

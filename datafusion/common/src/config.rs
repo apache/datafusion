@@ -191,8 +191,6 @@ config_namespace! {
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
 
-        /// Should DataFusion prioritize UDF over built-in scalar function in case of function name conflict.
-        pub prioritize_udf: bool, default = false
     }
 }
 

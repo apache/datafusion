@@ -1793,7 +1793,6 @@ impl SessionState {
             self.config.options().sql_parser.enable_ident_normalization;
         let parse_float_as_decimal =
             self.config.options().sql_parser.parse_float_as_decimal;
-        let prioritize_udf = self.config.options().sql_parser.prioritize_udf;
         for reference in references {
             let table = reference.table();
             let resolved = self.resolve_table_ref(&reference);
@@ -1811,7 +1810,6 @@ impl SessionState {
             ParserOptions {
                 parse_float_as_decimal,
                 enable_ident_normalization,
-                prioritize_udf,
             },
         );
         query.statement_to_plan(statement)

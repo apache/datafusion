@@ -28,7 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, BuiltinScalarFunction, ColumnarValue, Expr, ReturnTypeFunction,
+    AggregateUDF, ColumnarValue, Expr, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, TableSource, Volatility,
 };
 use datafusion_sql::{
@@ -73,7 +73,6 @@ fn parse_decimals() {
             ParserOptions {
                 parse_float_as_decimal: true,
                 enable_ident_normalization: false,
-                prioritize_udf: false,
             },
         );
     }
@@ -127,7 +126,6 @@ fn parse_ident_normalization() {
             ParserOptions {
                 parse_float_as_decimal: false,
                 enable_ident_normalization,
-                prioritize_udf: false,
             },
         );
         assert_eq!(expected, format!("{plan:?}"));
@@ -152,23 +150,14 @@ fn parse_prioritize_udf() {
     let test_data = [
         (
             "SELECT ABS(-1)",
-            Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction {
-                fun: BuiltinScalarFunction::Abs,
-                args: vec![Expr::Literal(ScalarValue::Int64(Some(-1)))],
-            }),
-            false,
-        ),
-        (
-            "SELECT ABS(-1)",
             Expr::ScalarUDF(datafusion_expr::expr::ScalarUDF {
                 fun: scalar_udf.clone(),
                 args: vec![Expr::Literal(ScalarValue::Int64(Some(-1)))],
             }),
-            true,
         ),
     ];
 
-    for (sql, expected_projected_field, prioritize_udf) in test_data {
+    for (sql, expected_projected_field) in test_data {
         let mut udfs = HashMap::new();
         udfs.insert("abs".to_string(), scalar_udf.clone());
         let plan = logical_plan_with_options_and_context(
@@ -176,7 +165,6 @@ fn parse_prioritize_udf() {
             ParserOptions {
                 parse_float_as_decimal: false,
                 enable_ident_normalization: true,
-                prioritize_udf,
             },
             &MockContextProvider {
                 udafs: HashMap::default(),
