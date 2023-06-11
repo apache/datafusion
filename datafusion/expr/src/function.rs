@@ -218,7 +218,9 @@ pub fn return_type(
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Float64),
-        BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin => {
+        // DateTrunc always makes nanosecond timestamps
+        BuiltinScalarFunction::DateTrunc => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        BuiltinScalarFunction::DateBin => {
             match input_expr_types[1] {
                 DataType::Timestamp(TimeUnit::Nanosecond, _) | DataType::Utf8 => {
                     Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
