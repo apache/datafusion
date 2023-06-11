@@ -1891,7 +1891,57 @@ where join_t1.t1_id + 12 in (select join_t2.t2_id + 1 from join_t2)
 
 # TODO: right_as_inner_table_nested_loop_join
 
-# TODO: left_as_inner_table_nested_loop_join
+# Left as inner table nested loop join
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query TT
+EXPLAIN
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM (select t1_id from join_t1 where join_t1.t1_id > 22) as join_t1
+RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
+        ON join_t1.t1_id < join_t2.t2_id
+----
+logical_plan
+Right Join:  Filter: join_t1.t1_id < join_t2.t2_id
+--SubqueryAlias: join_t1
+----Filter: join_t1.t1_id > UInt32(22)
+------TableScan: join_t1 projection=[t1_id]
+--SubqueryAlias: join_t2
+----Filter: join_t2.t2_id > UInt32(11)
+------TableScan: join_t2 projection=[t2_id]
+physical_plan
+NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: "t1_id", index: 0 }, op: Lt, right: Column { name: "t2_id", index: 1 } }
+--CoalescePartitionsExec
+----CoalesceBatchesExec: target_batch_size=4096
+------FilterExec: t1_id@0 > 22
+--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
+--CoalesceBatchesExec: target_batch_size=4096
+----FilterExec: t2_id@0 > 11
+------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+--------MemoryExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT join_t1.t1_id, join_t2.t2_id
+FROM (select t1_id from join_t1 where join_t1.t1_id > 22) as join_t1
+RIGHT JOIN (select t2_id from join_t2 where join_t2.t2_id > 11) as join_t2
+        ON join_t1.t1_id < join_t2.t2_id
+----
+33 44
+33 55
+44 55
+NULL 22
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
 
 # Exists subquery to join expr filter
 
