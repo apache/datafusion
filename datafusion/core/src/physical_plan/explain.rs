@@ -20,12 +20,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use datafusion_common::display::StringifiedPlan;
+
 use datafusion_common::{DataFusionError, Result};
 
-use crate::{
-    logical_expr::StringifiedPlan,
-    physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics},
-};
+use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use log::trace;
 

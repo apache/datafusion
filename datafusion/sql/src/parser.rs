@@ -664,8 +664,7 @@ impl<'a> DFParser<'a> {
                     break;
                 } else {
                     return Err(ParserError::ParserError(format!(
-                        "Unexpected token {}",
-                        token
+                        "Unexpected token {token}"
                     )));
                 }
             }

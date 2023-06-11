@@ -512,7 +512,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = AvroFormat::default();
+        let file_format = AvroFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -535,7 +535,7 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
 #[async_trait]
 impl ReadOptions<'_> for ArrowReadOptions<'_> {
     fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = ArrowFormat::default();
+        let file_format = ArrowFormat;
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

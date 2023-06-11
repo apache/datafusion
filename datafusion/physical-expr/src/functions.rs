@@ -45,7 +45,7 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    function, BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
+    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = function::return_type(fun, &input_expr_types)?;
+    let data_type = fun.return_type(&input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -2921,7 +2921,7 @@ mod tests {
         execution_props: &ExecutionProps,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let type_coerced_phy_exprs =
-            coerce(input_phy_exprs, input_schema, &function::signature(fun)).unwrap();
+            coerce(input_phy_exprs, input_schema, &fun.signature()).unwrap();
         create_physical_expr(fun, &type_coerced_phy_exprs, input_schema, execution_props)
     }
 

@@ -20,6 +20,7 @@ mod column;
 pub mod config;
 pub mod delta;
 mod dfschema;
+pub mod display;
 mod error;
 mod join_type;
 pub mod parsers;
