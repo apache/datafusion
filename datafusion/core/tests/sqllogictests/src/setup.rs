@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_array::types::Int32Type;
 use arrow_array::{
-    Array, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
+    Array, Date32Array, Date64Array, Decimal128Array, DictionaryArray, StringArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
 };
 use datafusion::{
     arrow::{
@@ -324,8 +326,6 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
     for partition in 0..partition_count {
         let filename = format!("partition-{partition}.{file_extension}");
         let file_path = test_ctx.testdir_path().join(filename);
-        println!("{}", file_path.clone().display());
-
         let mut file = File::create(file_path).unwrap();
 
         // generate some data
@@ -344,5 +344,187 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             CsvReadOptions::new().schema(&schema),
         )
         .await
+        .unwrap();
+}
+
+pub async fn register_hashjoin_datatype_table(ctx: &SessionContext) {
+    let t1_schema = Schema::new(vec![
+        Field::new("c1", DataType::Date32, true),
+        Field::new("c2", DataType::Date64, true),
+        Field::new("c3", DataType::Decimal128(5, 2), true),
+        Field::new(
+            "c4",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]);
+    let dict1: DictionaryArray<Int32Type> =
+        vec!["abc", "def", "ghi", "jkl"].into_iter().collect();
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Date32Array::from(vec![Some(1), Some(2), None, Some(3)])),
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                Some(172800000),
+                Some(259200000),
+                None,
+            ])),
+            Arc::new(
+                Decimal128Array::from_iter_values([123, 45600, 78900, -12312])
+                    .with_precision_and_scale(5, 2)
+                    .unwrap(),
+            ),
+            Arc::new(dict1),
+        ],
+    )
+    .unwrap();
+    ctx.register_batch("hashjoin_datatype_table_t1", t1_data)
+        .unwrap();
+
+    let t2_schema = Schema::new(vec![
+        Field::new("c1", DataType::Date32, true),
+        Field::new("c2", DataType::Date64, true),
+        Field::new("c3", DataType::Decimal128(10, 2), true),
+        Field::new(
+            "c4",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]);
+    let dict2: DictionaryArray<Int32Type> = vec!["abc", "abcdefg", "qwerty", "qwe"]
+        .into_iter()
+        .collect();
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Date32Array::from(vec![Some(1), None, None, Some(3)])),
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                None,
+                Some(259200000),
+                None,
+            ])),
+            Arc::new(
+                Decimal128Array::from_iter_values([-12312, 10000000, 0, 78900])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+            Arc::new(dict2),
+        ],
+    )
+    .unwrap();
+    ctx.register_batch("hashjoin_datatype_table_t2", t2_data)
+        .unwrap();
+}
+
+pub async fn register_left_semi_anti_join_table(ctx: &SessionContext) {
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("t1_id", DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![
+                Some(11),
+                Some(11),
+                Some(22),
+                Some(33),
+                Some(44),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+                Some("e"),
+            ])),
+            Arc::new(UInt32Array::from(vec![1, 1, 2, 3, 4, 0])),
+        ],
+    )
+    .unwrap();
+    ctx.register_batch("left_semi_anti_join_table_t1", t1_data)
+        .unwrap();
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("t2_id", DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![
+                Some(11),
+                Some(11),
+                Some(22),
+                Some(44),
+                Some(55),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+                Some("v"),
+            ])),
+            Arc::new(UInt32Array::from(vec![3, 3, 1, 3, 3, 0])),
+        ],
+    )
+    .unwrap();
+    ctx.register_batch("left_semi_anti_join_table_t2", t2_data)
+        .unwrap();
+}
+
+pub async fn register_right_semi_anti_join_table(ctx: &SessionContext) {
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new("t1_id", DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![
+                Some(11),
+                Some(22),
+                Some(33),
+                Some(44),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+                Some("e"),
+            ])),
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 0])),
+        ],
+    )
+    .unwrap();
+    ctx.register_batch("right_semi_anti_join_table_t1", t1_data)
+        .unwrap();
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new("t2_id", DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+    ]));
+    // t2 data size is smaller than t1
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![Some(11), Some(11), None])),
+            Arc::new(StringArray::from(vec![Some("a"), Some("x"), None])),
+        ],
+    )
+    .unwrap();
+    ctx.register_batch("right_semi_anti_join_table_t2", t2_data)
         .unwrap();
 }
