@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFrame API for building and executing query plans.
+//! [`DataFrame`] API for building and executing query plans.
 
 use std::any::Any;
 use std::sync::Arc;
