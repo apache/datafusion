@@ -295,16 +295,24 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 }
                 "second" => {
                     // trunc to second
-                    let mill = ScalarValue::TimestampNanosecond(
-                        nano.map(|nano| nano / 1_000_000 * 1_000_000),
+                    let mill = ScalarValue::TimestampSecond(
+                        Some(nano.unwrap() / 1_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(mill)
                 }
                 "millisecond" => {
                     // trunc to microsecond
-                    let micro = ScalarValue::TimestampNanosecond(
-                        nano.map(|nano| nano / 1_000 * 1_000),
+                    let micro = ScalarValue::TimestampMillisecond(
+                        Some(nano.unwrap() / 1_000),
+                        tz_opt.clone(),
+                    );
+                    ColumnarValue::Scalar(micro)
+                }
+                "microsecond" => {
+                    // trunc to microsecond
+                    let micro = ScalarValue::TimestampMicrosecond(
+                        Some(nano.unwrap()),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(micro)
