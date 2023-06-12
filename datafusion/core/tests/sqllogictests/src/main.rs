@@ -285,6 +285,13 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
                 return None;
             }
         }
+        "joins.slt" => {
+            let mut test_ctx = test_ctx;
+            info!("Registering timestamps tables");
+            setup::register_timestamps_table(test_ctx.session_ctx()).await;
+            setup::register_partition_table(&mut test_ctx).await;
+            return Some(test_ctx);
+        }
         _ => {
             info!("Using default SessionContext");
         }
