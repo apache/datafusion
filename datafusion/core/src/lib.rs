@@ -145,7 +145,7 @@
 //! You can find examples of each of them in the [datafusion-examples] directory.
 //!
 //! [`TableProvider`]: crate::datasource::TableProvider
-//! [`CatalogProvider`]: crate::catalog::catalog::CatalogProvider
+//! [`CatalogProvider`]: crate::catalog::CatalogProvider
 //! [`LogicalPlanBuilder`]: datafusion_expr::logical_plan::builder::LogicalPlanBuilder
 //! [`ScalarUDF`]: physical_plan::udf::ScalarUDF
 //! [`AggregateUDF`]: physical_plan::udaf::AggregateUDF
