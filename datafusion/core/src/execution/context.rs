@@ -19,9 +19,9 @@
 use crate::{
     catalog::{CatalogList, MemoryCatalogList},
     datasource::{
-        datasource::TableProviderFactory,
         listing::{ListingOptions, ListingTable},
         listing_table_factory::ListingTableFactory,
+        provider::TableProviderFactory,
     },
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
