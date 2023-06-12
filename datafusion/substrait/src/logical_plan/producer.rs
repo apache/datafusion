@@ -49,7 +49,7 @@ use substrait::{
             window_function::bound::Kind as BoundKind,
             window_function::Bound,
             FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType,
-            ScalarFunction, WindowFunction as SubstraitWindowFunction,
+            ScalarFunction, SingularOrList, WindowFunction as SubstraitWindowFunction,
         },
         extensions::{
             self,
@@ -622,46 +622,18 @@ pub fn to_substrait_rex(
         }) => {
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
             // negated: expr NOT IN (A, B, ...) --> (expr != A) AND (expr != B) AND (expr != C)
-            let op_for_list = match negated {
-                true => Operator::And,
-                false => Operator::Or,
-            };
-            let op_for_list_item = match negated {
-                true => Operator::NotEq,
-                false => Operator::Eq,
-            };
-
             let substrait_list = list
                 .iter()
                 .map(|x| to_substrait_rex(x, schema, extension_info))
                 .collect::<Result<Vec<Expression>>>()?;
             let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
 
-            if substrait_list.is_empty() {
-                return Err(DataFusionError::Internal(
-                    "Empty list in IN expression".to_string(),
-                ));
-            }
-
-            let first_val = substrait_list.first().unwrap();
-            let init_val = make_binary_op_scalar_func(
-                &substrait_expr,
-                first_val,
-                op_for_list_item,
-                extension_info,
-            );
-
-            let res = substrait_list.into_iter().skip(1).fold(init_val, |acc, y| {
-                let val = make_binary_op_scalar_func(
-                    &substrait_expr,
-                    &y,
-                    op_for_list_item,
-                    extension_info,
-                );
-
-                make_binary_op_scalar_func(&acc, &val, op_for_list, extension_info)
-            });
-            Ok(res)
+            Ok(Expression {
+                rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
+                    value: Some(Box::new(substrait_expr)),
+                    options: substrait_list,
+                }))),
+            })
         }
         Expr::ScalarFunction(DFScalarFunction { fun, args }) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
