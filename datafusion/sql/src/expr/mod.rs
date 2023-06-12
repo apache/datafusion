@@ -333,7 +333,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::JsonAccess { left, operator, right } => self.parse_json_access(*left, operator, *right, schema, planner_context),
 
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported ast node in sqltorel: {sql:?}"
+                "Unsupported ast node in sqltorel: {sql}"
             ))),
         }
     }
