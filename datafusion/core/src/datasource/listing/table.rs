@@ -22,6 +22,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
+use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_common::ToDFSchema;
@@ -133,8 +134,8 @@ impl ListingTableConfig {
             .map_err(|_| DataFusionError::Internal(err_msg))?;
 
         let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::ARROW => Arc::new(ArrowFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::ARROW => Arc::new(ArrowFormat),
+            FileType::AVRO => Arc::new(AvroFormat),
             FileType::CSV => Arc::new(
                 CsvFormat::default().with_file_compression_type(file_compression_type),
             ),
@@ -149,9 +150,11 @@ impl ListingTableConfig {
 
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
-        let store = state
-            .runtime_env()
-            .object_store(self.table_paths.get(0).unwrap())?;
+        let store = if let Some(url) = self.table_paths.get(0) {
+            state.runtime_env().object_store(url)?
+        } else {
+            return Ok(self);
+        };
 
         let file = self
             .table_paths
@@ -180,9 +183,11 @@ impl ListingTableConfig {
     pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
-                let schema = options
-                    .infer_schema(state, self.table_paths.get(0).unwrap())
-                    .await?;
+                let schema = if let Some(url) = self.table_paths.get(0) {
+                    options.infer_schema(state, url).await?
+                } else {
+                    Arc::new(Schema::empty())
+                };
 
                 Ok(Self {
                     table_paths: self.table_paths,
@@ -713,13 +718,18 @@ impl TableProvider for ListingTable {
             None
         };
 
+        let object_store_url = if let Some(url) = self.table_paths.get(0) {
+            url.object_store()
+        } else {
+            return Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))));
+        };
         // create the execution plan
         self.options
             .format
             .create_physical_plan(
                 state,
                 FileScanConfig {
-                    object_store_url: self.table_paths.get(0).unwrap().object_store(),
+                    object_store_url,
                     file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,
                     statistics,
@@ -828,9 +838,11 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
-        let store = ctx
-            .runtime_env()
-            .object_store(self.table_paths.get(0).unwrap())?;
+        let store = if let Some(url) = self.table_paths.get(0) {
+            ctx.runtime_env().object_store(url)?
+        } else {
+            return Ok((vec![], Statistics::default()));
+        };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(
@@ -903,7 +915,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
-    use datafusion_common::from_slice::FromSlice;
     use datafusion_expr::LogicalPlanBuilder;
     use rstest::*;
     use std::fs::File;
@@ -1527,7 +1538,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         // Filename with extension

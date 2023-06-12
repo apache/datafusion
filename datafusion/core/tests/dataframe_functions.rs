@@ -20,7 +20,6 @@ use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
-use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -44,13 +43,13 @@ async fn create_test_table() -> Result<DataFrame> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice([
+            Arc::new(StringArray::from(vec![
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
 

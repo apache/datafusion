@@ -244,14 +244,15 @@ mod tests {
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
         let ctx = SessionContext::new();
-        let plan = ctx.state().create_logical_plan(&sql).await?;
+        let plan = ctx.state().create_logical_plan(sql).await?;
 
-        match &plan {
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) => {
-                create_external_table(&ctx, cmd).await?;
-            }
-            _ => assert!(false),
-        };
+        if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
+            create_external_table(&ctx, cmd).await?;
+        } else {
+            return Err(DataFusionError::Plan(
+                "LogicalPlan is not a CreateExternalTable".to_string(),
+            ));
+        }
 
         ctx.runtime_env()
             .object_store(ListingTableUrl::parse(location)?)?;
@@ -312,7 +313,7 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("No such file or directory"));
+        assert!(err.to_string().contains("os error 2"));
 
         // for service_account_key
         let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('service_account_key' '{service_account_key}') LOCATION '{location}'");
@@ -327,14 +328,14 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("No such file or directory"));
+        assert!(err.to_string().contains("os error 2"));
 
         Ok(())
     }
 
     #[tokio::test]
     async fn create_external_table_local_file() -> Result<()> {
-        let location = "/path/to/file.parquet";
+        let location = "path/to/file.parquet";
 
         // Ensure that local files are also registered
         let sql =
@@ -342,7 +343,12 @@ mod tests {
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("No such file or directory"));
+
+        if let DataFusionError::IoError(e) = err {
+            assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        } else {
+            return Err(err);
+        }
 
         Ok(())
     }
