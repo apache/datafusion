@@ -150,6 +150,15 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
 }
 
+/// `make_array` SQL function
+pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
+    match values[0].data_type() {
+        DataType::Null => Ok(datafusion_expr::ColumnarValue::Scalar(
+            ScalarValue::new_list(Some(vec![]), DataType::Null),
+        )),
+        _ => array(values),
+    }
+}
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -217,6 +226,7 @@ pub fn array_append(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 (DataType::UInt16, DataType::UInt16) => append!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => append!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => append!(arr, element, UInt64Array),
+                (DataType::Null, _) => return array(&args[1..]),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_append is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
@@ -290,6 +300,7 @@ pub fn array_prepend(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 (DataType::UInt16, DataType::UInt16) => prepend!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => prepend!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => prepend!(arr, element, UInt64Array),
+                (DataType::Null, _) => return array(&args[..1]),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_prepend is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
@@ -318,30 +329,36 @@ pub fn array_concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         .collect();
     let data_type = arrays[0].data_type();
     match data_type {
-        DataType::List(..) => {
-            let list_arrays =
-                downcast_vec!(arrays, ListArray).collect::<Result<Vec<&ListArray>>>()?;
-            let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-            let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-            let array_data: Vec<_> =
-                list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-            let array_data = array_data.iter().collect();
-            let mut mutable =
-                MutableArrayData::with_capacities(array_data, false, capacity);
+        DataType::List(field) => match field.data_type() {
+            DataType::Null => array_concat(&args[1..]),
+            _ => {
+                let list_arrays = downcast_vec!(arrays, ListArray)
+                    .collect::<Result<Vec<&ListArray>>>()?;
+                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
+                let capacity =
+                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+                let array_data: Vec<_> =
+                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+                let array_data = array_data.iter().collect();
+                let mut mutable =
+                    MutableArrayData::with_capacities(array_data, false, capacity);
 
-            for (i, a) in list_arrays.iter().enumerate() {
-                mutable.extend(i, 0, a.len())
+                for (i, a) in list_arrays.iter().enumerate() {
+                    mutable.extend(i, 0, a.len())
+                }
+
+                let builder = mutable.into_builder();
+                let list = builder
+                    .len(1)
+                    .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
+                    .build()
+                    .unwrap();
+
+                return Ok(ColumnarValue::Array(Arc::new(arrow::array::make_array(
+                    list,
+                ))));
             }
-
-            let builder = mutable.into_builder();
-            let list = builder
-                .len(1)
-                .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-                .build()
-                .unwrap();
-
-            return Ok(ColumnarValue::Array(Arc::new(make_array(list))));
-        }
+        },
         _ => Err(DataFusionError::NotImplemented(format!(
             "Array is not type '{data_type:?}'."
         ))),
@@ -410,6 +427,11 @@ pub fn array_fill(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 DataType::UInt16 => fill!(array_values, element, UInt16Array),
                 DataType::UInt32 => fill!(array_values, element, UInt32Array),
                 DataType::UInt64 => fill!(array_values, element, UInt64Array),
+                DataType::Null => {
+                    return Ok(datafusion_expr::ColumnarValue::Scalar(
+                        ScalarValue::new_list(Some(vec![]), DataType::Null),
+                    ))
+                }
                 data_type => {
                     return Err(DataFusionError::Internal(format!(
                         "Array_fill is not implemented for type '{data_type:?}'."
@@ -823,6 +845,7 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::UInt16 => to_string!(arg, arr, &delimeter, UInt16Array),
             DataType::UInt32 => to_string!(arg, arr, &delimeter, UInt32Array),
             DataType::UInt64 => to_string!(arg, arr, &delimeter, UInt64Array),
+            DataType::Null => Ok(arg),
             data_type => Err(DataFusionError::NotImplemented(format!(
                 "Array is not implemented for type '{data_type:?}'."
             ))),
@@ -831,8 +854,13 @@ pub fn array_to_string(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let mut arg = String::from("");
     let mut res = compute_array_to_string(&mut arg, arr, delimeter.clone())?.clone();
-    res.truncate(res.len() - delimeter.len());
-    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res))))
+    match res.as_str() {
+        "" => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res)))),
+        _ => {
+            res.truncate(res.len() - delimeter.len());
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(res))))
+        }
+    }
 }
 
 /// Trim_array SQL function
@@ -871,8 +899,12 @@ pub fn trim_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     let list_array = downcast_arg!(arr, ListArray);
     let values = list_array.value(0);
+    if values.len() <= n {
+        return Ok(datafusion_expr::ColumnarValue::Scalar(
+            ScalarValue::new_list(Some(vec![]), DataType::Null),
+        ));
+    }
     let res = values.slice(0, values.len() - n);
-
     let mut scalars = vec![];
     for i in 0..res.len() {
         scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&res, i)?));

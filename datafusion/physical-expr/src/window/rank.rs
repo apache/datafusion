@@ -98,6 +98,10 @@ impl BuiltInWindowFunctionExpr for Rank {
         matches!(self.rank_type, RankType::Basic | RankType::Dense)
     }
 
+    fn include_rank(&self) -> bool {
+        true
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             state: RankState::default(),
@@ -161,10 +165,6 @@ impl PartitionEvaluator for RankEvaluator {
                 "Can not execute PERCENT_RANK in a streaming fashion".to_string(),
             )),
         }
-    }
-
-    fn include_rank(&self) -> bool {
-        true
     }
 
     fn evaluate_with_rank(

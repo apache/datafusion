@@ -58,16 +58,16 @@ impl BuiltInWindowFunctionExpr for CumeDist {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(CumeDistEvaluator {}))
     }
+
+    fn include_rank(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct CumeDistEvaluator;
 
 impl PartitionEvaluator for CumeDistEvaluator {
-    fn include_rank(&self) -> bool {
-        true
-    }
-
     fn evaluate_with_rank(
         &self,
         num_rows: usize,

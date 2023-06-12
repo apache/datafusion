@@ -957,7 +957,7 @@ where
 mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
-    use crate::avro_to_arrow::{Reader, ReaderBuilder};
+    use crate::datasource::avro_to_arrow::{Reader, ReaderBuilder};
     use arrow::datatypes::DataType;
     use datafusion_common::cast::{
         as_int32_array, as_int64_array, as_list_array, as_timestamp_microsecond_array,
