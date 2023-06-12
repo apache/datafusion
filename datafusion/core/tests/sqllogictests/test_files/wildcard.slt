@@ -108,6 +108,51 @@ SELECT t1.*, tb2.* FROM t1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id
 statement error Error during planning: Invalid qualifier agg
 SELECT agg.* FROM aggregate_simple ORDER BY c1
 
+# test_count_wildcard_on_with
+query I
+with tbl as (SELECT 0 as 'COUNT(*)') SELECT * from tbl
+----
+0
+
+# test_count_wildcard_on_with_logical_plan
+query TT
+explain with tbl as (SELECT 0 as 'COUNT(*)') SELECT * from tbl
+----
+logical_plan
+Projection: tbl.COUNT(UInt8(1)) AS tbl.COUNT(*)
+--SubqueryAlias: tbl
+----Projection: Int64(0) AS COUNT(UInt8(1))
+------EmptyRelation
+physical_plan
+ProjectionExec: expr=[COUNT(UInt8(1))@0 as tbl.COUNT(*)]
+--ProjectionExec: expr=[0 as COUNT(UInt8(1))]
+----EmptyExec: produce_one_row=true
+
+
+# test_count_wildcard_on_with_agg
+query I
+with tbl as (SELECT count(a) as 'COUNT(*)' from (values (1), (2)) as x(a)) SELECT * from tbl;
+----
+2
+
+# test_count_wildcard_on_with_agg_logical_plan
+query TT
+explain with tbl as (SELECT count(a) as 'COUNT(*)' from (values (1), (2)) as x(a)) SELECT * from tbl;
+----
+logical_plan
+Projection: tbl.COUNT(UInt8(1)) AS tbl.COUNT(*)
+--SubqueryAlias: tbl
+----Projection: COUNT(a) AS COUNT(UInt8(1))
+------Aggregate: groupBy=[[]], aggr=[[COUNT(a)]]
+--------Projection: x.column1 AS a
+----------SubqueryAlias: x
+------------Values: (Int64(1)), (Int64(2))
+physical_plan
+ProjectionExec: expr=[COUNT(UInt8(1))@0 as tbl.COUNT(*)]
+--ProjectionExec: expr=[COUNT(a)@0 as COUNT(UInt8(1))]
+----ProjectionExec: expr=[2 as COUNT(a)]
+------EmptyExec: produce_one_row=true
+
 ########
 # Clean up after the test
 ########

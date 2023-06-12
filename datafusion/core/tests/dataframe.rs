@@ -168,7 +168,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .await?
         .select(vec![Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunction::AggregateFunction(AggregateFunction::Count),
-            vec![Expr::Wildcard],
+            vec![Wildcard],
             vec![],
             vec![Expr::Sort(Sort::new(Box::new(col("a")), false, true))],
             WindowFrame {

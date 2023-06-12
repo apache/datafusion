@@ -29,6 +29,7 @@ use std::string::ToString;
 use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
+use crate::utils::rewrite_preserving_name;
 
 pub const COUNT_STAR: &str = "COUNT(*)";
 
@@ -61,7 +62,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let window_expr = window
                 .window_expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(LogicalPlan::Window(Window {
@@ -74,7 +75,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let aggr_expr = agg
                 .aggr_expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(LogicalPlan::Aggregate(
@@ -89,7 +90,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             let sort_expr = expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
             Ok(Transformed::Yes(LogicalPlan::Sort(Sort {
                 expr: sort_expr,
@@ -101,7 +102,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             let projection_expr = projection
                 .expr
                 .iter()
-                .map(|expr| expr.clone().rewrite(&mut rewriter))
+                .map(|expr| rewrite_preserving_name(expr.clone(), &mut rewriter))
                 .collect::<Result<Vec<_>>>()?;
             Ok(Transformed::Yes(LogicalPlan::Projection(
                 Projection::try_new_with_schema(
@@ -115,7 +116,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         LogicalPlan::Filter(Filter {
             predicate, input, ..
         }) => {
-            let predicate = predicate.rewrite(&mut rewriter)?;
+            let predicate = rewrite_preserving_name(predicate, &mut rewriter)?;
             Ok(Transformed::Yes(LogicalPlan::Filter(Filter::try_new(
                 predicate, input,
             )?)))
