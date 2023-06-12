@@ -239,10 +239,27 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.values)
-            - std::mem::size_of_val(&self.values)
-            + self.datatypes[0].size()
-            - std::mem::size_of_val(&self.datatypes[0])
+        let mut total = std::mem::size_of_val(self)
+            + ScalarValue::size_of_vec(&self.values)
+            - std::mem::size_of_val(&self.values);
+
+        // Add size of the `self.ordering_values`
+        total +=
+            std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        for row in &self.ordering_values {
+            total = total + ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+        }
+
+        // Add size of the `self.datatypes`
+        total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
+        for dtype in &self.datatypes {
+            total = total + dtype.size() - std::mem::size_of_val(dtype);
+        }
+
+        // Add size of the `self.ordering_req`
+        total += std::mem::size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
+        total
     }
 }
 

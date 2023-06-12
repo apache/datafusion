@@ -204,6 +204,8 @@ impl Accumulator for FirstValueAccumulator {
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.first)
             + self.first.size()
+            + ScalarValue::size_of_vec(&self.orderings)
+            - std::mem::size_of_val(&self.orderings)
     }
 }
 
@@ -376,7 +378,10 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.last) + self.last.size()
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.last)
+            + self.last.size()
+            + ScalarValue::size_of_vec(&self.orderings)
+            - std::mem::size_of_val(&self.orderings)
     }
 }
 
