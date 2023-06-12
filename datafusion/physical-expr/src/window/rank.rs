@@ -27,6 +27,7 @@ use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use std::any::Any;
 use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
@@ -77,6 +78,11 @@ pub fn percent_rank(name: String) -> Rank {
 }
 
 impl BuiltInWindowFunctionExpr for Rank {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = match self.rank_type {

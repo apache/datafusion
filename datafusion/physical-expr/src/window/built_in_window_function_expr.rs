@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use super::partition_evaluator::PartitionEvaluator;
 use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::PhysicalExpr;
@@ -24,6 +22,8 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use std::any::Any;
+use std::sync::Arc;
 
 /// Evaluates a window function by instantiating a
 /// `[PartitionEvaluator]` for calculating the function's output in
@@ -35,6 +35,10 @@ use datafusion_common::Result;
 /// `nth_value` need the value.
 #[allow(rustdoc::private_intra_doc_links)]
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
+    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
     /// The field of the final result of evaluating this window function.
     fn field(&self) -> Result<Field>;
 

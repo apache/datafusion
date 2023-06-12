@@ -27,6 +27,7 @@ use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::SortOptions;
 use datafusion_common::{Result, ScalarValue};
+use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -44,6 +45,11 @@ impl RowNumber {
 }
 
 impl BuiltInWindowFunctionExpr for RowNumber {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = DataType::UInt64;

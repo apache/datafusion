@@ -25,6 +25,7 @@ use arrow::array::ArrayRef;
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
+use std::any::Any;
 use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
@@ -41,6 +42,11 @@ pub fn cume_dist(name: String) -> CumeDist {
 }
 
 impl BuiltInWindowFunctionExpr for CumeDist {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = DataType::Float64;
