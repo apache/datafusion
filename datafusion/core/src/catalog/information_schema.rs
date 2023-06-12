@@ -36,7 +36,7 @@ use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
 
-use super::{catalog::CatalogList, schema::SchemaProvider};
+use super::{schema::SchemaProvider, CatalogList};
 
 pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";
