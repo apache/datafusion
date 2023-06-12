@@ -98,6 +98,8 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             })))
         }
         LogicalPlan::Projection(projection) => {
+            // resolve issue: https://github.com/apache/arrow-datafusion/issues/6447
+            // TODO: In the future, we can systematically solve the problem about `name changes` and then revert these code and other code to resolve this kind of problem.
             let input = projection
                 .input
                 .as_ref()
