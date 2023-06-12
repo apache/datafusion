@@ -1007,14 +1007,23 @@ fn aggregate_expressions(
                 } else {
                     None
                 };
-                agg.expressions()
+                let mut res = agg
+                    .expressions()
                     .into_iter()
                     .map(|expr| {
                         pre_cast_type.clone().map_or(expr.clone(), |cast_type| {
                             Arc::new(CastExpr::new(expr, cast_type, None))
                         })
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                if let Some(ordering_req) = agg.order_bys() {
+                    let ordering_exprs = ordering_req
+                        .iter()
+                        .map(|item| item.expr.clone())
+                        .collect::<Vec<_>>();
+                    res.extend(ordering_exprs);
+                }
+                res
             })
             .collect()),
         // in this mode, we build the merge expressions of the aggregation

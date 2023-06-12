@@ -19,7 +19,7 @@
 
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, LexOrdering, PhysicalExpr};
+use crate::{AggregateExpr, LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
@@ -92,14 +92,15 @@ impl AggregateExpr for FirstValue {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let mut res = vec![self.expr.clone()];
-        let ordering_req_exprs = self
-            .ordering_req
-            .iter()
-            .map(|e| e.expr.clone())
-            .collect::<Vec<_>>();
-        res.extend(ordering_req_exprs.clone());
-        res
+        vec![self.expr.clone()]
+    }
+
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.ordering_req.is_empty() {
+            None
+        } else {
+            Some(&self.ordering_req)
+        }
     }
 
     fn name(&self) -> &str {
@@ -265,14 +266,15 @@ impl AggregateExpr for LastValue {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        let mut res = vec![self.expr.clone()];
-        let ordering_req_exprs = self
-            .ordering_req
-            .iter()
-            .map(|e| e.expr.clone())
-            .collect::<Vec<_>>();
-        res.extend(ordering_req_exprs.clone());
-        res
+        vec![self.expr.clone()]
+    }
+
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.ordering_req.is_empty() {
+            None
+        } else {
+            Some(&self.ordering_req)
+        }
     }
 
     fn name(&self) -> &str {

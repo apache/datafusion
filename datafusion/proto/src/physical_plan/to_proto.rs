@@ -67,6 +67,13 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>>>()?;
 
+        let ordering_req: Vec<protobuf::PhysicalSortExprNode> = a
+            .order_bys()
+            .unwrap_or(&[])
+            .iter()
+            .map(|e| e.clone().try_into())
+            .collect::<Result<Vec<_>>>()?;
+
         let mut distinct = false;
         let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
             Ok(AggregateFunction::Avg.into())
@@ -162,8 +169,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         protobuf::PhysicalAggregateExprNode {
                             aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
                             expr: expressions,
-                            /// TODO: Add proper handling here
-                            ordering_req: vec![],
+                            ordering_req,
                             distinct,
                         },
                     )),
@@ -184,8 +190,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         ),
                     ),
                     expr: expressions,
-                    /// TODO: Add proper handling here
-                    ordering_req: vec![],
+                    ordering_req,
                     distinct,
                 },
             )),

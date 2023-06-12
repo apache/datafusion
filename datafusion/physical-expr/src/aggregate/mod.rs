@@ -17,7 +17,7 @@
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
-use crate::PhysicalExpr;
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -85,6 +85,13 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// expressions that are passed to the Accumulator.
     /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
+
+    /// Order by requirements for the aggregate function
+    /// By default it is `None` (there is no requirement)
+    /// Order-sensitive aggregators should implement this
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
 
     /// Human readable name such as `"MIN(c2)"`. The default
     /// implementation returns placeholder text.
