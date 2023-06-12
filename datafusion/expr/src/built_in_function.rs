@@ -277,6 +277,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::CurrentDate
                 | BuiltinScalarFunction::CurrentTime
                 | BuiltinScalarFunction::Uuid
+                | BuiltinScalarFunction::MakeArray
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -510,11 +511,14 @@ impl BuiltinScalarFunction {
                 ))),
             },
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
-            BuiltinScalarFunction::MakeArray => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[0].clone(),
-                true,
-            )))),
+            BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
+                0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
+                _ => Ok(List(Arc::new(Field::new(
+                    "item",
+                    input_expr_types[0].clone(),
+                    true,
+                )))),
+            },
             BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
                     "item",
