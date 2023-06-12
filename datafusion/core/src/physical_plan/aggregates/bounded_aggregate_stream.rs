@@ -43,8 +43,8 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::physical_plan::aggregates::utils::{
-    aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
-    read_as_batch, slice_and_maybe_filter, ExecutionState, GroupState,
+    aggr_state_schema, get_at_indices, get_optional_filters, read_as_batch,
+    slice_and_maybe_filter, ExecutionState, GroupState,
 };
 use arrow::array::{new_null_array, ArrayRef, UInt32Builder};
 use arrow::compute::{cast, SortColumn};
@@ -591,6 +591,7 @@ impl BoundedAggregateStream {
                             RowAccessor::new_from_layout(self.row_aggr_layout.clone());
                         state_accessor
                             .point_to(0, group_state.aggregation_buffer.as_mut_slice());
+
                         match self.mode {
                             AggregateMode::Partial | AggregateMode::Single => {
                                 accumulator.update_batch(&values, &mut state_accessor)
@@ -663,20 +664,12 @@ impl BoundedAggregateStream {
                     row_values.iter(),
                     filter_bool_array.iter()
                 ) {
-                    if values_array.len() == 1 {
-                        let scalar_value =
-                            col_to_scalar(&values_array[0], filter_array, *idx as usize)?;
-                        accumulator.update_scalar(&scalar_value, &mut state_accessor)?;
-                    } else {
-                        let scalar_values = values_array
-                            .iter()
-                            .map(|array| {
-                                col_to_scalar(array, filter_array, *idx as usize)
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        accumulator
-                            .update_scalar_values(&scalar_values, &mut state_accessor)?;
-                    }
+                    accumulator.update_single_row(
+                        values_array,
+                        filter_array,
+                        *idx as usize,
+                        &mut state_accessor,
+                    )?;
                 }
             }
             // clear the group indices in this group

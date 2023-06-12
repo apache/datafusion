@@ -34,7 +34,6 @@ use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::{
-    aggregate::row_accumulator::RowAccumulator,
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
     normalize_out_expr_with_columns_map,
@@ -52,6 +51,7 @@ mod row_hash;
 mod utils;
 
 pub use datafusion_expr::AggregateFunction;
+use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulatorItem;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::expressions::{ArrayAgg, FirstValue, LastValue};
 
@@ -912,7 +912,6 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
-pub(crate) type RowAccumulatorItem = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],

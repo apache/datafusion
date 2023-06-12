@@ -20,9 +20,11 @@
 use crate::layout::RowLayout;
 use crate::validity::NullBitsFormatter;
 use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx};
+use arrow::array::{Array, ArrowPrimitiveType, BooleanArray, PrimitiveArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{get_bit_raw, set_bit_raw};
 use datafusion_common::ScalarValue;
+use std::fmt::Debug;
 use std::ops::{BitAnd, BitOr, BitXor};
 use std::sync::Arc;
 
@@ -381,4 +383,436 @@ impl<'a> RowAccessor<'a> {
     fn_bit_and_or_xor_idx!(i16, bitxor);
     fn_bit_and_or_xor_idx!(i32, bitxor);
     fn_bit_and_or_xor_idx!(i64, bitxor);
+}
+
+pub trait RowAccumulatorNativeType: Debug + Send + Sync {
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor);
+
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor);
+
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor);
+
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor);
+
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor);
+
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor);
+}
+
+impl RowAccumulatorNativeType for bool {
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        //TODO add test
+        row.set_bool(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_bool(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_bool(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_bool(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_bool(row_idx, self)
+    }
+
+    fn bit_xor_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+}
+
+impl RowAccumulatorNativeType for u8 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_u8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_u8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_u8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_u8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_u8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_u8(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for u16 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_u16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_u16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_u16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_u16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_u16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_u16(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for u32 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_u32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_u32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_u32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_u32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_u32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_u32(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for u64 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_u64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_u64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_u64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_u64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_u64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_u64(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for i8 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_i8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_i8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_i8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_i8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_i8(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_i8(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for i16 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_i16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_i16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_i16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_i16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_i16(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_i16(row_idx, self)
+    }
+}
+impl RowAccumulatorNativeType for i32 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_i32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_i32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_i32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_i32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_i32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_i32(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for i64 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_i64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_i64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_i64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_and_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitand_i64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_or_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitor_i64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn bit_xor_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.bitxor_i64(row_idx, self)
+    }
+}
+
+impl RowAccumulatorNativeType for f32 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_f32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_f32(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_f32(row_idx, self)
+    }
+
+    fn bit_and_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+
+    fn bit_or_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+
+    fn bit_xor_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+}
+
+impl RowAccumulatorNativeType for f64 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_f64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_f64(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_f64(row_idx, self)
+    }
+
+    fn bit_and_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+
+    fn bit_or_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+
+    fn bit_xor_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+}
+
+impl RowAccumulatorNativeType for i128 {
+    #[inline(always)]
+    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.add_i128(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn min_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.min_i128(row_idx, self)
+    }
+
+    #[inline(always)]
+    fn max_to_row(self, row_idx: usize, row: &mut RowAccessor) {
+        row.max_i128(row_idx, self)
+    }
+
+    fn bit_and_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+
+    fn bit_or_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+
+    fn bit_xor_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
+    }
+}
+
+pub trait ArrowArrayReader: Array {
+    type Item: RowAccumulatorNativeType;
+
+    /// Returns the element at index `i`
+    /// # Panics
+    /// Panics if the value is outside the bounds of the array
+    fn value_at(&self, index: usize) -> Self::Item;
+
+    /// Returns the element at index `i`
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    unsafe fn value_at_unchecked(&self, index: usize) -> Self::Item;
+}
+
+impl<'a> ArrowArrayReader for &'a BooleanArray {
+    type Item = bool;
+
+    #[inline]
+    fn value_at(&self, index: usize) -> Self::Item {
+        BooleanArray::value(self, index)
+    }
+
+    #[inline]
+    unsafe fn value_at_unchecked(&self, index: usize) -> Self::Item {
+        BooleanArray::value_unchecked(self, index)
+    }
+}
+
+impl<'a, T: ArrowPrimitiveType> ArrowArrayReader for &'a PrimitiveArray<T>
+where
+    <T as ArrowPrimitiveType>::Native: RowAccumulatorNativeType,
+{
+    type Item = T::Native;
+
+    #[inline]
+    fn value_at(&self, index: usize) -> Self::Item {
+        PrimitiveArray::value(self, index)
+    }
+
+    #[inline]
+    unsafe fn value_at_unchecked(&self, index: usize) -> Self::Item {
+        PrimitiveArray::value_unchecked(self, index)
+    }
 }

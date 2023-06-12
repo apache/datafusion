@@ -21,9 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
+use crate::aggregate::row_accumulator::{is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem};
 use crate::aggregate::sum;
 use crate::aggregate::sum::sum_batch;
 use crate::aggregate::utils::calculate_result_decimal_for_avg;
@@ -36,11 +34,15 @@ use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
-use arrow_array::Array;
+use arrow_array::cast::{as_boolean_array, as_decimal_array, as_primitive_array};
+use arrow_array::{
+    Array, ArrayAccessor, BooleanArray, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt8Array,
+};
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_row::accessor::RowAccessor;
+use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 
 /// AVG aggregate expression
 #[derive(Debug, Clone)]
@@ -141,12 +143,12 @@ impl AggregateExpr for Avg {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(AvgRowAccumulator::new(
+    ) -> Result<RowAccumulatorItem> {
+        Ok(AvgRowAccumulator::new(
             start_index,
             &self.sum_data_type,
             &self.rt_data_type,
-        )))
+        ).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -263,7 +265,7 @@ impl Accumulator for AvgAccumulator {
 }
 
 #[derive(Debug)]
-struct AvgRowAccumulator {
+pub struct AvgRowAccumulator {
     state_index: usize,
     sum_datatype: DataType,
     return_data_type: DataType,
@@ -295,28 +297,123 @@ impl RowAccumulator for AvgRowAccumulator {
         accessor.add_u64(self.state_index(), delta);
 
         // sum
-        sum::add_to_row(
+        sum::add_to_row_with_scalar(
             self.state_index() + 1,
             accessor,
             &sum::sum_batch(values, &self.sum_datatype)?,
         )
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let value = &values[0];
-        sum::update_avg_to_row(self.state_index(), accessor, value)
+        let array = &values[0];
+        if array.is_null(row_index) {
+            return Ok(());
+        }
+        if let Some(filter) = filter {
+            if !filter.value(row_index) {
+                return Ok(());
+            }
+        }
+        match array.data_type() {
+            DataType::Boolean => {
+                let typed_array = as_boolean_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Int8 => {
+                let typed_array: &Int8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Int16 => {
+                let typed_array: &Int16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Int32 => {
+                let typed_array: &Int32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Int64 => {
+                let typed_array: &Int64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::UInt8 => {
+                let typed_array: &UInt8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::UInt16 => {
+                let typed_array: &UInt16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::UInt32 => {
+                let typed_array: &UInt32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::UInt64 => {
+                let typed_array: &UInt64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Float32 => {
+                let typed_array: &Float32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Float64 => {
+                let typed_array: &Float64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            DataType::Decimal128(_, _) => {
+                let typed_array = as_decimal_array(array);
+                let value = typed_array.value_at(row_index);
+                accessor.add_u64(self.state_index, 1);
+                value.add_to_row(self.state_index + 1, accessor);
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in AvgRowAccumulator: {}",
+                    array.data_type()
+                )))
+            }
+        }
+
+        Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        sum::update_avg_to_row(self.state_index(), accessor, value)
+    ) {
+        if let Some(value) = native_value {
+            accessor.add_u64(self.state_index, 1);
+            value.add_to_row(self.state_index + 1, accessor);
+        }
     }
 
     fn merge_batch(
@@ -331,7 +428,7 @@ impl RowAccumulator for AvgRowAccumulator {
 
         // sum
         let difference = sum::sum_batch(&states[1], &self.sum_datatype)?;
-        sum::add_to_row(self.state_index() + 1, accessor, &difference)
+        sum::add_to_row_with_scalar(self.state_index() + 1, accessor, &difference)
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {

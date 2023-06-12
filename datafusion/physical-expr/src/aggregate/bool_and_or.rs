@@ -30,13 +30,13 @@ use arrow::{
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
+use crate::aggregate::row_accumulator::{is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
-use datafusion_row::accessor::RowAccessor;
+use arrow_array::cast::as_boolean_array;
+use arrow_array::ArrayAccessor;
+use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 
 fn bool_and(array: &BooleanArray) -> Option<bool> {
     if array.null_count() == array.len() {
@@ -118,7 +118,7 @@ macro_rules! bool_and_or_v2 {
     }};
 }
 
-pub fn bool_and_row(
+pub fn bool_and_row_with_scalar(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -126,7 +126,7 @@ pub fn bool_and_row(
     bool_and_or_v2!(index, accessor, s, bitand)
 }
 
-pub fn bool_or_row(
+pub fn bool_or_row_with_scalar(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -200,11 +200,11 @@ impl AggregateExpr for BoolAnd {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BoolAndRowAccumulator::new(
+    ) -> Result<RowAccumulatorItem> {
+        Ok(BoolAndRowAccumulator::new(
             start_index,
             self.data_type.clone(),
-        )))
+        ).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -271,7 +271,7 @@ impl Accumulator for BoolAndAccumulator {
 }
 
 #[derive(Debug)]
-struct BoolAndRowAccumulator {
+pub struct BoolAndRowAccumulator {
     index: usize,
     datatype: DataType,
 }
@@ -290,24 +290,52 @@ impl RowAccumulator for BoolAndRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bool_and_batch(values)?;
-        bool_and_row(self.index, accessor, delta)
+        bool_and_row_with_scalar(self.index, accessor, delta)
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let value = &values[0];
-        bool_and_row(self.index, accessor, value)
+        let array = &values[0];
+        if array.is_null(row_index) {
+            return Ok(());
+        }
+        if let Some(filter) = filter {
+            if !filter.value(row_index) {
+                return Ok(());
+            }
+        }
+
+        match array.data_type() {
+            DataType::Boolean => {
+                let typed_array: &BooleanArray = as_boolean_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in BoolAndRowAccumulator: {}",
+                    array.data_type()
+                )))
+            }
+        }
+
+        Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bool_and_row(self.index, accessor, value)
+    ) {
+        if let Some(value) = native_value {
+            value.bit_and_to_row(self.index, accessor);
+        }
     }
 
     fn merge_batch(
@@ -394,11 +422,11 @@ impl AggregateExpr for BoolOr {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BoolOrRowAccumulator::new(
+    ) -> Result<RowAccumulatorItem> {
+        Ok(BoolOrRowAccumulator::new(
             start_index,
             self.data_type.clone(),
-        )))
+        ).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -465,7 +493,7 @@ impl Accumulator for BoolOrAccumulator {
 }
 
 #[derive(Debug)]
-struct BoolOrRowAccumulator {
+pub struct BoolOrRowAccumulator {
     index: usize,
     datatype: DataType,
 }
@@ -484,25 +512,53 @@ impl RowAccumulator for BoolOrRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bool_or_batch(values)?;
-        bool_or_row(self.index, accessor, delta)?;
+        bool_or_row_with_scalar(self.index, accessor, delta)?;
         Ok(())
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let value = &values[0];
-        bool_or_row(self.index, accessor, value)
+        let array = &values[0];
+        if array.is_null(row_index) {
+            return Ok(());
+        }
+        if let Some(filter) = filter {
+            if !filter.value(row_index) {
+                return Ok(());
+            }
+        }
+
+        match array.data_type() {
+            DataType::Boolean => {
+                let typed_array: &BooleanArray = as_boolean_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in BoolOrRowAccumulator: {}",
+                    array.data_type()
+                )))
+            }
+        }
+
+        Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bool_or_row(self.index, accessor, value)
+    ) {
+        if let Some(value) = native_value {
+            value.bit_or_to_row(self.index, accessor);
+        }
     }
 
     fn merge_batch(

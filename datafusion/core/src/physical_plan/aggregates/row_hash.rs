@@ -33,8 +33,8 @@ use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::utils::{
-    aggr_state_schema, col_to_scalar, get_at_indices, get_optional_filters,
-    read_as_batch, slice_and_maybe_filter, ExecutionState, GroupState,
+    aggr_state_schema, col_to_value, get_at_indices, get_optional_filters, read_as_batch,
+    slice_and_maybe_filter, ExecutionState, GroupState,
 };
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
@@ -48,9 +48,9 @@ use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_row::accessor::RowAccessor;
+use datafusion_row::accessor::{ArrowArrayReader, RowAccessor};
 use datafusion_row::layout::RowLayout;
 use hashbrown::raw::RawTable;
 use itertools::izip;
@@ -497,37 +497,59 @@ impl GroupedHashAggregateStream {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        for group_idx in groups_with_rows {
-            let group_state = &mut self.aggr_state.group_states[*group_idx];
-            let mut state_accessor =
-                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
-            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-            for idx in &group_state.indices {
-                for (accumulator, values_array, filter_array) in izip!(
-                    self.row_accumulators.iter_mut(),
-                    row_values.iter(),
-                    filter_bool_array.iter()
-                ) {
-                    if values_array.len() == 1 {
-                        let scalar_value =
-                            col_to_scalar(&values_array[0], filter_array, *idx as usize)?;
-                        accumulator.update_scalar(&scalar_value, &mut state_accessor)?;
-                    } else {
-                        let scalar_values = values_array
-                            .iter()
-                            .map(|array| {
-                                col_to_scalar(array, filter_array, *idx as usize)
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        accumulator
-                            .update_scalar_values(&scalar_values, &mut state_accessor)?;
+        let mut single_value_acc_idx = vec![];
+        let mut single_row_acc_idx = vec![];
+        self.row_accumulators
+            .iter()
+            .zip(row_values.iter())
+            .enumerate()
+            .for_each(|(idx, (acc, values))| {
+                if let RowAccumulatorItem::COUNT(_) = acc {
+                    single_row_acc_idx.push(idx);
+                } else if values.len() == 1 {
+                    single_value_acc_idx.push(idx);
+                } else {
+                    single_row_acc_idx.push(idx);
+                };
+            });
+
+        if single_value_acc_idx.len() == 1 && single_row_acc_idx.len() == 0 {
+            let acc_idx1 = single_value_acc_idx[0];
+            let array1 = &row_values[acc_idx1][0];
+            let array1_dt = array1.data_type();
+            for_all_data_types! { impl_one_accumulator_dispatch, array1_dt, array1, self, update_one_accumulator_with_native_value, groups_with_rows, acc_idx1, filter_bool_array}
+        } else if single_value_acc_idx.len() == 2 && single_row_acc_idx.len() == 0 {
+            let acc_idx1 = single_value_acc_idx[0];
+            let acc_idx2 = single_value_acc_idx[1];
+            let array1 = &row_values[acc_idx1][0];
+            let array2 = &row_values[acc_idx2][0];
+            let array1_dt = array1.data_type();
+            let array2_dt = array2.data_type();
+            for_all_data_types2! { impl_two_accumulators_dispatch, array1_dt, array2_dt, array1, array2, self, update_two_accumulator2_with_native_value, groups_with_rows, acc_idx1, acc_idx2,filter_bool_array}
+        } else {
+            for group_idx in groups_with_rows {
+                let group_state = &mut self.aggr_state.group_states[*group_idx];
+                let mut state_accessor =
+                    RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+                state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+                for idx in &group_state.indices {
+                    for (accumulator, values_array, filter_array) in izip!(
+                        self.row_accumulators.iter_mut(),
+                        row_values.iter(),
+                        filter_bool_array.iter()
+                    ) {
+                        accumulator.update_single_row(
+                            values_array,
+                            filter_array,
+                            *idx as usize,
+                            &mut state_accessor,
+                        )?;
                     }
                 }
+                // clear the group indices in this group
+                group_state.indices.clear();
             }
-            // clear the group indices in this group
-            group_state.indices.clear();
         }
-
         Ok(())
     }
 
@@ -762,4 +784,427 @@ impl GroupedHashAggregateStream {
         }
         Ok(Some(RecordBatch::try_new(self.schema.clone(), output)?))
     }
+
+    fn update_one_accumulator_with_native_value<T1>(
+        &mut self,
+        groups_with_rows: &[usize],
+        agg_input_array1: &T1,
+        acc_idx1: usize,
+        filter_bool_array: &[Option<&BooleanArray>],
+    ) -> Result<()>
+    where
+        T1: ArrowArrayReader,
+    {
+        let accumulator1 = &self.row_accumulators[acc_idx1];
+        let filter_array1 = &filter_bool_array[acc_idx1];
+        for group_idx in groups_with_rows {
+            let group_state = &mut self.aggr_state.group_states[*group_idx];
+            let mut state_accessor =
+                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                let value = col_to_value(agg_input_array1, filter_array1, *idx as usize);
+                accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
+    }
+
+    fn update_two_accumulator2_with_native_value<T1, T2>(
+        &mut self,
+        groups_with_rows: &[usize],
+        agg_input_array1: &T1,
+        agg_input_array2: &T2,
+        acc_idx1: usize,
+        acc_idx2: usize,
+        filter_bool_array: &[Option<&BooleanArray>],
+    ) -> Result<()>
+    where
+        T1: ArrowArrayReader,
+        T2: ArrowArrayReader,
+    {
+        let accumulator1 = &self.row_accumulators[acc_idx1];
+        let accumulator2 = &self.row_accumulators[acc_idx2];
+        let filter_array1 = &filter_bool_array[acc_idx1];
+        let filter_array2 = &filter_bool_array[acc_idx2];
+        for group_idx in groups_with_rows {
+            let group_state = &mut self.aggr_state.group_states[*group_idx];
+            let mut state_accessor =
+                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                let value = col_to_value(agg_input_array1, filter_array1, *idx as usize);
+                accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
+                let value = col_to_value(agg_input_array2, filter_array2, *idx as usize);
+                accumulator2.update_value::<T2::Item>(value, &mut state_accessor);
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
+    }
 }
+
+macro_rules! for_all_data_types {
+    ($macro:ident $(, $x:ident)*) => {
+        $macro! {
+                [$($x),*],
+                { Boolean, BooleanArray },
+                { Int8, Int8Array },
+                { Int16, Int16Array },
+                { Int32, Int32Array },
+                { Int64, Int64Array },
+                { UInt8, UInt8Array },
+                { UInt16, UInt16Array },
+                { UInt32, UInt32Array },
+                { UInt64, UInt64Array },
+                { Float32, Float32Array },
+                { Float64, Float64Array },
+                { Decimal128, Decimal128Array }
+        }
+    };
+}
+pub(crate) use for_all_data_types;
+
+macro_rules! for_all_data_types2 {
+    ($macro:ident $(, $x:ident)*) => {
+       $macro! {
+                [$($x),*],
+                { Boolean, BooleanArray, Boolean, BooleanArray },
+                { Int8, Int8Array, Boolean, BooleanArray },
+                { Int16, Int16Array, Boolean, BooleanArray },
+                { Int32, Int32Array, Boolean, BooleanArray },
+                { Int64, Int64Array, Boolean, BooleanArray },
+                { UInt8, UInt8Array, Boolean, BooleanArray },
+                { UInt16, UInt16Array, Boolean, BooleanArray },
+                { UInt32, UInt32Array, Boolean, BooleanArray },
+                { UInt64, UInt64Array, Boolean, BooleanArray },
+                { Float32, Float32Array, Boolean, BooleanArray },
+                { Float64, Float64Array, Boolean, BooleanArray },
+                { Decimal128, Decimal128Array, Boolean, BooleanArray },
+                { Boolean, BooleanArray, Int8, Int8Array },
+                { Int8, Int8Array, Int8, Int8Array },
+                { Int16, Int16Array, Int8, Int8Array },
+                { Int32, Int32Array, Int8, Int8Array },
+                { Int64, Int64Array, Int8, Int8Array },
+                { UInt8, UInt8Array, Int8, Int8Array },
+                { UInt16, UInt16Array, Int8, Int8Array },
+                { UInt32, UInt32Array, Int8, Int8Array },
+                { UInt64, UInt64Array, Int8, Int8Array },
+                { Float32, Float32Array, Int8, Int8Array },
+                { Float64, Float64Array, Int8, Int8Array },
+                { Decimal128, Decimal128Array, Int8, Int8Array },
+                { Boolean, BooleanArray, Int16, Int16Array},
+                { Int8, Int8Array, Int16, Int16Array },
+                { Int16, Int16Array, Int16, Int16Array },
+                { Int32, Int32Array, Int16, Int16Array },
+                { Int64, Int64Array, Int16, Int16Array },
+                { UInt8, UInt8Array, Int16, Int16Array },
+                { UInt16, UInt16Array, Int16, Int16Array },
+                { UInt32, UInt32Array, Int16, Int16Array },
+                { UInt64, UInt64Array, Int16, Int16Array },
+                { Float32, Float32Array, Int16, Int16Array },
+                { Float64, Float64Array, Int16, Int16Array },
+                { Decimal128, Decimal128Array, Int16, Int16Array },
+                { Boolean, BooleanArray, Int32, Int32Array },
+                { Int8, Int8Array, Int32, Int32Array },
+                { Int16, Int16Array, Int32, Int32Array },
+                { Int32, Int32Array, Int32, Int32Array },
+                { Int64, Int64Array, Int32, Int32Array },
+                { UInt8, UInt8Array, Int32, Int32Array },
+                { UInt16, UInt16Array, Int32, Int32Array },
+                { UInt32, UInt32Array, Int32, Int32Array },
+                { UInt64, UInt64Array, Int32, Int32Array },
+                { Float32, Float32Array, Int32, Int32Array },
+                { Float64, Float64Array, Int32, Int32Array },
+                { Decimal128, Decimal128Array, Int32, Int32Array },
+                { Boolean, BooleanArray, Int64, Int64Array },
+                { Int8, Int8Array, Int64, Int64Array },
+                { Int16, Int16Array, Int64, Int64Array },
+                { Int32, Int32Array, Int64, Int64Array },
+                { Int64, Int64Array, Int64, Int64Array },
+                { UInt8, UInt8Array, Int64, Int64Array },
+                { UInt16, UInt16Array, Int64, Int64Array },
+                { UInt32, UInt32Array, Int64, Int64Array },
+                { UInt64, UInt64Array, Int64, Int64Array },
+                { Float32, Float32Array, Int64, Int64Array },
+                { Float64, Float64Array, Int64, Int64Array },
+                { Decimal128, Decimal128Array, Int64, Int64Array },
+                { Boolean, BooleanArray, UInt8, UInt8Array },
+                { Int8, Int8Array, UInt8, UInt8Array },
+                { Int16, Int16Array, UInt8, UInt8Array },
+                { Int32, Int32Array, UInt8, UInt8Array },
+                { Int64, Int64Array, UInt8, UInt8Array },
+                { UInt8, UInt8Array, UInt8, UInt8Array },
+                { UInt16, UInt16Array, UInt8, UInt8Array },
+                { UInt32, UInt32Array, UInt8, UInt8Array },
+                { UInt64, UInt64Array, UInt8, UInt8Array },
+                { Float32, Float32Array, UInt8, UInt8Array },
+                { Float64, Float64Array, UInt8, UInt8Array },
+                { Decimal128, Decimal128Array, UInt8, UInt8Array },
+                { Boolean, BooleanArray, UInt16, UInt16Array },
+                { Int8, Int8Array, UInt16, UInt16Array },
+                { Int16, Int16Array, UInt16, UInt16Array },
+                { Int32, Int32Array, UInt16, UInt16Array },
+                { Int64, Int64Array, UInt16, UInt16Array },
+                { UInt8, UInt8Array, UInt16, UInt16Array },
+                { UInt16, UInt16Array, UInt16, UInt16Array },
+                { UInt32, UInt32Array, UInt16, UInt16Array },
+                { UInt64, UInt64Array, UInt16, UInt16Array },
+                { Float32, Float32Array, UInt16, UInt16Array },
+                { Float64, Float64Array, UInt16, UInt16Array },
+                { Decimal128, Decimal128Array, UInt16, UInt16Array },
+                { Boolean, BooleanArray, UInt32, UInt32Array },
+                { Int8, Int8Array, UInt32, UInt32Array },
+                { Int16, Int16Array, UInt32, UInt32Array },
+                { Int32, Int32Array, UInt32, UInt32Array },
+                { Int64, Int64Array, UInt32, UInt32Array },
+                { UInt8, UInt8Array, UInt32, UInt32Array },
+                { UInt16, UInt16Array, UInt32, UInt32Array },
+                { UInt32, UInt32Array, UInt32, UInt32Array },
+                { UInt64, UInt64Array, UInt32, UInt32Array },
+                { Float32, Float32Array, UInt32, UInt32Array },
+                { Float64, Float64Array, UInt32, UInt32Array },
+                { Decimal128, Decimal128Array, UInt32, UInt32Array },
+                { Boolean, BooleanArray, UInt64, UInt64Array },
+                { Int8, Int8Array, UInt64, UInt64Array },
+                { Int16, Int16Array, UInt64, UInt64Array },
+                { Int32, Int32Array, UInt64, UInt64Array },
+                { Int64, Int64Array, UInt64, UInt64Array },
+                { UInt8, UInt8Array, UInt64, UInt64Array },
+                { UInt16, UInt16Array, UInt64, UInt64Array },
+                { UInt32, UInt32Array, UInt64, UInt64Array },
+                { UInt64, UInt64Array, UInt64, UInt64Array },
+                { Float32, Float32Array, UInt64, UInt64Array },
+                { Float64, Float64Array, UInt64, UInt64Array },
+                { Decimal128, Decimal128Array, UInt64, UInt64Array },
+                { Boolean, BooleanArray, Float32, Float32Array },
+                { Int8, Int8Array, Float32, Float32Array },
+                { Int16, Int16Array, Float32, Float32Array },
+                { Int32, Int32Array, Float32, Float32Array },
+                { Int64, Int64Array, Float32, Float32Array },
+                { UInt8, UInt8Array, Float32, Float32Array },
+                { UInt16, UInt16Array, Float32, Float32Array },
+                { UInt32, UInt32Array, Float32, Float32Array },
+                { UInt64, UInt64Array, Float32, Float32Array },
+                { Float32, Float32Array, Float32, Float32Array },
+                { Float64, Float64Array, Float32, Float32Array },
+                { Decimal128, Decimal128Array, Float32, Float32Array },
+                { Boolean, BooleanArray, Float64, Float64Array },
+                { Int8, Int8Array, Float64, Float64Array },
+                { Int16, Int16Array, Float64, Float64Array },
+                { Int32, Int32Array, Float64, Float64Array },
+                { Int64, Int64Array, Float64, Float64Array },
+                { UInt8, UInt8Array, Float64, Float64Array },
+                { UInt16, UInt16Array, Float64, Float64Array },
+                { UInt32, UInt32Array, Float64, Float64Array },
+                { UInt64, UInt64Array, Float64, Float64Array },
+                { Float32, Float32Array, Float64, Float64Array },
+                { Float64, Float64Array, Float64, Float64Array },
+                { Decimal128, Decimal128Array, Float64, Float64Array },
+                { Boolean, BooleanArray, Decimal128, Decimal128Array },
+                { Int8, Int8Array, Decimal128, Decimal128Array },
+                { Int16, Int16Array, Decimal128, Decimal128Array },
+                { Int32, Int32Array, Decimal128, Decimal128Array },
+                { Int64, Int64Array, Decimal128, Decimal128Array },
+                { UInt8, UInt8Array, Decimal128, Decimal128Array },
+                { UInt16, UInt16Array, Decimal128, Decimal128Array },
+                { UInt32, UInt32Array, Decimal128, Decimal128Array },
+                { UInt64, UInt64Array, Decimal128, Decimal128Array },
+                { Float32, Float32Array, Decimal128, Decimal128Array },
+                { Float64, Float64Array, Decimal128, Decimal128Array },
+                { Decimal128, Decimal128Array, Decimal128, Decimal128Array }
+        }
+    };
+}
+
+pub(crate) use for_all_data_types2;
+
+/// Generate one accumulator dispatch logic
+macro_rules! impl_one_accumulator_dispatch {
+    (
+        [$array1_dt:ident, $array1:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $acc_idx1:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident}),*
+    ) => {
+        match ($array1_dt) {
+            $(
+                ($i1t! { datatype_match_pattern }) => {
+                        let typed_array = downcast_value!($array1, $i1);
+                        $self.$update_func(
+                            $groups_with_rows,
+                            &typed_array,
+                            $acc_idx1,
+                            &$filter_bool_array,
+                        )?;
+                }
+            )*
+            (_) => return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type in RowAccumulator: {}",
+                        $array1_dt
+                    )))
+        }
+    };
+}
+
+/// Generate two accumulators dispatch logic
+macro_rules! impl_two_accumulators_dispatch {
+    (
+        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $acc_idx1:ident, $acc_idx2:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),*
+    ) => {
+        match ($array1_dt, $array2_dt) {
+            $(
+                ($i1t! { datatype_match_pattern }, $i2t! { datatype_match_pattern }) => {
+                        let typed_array1 = downcast_value!($array1, $i1);
+                        let typed_array2 = downcast_value!($array2, $i2);
+                        $self.$update_func(
+                            $groups_with_rows,
+                            &typed_array1,
+                            &typed_array2,
+                            $acc_idx1,
+                            $acc_idx2,
+                            &$filter_bool_array,
+                        )?;
+                }
+            )*
+            (_, _) => return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {} or {} in RowAccumulator",
+                        $array1_dt, $array2_dt
+                    )))
+        }
+    };
+}
+
+pub(crate) use impl_one_accumulator_dispatch;
+pub(crate) use impl_two_accumulators_dispatch;
+
+#[macro_export]
+macro_rules! datatype_match_pattern {
+    ($match_pattern:pat) => {
+        $match_pattern
+    };
+}
+
+pub use datatype_match_pattern;
+
+macro_rules! Boolean {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Boolean
+        }
+    };
+}
+
+pub(crate) use Boolean;
+
+macro_rules! Int8 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Int8
+        }
+    };
+}
+
+pub(crate) use Int8;
+
+macro_rules! Int16 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Int16
+        }
+    };
+}
+
+pub(crate) use Int16;
+
+macro_rules! Int32 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Int32
+        }
+    };
+}
+
+pub(crate) use Int32;
+
+macro_rules! Int64 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Int64
+        }
+    };
+}
+
+pub(crate) use Int64;
+
+macro_rules! UInt8 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::UInt8
+        }
+    };
+}
+
+pub(crate) use UInt8;
+
+macro_rules! UInt16 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::UInt16
+        }
+    };
+}
+
+pub(crate) use UInt16;
+
+macro_rules! UInt32 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::UInt32
+        }
+    };
+}
+
+pub(crate) use UInt32;
+
+macro_rules! UInt64 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::UInt64
+        }
+    };
+}
+
+pub(crate) use UInt64;
+
+macro_rules! Float32 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Float32
+        }
+    };
+}
+
+pub(crate) use Float32;
+
+macro_rules! Float64 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Float64
+        }
+    };
+}
+
+pub(crate) use Float64;
+
+macro_rules! Decimal128 {
+    ($macro:ident) => {
+        $macro! {
+            DataType::Decimal128 { .. }
+        }
+    };
+}
+
+pub(crate) use Decimal128;

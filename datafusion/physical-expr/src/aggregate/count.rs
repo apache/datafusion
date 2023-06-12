@@ -22,18 +22,19 @@ use std::fmt::Debug;
 use std::ops::BitAnd;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{RowAccumulator, RowAccumulatorItem};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{Array, Int64Array};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
+use arrow_array::BooleanArray;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-use datafusion_row::accessor::RowAccessor;
+use datafusion_row::accessor::{RowAccessor, RowAccumulatorNativeType};
 
 use crate::expressions::format_state_name;
 
@@ -140,8 +141,8 @@ impl AggregateExpr for Count {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(CountRowAccumulator::new(start_index)))
+    ) -> Result<RowAccumulatorItem> {
+        Ok(CountRowAccumulator::new(start_index).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -220,7 +221,7 @@ impl Accumulator for CountAccumulator {
 }
 
 #[derive(Debug)]
-struct CountRowAccumulator {
+pub struct CountRowAccumulator {
     state_index: usize,
 }
 
@@ -242,29 +243,34 @@ impl RowAccumulator for CountRowAccumulator {
         Ok(())
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        if !values.iter().any(|s| matches!(s, ScalarValue::Null)) {
-            accessor.add_u64(self.state_index, 1)
+        if !values.iter().any(|array| array.is_null(row_index)) {
+            if let Some(filter_array) = filter {
+                if filter_array.value(row_index) {
+                    accessor.add_u64(self.state_index, 1)
+                }
+            } else {
+                accessor.add_u64(self.state_index, 1)
+            }
         }
         Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        match value {
-            ScalarValue::Null => {
-                // do not update the accumulator
-            }
-            _ => accessor.add_u64(self.state_index, 1),
+    ) {
+        if let Some(_value) = native_value {
+            accessor.add_u64(self.state_index, 1);
         }
-        Ok(())
     }
 
     fn merge_batch(

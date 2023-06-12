@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::RowAccumulatorItem;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
@@ -109,7 +109,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     fn create_row_accumulator(
         &self,
         _start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
+    ) -> Result<RowAccumulatorItem> {
         Err(DataFusionError::NotImplemented(format!(
             "RowAccumulator hasn't been implemented for {self:?} yet"
         )))

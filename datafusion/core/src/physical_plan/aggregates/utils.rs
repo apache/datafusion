@@ -27,8 +27,9 @@ use arrow_array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::get_arrayref_at_indices;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::AggregateExpr;
+use datafusion_row::accessor::ArrowArrayReader;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::MutableRecordBatch;
 use std::sync::Arc;
@@ -131,20 +132,18 @@ pub(crate) fn slice_and_maybe_filter(
     }
 }
 
-/// This method is similar to Scalar::try_from_array except for the Null handling.
-/// This method returns [ScalarValue::Null] instead of [ScalarValue::Type(None)].
-pub(crate) fn col_to_scalar(
-    array: &ArrayRef,
+pub(crate) fn col_to_value<T1: ArrowArrayReader>(
+    array: &T1,
     filter: &Option<&BooleanArray>,
     row_index: usize,
-) -> Result<ScalarValue> {
+) -> Option<T1::Item> {
     if array.is_null(row_index) {
-        return Ok(ScalarValue::Null);
+        return None;
     }
     if let Some(filter) = filter {
         if !filter.value(row_index) {
-            return Ok(ScalarValue::Null);
+            return None;
         }
     }
-    ScalarValue::try_from_array(array, row_index)
+    Some(array.value_at(row_index))
 }

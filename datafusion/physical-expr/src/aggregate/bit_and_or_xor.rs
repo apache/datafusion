@@ -33,16 +33,16 @@ use arrow::{
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
+use crate::aggregate::row_accumulator::{is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::PrimitiveArray;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::datatypes::ArrowNumericType;
-use datafusion_row::accessor::RowAccessor;
+use arrow_array::cast::as_primitive_array;
+use arrow_array::{ArrayAccessor, BooleanArray};
+use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 use std::ops::BitAnd as BitAndImplementation;
 use std::ops::BitOr as BitOrImplementation;
 use std::ops::BitXor as BitXorImplementation;
@@ -251,7 +251,7 @@ macro_rules! bit_and_or_xor_v2 {
     }};
 }
 
-pub fn bit_and_row(
+pub fn bit_and_row_with_scalar(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -259,7 +259,7 @@ pub fn bit_and_row(
     bit_and_or_xor_v2!(index, accessor, s, bitand)
 }
 
-pub fn bit_or_row(
+pub fn bit_or_row_with_scalar(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -267,7 +267,7 @@ pub fn bit_or_row(
     bit_and_or_xor_v2!(index, accessor, s, bitor)
 }
 
-pub fn bit_xor_row(
+pub fn bit_xor_row_with_scalar(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -341,11 +341,11 @@ impl AggregateExpr for BitAnd {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BitAndRowAccumulator::new(
+    ) -> Result<RowAccumulatorItem> {
+        Ok(BitAndRowAccumulator::new(
             start_index,
             self.data_type.clone(),
-        )))
+        ).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -408,7 +408,7 @@ impl Accumulator for BitAndAccumulator {
 }
 
 #[derive(Debug)]
-struct BitAndRowAccumulator {
+pub struct BitAndRowAccumulator {
     index: usize,
     datatype: DataType,
 }
@@ -427,24 +427,87 @@ impl RowAccumulator for BitAndRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bit_and_batch(values)?;
-        bit_and_row(self.index, accessor, delta)
+        bit_and_row_with_scalar(self.index, accessor, delta)
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let value = &values[0];
-        bit_and_row(self.index, accessor, value)
+        let array = &values[0];
+        if array.is_null(row_index) {
+            return Ok(());
+        }
+        if let Some(filter) = filter {
+            if !filter.value(row_index) {
+                return Ok(());
+            }
+        }
+
+        match array.data_type() {
+            DataType::Int8 => {
+                let typed_array: &Int8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::Int16 => {
+                let typed_array: &Int16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::Int32 => {
+                let typed_array: &Int32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::Int64 => {
+                let typed_array: &Int64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::UInt8 => {
+                let typed_array: &UInt8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::UInt16 => {
+                let typed_array: &UInt16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::UInt32 => {
+                let typed_array: &UInt32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            DataType::UInt64 => {
+                let typed_array: &UInt64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_and_to_row(self.index, accessor);
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in BitAndRowAccumulator: {}",
+                    array.data_type()
+                )))
+            }
+        }
+
+        Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bit_and_row(self.index, accessor, value)
+    ) {
+        if let Some(value) = native_value {
+            value.min_to_row(self.index, accessor);
+        }
     }
 
     fn merge_batch(
@@ -531,11 +594,11 @@ impl AggregateExpr for BitOr {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BitOrRowAccumulator::new(
+    ) -> Result<RowAccumulatorItem> {
+        Ok(BitOrRowAccumulator::new(
             start_index,
             self.data_type.clone(),
-        )))
+        ).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -598,7 +661,7 @@ impl Accumulator for BitOrAccumulator {
 }
 
 #[derive(Debug)]
-struct BitOrRowAccumulator {
+pub struct BitOrRowAccumulator {
     index: usize,
     datatype: DataType,
 }
@@ -617,25 +680,88 @@ impl RowAccumulator for BitOrRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bit_or_batch(values)?;
-        bit_or_row(self.index, accessor, delta)?;
+        bit_or_row_with_scalar(self.index, accessor, delta)?;
         Ok(())
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let value = &values[0];
-        bit_or_row(self.index, accessor, value)
+        let array = &values[0];
+        if array.is_null(row_index) {
+            return Ok(());
+        }
+        if let Some(filter) = filter {
+            if !filter.value(row_index) {
+                return Ok(());
+            }
+        }
+
+        match array.data_type() {
+            DataType::Int8 => {
+                let typed_array: &Int8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::Int16 => {
+                let typed_array: &Int16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::Int32 => {
+                let typed_array: &Int32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::Int64 => {
+                let typed_array: &Int64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::UInt8 => {
+                let typed_array: &UInt8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::UInt16 => {
+                let typed_array: &UInt16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::UInt32 => {
+                let typed_array: &UInt32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            DataType::UInt64 => {
+                let typed_array: &UInt64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_or_to_row(self.index, accessor);
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in BitOrRowAccumulator: {}",
+                    array.data_type()
+                )))
+            }
+        }
+
+        Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bit_or_row(self.index, accessor, value)
+    ) {
+        if let Some(value) = native_value {
+            value.bit_or_to_row(self.index, accessor);
+        }
     }
 
     fn merge_batch(
@@ -722,11 +848,11 @@ impl AggregateExpr for BitXor {
     fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(BitXorRowAccumulator::new(
+    ) -> Result<RowAccumulatorItem> {
+        Ok(BitXorRowAccumulator::new(
             start_index,
             self.data_type.clone(),
-        )))
+        ).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -789,7 +915,7 @@ impl Accumulator for BitXorAccumulator {
 }
 
 #[derive(Debug)]
-struct BitXorRowAccumulator {
+pub struct BitXorRowAccumulator {
     index: usize,
     datatype: DataType,
 }
@@ -808,25 +934,88 @@ impl RowAccumulator for BitXorRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bit_xor_batch(values)?;
-        bit_xor_row(self.index, accessor, delta)?;
+        bit_xor_row_with_scalar(self.index, accessor, delta)?;
         Ok(())
     }
 
-    fn update_scalar_values(
-        &mut self,
-        values: &[ScalarValue],
+    fn update_single_row(
+        &self,
+        values: &[ArrayRef],
+        filter: &Option<&BooleanArray>,
+        row_index: usize,
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        let value = &values[0];
-        bit_xor_row(self.index, accessor, value)
+        let array = &values[0];
+        if array.is_null(row_index) {
+            return Ok(());
+        }
+        if let Some(filter) = filter {
+            if !filter.value(row_index) {
+                return Ok(());
+            }
+        }
+
+        match array.data_type() {
+            DataType::Int8 => {
+                let typed_array: &Int8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::Int16 => {
+                let typed_array: &Int16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::Int32 => {
+                let typed_array: &Int32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::Int64 => {
+                let typed_array: &Int64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::UInt8 => {
+                let typed_array: &UInt8Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::UInt16 => {
+                let typed_array: &UInt16Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::UInt32 => {
+                let typed_array: &UInt32Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            DataType::UInt64 => {
+                let typed_array: &UInt64Array = as_primitive_array(array);
+                let value = typed_array.value_at(row_index);
+                value.bit_xor_to_row(self.index, accessor);
+            }
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "Unsupported data type in BitXorRowAccumulator: {}",
+                    array.data_type()
+                )))
+            }
+        }
+
+        Ok(())
     }
 
-    fn update_scalar(
-        &mut self,
-        value: &ScalarValue,
+    #[inline(always)]
+    fn update_value<N: RowAccumulatorNativeType>(
+        &self,
+        native_value: Option<N>,
         accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        bit_xor_row(self.index, accessor, value)
+    ) {
+        if let Some(value) = native_value {
+            value.bit_xor_to_row(self.index, accessor);
+        }
     }
 
     fn merge_batch(
