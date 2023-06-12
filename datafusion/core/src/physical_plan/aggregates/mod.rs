@@ -431,12 +431,14 @@ fn get_finest_requirement<
 /// ordering requirements of order-sensitive aggregation functions.
 fn calc_required_input_ordering(
     input: &Arc<dyn ExecutionPlan>,
-    aggr_expr: &mut [Arc<dyn AggregateExpr>],
-    order_by_expr: &mut [Option<LexOrdering>],
+    aggr_exprs: &mut [Arc<dyn AggregateExpr>],
+    order_by_exprs: &mut [Option<LexOrdering>],
     aggregator_reqs: LexOrderingReq,
     aggregator_reverse_reqs: Option<LexOrderingReq>,
     aggregation_ordering: &mut Option<AggregationOrdering>,
-    is_single_mode: bool,
+    // In partial mode we need to propagate ordering so that subsequent stages
+    // (Final, FinalPartitioned) can know ordering for its input table.
+    is_partial_mode: bool,
 ) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = vec![];
     // Boolean shows that whether `required_input_ordering` stored comes from
@@ -480,14 +482,19 @@ fn calc_required_input_ordering(
                 if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                     requirement.push(req.clone());
                 }
-                if ordering.iter().all(|item| req.expr.ne(&item.expr)) && !is_single_mode
+                // In partial mode, append output ordering with required ordering of the aggregator
+                // In multi partitions, this enables us to reduce partitions correctly.
+                if ordering.iter().all(|item| req.expr.ne(&item.expr)) && is_partial_mode
                 {
                     ordering.push(req.into());
                 }
             }
             required_input_ordering = requirement;
         } else {
-            if !is_single_mode && !aggregator_requirement.is_empty() {
+            // In partial mode, append output ordering with required ordering of the aggregator
+            // (In this case there is no output ordering, hence output ordering is required ordering of the aggregator)
+            // In multi partitions, this enables us to reduce partitions correctly.
+            if is_partial_mode && !aggregator_requirement.is_empty() {
                 *aggregation_ordering = Some(AggregationOrdering {
                     mode: GroupByOrderMode::Linear,
                     order_indices: vec![],
@@ -519,13 +526,13 @@ fn calc_required_input_ordering(
     // If `required_input_ordering` is constructed using reverse requirement, we should reverse
     // each `aggr_expr` to be able to correctly calculate their result in reverse order.
     if reverse_req {
-        aggr_expr
+        aggr_exprs
             .iter_mut()
-            .zip(order_by_expr.iter_mut())
-            .map(|(elem, ob_expr)| {
-                if is_order_sensitive(elem) {
-                    if let Some(reverse) = elem.reverse_expr() {
-                        *elem = reverse;
+            .zip(order_by_exprs.iter_mut())
+            .map(|(aggr_expr, ob_expr)| {
+                if is_order_sensitive(aggr_expr) {
+                    if let Some(reverse) = aggr_expr.reverse_expr() {
+                        *aggr_expr = reverse;
                         *ob_expr = ob_expr.as_ref().map(|obs| reverse_order_bys(obs));
                     } else {
                         return Err(DataFusionError::Execution(
@@ -548,6 +555,7 @@ impl AggregateExec {
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        // Ordering requirement of each aggregate expression
         mut order_by_expr: Vec<Option<LexOrdering>>,
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
@@ -624,7 +632,7 @@ impl AggregateExec {
             aggregator_reqs,
             aggregator_reverse_reqs,
             &mut aggregation_ordering,
-            matches!(mode, AggregateMode::Single),
+            matches!(mode, AggregateMode::Partial),
         )?;
 
         Ok(AggregateExec {
@@ -1016,12 +1024,14 @@ fn aggregate_expressions(
                         })
                     })
                     .collect::<Vec<_>>();
-                if let Some(ordering_req) = agg.order_bys() {
-                    let ordering_exprs = ordering_req
-                        .iter()
-                        .map(|item| item.expr.clone())
-                        .collect::<Vec<_>>();
-                    res.extend(ordering_exprs);
+                if matches!(mode, AggregateMode::Partial) {
+                    if let Some(ordering_req) = agg.order_bys() {
+                        let ordering_exprs = ordering_req
+                            .iter()
+                            .map(|item| item.expr.clone())
+                            .collect::<Vec<_>>();
+                        res.extend(ordering_exprs);
+                    }
                 }
                 res
             })
@@ -1918,8 +1928,9 @@ mod tests {
         let aggr_expr = Arc::new(FirstValue::new(
             Arc::new(col_a.clone()),
             "first1",
+            DataType::Int32,
             vec![],
-            vec![DataType::Int32],
+            vec![],
         )) as _;
         let mut aggr_exprs = vec![aggr_expr; order_by_exprs.len()];
         let res = get_finest_requirement(

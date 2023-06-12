@@ -35,7 +35,8 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct OrderSensitiveArrayAgg {
     name: String,
-    data_types: Vec<DataType>,
+    input_data_type: DataType,
+    ob_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
 }
@@ -45,13 +46,15 @@ impl OrderSensitiveArrayAgg {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
-        data_types: Vec<DataType>,
+        input_data_type: DataType,
+        ob_data_types: Vec<DataType>,
         ordering_req: LexOrdering,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
-            data_types,
+            input_data_type,
+            ob_data_types,
             ordering_req,
         }
     }
@@ -65,15 +68,15 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn field(&self) -> Result<Field> {
         Ok(Field::new_list(
             &self.name,
-            Field::new("item", self.data_types[0].clone(), true),
+            Field::new("item", self.input_data_type.clone(), true),
             false,
         ))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(OrderSensitiveArrayAggAccumulator::try_new(
-            &self.data_types[0],
-            &self.data_types[1..],
+            &self.input_data_type,
+            &self.ob_data_types,
             self.ordering_req.clone(),
         )?))
     }
@@ -81,12 +84,12 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new_list(
             format_state_name(&self.name, "array_agg"),
-            Field::new("item", self.data_types[0].clone(), true),
+            Field::new("item", self.input_data_type.clone(), true),
             false,
         )];
-        let orderings = ordering_fields(&self.ordering_req, &self.data_types[1..]);
+        let orderings = ordering_fields(&self.ordering_req, &self.ob_data_types);
         fields.push(Field::new_list(
-            format_state_name(&self.name, "array_agg"),
+            format_state_name(&self.name, "array_agg_orderings"),
             Field::new(
                 "item",
                 DataType::Struct(Fields::from(orderings.clone())),
@@ -121,7 +124,8 @@ impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.data_types == x.data_types
+                    && self.input_data_type == x.input_data_type
+                    && self.ob_data_types == x.ob_data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)

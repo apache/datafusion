@@ -45,7 +45,7 @@ pub fn create_aggregate_expr(
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
     // get the result data type for this aggregate function
-    let mut input_phy_types = input_phy_exprs
+    let input_phy_types = input_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
@@ -54,7 +54,6 @@ pub fn create_aggregate_expr(
         .iter()
         .map(|e| e.expr.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
-    input_phy_types.extend(ordering_types);
     let input_phy_exprs = input_phy_exprs.to_vec();
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
@@ -152,7 +151,8 @@ pub fn create_aggregate_expr(
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
                     input_phy_exprs[0].clone(),
                     name,
-                    input_phy_types.clone(),
+                    input_phy_types[0].clone(),
+                    ordering_types,
                     ordering_req.to_vec(),
                 ))
             }
@@ -327,14 +327,16 @@ pub fn create_aggregate_expr(
         (AggregateFunction::FirstValue, _) => Arc::new(expressions::FirstValue::new(
             input_phy_exprs[0].clone(),
             name,
+            input_phy_types[0].clone(),
             ordering_req.to_vec(),
-            input_phy_types.clone(),
+            ordering_types,
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
+            input_phy_types[0].clone(),
             ordering_req.to_vec(),
-            input_phy_types.clone(),
+            ordering_types,
         )),
     })
 }

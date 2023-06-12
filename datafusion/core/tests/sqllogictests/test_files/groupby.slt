@@ -2600,7 +2600,7 @@ physical_plan
 SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as fv2]
-------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=Linear
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------SortExec: expr=[ts@1 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
@@ -2638,7 +2638,7 @@ physical_plan
 SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
-------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)], ordering_mode=Linear
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
 --------SortExec: expr=[ts@1 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
@@ -2671,7 +2671,7 @@ Projection: FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS
 ----TableScan: sales_global projection=[ts, amount]
 physical_plan
 ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv2]
---AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=Linear
+--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 ----SortPreservingMergeExec: [ts@0 ASC NULLS LAST]
 ------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=Linear
 --------SortExec: expr=[ts@0 ASC NULLS LAST]
@@ -2698,7 +2698,7 @@ Projection: FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS
 ----TableScan: sales_global projection=[ts, amount]
 physical_plan
 ProjectionExec: expr=[FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@1 as fv2]
---AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)], ordering_mode=Linear
+--AggregateExec: mode=Final, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
 ----SortPreservingMergeExec: [ts@0 ASC NULLS LAST]
 ------AggregateExec: mode=Partial, gby=[], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)], ordering_mode=Linear
 --------SortExec: expr=[ts@0 ASC NULLS LAST]
@@ -2723,7 +2723,7 @@ Projection: ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS L
 ----TableScan: sales_global projection=[ts, amount]
 physical_plan
 ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@0 as array_agg1]
---AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
 ----SortPreservingMergeExec: [ts@0 ASC NULLS LAST]
 ------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
 --------SortExec: expr=[ts@0 ASC NULLS LAST]
@@ -2747,7 +2747,7 @@ Projection: ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS 
 ----TableScan: sales_global projection=[ts, amount]
 physical_plan
 ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@0 as array_agg1]
---AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
 ----SortPreservingMergeExec: [ts@0 DESC]
 ------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
 --------SortExec: expr=[ts@0 DESC]
@@ -2771,7 +2771,7 @@ Projection: ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NUL
 ----TableScan: sales_global projection=[amount]
 physical_plan
 ProjectionExec: expr=[ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@0 as array_agg1]
---AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
+--AggregateExec: mode=Final, gby=[], aggr=[ARRAY_AGG(sales_global.amount)]
 ----SortPreservingMergeExec: [amount@0 ASC NULLS LAST]
 ------AggregateExec: mode=Partial, gby=[], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
 --------SortExec: expr=[amount@0 ASC NULLS LAST]
@@ -2800,7 +2800,7 @@ physical_plan
 SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as array_agg1]
-------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=Linear
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
 --------SortExec: expr=[amount@1 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
@@ -2837,7 +2837,7 @@ physical_plan
 SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 --SortExec: expr=[country@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[country@0 as country, ARRAY_AGG(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, FIRST_VALUE(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, LAST_VALUE(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
-------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=Linear
+------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------SortExec: expr=[amount@1 DESC]
 ----------CoalesceBatchesExec: target_batch_size=8192
 ------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8

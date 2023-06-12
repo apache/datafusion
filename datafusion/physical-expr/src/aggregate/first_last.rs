@@ -37,7 +37,8 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct FirstValue {
     name: String,
-    pub data_types: Vec<DataType>,
+    input_data_type: DataType,
+    pub ob_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
 }
@@ -47,12 +48,14 @@ impl FirstValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
+        input_data_type: DataType,
         ordering_req: LexOrdering,
-        data_types: Vec<DataType>,
+        ob_data_types: Vec<DataType>,
     ) -> Self {
         Self {
             name: name.into(),
-            data_types,
+            input_data_type,
+            ob_data_types,
             expr,
             ordering_req,
         }
@@ -66,23 +69,23 @@ impl AggregateExpr for FirstValue {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_types[0].clone(), true))
+        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(FirstValueAccumulator::try_new(
-            &self.data_types[0],
-            &self.data_types[1..],
+            &self.input_data_type,
+            &self.ob_data_types,
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
             format_state_name(&self.name, "first_value"),
-            self.data_types[0].clone(),
+            self.input_data_type.clone(),
             true,
         )];
-        fields.extend(ordering_fields(&self.ordering_req, &self.data_types[1..]));
+        fields.extend(ordering_fields(&self.ordering_req, &self.ob_data_types));
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
             DataType::Boolean,
@@ -116,15 +119,16 @@ impl AggregateExpr for FirstValue {
         Some(Arc::new(LastValue::new(
             self.expr.clone(),
             name,
+            self.input_data_type.clone(),
             self.ordering_req.clone(),
-            self.data_types.clone(),
+            self.ob_data_types.clone(),
         )))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(FirstValueAccumulator::try_new(
-            &self.data_types[0],
-            &self.data_types[1..],
+            &self.input_data_type,
+            &self.ob_data_types,
         )?))
     }
 }
@@ -135,7 +139,8 @@ impl PartialEq<dyn Any> for FirstValue {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.data_types == x.data_types
+                    && self.input_data_type == x.input_data_type
+                    && self.ob_data_types == x.ob_data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)
@@ -213,7 +218,8 @@ impl Accumulator for FirstValueAccumulator {
 #[derive(Debug)]
 pub struct LastValue {
     name: String,
-    pub data_types: Vec<DataType>,
+    input_data_type: DataType,
+    pub ob_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
 }
@@ -223,12 +229,14 @@ impl LastValue {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
+        input_data_type: DataType,
         ordering_req: LexOrdering,
-        data_types: Vec<DataType>,
+        ob_data_types: Vec<DataType>,
     ) -> Self {
         Self {
             name: name.into(),
-            data_types,
+            input_data_type,
+            ob_data_types,
             expr,
             ordering_req,
         }
@@ -242,23 +250,23 @@ impl AggregateExpr for LastValue {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_types[0].clone(), true))
+        Ok(Field::new(&self.name, self.input_data_type.clone(), true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(LastValueAccumulator::try_new(
-            &self.data_types[0],
-            &self.data_types[1..],
+            &self.input_data_type,
+            &self.ob_data_types,
         )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         let mut fields = vec![Field::new(
             format_state_name(&self.name, "last_value"),
-            self.data_types[0].clone(),
+            self.input_data_type.clone(),
             true,
         )];
-        fields.extend(ordering_fields(&self.ordering_req, &self.data_types[1..]));
+        fields.extend(ordering_fields(&self.ordering_req, &self.ob_data_types));
         fields.push(Field::new(
             format_state_name(&self.name, "is_set"),
             DataType::Boolean,
@@ -292,15 +300,16 @@ impl AggregateExpr for LastValue {
         Some(Arc::new(FirstValue::new(
             self.expr.clone(),
             name,
+            self.input_data_type.clone(),
             self.ordering_req.clone(),
-            self.data_types.clone(),
+            self.ob_data_types.clone(),
         )))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(LastValueAccumulator::try_new(
-            &self.data_types[0],
-            &self.data_types[1..],
+            &self.input_data_type,
+            &self.ob_data_types,
         )?))
     }
 }
@@ -311,7 +320,8 @@ impl PartialEq<dyn Any> for LastValue {
             .downcast_ref::<Self>()
             .map(|x| {
                 self.name == x.name
-                    && self.data_types == x.data_types
+                    && self.input_data_type == x.input_data_type
+                    && self.ob_data_types == x.ob_data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)
