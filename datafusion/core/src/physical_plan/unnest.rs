@@ -36,10 +36,7 @@ use crate::physical_plan::{
     Distribution, EquivalenceProperties, ExecutionPlan, Partitioning, PhysicalExpr,
     PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 /// Unnest the given column by joining the row with each value in the nested type.
 #[derive(Debug)]

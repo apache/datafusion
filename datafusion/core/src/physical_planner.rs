@@ -26,8 +26,10 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
-    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
+    Repartition, Union, UserDefinedLogicalNode,
 };
+use datafusion_common::display::ToStringifiedPlan;
+
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;

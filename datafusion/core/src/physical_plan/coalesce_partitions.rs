@@ -27,10 +27,10 @@ use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::Statistics;
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
+use datafusion_common::{DataFusionError, Result};
 
 use super::SendableRecordBatchStream;
 use datafusion_execution::TaskContext;

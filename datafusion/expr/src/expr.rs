@@ -992,7 +992,7 @@ impl fmt::Debug for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {:?}", ob)?;
+                    write!(f, " ORDER BY {ob:?}")?;
                 }
                 Ok(())
             }
@@ -1008,7 +1008,7 @@ impl fmt::Debug for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {:?}", ob)?;
+                    write!(f, " ORDER BY {ob:?}")?;
                 }
                 Ok(())
             }
@@ -1374,7 +1374,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" FILTER (WHERE {fe})");
             }
             if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ({:?})", ob);
+                info += &format!(" ORDER BY ({ob:?})");
             }
             Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }

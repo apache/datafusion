@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion Configuration Options
+//! Runtime configuration, via [`ConfigOptions`]
 
 use crate::{DataFusionError, Result};
 use std::any::Any;

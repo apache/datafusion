@@ -24,20 +24,24 @@ use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;
 
-/// A window expression that is a built-in window function.
+/// Evaluates a window function by instantiating a
+/// `[PartitionEvaluator]` for calculating the function's output in
+/// that partition.
 ///
-/// Note that unlike aggregation based window functions, built-in window functions normally ignore
-/// window frame spec, with the exception of first_value, last_value, and nth_value.
+/// Note that unlike aggregation based window functions, some window
+/// functions such as `rank` ignore the values in the window frame,
+/// but others such as `first_value`, `last_value`, and
+/// `nth_value` need the value.
+#[allow(rustdoc::private_intra_doc_links)]
 pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
-    /// the field of the final result of this aggregation.
+    /// The field of the final result of evaluating this window function.
     fn field(&self) -> Result<Field>;
 
-    /// expressions that are passed to the Accumulator.
-    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
+    /// Expressions that are passed to the [`PartitionEvaluator`].
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
     /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
@@ -46,8 +50,10 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         "BuiltInWindowFunctionExpr: default name"
     }
 
-    /// Evaluate window function arguments against the batch and return
-    /// an array ref. Typically, the resulting vector is a single element vector.
+    /// Evaluate window function's arguments against the input window
+    /// batch and return an [`ArrayRef`].
+    ///
+    /// Typically, the resulting vector is a single element vector.
     fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         self.expressions()
             .iter()
@@ -56,20 +62,45 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
             .collect()
     }
 
-    /// Create built-in window evaluator with a batch
+    /// Create a [`PartitionEvaluator`] for evaluating the function on
+    /// a particular partition.
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Construct Reverse Expression that produces the same result
-    /// on a reversed window.  For example `lead(10)` --> `lag(10)`
+    /// Construct a new [`BuiltInWindowFunctionExpr`] that produces
+    /// the same result as this function on a window with reverse
+    /// order. The return value of this function is used by the
+    /// DataFusion optimizer to avoid re-sorting the data when
+    /// possible.
+    ///
+    /// Returns `None` (the default) if no reverse is known (or possible).
+    ///
+    /// For example, the reverse of `lead(10)` is `lag(10)`.
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         None
     }
 
+    /// Can the window function be incrementally computed using
+    /// bounded memory?
+    ///
+    /// If this function returns true, [`Self::create_evaluator`] must
+    /// implement [`PartitionEvaluator::evaluate_stateful`]
     fn supports_bounded_execution(&self) -> bool {
         false
     }
 
+    /// Does the window function use the values from its window frame?
+    ///
+    /// If this function returns true, [`Self::create_evaluator`] must
+    /// implement [`PartitionEvaluator::evaluate_inside_range`]
     fn uses_window_frame(&self) -> bool {
+        false
+    }
+
+    /// Can this function be evaluated with (only) rank
+    ///
+    /// If `include_rank` is true, then [`Self::create_evaluator`] must
+    /// implement [`PartitionEvaluator::evaluate_with_rank`]
+    fn include_rank(&self) -> bool {
         false
     }
 }

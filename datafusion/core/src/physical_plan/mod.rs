@@ -22,9 +22,9 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-pub use crate::common::{ColumnStatistics, Statistics};
-use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use datafusion_common::Result;
+pub use datafusion_common::{ColumnStatistics, Statistics};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;

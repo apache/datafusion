@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::error::Result;
 use crate::physical_plan::displayable;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::DataFusionError;
+use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};

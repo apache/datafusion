@@ -17,7 +17,6 @@
 
 //! Physical expressions for window functions
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
     expressions::{
@@ -26,9 +25,10 @@ use crate::physical_plan::{
     },
     udaf, ExecutionPlan, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
 use arrow_schema::{SchemaRef, SortOptions};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     WindowFrame,

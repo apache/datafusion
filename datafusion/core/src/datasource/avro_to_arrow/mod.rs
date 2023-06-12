@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains utilities to manipulate avro metadata.
+//! This module contains code for reading [Avro] data into `RecordBatch`es
+//!
+//! [Avro]: https://avro.apache.org/docs/1.2.0/
 
 #[cfg(feature = "avro")]
 mod arrow_array_reader;

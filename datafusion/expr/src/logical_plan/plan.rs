@@ -40,8 +40,11 @@ use datafusion_common::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::Arc;
+
+// backwards compatibility
+pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+pub use datafusion_common::{JoinConstraint, JoinType};
 
 use super::DdlStatement;
 
@@ -1128,79 +1131,6 @@ impl ToStringifiedPlan for LogicalPlan {
     }
 }
 
-/// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinType {
-    /// Inner Join
-    Inner,
-    /// Left Join
-    Left,
-    /// Right Join
-    Right,
-    /// Full Join
-    Full,
-    /// Left Semi Join
-    LeftSemi,
-    /// Right Semi Join
-    RightSemi,
-    /// Left Anti Join
-    LeftAnti,
-    /// Right Anti Join
-    RightAnti,
-}
-
-impl JoinType {
-    pub fn is_outer(self) -> bool {
-        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
-    }
-}
-
-impl Display for JoinType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let join_type = match self {
-            JoinType::Inner => "Inner",
-            JoinType::Left => "Left",
-            JoinType::Right => "Right",
-            JoinType::Full => "Full",
-            JoinType::LeftSemi => "LeftSemi",
-            JoinType::RightSemi => "RightSemi",
-            JoinType::LeftAnti => "LeftAnti",
-            JoinType::RightAnti => "RightAnti",
-        };
-        write!(f, "{join_type}")
-    }
-}
-
-impl FromStr for JoinType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "INNER" => Ok(JoinType::Inner),
-            "LEFT" => Ok(JoinType::Left),
-            "RIGHT" => Ok(JoinType::Right),
-            "FULL" => Ok(JoinType::Full),
-            "LEFTSEMI" => Ok(JoinType::LeftSemi),
-            "RIGHTSEMI" => Ok(JoinType::RightSemi),
-            "LEFTANTI" => Ok(JoinType::LeftAnti),
-            "RIGHTANTI" => Ok(JoinType::RightAnti),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "The join type {s} does not exist or is not implemented"
-            ))),
-        }
-    }
-}
-
-/// Join constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinConstraint {
-    /// Join ON
-    On,
-    /// Join USING
-    Using,
-}
-
 /// Produces no rows: An empty relation with an empty schema
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct EmptyRelation {
@@ -1719,93 +1649,6 @@ pub enum Partitioning {
     Hash(Vec<Expr>, usize),
     /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
     DistributeBy(Vec<Expr>),
-}
-
-/// Represents which type of plan, when storing multiple
-/// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PlanType {
-    /// The initial LogicalPlan provided to DataFusion
-    InitialLogicalPlan,
-    /// The LogicalPlan which results from applying an analyzer pass
-    AnalyzedLogicalPlan {
-        /// The name of the analyzer which produced this plan
-        analyzer_name: String,
-    },
-    /// The LogicalPlan after all analyzer passes have been applied
-    FinalAnalyzedLogicalPlan,
-    /// The LogicalPlan which results from applying an optimizer pass
-    OptimizedLogicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized LogicalPlan that was converted to a physical plan
-    FinalLogicalPlan,
-    /// The initial physical plan, prepared for execution
-    InitialPhysicalPlan,
-    /// The ExecutionPlan which results from applying an optimizer pass
-    OptimizedPhysicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized physical which would be executed
-    FinalPhysicalPlan,
-}
-
-impl Display for PlanType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
-            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
-                write!(f, "logical_plan after {analyzer_name}")
-            }
-            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
-            PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                write!(f, "logical_plan after {optimizer_name}")
-            }
-            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
-            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
-            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
-                write!(f, "physical_plan after {optimizer_name}")
-            }
-            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
-        }
-    }
-}
-
-/// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StringifiedPlan {
-    /// An identifier of what type of plan this string represents
-    pub plan_type: PlanType,
-    /// The string representation of the plan
-    pub plan: Arc<String>,
-}
-
-impl StringifiedPlan {
-    /// Create a new Stringified plan of `plan_type` with string
-    /// representation `plan`
-    pub fn new(plan_type: PlanType, plan: impl Into<String>) -> Self {
-        StringifiedPlan {
-            plan_type,
-            plan: Arc::new(plan.into()),
-        }
-    }
-
-    /// returns true if this plan should be displayed. Generally
-    /// `verbose_mode = true` will display all available plans
-    pub fn should_display(&self, verbose_mode: bool) -> bool {
-        match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
-            _ => verbose_mode,
-        }
-    }
-}
-
-/// Trait for something that can be formatted as a stringified plan
-pub trait ToStringifiedPlan {
-    /// Create a stringified plan with the specified type
-    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
 }
 
 /// Unnest a column that contains a nested list type.

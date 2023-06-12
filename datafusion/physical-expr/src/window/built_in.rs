@@ -39,7 +39,7 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::WindowFrame;
 
-/// A window expr that takes the form of a built in window function
+/// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
@@ -121,7 +121,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 last_range = range;
             }
             ScalarValue::iter_to_array(row_wise_results.into_iter())
-        } else if evaluator.include_rank() {
+        } else if self.expr.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
             evaluator.evaluate_with_rank(num_rows, &sort_partition_points)
@@ -158,7 +158,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 WindowFn::Builtin(evaluator) => evaluator,
                 _ => unreachable!(),
             };
-            let mut state = &mut window_state.state;
+            let state = &mut window_state.state;
 
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
@@ -166,7 +166,7 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let sort_partition_points = if evaluator.include_rank() {
+            let sort_partition_points = if self.expr.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
                 evaluate_partition_ranges(num_rows, &columns)?
             } else {
