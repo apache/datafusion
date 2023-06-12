@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use arrow::util::pretty::print_batches;
 
 #[tokio::test]
 #[ignore]

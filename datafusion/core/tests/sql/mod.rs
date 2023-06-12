@@ -25,7 +25,6 @@ use arrow::{
 use chrono::prelude::*;
 use chrono::Duration;
 
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, TableScan};
 use datafusion::physical_plan::metrics::MetricValue;
