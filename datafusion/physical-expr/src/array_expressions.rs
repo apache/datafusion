@@ -280,28 +280,29 @@ pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::List(field) => match field.data_type() {
             DataType::Null => array_concat(&args[1..]),
             _ => {
-                let list_arrays =
-                    downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+                let list_arrays = downcast_vec!(args, ListArray)
+                    .collect::<Result<Vec<&ListArray>>>()?;
                 let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-                let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-                let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+                let capacity =
+                    Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+                let array_data: Vec<_> =
+                    list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
                 let array_data = array_data.iter().collect();
-                let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
-            
+                let mut mutable =
+                    MutableArrayData::with_capacities(array_data, false, capacity);
+
                 for (i, a) in list_arrays.iter().enumerate() {
                     mutable.extend(i, 0, a.len())
                 }
-            
+
                 let builder = mutable.into_builder();
                 let list = builder
                     .len(1)
                     .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
                     .build()
                     .unwrap();
-            
-                return Ok(Arc::new(arrow::array::make_array(
-                    list,
-                )));
+
+                return Ok(Arc::new(arrow::array::make_array(list)));
             }
         },
         data_type => Err(DataFusionError::NotImplemented(format!(
