@@ -20,14 +20,15 @@ under the License.
 # Roadmap
 
 The [project introduction](../user-guide/introduction) explains the
-overview and goals of the project and our development efforts largely
+overview and goals of DataFusion, and our development efforts largely
 align to that vision.
 
 ## Planning `EPIC`s
 
-DataFusion uses GitHub issues to track planned work. We collect
-related tickets using tracking issues labeled with `[EPIC]` which
-contain discussion and links to related items.
+DataFusion uses [GitHub
+issues](https://github.com/apache/arrow-datafusion/issues) to track
+planned work. We collect related tickets using tracking issues labeled
+with `[EPIC]` which contain discussion and links to more detailed items.
 
 Epics offer a high level roadmap of what the DataFusion
 community is thinking about. The epics are not meant to restrict
@@ -35,9 +36,10 @@ possibilities, but rather help the community see where development is
 headed, align our work, and inspire additional contributions.
 
 As this project is entirely driven by volunteers, we welcome
-contributions for items not currently covered by epics. However, before
-submitting a large PR, we strongly suggest and request you start a
-conversation using a github issue or the dev@arrow.apache.org mailing
-list to make review efficient and avoid surprises.
+contributions for items not currently covered by epics. However,
+before submitting a large PR, we strongly suggest and request you
+start a conversation using a github issue or the
+[dev@arrow.apache.org](mailto:dev@arrow.apache.org) mailing list to
+make review efficient and avoid surprises.
 
 [The current list of `EPIC`s can be found here](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+epic).
