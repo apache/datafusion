@@ -65,7 +65,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     }
 
     fn add_equal_orderings(&self, builder: &mut OrderingEquivalenceBuilder) {
-        // Only the built-in `RowNumber` window function introduces a new
+        // The built-in RowNumber window function introduces a new
         // ordering:
         let schema = builder.schema();
         if let Some((idx, field)) = schema.column_with_name(self.name()) {
