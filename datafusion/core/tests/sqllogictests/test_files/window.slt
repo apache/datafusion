@@ -258,34 +258,37 @@ Sort: d.b ASC NULLS LAST
 ----Aggregate: groupBy=[[d.b]], aggr=[[MAX(d.a)]]
 ------SubqueryAlias: d
 --------SubqueryAlias: _data2
-----------SubqueryAlias: s
-------------SubqueryAlias: _sample_data
---------------Union
-----------------Projection: Int64(1) AS a, Utf8("aa") AS b
-------------------EmptyRelation
-----------------Projection: Int64(3) AS a, Utf8("aa") AS b
-------------------EmptyRelation
-----------------Projection: Int64(5) AS a, Utf8("bb") AS b
-------------------EmptyRelation
-----------------Projection: Int64(7) AS a, Utf8("bb") AS b
-------------------EmptyRelation
+----------Projection: s.a, s.b
+------------WindowAggr: windowExpr=[[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+--------------SubqueryAlias: s
+----------------SubqueryAlias: _sample_data
+------------------Union
+--------------------Projection: Int64(1) AS a, Utf8("aa") AS b
+----------------------EmptyRelation
+--------------------Projection: Int64(3) AS a, Utf8("aa") AS b
+----------------------EmptyRelation
+--------------------Projection: Int64(5) AS a, Utf8("bb") AS b
+----------------------EmptyRelation
+--------------------Projection: Int64(7) AS a, Utf8("bb") AS b
+----------------------EmptyRelation
 physical_plan
 SortPreservingMergeExec: [b@0 ASC NULLS LAST]
---SortExec: expr=[b@0 ASC NULLS LAST]
-----ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a]
-------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[MAX(d.a)]
---------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 4), input_partitions=4
-------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]
---------------UnionExec
-----------------ProjectionExec: expr=[1 as a, aa as b]
-------------------EmptyExec: produce_one_row=true
-----------------ProjectionExec: expr=[3 as a, aa as b]
-------------------EmptyExec: produce_one_row=true
-----------------ProjectionExec: expr=[5 as a, bb as b]
-------------------EmptyExec: produce_one_row=true
-----------------ProjectionExec: expr=[7 as a, bb as b]
-------------------EmptyExec: produce_one_row=true
+--ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a]
+----AggregateExec: mode=Single, gby=[b@1 as b], aggr=[MAX(d.a)], ordering_mode=FullyOrdered
+------ProjectionExec: expr=[a@0 as a, b@1 as b]
+--------BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
+----------SortExec: expr=[b@1 ASC NULLS LAST,a@0 ASC NULLS LAST]
+------------CoalesceBatchesExec: target_batch_size=8192
+--------------RepartitionExec: partitioning=Hash([Column { name: "b", index: 1 }], 4), input_partitions=4
+----------------UnionExec
+------------------ProjectionExec: expr=[1 as a, aa as b]
+--------------------EmptyExec: produce_one_row=true
+------------------ProjectionExec: expr=[3 as a, aa as b]
+--------------------EmptyExec: produce_one_row=true
+------------------ProjectionExec: expr=[5 as a, bb as b]
+--------------------EmptyExec: produce_one_row=true
+------------------ProjectionExec: expr=[7 as a, bb as b]
+--------------------EmptyExec: produce_one_row=true
 
 # Check actual result:
 query TI

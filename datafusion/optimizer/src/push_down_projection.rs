@@ -311,12 +311,8 @@ impl OptimizerRule for PushDownProjection {
                 }
 
                 if new_window_expr.is_empty() {
-                    // none columns in window expr are needed, remove the window expr
-                    let input = window.input.clone();
-                    let new_window = restrict_outputs(input.clone(), &required_columns)?
-                        .unwrap_or((*input).clone());
-
-                    generate_plan!(projection_is_empty, plan, new_window)
+                    // none columns in window expr are needed, return original Window
+                    return Ok(None);
                 } else {
                     let mut referenced_inputs = HashSet::new();
                     exprlist_to_columns(&new_window_expr, &mut referenced_inputs)?;
