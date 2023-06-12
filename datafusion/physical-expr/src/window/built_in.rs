@@ -25,12 +25,12 @@ use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::window::window_expr::{
-    reverse_order_bys, BuiltinWindowState, NthValueKind, NthValueState, WindowFn,
+    BuiltinWindowState, NthValueKind, NthValueState, WindowFn,
 };
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
@@ -39,7 +39,7 @@ use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::WindowFrame;
 
-/// A window expr that takes the form of a built in window function
+/// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
 #[derive(Debug)]
 pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
@@ -158,7 +158,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 WindowFn::Builtin(evaluator) => evaluator,
                 _ => unreachable!(),
             };
-            let mut state = &mut window_state.state;
+            let state = &mut window_state.state;
 
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;

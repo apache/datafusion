@@ -75,14 +75,15 @@ use datafusion_sql::{
     planner::ParserOptions,
     ResolvedTableReference, TableReference,
 };
+use sqlparser::dialect::dialect_from_str;
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::ConfigOptions;
+use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
@@ -97,11 +98,6 @@ use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
-use sqlparser::dialect::{
-    AnsiDialect, BigQueryDialect, ClickHouseDialect, Dialect, GenericDialect,
-    HiveDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, RedshiftSqlDialect,
-    SQLiteDialect, SnowflakeDialect,
-};
 use url::Url;
 
 use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
@@ -495,6 +491,7 @@ impl SessionContext {
         }
 
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
+        let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
 
         match (if_not_exists, or_replace, table) {
@@ -1460,14 +1457,13 @@ impl SessionState {
             // The EnforceDistribution rule is for adding essential repartition to satisfy the required
             // distribution. Please make sure that the whole plan tree is determined before this rule.
             Arc::new(EnforceDistribution::new()),
+            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution rule
+            Arc::new(CombinePartialFinalAggregate::new()),
             // The EnforceSorting rule is for adding essential local sorting to satisfy the required
             // ordering. Please make sure that the whole plan tree is determined before this rule.
             // Note that one should always run this rule after running the EnforceDistribution rule
             // as the latter may break local sorting requirements.
             Arc::new(EnforceSorting::new()),
-            // The CombinePartialFinalAggregate rule should be applied after the EnforceDistribution
-            // and EnforceSorting rules
-            Arc::new(CombinePartialFinalAggregate::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
@@ -1675,7 +1671,13 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> Result<datafusion_sql::parser::Statement> {
-        let dialect = create_dialect_from_str(dialect)?;
+        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: \
+                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                     MsSQL, ClickHouse, BigQuery, Ansi."
+            ))
+        })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
         if statements.len() > 1 {
             return Err(DataFusionError::NotImplemented(
@@ -2071,28 +2073,6 @@ impl From<&SessionState> for TaskContext {
     }
 }
 
-// TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/848 is released
-fn create_dialect_from_str(dialect_name: &str) -> Result<Box<dyn Dialect>> {
-    match dialect_name.to_lowercase().as_str() {
-        "generic" => Ok(Box::new(GenericDialect)),
-        "mysql" => Ok(Box::new(MySqlDialect {})),
-        "postgresql" | "postgres" => Ok(Box::new(PostgreSqlDialect {})),
-        "hive" => Ok(Box::new(HiveDialect {})),
-        "sqlite" => Ok(Box::new(SQLiteDialect {})),
-        "snowflake" => Ok(Box::new(SnowflakeDialect)),
-        "redshift" => Ok(Box::new(RedshiftSqlDialect {})),
-        "mssql" => Ok(Box::new(MsSqlDialect {})),
-        "clickhouse" => Ok(Box::new(ClickHouseDialect {})),
-        "bigquery" => Ok(Box::new(BigQueryDialect)),
-        "ansi" => Ok(Box::new(AnsiDialect {})),
-        _ => {
-            Err(DataFusionError::Internal(format!(
-                "Unsupported SQL dialect: {dialect_name}. Available dialects: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi."
-            )))
-        }
-    }
-}
-
 /// Default implementation of [SerializerRegistry] that throws unimplemented error
 /// for all requests.
 pub struct EmptySerializerRegistry;
@@ -2257,10 +2237,9 @@ mod tests {
         let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
             .await
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid function \'my_func\'"
-        );
+        assert!(err
+            .to_string()
+            .contains("Error during planning: Invalid function \'my_func\'"));
 
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
@@ -2304,10 +2283,9 @@ mod tests {
         let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
             .await
             .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid function \'my_avg\'"
-        );
+        assert!(err
+            .to_string()
+            .contains("Error during planning: Invalid function \'my_avg\'"));
 
         // Can call it if you put quotes
         let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;

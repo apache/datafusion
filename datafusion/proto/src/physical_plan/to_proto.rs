@@ -32,7 +32,7 @@ use datafusion::physical_plan::{
 };
 
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
-use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::datasource::physical_plan::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 

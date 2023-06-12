@@ -30,27 +30,16 @@ use arrow::{
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::{is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem};
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
+};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
+use arrow::compute::{bool_and, bool_or};
 use arrow_array::cast::as_boolean_array;
 use arrow_array::ArrayAccessor;
 use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
-
-fn bool_and(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.false_count() == 0)
-}
-
-fn bool_or(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.true_count() != 0)
-}
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {
@@ -197,14 +186,8 @@ impl AggregateExpr for BoolAnd {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<RowAccumulatorItem> {
-        Ok(BoolAndRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        ).into())
+    fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
+        Ok(BoolAndRowAccumulator::new(start_index, self.data_type.clone()).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -419,14 +402,8 @@ impl AggregateExpr for BoolOr {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<RowAccumulatorItem> {
-        Ok(BoolOrRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        ).into())
+    fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
+        Ok(BoolOrRowAccumulator::new(start_index, self.data_type.clone()).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

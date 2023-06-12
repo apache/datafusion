@@ -32,8 +32,8 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use hashbrown::raw::RawTable;
 use smallvec::SmallVec;
 
-use crate::common::Result;
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
+use datafusion_common::Result;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 //

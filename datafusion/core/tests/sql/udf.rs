@@ -48,8 +48,8 @@ async fn scalar_udf() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
         ],
     )?;
 
@@ -127,7 +127,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from(vec![1, 10, 10, 100]))],
     )?;
     let ctx = SessionContext::new();
 
@@ -186,11 +186,11 @@ async fn simple_udaf() -> Result<()> {
 
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
     )?;
     let batch2 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([4, 5]))],
+        vec![Arc::new(Int32Array::from(vec![4, 5]))],
     )?;
 
     let ctx = SessionContext::new();

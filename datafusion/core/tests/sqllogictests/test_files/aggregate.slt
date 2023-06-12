@@ -16,26 +16,6 @@
 # under the License.
 
 
-statement ok
-CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
-  c1  VARCHAR NOT NULL,
-  c2  TINYINT NOT NULL,
-  c3  SMALLINT NOT NULL,
-  c4  SMALLINT,
-  c5  INT,
-  c6  BIGINT NOT NULL,
-  c7  SMALLINT NOT NULL,
-  c8  INT NOT NULL,
-  c9  BIGINT UNSIGNED NOT NULL,
-  c10 VARCHAR NOT NULL,
-  c11 FLOAT NOT NULL,
-  c12 DOUBLE NOT NULL,
-  c13 VARCHAR NOT NULL
-)
-STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv'
-
 #######
 # Error tests
 #######
@@ -65,7 +45,7 @@ statement error Error during planning: The percentile sample points count for Ap
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
 # csv_query_array_agg_unsupported
-statement error This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1
+statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
 SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100
 
 statement error This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1
@@ -87,9 +67,21 @@ SELECT bit_and(c5), bit_and(c6), bit_and(c7), bit_and(c8), bit_and(c9) FROM aggr
 ----
 0 0 0 0 0
 
+# csv_query_bit_and_distinct
+query IIIII
+SELECT bit_and(distinct c5), bit_and(distinct c6), bit_and(distinct c7), bit_and(distinct c8), bit_and(distinct c9) FROM aggregate_test_100
+----
+0 0 0 0 0
+
 # csv_query_bit_or
 query IIIII
 SELECT bit_or(c5), bit_or(c6), bit_or(c7), bit_or(c8), bit_or(c9) FROM aggregate_test_100
+----
+-1 -1 255 65535 4294967295
+
+# csv_query_bit_or_distinct
+query IIIII
+SELECT bit_or(distinct c5), bit_or(distinct c6), bit_or(distinct c7), bit_or(distinct c8), bit_or(distinct c9) FROM aggregate_test_100
 ----
 -1 -1 255 65535 4294967295
 
@@ -98,6 +90,18 @@ query IIIII
 SELECT bit_xor(c5), bit_xor(c6), bit_xor(c7), bit_xor(c8), bit_xor(c9) FROM aggregate_test_100
 ----
 1632751011 5960911605712039654 148 54789 169634700
+
+# csv_query_bit_xor_distinct (should be different than above)
+query IIIII
+SELECT bit_xor(distinct c5), bit_xor(distinct c6), bit_xor(distinct c7), bit_xor(distinct c8), bit_xor(distinct c9) FROM aggregate_test_100
+----
+1632751011 5960911605712039654 196 54789 169634700
+
+# csv_query_bit_xor_distinct_expr
+query I
+SELECT bit_xor(distinct c5 % 2) FROM aggregate_test_100
+----
+-2
 
 # csv_query_covariance_1
 query R
@@ -695,7 +699,7 @@ true
 
 # csv_query_cube_avg
 query TIR
-SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORDER BY c1, c2
+SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2
 ----
 a 1 -17.6
 a 2 -15.333333333333
@@ -736,7 +740,7 @@ NULL NULL 7.81
 
 # csv_query_rollup_avg
 query TIIR
-SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100_by_sql WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
+SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100 WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
 ----
 a 1 -85 -15154
 a 1 -56 8692
@@ -794,7 +798,7 @@ NULL NULL NULL 3833.525
 # csv_query_groupingsets_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4)
-FROM aggregate_test_100_by_sql
+FROM aggregate_test_100
 WHERE c1 IN ('a', 'b', NULL)
 GROUP BY GROUPING SETS ((c1), (c1,c2), (c1,c2,c3))
 ORDER BY c1, c2, c3
@@ -854,7 +858,7 @@ b NULL NULL 7732.315789473684
 # csv_query_singlecol_with_rollup_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4)
-FROM aggregate_test_100_by_sql
+FROM aggregate_test_100
 WHERE c1 IN ('a', 'b', NULL)
 GROUP BY c1, ROLLUP (c2, c3)
 ORDER BY c1, c2, c3
@@ -1169,7 +1173,7 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 5 -194 -13.857142857143 118 -101 14
 
 # csv_query_array_agg_unsupported
-statement error This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1
+statement error This feature is not implemented: Order-sensitive aggregators is not supported on multiple partitions
 SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
@@ -1496,9 +1500,21 @@ SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), boo
 ----
 true false false false false true false NULL
 
+# query_bool_and_distinct
+query BBBBBBBB
+SELECT bool_and(distinct c1), bool_and(distinct c2), bool_and(distinct c3), bool_and(distinct c4), bool_and(distinct c5), bool_and(distinct c6), bool_and(distinct c7), bool_and(distinct c8) FROM bool_aggregate_functions
+----
+true false false false false true false NULL
+
 # query_bool_or
 query BBBBBBBB
 SELECT bool_or(c1), bool_or(c2), bool_or(c3), bool_or(c4), bool_or(c5), bool_or(c6), bool_or(c7), bool_or(c8) FROM bool_aggregate_functions
+----
+true true true false true true false NULL
+
+# query_bool_or_distinct
+query BBBBBBBB
+SELECT bool_or(distinct c1), bool_or(distinct c2), bool_or(distinct c3), bool_or(distinct c4), bool_or(distinct c5), bool_or(distinct c6), bool_or(distinct c7), bool_or(distinct c8) FROM bool_aggregate_functions
 ----
 true true true false true true false NULL
 

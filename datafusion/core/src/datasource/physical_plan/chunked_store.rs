@@ -20,7 +20,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::path::Path;
-use object_store::{GetResult, ListResult, ObjectMeta, ObjectStore};
+use object_store::{GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore};
 use object_store::{MultipartId, Result};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
@@ -149,6 +149,10 @@ impl ObjectStore for ChunkedStore {
                 ))
             }
         }
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.inner.get_opts(location, options).await
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {

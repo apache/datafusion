@@ -29,9 +29,6 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::execution::context::TaskContext;
-use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
-use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use crate::physical_plan::aggregates::utils::{
     aggr_state_schema, col_to_value, get_at_indices, get_optional_filters, read_as_batch,
     slice_and_maybe_filter, ExecutionState, GroupState,
@@ -49,6 +46,9 @@ use arrow::datatypes::DataType;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::{ArrowArrayReader, RowAccessor};
 use datafusion_row::layout::RowLayout;
@@ -368,8 +368,7 @@ impl GroupedHashAggregateStream {
 
                     // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    *allocated += (std::mem::size_of::<u8>()
-                        * group_state.group_by_values.as_ref().len())
+                    *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());

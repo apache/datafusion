@@ -32,8 +32,31 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// A window expression that:
-/// * knows its resulting field
+/// Common trait for [window function] implementations
+///
+/// # Aggregate Window Expressions
+///
+/// These expressions take the form
+///
+/// ```text
+/// OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)
+/// ```
+///
+/// For example, cumulative window frames uses `PlainAggregateWindowExpr`.
+///
+/// # Non Aggregate Window Expressions
+///
+/// The expressions have the form
+///
+/// ```text
+/// OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)
+/// ```
+///
+/// For example, sliding window frames use [`SlidingAggregateWindowExpr`].
+///
+/// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
+/// [`PlainAggregateWindowExpr`]: crate::window::PlainAggregateWindowExpr
+/// [`SlidingAggregateWindowExpr`]: crate::window::SlidingAggregateWindowExpr
 pub trait WindowExpr: Send + Sync + Debug {
     /// Returns the window expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -123,7 +146,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
-/// Trait for different `AggregateWindowExpr`s (`PlainAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
+/// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
     /// window expressions may return distinct accumulators; e.g. sliding
@@ -251,19 +274,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             ScalarValue::iter_to_array(row_wise_results.into_iter())
         }
     }
-}
-
-/// Reverses the ORDER BY expression, which is useful during equivalent window
-/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
-/// 'ORDER BY a DESC, NULLS FIRST'.
-pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
-    order_bys
-        .iter()
-        .map(|e| PhysicalSortExpr {
-            expr: e.expr.clone(),
-            options: !e.options,
-        })
-        .collect()
 }
 
 #[derive(Debug)]

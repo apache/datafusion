@@ -22,10 +22,4 @@ pub mod context;
 pub use crate::datasource::file_format::options;
 
 // backwards compatibility
-pub use datafusion_execution::disk_manager;
-pub use datafusion_execution::memory_pool;
-pub use datafusion_execution::registry;
-pub use datafusion_execution::runtime_env;
-
-pub use disk_manager::DiskManager;
-pub use registry::FunctionRegistry;
+pub use datafusion_execution::*;

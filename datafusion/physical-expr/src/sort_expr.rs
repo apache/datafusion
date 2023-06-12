@@ -80,7 +80,7 @@ impl PhysicalSortExpr {
 
 /// Represents sort requirement associated with a plan
 ///
-/// If the requirement incudes [`SortOptions`] then both the
+/// If the requirement includes [`SortOptions`] then both the
 /// expression *and* the sort options must match.
 ///
 /// If the requirement does not include [`SortOptions`]) then only the
@@ -214,5 +214,8 @@ fn to_str(options: &SortOptions) -> &str {
     }
 }
 
-/// `LexOrdering` is a type alias for lexicographical ordering definition `Vec<PhysicalSortExpr>`
+///`LexOrdering` is a type alias for lexicographical ordering definition`Vec<PhysicalSortExpr>`
 pub type LexOrdering = Vec<PhysicalSortExpr>;
+
+///`LexOrderingReq` is a type alias for lexicographical ordering requirement definition`Vec<PhysicalSortRequirement>`
+pub type LexOrderingReq = Vec<PhysicalSortRequirement>;

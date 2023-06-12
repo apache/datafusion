@@ -45,7 +45,7 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    function, BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
+    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = function::return_type(fun, &input_expr_types)?;
+    let data_type = fun.return_type(&input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -384,8 +384,30 @@ pub fn create_physical_fun(
             Arc::new(|args| make_scalar_function(math_expressions::log)(args))
         }
 
+        // array functions
+        BuiltinScalarFunction::ArrayAppend => Arc::new(array_expressions::array_append),
+        BuiltinScalarFunction::ArrayConcat => Arc::new(array_expressions::array_concat),
+        BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
+        BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
+        BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
+        BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
+        BuiltinScalarFunction::ArrayPosition => {
+            Arc::new(array_expressions::array_position)
+        }
+        BuiltinScalarFunction::ArrayPositions => {
+            Arc::new(array_expressions::array_positions)
+        }
+        BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
+        BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
+        BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
+        BuiltinScalarFunction::ArrayToString => {
+            Arc::new(array_expressions::array_to_string)
+        }
+        BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
+        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
+        BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
+
         // string functions
-        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
@@ -787,19 +809,20 @@ pub fn create_physical_fun(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
-    use crate::from_slice::FromSlice;
-    use crate::type_coercion::coerce;
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-            Int32Array, StringArray, UInt32Array, UInt64Array,
+            Int32Array, StringArray, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::{as_fixed_size_list_array, as_uint64_array};
+    use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::type_coercion::functions::data_types;
+    use datafusion_expr::Signature;
 
     /// $FUNC function to test
     /// $ARGS arguments (vec) to pass to function
@@ -815,7 +838,7 @@ mod tests {
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
 
             let expr =
                 create_physical_expr_with_type_coercion(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
@@ -2785,73 +2808,6 @@ mod tests {
         Ok(())
     }
 
-    fn generic_test_array(
-        value1: ArrayRef,
-        value2: ArrayRef,
-        expected_type: DataType,
-        expected: &str,
-    ) -> Result<()> {
-        // any type works here: we evaluate against a literal of `value`
-        let schema = Schema::new(vec![
-            Field::new("a", value1.data_type().clone(), false),
-            Field::new("b", value2.data_type().clone(), false),
-        ]);
-        let columns: Vec<ArrayRef> = vec![value1, value2];
-        let execution_props = ExecutionProps::new();
-
-        let expr = create_physical_expr_with_type_coercion(
-            &BuiltinScalarFunction::MakeArray,
-            &[col("a", &schema)?, col("b", &schema)?],
-            &schema,
-            &execution_props,
-        )?;
-
-        // type is correct
-        assert_eq!(
-            expr.data_type(&schema)?,
-            // type equals to a common coercion
-            DataType::FixedSizeList(Arc::new(Field::new("item", expected_type, true)), 2)
-        );
-
-        // evaluate works
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), columns)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-
-        // downcast works
-        let result = as_fixed_size_list_array(&result)?;
-
-        // value is correct
-        assert_eq!(format!("{:?}", result.value(0)), expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_array() -> Result<()> {
-        generic_test_array(
-            Arc::new(StringArray::from_slice(["aa"])),
-            Arc::new(StringArray::from_slice(["bb"])),
-            DataType::Utf8,
-            "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
-        )?;
-
-        // different types, to validate that casting happens
-        generic_test_array(
-            Arc::new(UInt32Array::from_slice([1u32])),
-            Arc::new(UInt64Array::from_slice([1u64])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
-        )?;
-
-        // different types (another order), to validate that casting happens
-        generic_test_array(
-            Arc::new(UInt64Array::from_slice([1u64])),
-            Arc::new(UInt32Array::from_slice([1u32])),
-            DataType::UInt64,
-            "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
-        )
-    }
-
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match() -> Result<()> {
@@ -2859,7 +2815,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let execution_props = ExecutionProps::new();
 
-        let col_value: ArrayRef = Arc::new(StringArray::from_slice(["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
         let pattern = lit(r".*-(\d*)");
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr_with_type_coercion(
@@ -2900,7 +2856,7 @@ mod tests {
 
         let col_value = lit("aaa-555");
         let pattern = lit(r".*-(\d*)");
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice([1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
         let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
@@ -2930,7 +2886,33 @@ mod tests {
         Ok(())
     }
 
-    // Helper function
+    // Helper function just for testing.
+    // Returns `expressions` coerced to types compatible with
+    // `signature`, if possible.
+    pub fn coerce(
+        expressions: &[Arc<dyn PhysicalExpr>],
+        schema: &Schema,
+        signature: &Signature,
+    ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        if expressions.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let current_types = expressions
+            .iter()
+            .map(|e| e.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_types = data_types(&current_types, signature)?;
+
+        expressions
+            .iter()
+            .enumerate()
+            .map(|(i, expr)| try_cast(expr.clone(), schema, new_types[i].clone()))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    // Helper function just for testing.
     // The type coercion will be done in the logical phase, should do the type coercion for the test
     fn create_physical_expr_with_type_coercion(
         fun: &BuiltinScalarFunction,
@@ -2939,7 +2921,7 @@ mod tests {
         execution_props: &ExecutionProps,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let type_coerced_phy_exprs =
-            coerce(input_phy_exprs, input_schema, &function::signature(fun)).unwrap();
+            coerce(input_phy_exprs, input_schema, &fun.signature()).unwrap();
         create_physical_expr(fun, &type_coerced_phy_exprs, input_schema, execution_props)
     }
 

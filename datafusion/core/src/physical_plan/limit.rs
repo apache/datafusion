@@ -25,13 +25,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::{DataFusionError, Result};
 
 use super::expressions::PhysicalSortExpr;
 use super::{
@@ -39,7 +39,7 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Limit execution plan
 #[derive(Debug)]
