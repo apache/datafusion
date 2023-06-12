@@ -1685,24 +1685,24 @@ mod tests {
             vec![0u64, 0u64, 1u64],
         );
         test_coercion!(
+            Int16Array,
+            DataType::Int16,
+            vec![3i16, 2i16, 3i16],
+            Int64Array,
+            DataType::Int64,
+            vec![10i64, 6i64, 5i64],
+            Operator::BitwiseOr,
+            Int64Array,
+            DataType::Int64,
+            vec![11i64, 6i64, 7i64],
+        );
+        test_coercion!(
             UInt16Array,
             DataType::UInt16,
             vec![1u16, 2u16, 3u16],
             UInt64Array,
             DataType::UInt64,
             vec![10u64, 4u64, 5u64],
-            Operator::BitwiseOr,
-            UInt64Array,
-            DataType::UInt64,
-            vec![11u64, 6u64, 7u64],
-        );
-        test_coercion!(
-            UInt16Array,
-            DataType::UInt16,
-            vec![3u16, 2u16, 3u16],
-            UInt64Array,
-            DataType::UInt64,
-            vec![10u64, 6u64, 5u64],
             Operator::BitwiseOr,
             UInt64Array,
             DataType::UInt64,
