@@ -132,11 +132,11 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion is designed with a mind towards being a disaggregated
-//! query processing engine. Developers shoudl be able to mix and
-//! extend the part of it they need for their usecase. For example,
-//! just the [`ExecutionEngine`] runtime, or just the [`SqlToRel`] SQL
-//! planner and optimizer.
+//! DataFusion is designed to be a "disaggregated" query engine.  This
+//! means that developers can mix and extend the parts of DataFusion
+//! they need for their usecase. For example, just the
+//! [`ExecutionEngine`] runtime, or just the [`SqlToRel`] SQL planner
+//! and optimizer.
 //!
 //! In order to achieve this, DataFusion supports extension at many points:
 //!

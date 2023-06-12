@@ -35,7 +35,7 @@ possibilities, but rather help the community see where development is
 headed, align our work, and inspire additional contributions.
 
 As this project is entirely driven by volunteers, we welcome
-contributions for items not on this roadmap. However, before
+contributions for items not currently covered by epics. However, before
 submitting a large PR, we strongly suggest and request you start a
 conversation using a github issue or the dev@arrow.apache.org mailing
 list to make review efficient and avoid surprises.
