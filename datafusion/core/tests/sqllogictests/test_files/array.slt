@@ -295,7 +295,6 @@ select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1
 ----
 3 21
 
-=======
 # array_ndims scalar function #3
 query II rowsort
 select array_ndims(make_array()), array_ndims(make_array(make_array()))

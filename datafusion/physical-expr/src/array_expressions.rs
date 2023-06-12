@@ -160,6 +160,7 @@ pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
         _ => array(values),
     }
 }
+
 macro_rules! downcast_arg {
     ($ARG:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -211,7 +212,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (DataType::UInt16, DataType::UInt16) => append!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => append!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => append!(arr, element, UInt64Array),
-                (DataType::Null, _) => return array(&args[1..]),
+                (DataType::Null, _) => return Ok(array(&[ColumnarValue::Array(args[1].clone())])?.into_array(1)),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_append is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
@@ -262,7 +263,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
                 (DataType::UInt16, DataType::UInt16) => prepend!(arr, element, UInt16Array),
                 (DataType::UInt32, DataType::UInt32) => prepend!(arr, element, UInt32Array),
                 (DataType::UInt64, DataType::UInt64) => prepend!(arr, element, UInt64Array),
-                (DataType::Null, _) => return array(&args[..1]),
+                (DataType::Null, _) => return Ok(array(&[ColumnarValue::Array(args[0].clone())])?.into_array(1)),
                 (array_data_type, element_data_type) => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Array_prepend is not implemented for types '{array_data_type:?}' and '{element_data_type:?}'."
@@ -275,26 +276,38 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_concat/Array_cat SQL function
 pub fn array_concat(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_arrays =
-        downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
-    let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
-    let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
-    let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
-    let array_data = array_data.iter().collect();
-    let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
-
-    for (i, a) in list_arrays.iter().enumerate() {
-        mutable.extend(i, 0, a.len())
+    match args[0].data_type() {
+        DataType::List(field) => match field.data_type() {
+            DataType::Null => array_concat(&args[1..]),
+            _ => {
+                let list_arrays =
+                    downcast_vec!(args, ListArray).collect::<Result<Vec<&ListArray>>>()?;
+                let len: usize = list_arrays.iter().map(|a| a.values().len()).sum();
+                let capacity = Capacities::Array(list_arrays.iter().map(|a| a.len()).sum());
+                let array_data: Vec<_> = list_arrays.iter().map(|a| a.to_data()).collect::<Vec<_>>();
+                let array_data = array_data.iter().collect();
+                let mut mutable = MutableArrayData::with_capacities(array_data, false, capacity);
+            
+                for (i, a) in list_arrays.iter().enumerate() {
+                    mutable.extend(i, 0, a.len())
+                }
+            
+                let builder = mutable.into_builder();
+                let list = builder
+                    .len(1)
+                    .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
+                    .build()
+                    .unwrap();
+            
+                return Ok(Arc::new(arrow::array::make_array(
+                    list,
+                )));
+            }
+        },
+        data_type => Err(DataFusionError::NotImplemented(format!(
+            "Array is not type '{data_type:?}'."
+        ))),
     }
-
-    let builder = mutable.into_builder();
-    let list = builder
-        .len(1)
-        .buffers(vec![Buffer::from_slice_ref([0, len as i32])])
-        .build()
-        .unwrap();
-
-    return Ok(Arc::new(make_array(list)));
 }
 
 macro_rules! fill {
