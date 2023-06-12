@@ -41,7 +41,7 @@ use datafusion_expr::ScalarFunctionImplementation;
 use std::any::Any;
 use std::fmt::Debug;
 use std::fmt::{self, Formatter};
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Physical expression of a scalar function
@@ -164,10 +164,12 @@ impl PhysicalExpr for ScalarFunctionExpr {
         )))
     }
 
-    fn dyn_hash(&self, _state: &mut dyn Hasher) {
-        // hashing for `self.fun` is not supported
-        // Hence we cannot calculate hash for this type
-        unimplemented!();
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.name.hash(&mut s);
+        self.args.hash(&mut s);
+        self.return_type.hash(&mut s);
+        // Add `self.fun` when hash is available
     }
 }
 

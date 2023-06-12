@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::intervals::Interval;
@@ -134,10 +134,12 @@ impl PhysicalExpr for CastExpr {
         )])
     }
 
-    fn dyn_hash(&self, _state: &mut dyn Hasher) {
-        // `self.cast_options` doesn't support hashing
-        // Hence we cannot calculate `dyn_hash` for this type.
-        unimplemented!();
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.expr.hash(&mut s);
+        self.cast_type.hash(&mut s);
+        // Add `self.cast_options` when hash is available
+        // https://github.com/apache/arrow-rs/pull/4395
     }
 }
 

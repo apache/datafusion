@@ -106,6 +106,36 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         )))
     }
 
+    /// Update the hash `state` with this expression requirements from
+    /// [`Hash`].
+    ///
+    /// This method is required to support hashing [`PhysicalExpr`]s.  To
+    /// implement it, typically the type implementing
+    /// [`PhysicalExpr`] implements [`Hash`] and
+    /// then the following boiler plate is used:
+    ///
+    /// # Example:
+    /// ```
+    /// // User defined expression that derives Hash
+    /// #[derive(Hash, Debug, PartialEq, Eq)]
+    /// struct MyExpr {
+    ///   val: u64
+    /// }
+    ///
+    /// // impl PhysicalExpr {
+    /// // ...
+    /// # impl MyExpr {
+    ///   // Boiler plate to call the derived Hash impl
+    ///   fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+    ///     use std::hash::Hash;
+    ///     let mut s = state;
+    ///     self.hash(&mut s);
+    ///   }
+    /// // }
+    /// # }
+    /// ```
+    /// Note: [`PhysicalExpr`] is not constrained by [`Hash`]
+    /// directly because it must remain object safe.
     fn dyn_hash(&self, _state: &mut dyn Hasher);
 }
 
