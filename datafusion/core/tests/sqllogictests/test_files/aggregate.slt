@@ -16,26 +16,6 @@
 # under the License.
 
 
-statement ok
-CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
-  c1  VARCHAR NOT NULL,
-  c2  TINYINT NOT NULL,
-  c3  SMALLINT NOT NULL,
-  c4  SMALLINT,
-  c5  INT,
-  c6  BIGINT NOT NULL,
-  c7  SMALLINT NOT NULL,
-  c8  INT NOT NULL,
-  c9  BIGINT UNSIGNED NOT NULL,
-  c10 VARCHAR NOT NULL,
-  c11 FLOAT NOT NULL,
-  c12 DOUBLE NOT NULL,
-  c13 VARCHAR NOT NULL
-)
-STORED AS CSV
-WITH HEADER ROW
-LOCATION '../../testing/data/csv/aggregate_test_100.csv'
-
 #######
 # Error tests
 #######
@@ -719,7 +699,7 @@ true
 
 # csv_query_cube_avg
 query TIR
-SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORDER BY c1, c2
+SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2
 ----
 a 1 -17.6
 a 2 -15.333333333333
@@ -760,7 +740,7 @@ NULL NULL 7.81
 
 # csv_query_rollup_avg
 query TIIR
-SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100_by_sql WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
+SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100 WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
 ----
 a 1 -85 -15154
 a 1 -56 8692
@@ -818,7 +798,7 @@ NULL NULL NULL 3833.525
 # csv_query_groupingsets_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4)
-FROM aggregate_test_100_by_sql
+FROM aggregate_test_100
 WHERE c1 IN ('a', 'b', NULL)
 GROUP BY GROUPING SETS ((c1), (c1,c2), (c1,c2,c3))
 ORDER BY c1, c2, c3
@@ -878,7 +858,7 @@ b NULL NULL 7732.315789473684
 # csv_query_singlecol_with_rollup_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4)
-FROM aggregate_test_100_by_sql
+FROM aggregate_test_100
 WHERE c1 IN ('a', 'b', NULL)
 GROUP BY c1, ROLLUP (c2, c3)
 ORDER BY c1, c2, c3
