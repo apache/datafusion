@@ -65,9 +65,12 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => {
-            let aggregate =
-                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+        WindowFunction::AggregateFunction(_) | WindowFunction::AggregateUDF(_) => {
+            let aggregate = match fun {
+                WindowFunction::AggregateFunction(fun) => aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?,
+                WindowFunction::AggregateUDF(fun) => udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
+                _ => unreachable!()
+            };
             if !window_frame.start_bound.is_unbounded() {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     aggregate,
@@ -86,12 +89,6 @@ pub fn create_window_expr(
         }
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
-        WindowFunction::AggregateUDF(fun) => Arc::new(PlainAggregateWindowExpr::new(
-            udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
             partition_by,
             order_by,
             window_frame,

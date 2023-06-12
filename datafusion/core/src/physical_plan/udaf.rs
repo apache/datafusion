@@ -106,6 +106,10 @@ impl AggregateExpr for AggregateFunctionExpr {
         (self.fun.accumulator)(&self.data_type)
     }
 
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        (self.fun.accumulator)(&self.data_type)
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
