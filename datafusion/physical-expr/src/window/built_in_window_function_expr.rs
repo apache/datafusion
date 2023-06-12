@@ -95,4 +95,12 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn uses_window_frame(&self) -> bool {
         false
     }
+
+    /// Can this function be evaluated with (only) rank
+    ///
+    /// If `include_rank` is true, then [`Self::create_evaluator`] must
+    /// implement [`PartitionEvaluator::evaluate_with_rank`]
+    fn include_rank(&self) -> bool {
+        false
+    }
 }
