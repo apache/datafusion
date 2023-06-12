@@ -296,7 +296,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 "second" => {
                     // trunc to second
                     let mill = ScalarValue::TimestampSecond(
-                        Some(nano.unwrap() / 1_000_000),
+                        Some(nano.unwrap() / 1_000_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(mill)
@@ -304,7 +304,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 "millisecond" => {
                     // trunc to microsecond
                     let micro = ScalarValue::TimestampMillisecond(
-                        Some(nano.unwrap() / 1_000),
+                        Some(nano.unwrap() / 1_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(micro)
