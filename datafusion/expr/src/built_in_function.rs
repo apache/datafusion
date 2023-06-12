@@ -277,6 +277,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::CurrentDate
                 | BuiltinScalarFunction::CurrentTime
                 | BuiltinScalarFunction::Uuid
+                | BuiltinScalarFunction::MakeArray
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -510,11 +511,14 @@ impl BuiltinScalarFunction {
                 ))),
             },
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
-            BuiltinScalarFunction::MakeArray => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[0].clone(),
-                true,
-            )))),
+            BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
+                0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
+                _ => Ok(List(Arc::new(Field::new(
+                    "item",
+                    input_expr_types[0].clone(),
+                    true,
+                )))),
+            },
             BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
                     "item",
@@ -544,17 +548,17 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Concat => Ok(Utf8),
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
-            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin => {
-                match input_expr_types[1] {
-                    Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
-                    Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-                    Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-                    Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                    _ => Err(DataFusionError::Internal(format!(
-                        "The {self} function can only accept timestamp as the second arg."
-                    ))),
-                }
-            }
+            // DateTrunc always makes nanosecond timestamps
+            BuiltinScalarFunction::DateTrunc => Ok(Timestamp(Nanosecond, None)),
+            BuiltinScalarFunction::DateBin => match input_expr_types[1] {
+                Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
+                Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
+                Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
+                Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept timestamp as the second arg."
+                ))),
+            },
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }

@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFusion data sources
+//! DataFusion data sources: [`TableProvider`] and [`ListingTable`]
+//!
+//! [`ListingTable`]: crate::datasource::listing::ListingTable
 
 pub mod default_table_source;
 pub mod empty;

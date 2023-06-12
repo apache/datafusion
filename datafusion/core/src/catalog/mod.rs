@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains interfaces and default implementations
-//! of table namespacing concepts, including catalogs and schemas.
+//! Interfaces and default implementations of catalogs and schemas.
 
 pub mod information_schema;
 pub mod listing_schema;
