@@ -124,34 +124,4 @@ impl PhysicalOptimizer {
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
     }
-
-    /// Remove the first rule that [PhysicalOptimizerRule::name] equals to the given name.
-    /// Return whether a rule is removed.
-    pub fn remove_rule(&mut self, name: &str) -> bool {
-        let mut index_to_move = None;
-        for (index, rule) in self.rules.iter().enumerate() {
-            if rule.name() == name {
-                index_to_move = Some(index);
-                break;
-            }
-        }
-
-        if let Some(index) = index_to_move {
-            self.rules.remove(index);
-        }
-
-        index_to_move.is_some()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn remove_enforce_sorting_rule() {
-        let mut optimizer = PhysicalOptimizer::new();
-        assert!(optimizer.remove_rule(EnforceSorting {}.name()));
-        assert!(!optimizer.remove_rule(EnforceSorting {}.name()));
-    }
 }
