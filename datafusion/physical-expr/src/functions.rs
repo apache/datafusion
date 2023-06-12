@@ -404,7 +404,7 @@ pub fn create_physical_fun(
             Arc::new(array_expressions::array_to_string)
         }
         BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
-        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
         BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
 
         // string functions
