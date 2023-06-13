@@ -28,6 +28,7 @@ use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
     ScalarUDF, WindowFunction,
 };
+use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
@@ -47,7 +48,7 @@ use datafusion_expr::{
 use datafusion_expr::{ExprSchemable, Signature};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::{merge_schema, rewrite_preserving_name};
+use crate::utils::merge_schema;
 
 #[derive(Default)]
 pub struct TypeCoercion {}

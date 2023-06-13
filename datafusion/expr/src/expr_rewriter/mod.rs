@@ -17,9 +17,10 @@
 
 //! Expression rewriter
 
+use crate::expr::Sort;
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
 use std::collections::HashMap;
@@ -233,13 +234,69 @@ fn coerce_exprs_for_schema(
         .collect::<Result<_>>()
 }
 
+/// Recursively un-alias an expressions
+#[inline]
+pub fn unalias(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
+        _ => expr,
+    }
+}
+
+/// Rewrites `expr` using `rewriter`, ensuring that the output has the
+/// same name as `expr` prior to rewrite, adding an alias if necessary.
+///
+/// This is important when optimizing plans to ensure the output
+/// schema of plan nodes don't change after optimization
+pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
+where
+    R: TreeNodeRewriter<N = Expr>,
+{
+    let original_name = name_for_alias(&expr)?;
+    let expr = expr.rewrite(rewriter)?;
+    add_alias_if_changed(original_name, expr)
+}
+
+/// Return the name to use for the specific Expr, recursing into
+/// `Expr::Sort` as appropriate
+fn name_for_alias(expr: &Expr) -> Result<String> {
+    match expr {
+        // call Expr::display_name() on a Expr::Sort will throw an error
+        Expr::Sort(Sort { expr, .. }) => name_for_alias(expr),
+        expr => expr.display_name(),
+    }
+}
+
+/// Ensure `expr` has the name as `original_name` by adding an
+/// alias if necessary.
+fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
+    let new_name = name_for_alias(&expr)?;
+
+    if new_name == original_name {
+        return Ok(expr);
+    }
+
+    Ok(match expr {
+        Expr::Sort(Sort {
+            expr,
+            asc,
+            nulls_first,
+        }) => {
+            let expr = add_alias_if_changed(original_name, *expr)?;
+            Expr::Sort(Sort::new(Box::new(expr), asc, nulls_first))
+        }
+        expr => expr.alias(original_name),
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{col, lit};
+    use crate::{col, lit, Cast};
     use arrow::datatypes::DataType;
     use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
+    use std::ops::Add;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -385,6 +442,66 @@ mod test {
                 "Mutated Utf8(\"CO\")",
                 "Mutated state = Utf8(\"CO\")"
             ]
+        )
+    }
+
+    #[test]
+    fn test_rewrite_preserving_name() {
+        test_rewrite(col("a"), col("a"));
+
+        test_rewrite(col("a"), col("b"));
+
+        // cast data types
+        test_rewrite(
+            col("a"),
+            Expr::Cast(Cast::new(Box::new(col("a")), DataType::Int32)),
+        );
+
+        // change literal type from i32 to i64
+        test_rewrite(col("a").add(lit(1i32)), col("a").add(lit(1i64)));
+
+        // SortExpr a+1 ==> b + 2
+        test_rewrite(
+            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
+            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
+        );
+    }
+
+    /// rewrites `expr_from` to `rewrite_to` using
+    /// `rewrite_preserving_name` verifying the result is `expected_expr`
+    fn test_rewrite(expr_from: Expr, rewrite_to: Expr) {
+        struct TestRewriter {
+            rewrite_to: Expr,
+        }
+
+        impl TreeNodeRewriter for TestRewriter {
+            type N = Expr;
+
+            fn mutate(&mut self, _: Expr) -> Result<Expr> {
+                Ok(self.rewrite_to.clone())
+            }
+        }
+
+        let mut rewriter = TestRewriter {
+            rewrite_to: rewrite_to.clone(),
+        };
+        let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
+
+        let original_name = match &expr_from {
+            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
+            expr => expr.display_name(),
+        }
+        .unwrap();
+
+        let new_name = match &expr {
+            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
+            expr => expr.display_name(),
+        }
+        .unwrap();
+
+        assert_eq!(
+            original_name, new_name,
+            "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
         )
     }
 }
