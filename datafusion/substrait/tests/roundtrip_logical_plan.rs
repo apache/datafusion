@@ -279,18 +279,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // Test with length <= datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
-    async fn roundtrip_inlist_1() -> Result<()> {
-        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c')").await
-    }
-
-    #[tokio::test]
-    // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
-    async fn roundtrip_inlist_2() -> Result<()> {
-        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c', 'd')").await
-    }
-
-    #[tokio::test]
     async fn simple_scalar_function_abs() -> Result<()> {
         roundtrip("SELECT ABS(a) FROM data").await
     }
@@ -346,8 +334,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_inlist() -> Result<()> {
+    async fn roundtrip_inlist_1() -> Result<()> {
         roundtrip("SELECT * FROM data WHERE a IN (1, 2, 3)").await
+    }
+
+    #[tokio::test]
+    // Test with length <= datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+    async fn roundtrip_inlist_2() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c')").await
+    }
+
+    #[tokio::test]
+    // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+    async fn roundtrip_inlist_3() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c', 'd')").await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_inlist_4() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f NOT IN ('a', 'b', 'c', 'd')").await
     }
 
     #[tokio::test]

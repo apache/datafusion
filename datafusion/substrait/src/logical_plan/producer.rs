@@ -620,20 +620,37 @@ pub fn to_substrait_rex(
             list,
             negated,
         }) => {
-            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
-            // negated: expr NOT IN (A, B, ...) --> (expr != A) AND (expr != B) AND (expr != C)
             let substrait_list = list
                 .iter()
                 .map(|x| to_substrait_rex(x, schema, extension_info))
                 .collect::<Result<Vec<Expression>>>()?;
             let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
 
-            Ok(Expression {
+            let substrait_or_list = Expression {
                 rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
                     value: Some(Box::new(substrait_expr)),
                     options: substrait_list,
                 }))),
-            })
+            };
+
+            if *negated {
+                let function_anchor =
+                    _register_function("not".to_string(), extension_info);
+
+                Ok(Expression {
+                    rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                        function_reference: function_anchor,
+                        arguments: vec![FunctionArgument {
+                            arg_type: Some(ArgType::Value(substrait_or_list)),
+                        }],
+                        output_type: None,
+                        args: vec![],
+                        options: vec![],
+                    })),
+                })
+            } else {
+                Ok(substrait_or_list)
+            }
         }
         Expr::ScalarFunction(DFScalarFunction { fun, args }) => {
             let mut arguments: Vec<FunctionArgument> = vec![];
