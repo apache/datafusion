@@ -234,3 +234,39 @@ select count(*) from table_without_values;
 
 statement ok
 drop table table_without_values;
+
+
+# test insert with column names
+statement ok
+CREATE TABLE table_without_values(id BIGINT, name varchar);
+
+query IT
+insert into table_without_values(id, name) values(1, 'foo');
+----
+1
+
+query IT
+insert into table_without_values(name, id) values('bar', 2);
+----
+1
+
+statement error Schema error: Schema contains duplicate unqualified field name id
+insert into table_without_values(id, id) values(3, 3);
+
+statement error Arrow error: Cast error: Cannot cast string 'zoo' to value of Int64 type
+insert into table_without_values(name, id) values(4, 'zoo');
+
+statement error Error during planning: Column count doesn't match insert query!
+insert into table_without_values(id) values(4, 'zoo');
+
+statement error Error during planning: Inserting query must have the same schema with the table.
+insert into table_without_values(id) values(4);
+
+query IT rowsort
+select * from table_without_values;
+----
+1 foo
+2 bar
+
+statement ok
+drop table table_without_values;
