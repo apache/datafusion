@@ -153,9 +153,18 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
+    /// Evaluate a window function on the entire input partition,
+    /// `values`, producing one output row for each input.
+    ///
     /// Called for window functions that *do not use* values from the
     /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
     /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`).
+    ///
+    /// The function is passed the window as the `value` and must
+    /// produce an output column with exactly `num_rows` values.
+    ///
+    /// `num_rows` is requied to correctly compute the output in case
+    /// `values.len() == 0`
     fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),
@@ -214,7 +223,13 @@ pub trait PartitionEvaluator: Debug + Send {
     /// such as `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE` and produce a
     /// single value for every row in the partition.
     ///
-    /// Returns a [`ScalarValue`] that is the value of the window function for the entire partition
+    /// This is the simplest and most general function to implement
+    /// but also the least performant as it creates the output one row
+    /// at a time. It is typically much faster to implement stateful
+    /// evaluation or one of the specialized ran or evaluate
+    ///
+    /// Returns a [`ScalarValue`] that is the value of the window
+    /// function within the rangefor the entire partition
     fn evaluate_inside_range(
         &self,
         _values: &[ArrayRef],

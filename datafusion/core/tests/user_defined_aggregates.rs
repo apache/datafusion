@@ -18,6 +18,9 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
+// TODO: rename this file user_defined_functions.rs (as it has examples of user defined window functions too now)
+
+
 use arrow::datatypes::Fields;
 use std::sync::Arc;
 
@@ -239,3 +242,14 @@ impl Accumulator for FirstSelector {
         std::mem::size_of_val(self)
     }
 }
+
+
+// Test 1: Evaluate over the entire partition
+
+// Test 2: Evlaute over window ranges
+
+// Test 3: Evaluate using rank()
+
+// Test 4: Evaluate using stateful evalution
+
+// Test 5: Show using a scalar as argument

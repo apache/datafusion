@@ -249,6 +249,18 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        None
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        self.fun.supports_bounded_execution
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        self.fun.uses_window_frame
+    }
 }
 
 pub(crate) fn calc_requirements<

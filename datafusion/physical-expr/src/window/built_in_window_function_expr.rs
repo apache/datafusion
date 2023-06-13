@@ -86,10 +86,29 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         false
     }
 
-    /// Does the window function use the values from its window frame?
+    /// Does the window function use the values from the window frame,
+    /// if one is specified?
     ///
     /// If this function returns true, [`Self::create_evaluator`] must
     /// implement [`PartitionEvaluator::evaluate_inside_range`]
+    ///
+    /// This is an optimization: certain window functions are not
+    /// affected by the window frame, and thus DataFusion skips the
+    /// (costly) calculation of the window frame, if possible.
+    ///
+    /// For example, the `LAG` built in window function does not use the
+    /// values of its window frame (it can be computed in one shot on
+    /// the entire partition with `Self::evalute`)
+    ///
+    /// ```sql
+    /// lag(x, 1) OVER (ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
+    ///
+    /// However, the LEAD built in does not
+    ///
+    /// ```sql
+    /// avg(x) OVER (ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
     fn uses_window_frame(&self) -> bool {
         false
     }

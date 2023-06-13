@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{AsArray, Float64Array},
+    array::{AsArray, Float64Array, ArrayRef},
     datatypes::Float64Type,
 };
 use arrow_schema::DataType;
@@ -26,7 +26,7 @@ use datafusion::datasource::file_format::options::CsvReadOptions;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{
     partition_evaluator::PartitionEvaluator, Signature, Volatility, WindowUDF,
 };
@@ -51,56 +51,85 @@ async fn main() -> Result<()> {
     let ctx = create_context().await?;
 
     // register the window function with DataFusion so wecan call it
-    ctx.register_udwf(my_average());
+    ctx.register_udwf(smooth_it());
 
     // Use SQL to run the new window function
     let df = ctx.sql("SELECT * from cars").await?;
     // print the results
     df.show().await?;
 
-    // Use SQL to run the new window function
-    // `PARTITION BY car`:each distinct value of car (red, and green) should be treated separately
-    // `ORDER BY time`: within each group (greed or green) the values will be orderd by time
-    let df = ctx
-        .sql(
-            "SELECT car, \
-                      speed, \
-                      lag(speed, 1) OVER (PARTITION BY car ORDER BY time),\
-                      my_average(speed) OVER (PARTITION BY car ORDER BY time),\
-                      time \
-                      from cars",
+    // Use SQL to run the new window function:
+    //
+    // `PARTITION BY car`:each distinct value of car (red, and green)
+    // should be treated as a seprate partition (and will result in
+    // creating a new `PartitionEvaluator`)
+    //
+    // `ORDER BY time`: within each partition ('green' or 'red') the
+    // rows will be be orderd by the value in the `time` column
+    //
+    // `evaluate_inside_range` is invoked with a window defined by the
+    // SQL. In this case:
+    //
+    // The first invocation will be passed row 0, the first row in the
+    // partition.
+    //
+    // The second invocation will be passed rows 0 and 1, the first
+    // two rows in the partition.
+    //
+    // etc.
+    let df = ctx.sql(
+            "SELECT \
+               car, \
+               speed, \
+               smooth_it(speed) OVER (PARTITION BY car ORDER BY time),\
+               time \
+               from cars \
+             ORDER BY \
+               car",
         )
         .await?;
     // print the results
     df.show().await?;
 
-    // // ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING: Run the window functon so that each invocation only sees 5 rows: the 2 before and 2 after) using
-    // let df = ctx.sql("SELECT car, \
-    //                   speed, \
-    //                   lag(speed, 1) OVER (PARTITION BY car ORDER BY time ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING),\
-    //                   time \
-    //                   from cars").await?;
-    // // print the results
-    // df.show().await?;
+    // this time, call the new widow function with an explicit window
+    //
+    // `ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING`: each invocation
+    // sees at most 3 rows: the row before, the current row, and the 1
+    // row afterward.
+    let df = ctx.sql(
+        "SELECT \
+           car, \
+           speed, \
+           smooth_it(speed) OVER (PARTITION BY car ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+           time \
+           from cars \
+         ORDER BY \
+           car",
+    ).await?;
+    // print the results
+    df.show().await?;
 
     // todo show how to run dataframe API as well
 
     Ok(())
 }
-
-// TODO make a helper funciton like `crate_udf` that helps to make these signatures
-
-fn my_average() -> WindowUDF {
+fn smooth_it() -> WindowUDF {
     WindowUDF {
-        name: String::from("my_average"),
-        // it will take 2 arguments -- the column and the window size
+        name: String::from("smooth_it"),
+        // it will take 1 arguments -- the column to smooth
         signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
         return_type: Arc::new(return_type),
         partition_evaluator: Arc::new(make_partition_evaluator),
+        // specify that the user defined window function gets a window
+        // frame (so that the user can use the window frame definition
+        // (ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+        uses_window_frame: true,
+        supports_bounded_execution: false,
     }
 }
 
-/// Compute the return type of the function given the argument types
+/// Compute the return type of the smooth_it window function given
+/// arguments of `arg_types`.
 fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
     if arg_types.len() != 1 {
         return Err(DataFusionError::Plan(format!(
@@ -112,7 +141,8 @@ fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
     Ok(Arc::new(arg_types[0].clone()))
 }
 
-/// Create a partition evaluator for this argument
+/// Create a `PartitionEvalutor` to evaluate this function on a new
+/// partition.
 fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
     Ok(Box::new(MyPartitionEvaluator::new()))
 }
@@ -138,73 +168,41 @@ impl PartitionEvaluator for MyPartitionEvaluator {
         ))
     }
 
-    /// This function is given the values of each partition
-    fn evaluate(
-        &self,
-        values: &[arrow::array::ArrayRef],
-        _num_rows: usize,
-    ) -> Result<arrow::array::ArrayRef> {
-        // datafusion has handled ensuring we get the correct input argument
-        assert_eq!(values.len(), 1);
-
-        // For this example, we convert convert the input argument to an
-        // array of floating point numbers to calculate a moving average
-        let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
-
-        // implement a simple moving average by averaging the current
-        // value with the previous value
-        //
-        // value | avg
-        // ------+------
-        //  10   | 10
-        //  20   | 15
-        //  30   | 25
-        //  30   | 30
-        //
-        let mut previous_value = None;
-        let new_values: Float64Array = arr
-            .values()
-            .iter()
-            .map(|&value| {
-                let new_value = previous_value
-                    .map(|previous_value| (value + previous_value) / 2.0)
-                    .unwrap_or(value);
-                previous_value = Some(value);
-                new_value
-            })
-            .collect();
-
-        Ok(Arc::new(new_values))
-    }
-
-    fn evaluate_stateful(
-        &mut self,
-        _values: &[arrow::array::ArrayRef],
-    ) -> Result<datafusion_common::ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_stateful is not implemented by default".into(),
-        ))
-    }
-
-    fn evaluate_with_rank(
-        &self,
-        _num_rows: usize,
-        _ranks_in_partition: &[std::ops::Range<usize>],
-    ) -> Result<arrow::array::ArrayRef> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_partition_with_rank is not implemented by default".into(),
-        ))
-    }
-
+    /// This function is called once per input row.
+    ///
+    /// `range`
+    /// specifies which indexes of `values` should be considered for
+    /// the calculation.
+    ///
+    /// Note this is not the fastest way to evaluate a window
+    /// function. It is much faster to implement evaluate_stateful or
+    /// range less / rank based calculations if possible.
     fn evaluate_inside_range(
         &self,
-        _values: &[arrow::array::ArrayRef],
-        _range: &std::ops::Range<usize>,
-    ) -> Result<datafusion_common::ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_inside_range is not implemented by default".into(),
-        ))
+        values: &[ArrayRef],
+        range: &std::ops::Range<usize>,
+    ) -> Result<ScalarValue> {
+        //println!("evaluate_inside_range(). range: {range:#?}, values: {values:#?}");
+
+        // Again, the input argument is an array of floating
+        // point numbers to calculate a moving average
+        let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+
+        let range_len = range.end - range.start;
+
+        // our smoothing function will average all the values in the
+        let output = if range_len > 0 {
+            let sum: f64 =  arr
+                .values()
+                .iter()
+                .skip(range.start)
+                .take(range_len)
+                .sum();
+            Some(sum / range_len as f64)
+        } else {
+            None
+        };
+
+        Ok(ScalarValue::Float64(output))
     }
 }
-
-// TODO show how to use other evaluate methods

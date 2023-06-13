@@ -23,6 +23,11 @@ use crate::{function::PartitionEvaluatorFunctionFactory, ReturnTypeFunction, Sig
 
 /// Logical representation of a user-defined window function (UDWF)
 /// A UDAF is different from a UDF in that it is stateful across batches.
+///
+/// Window Frames:
+///
+/// TODO add a diagram here showing the input and the ouput w/ frames
+/// (or document that elsewhere and link here)
 #[derive(Clone)]
 pub struct WindowUDF {
     /// name
@@ -33,11 +38,25 @@ pub struct WindowUDF {
     pub return_type: ReturnTypeFunction,
     /// Return the partition functon
     pub partition_evaluator: PartitionEvaluatorFunctionFactory,
+    /// If true, the window function requires the window frame (e.g. the sliding  the declared window frame
+    /// (TODO: see documentation on
+    /// BuiltInWindowFunctionExpr::uses_window_frame)
+    pub uses_window_frame: bool,
+    /// Returns true if this function supports bounded execution (TODO see documentation on XXXX)
+    pub supports_bounded_execution: bool,
+    // TODO: Reverse expressions, uses rank()
 }
 
 impl Debug for WindowUDF {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("WindowUDF").finish_non_exhaustive()
+        f.debug_struct("WindowUDF")
+            .field("name", &self.name)
+            .field("signature", &self.signature)
+            .field("return_type", &"<func>")
+            .field("partition_evaluator", &"<func>")
+            .field("uses_window_frame", &self.uses_window_frame)
+            .field("supports_bounded_execution", &self.supports_bounded_execution)
+            .finish_non_exhaustive()
     }
 }
 
