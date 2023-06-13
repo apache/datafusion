@@ -1104,7 +1104,6 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-buffer",
- "arrow-cast",
  "arrow-schema",
  "blake2",
  "blake3",

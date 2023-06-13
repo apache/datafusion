@@ -21,11 +21,9 @@ use arrow::array::*;
 use arrow::buffer::Buffer;
 use arrow::compute;
 use arrow::datatypes::{DataType, Field};
-use arrow_cast::cast;
 use core::any::type_name;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::comparison_coercion;
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
@@ -87,18 +85,7 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         ));
     }
 
-    let data_type = args
-        .iter()
-        .skip(1)
-        .fold(args[0].data_type().clone(), |acc, x| {
-            comparison_coercion(&acc, x.data_type()).unwrap_or(acc)
-        });
-
-    let args: &[ArrayRef] = &args
-        .iter()
-        .map(|item| cast(item, &data_type).unwrap())
-        .collect::<Vec<ArrayRef>>();
-
+    let data_type = args[0].data_type();
     let res = match data_type {
         DataType::List(..) => {
             let arrays =
@@ -1165,49 +1152,6 @@ mod tests {
                 .value(0)
                 .as_any()
                 .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        )
-    }
-    #[test]
-    fn test_array_with_different_types_1() {
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Int32(Some(1))),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
-        ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1, 1],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values()
-        );
-    }
-
-    #[test]
-    fn test_array_with_different_types_2() {
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(1.0))),
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0))),
-        ];
-        let array = array(&args)
-            .expect("failed to initialize function array")
-            .into_array(1);
-        let result = as_list_array(&array).expect("failed to initialize function array");
-        assert_eq!(result.len(), 1);
-        assert_eq!(
-            &[1.0, 1.0],
-            result
-                .value(0)
-                .as_any()
-                .downcast_ref::<Float64Array>()
                 .unwrap()
                 .values()
         )
