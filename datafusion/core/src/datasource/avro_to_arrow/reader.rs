@@ -56,17 +56,21 @@ impl ReaderBuilder {
     /// # Example
     ///
     /// ```
-    /// extern crate apache_avro;
-    ///
     /// use std::fs::File;
     ///
-    /// fn example() -> crate::datafusion::avro_to_arrow::Reader<'static, File> {
+    /// use datafusion::datasource::avro_to_arrow::{Reader, ReaderBuilder};
+    ///
+    /// fn example() -> Reader<'static, File> {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().read_schema().with_batch_size(100);
+    ///     let builder = ReaderBuilder::new()
+    ///       .read_schema()
+    ///       .with_batch_size(100);
     ///
-    ///     let reader = builder.build::<File>(file).unwrap();
+    ///     let reader = builder
+    ///       .build::<File>(file)
+    ///       .unwrap();
     ///
     ///     reader
     /// }
@@ -151,28 +155,15 @@ impl<'a, R: Read> Reader<'a, R> {
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-
-    /// Returns the next batch of results (defined by `self.batch_size`), or `None` if there
-    /// are no more results.
-    //
-    // TODO(clippy): The clippy `allow` could be removed by renaming this method to `next_batch`.
-    // This would also make the intent of the method clearer.
-    //
-    // Another option could be to rework `AvroArrowArrayReader::next_batch` so it returns an
-    // `Option<ArrowResult<RecordBatch>>` instead of a  `ArrowResult<Option<RecordBatch>>`.
-    // This would make it possible to remove this method entirely and move its body into the
-    // `Iterator` implementation.
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> ArrowResult<Option<RecordBatch>> {
-        self.array_reader.next_batch(self.batch_size)
-    }
 }
 
 impl<'a, R: Read> Iterator for Reader<'a, R> {
     type Item = ArrowResult<RecordBatch>;
 
+    /// Returns the next batch of results (defined by `self.batch_size`), or `None` if there
+    /// are no more results.
     fn next(&mut self) -> Option<Self::Item> {
-        self.next().transpose()
+        self.array_reader.next_batch(self.batch_size)
     }
 }
 

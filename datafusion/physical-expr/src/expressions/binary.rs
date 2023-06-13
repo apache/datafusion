@@ -19,6 +19,7 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
@@ -96,7 +97,7 @@ use datafusion_expr::type_coercion::binary::{
 use datafusion_expr::{ColumnarValue, Operator};
 
 /// Binary expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
@@ -837,6 +838,11 @@ impl PhysicalExpr for BinaryExpr {
         };
         Ok(vec![left, right])
     }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
+    }
 }
 
 impl PartialEq<dyn Any> for BinaryExpr {
@@ -1060,8 +1066,7 @@ fn to_result_type_array(
                     Ok(cast(&array, result_type)?)
                 } else {
                     Err(DataFusionError::Internal(format!(
-                            "Incompatible Dictionary value type {:?} with result type {:?} of Binary operator {:?}",
-                            value_type, result_type, op
+                            "Incompatible Dictionary value type {value_type:?} with result type {result_type:?} of Binary operator {op:?}"
                         )))
                 }
             }

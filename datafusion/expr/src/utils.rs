@@ -37,6 +37,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
     TableReference,
 };
+use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -315,10 +316,84 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
     })
 }
 
+/// Find excluded columns in the schema, if any
+/// SELECT * EXCLUDE(col1, col2), would return `vec![col1, col2]`
+fn get_excluded_columns(
+    opt_exclude: Option<ExcludeSelectItem>,
+    opt_except: Option<ExceptSelectItem>,
+    schema: &DFSchema,
+    qualifier: &Option<TableReference>,
+) -> Result<Vec<Column>> {
+    let mut idents = vec![];
+    if let Some(excepts) = opt_except {
+        idents.push(excepts.first_element);
+        idents.extend(excepts.additional_elements);
+    }
+    if let Some(exclude) = opt_exclude {
+        match exclude {
+            ExcludeSelectItem::Single(ident) => idents.push(ident),
+            ExcludeSelectItem::Multiple(idents_inner) => idents.extend(idents_inner),
+        }
+    }
+    // Excluded columns should be unique
+    let n_elem = idents.len();
+    let unique_idents = idents.into_iter().collect::<HashSet<_>>();
+    // if HashSet size, and vector length are different, this means that some of the excluded columns
+    // are not unique. In this case return error.
+    if n_elem != unique_idents.len() {
+        return Err(DataFusionError::Plan(
+            "EXCLUDE or EXCEPT contains duplicate column names".to_string(),
+        ));
+    }
+
+    let mut result = vec![];
+    for ident in unique_idents.into_iter() {
+        let col_name = ident.value.as_str();
+        let field = if let Some(qualifier) = qualifier {
+            schema.field_with_qualified_name(qualifier, col_name)?
+        } else {
+            schema.field_with_unqualified_name(col_name)?
+        };
+        result.push(field.qualified_column())
+    }
+    Ok(result)
+}
+
+/// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
+fn get_exprs_except_skipped(
+    schema: &DFSchema,
+    columns_to_skip: HashSet<Column>,
+) -> Vec<Expr> {
+    if columns_to_skip.is_empty() {
+        schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect::<Vec<Expr>>()
+    } else {
+        schema
+            .fields()
+            .iter()
+            .filter_map(|f| {
+                let col = f.qualified_column();
+                if !columns_to_skip.contains(&col) {
+                    Some(Expr::Column(col))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<Expr>>()
+    }
+}
+
 /// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
-pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr>> {
+pub fn expand_wildcard(
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+    wildcard_options: Option<WildcardAdditionalOptions>,
+) -> Result<Vec<Expr>> {
     let using_columns = plan.using_columns()?;
-    let columns_to_skip = using_columns
+    let mut columns_to_skip = using_columns
         .into_iter()
         // For each USING JOIN condition, only expand to one of each join column in projection
         .flat_map(|cols| {
@@ -339,33 +414,26 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
                 .collect::<Vec<_>>()
         })
         .collect::<HashSet<_>>();
-
-    if columns_to_skip.is_empty() {
-        Ok(schema
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(f.qualified_column()))
-            .collect::<Vec<Expr>>())
+    let excluded_columns = if let Some(WildcardAdditionalOptions {
+        opt_exclude,
+        opt_except,
+        ..
+    }) = wildcard_options
+    {
+        get_excluded_columns(opt_exclude, opt_except, schema, &None)?
     } else {
-        Ok(schema
-            .fields()
-            .iter()
-            .filter_map(|f| {
-                let col = f.qualified_column();
-                if !columns_to_skip.contains(&col) {
-                    Some(Expr::Column(col))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<Expr>>())
-    }
+        vec![]
+    };
+    // Add each excluded `Column` to columns_to_skip
+    columns_to_skip.extend(excluded_columns);
+    Ok(get_exprs_except_skipped(schema, columns_to_skip))
 }
 
 /// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
+    wildcard_options: Option<WildcardAdditionalOptions>,
 ) -> Result<Vec<Expr>> {
     let qualifier = TableReference::from(qualifier);
     let qualified_fields: Vec<DFField> = schema
@@ -380,12 +448,20 @@ pub fn expand_qualified_wildcard(
     }
     let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    // if qualified, allow all columns in output (i.e. ignore using column check)
-    Ok(qualified_schema
-        .fields()
-        .iter()
-        .map(|f| Expr::Column(f.qualified_column()))
-        .collect::<Vec<Expr>>())
+    let excluded_columns = if let Some(WildcardAdditionalOptions {
+        opt_exclude,
+        opt_except,
+        ..
+    }) = wildcard_options
+    {
+        get_excluded_columns(opt_exclude, opt_except, schema, &Some(qualifier))?
+    } else {
+        vec![]
+    };
+    // Add each excluded `Column` to columns_to_skip
+    let mut columns_to_skip = HashSet::new();
+    columns_to_skip.extend(excluded_columns);
+    Ok(get_exprs_except_skipped(&qualified_schema, columns_to_skip))
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")

@@ -36,9 +36,12 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Placeholder;
 use datafusion_expr::{
-    abs, acos, acosh, array, ascii, asin, asinh, atan, atan2, atanh, bit_length, btrim,
-    cbrt, ceil, character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, cosh,
-    date_bin, date_part, date_trunc, degrees, digest, exp,
+    abs, acos, acosh, array, array_append, array_concat, array_dims, array_fill,
+    array_length, array_ndims, array_position, array_positions, array_prepend,
+    array_remove, array_replace, array_to_string, ascii, asin, asinh, atan, atan2, atanh,
+    bit_length, btrim, cardinality, cbrt, ceil, character_length, chr, coalesce,
+    concat_expr, concat_ws_expr, cos, cosh, date_bin, date_part, date_trunc, degrees,
+    digest, exp,
     expr::{self, InList, Sort, WindowFunction},
     factorial, floor, from_unixtime, gcd, lcm, left, ln, log, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
@@ -46,7 +49,8 @@ use datafusion_expr::{
     regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
     sha224, sha256, sha384, sha512, signum, sin, sinh, split_part, sqrt, starts_with,
     strpos, substr, substring, tan, tanh, to_hex, to_timestamp_micros,
-    to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, upper, uuid,
+    to_timestamp_millis, to_timestamp_seconds, translate, trim, trim_array, trunc, upper,
+    uuid,
     window_frame::regularize,
     AggregateFunction, Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction,
     Case, Cast, Expr, GetIndexedField, GroupingSet,
@@ -444,7 +448,21 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Ltrim => Self::Ltrim,
             ScalarFunction::Rtrim => Self::Rtrim,
             ScalarFunction::ToTimestamp => Self::ToTimestamp,
+            ScalarFunction::ArrayAppend => Self::ArrayAppend,
+            ScalarFunction::ArrayConcat => Self::ArrayConcat,
+            ScalarFunction::ArrayDims => Self::ArrayDims,
+            ScalarFunction::ArrayFill => Self::ArrayFill,
+            ScalarFunction::ArrayLength => Self::ArrayLength,
+            ScalarFunction::ArrayNdims => Self::ArrayNdims,
+            ScalarFunction::ArrayPosition => Self::ArrayPosition,
+            ScalarFunction::ArrayPositions => Self::ArrayPositions,
+            ScalarFunction::ArrayPrepend => Self::ArrayPrepend,
+            ScalarFunction::ArrayRemove => Self::ArrayRemove,
+            ScalarFunction::ArrayReplace => Self::ArrayReplace,
+            ScalarFunction::ArrayToString => Self::ArrayToString,
+            ScalarFunction::Cardinality => Self::Cardinality,
             ScalarFunction::Array => Self::MakeArray,
+            ScalarFunction::TrimArray => Self::TrimArray,
             ScalarFunction::NullIf => Self::NullIf,
             ScalarFunction::DatePart => Self::DatePart,
             ScalarFunction::DateTrunc => Self::DateTrunc,
@@ -1160,6 +1178,63 @@ pub fn parse_expr(
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
                 )),
+                ScalarFunction::ArrayAppend => Ok(array_append(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayPrepend => Ok(array_prepend(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayConcat => Ok(array_concat(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ArrayFill => Ok(array_fill(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayPosition => Ok(array_position(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayPositions => Ok(array_positions(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayRemove => Ok(array_remove(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayReplace => Ok(array_replace(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                    parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::ArrayToString => Ok(array_to_string(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::Cardinality => {
+                    Ok(cardinality(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::TrimArray => Ok(trim_array(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayLength => Ok(array_length(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
+                )),
+                ScalarFunction::ArrayDims => {
+                    Ok(array_dims(parse_expr(&args[0], registry)?))
+                }
+                ScalarFunction::ArrayNdims => {
+                    Ok(array_ndims(parse_expr(&args[0], registry)?))
+                }
                 ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Cbrt => Ok(cbrt(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], registry)?)),

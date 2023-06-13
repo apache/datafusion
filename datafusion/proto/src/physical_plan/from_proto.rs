@@ -24,6 +24,7 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
@@ -32,7 +33,6 @@ use datafusion::physical_plan::expressions::{
     date_time_interval_expr, GetIndexedFieldExpr,
 };
 use datafusion::physical_plan::expressions::{in_list, LikeExpr};
-use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, Literal,
@@ -475,6 +475,7 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 location: Path::from(val.path.as_str()),
                 last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
                 size: val.size as usize,
+                e_tag: None,
             },
             partition_values: val
                 .partition_values

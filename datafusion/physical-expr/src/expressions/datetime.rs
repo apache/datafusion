@@ -27,12 +27,13 @@ use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use super::binary::{resolve_temporal_op, resolve_temporal_op_scalar};
 
 /// Perform DATE/TIME/TIMESTAMP +/ INTERVAL math
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct DateTimeIntervalExpr {
     lhs: Arc<dyn PhysicalExpr>,
     op: Operator,
@@ -184,6 +185,11 @@ impl PhysicalExpr for DateTimeIntervalExpr {
             self.op,
             children[1].clone(),
         )))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

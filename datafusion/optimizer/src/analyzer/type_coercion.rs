@@ -40,9 +40,9 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
-    is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    aggregate_function, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
+    is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
+    Projection, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
@@ -108,7 +108,14 @@ fn analyze_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    from_plan(plan, &new_expr, &new_inputs)
+    // TODO: use from_plan after fix https://github.com/apache/arrow-datafusion/issues/6613
+    match &plan {
+        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
+            new_expr,
+            Arc::new(new_inputs[0].clone()),
+        )?)),
+        _ => from_plan(plan, &new_expr, &new_inputs),
+    }
 }
 
 pub(crate) struct TypeCoercionRewriter {
@@ -383,7 +390,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let nex_expr = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &function::signature(&fun),
+                    &fun.signature(),
                 )?;
                 let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
                 Ok(expr)

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::file_format::ParquetExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use std::collections::HashMap;
 use substrait::proto::expression::MaskExpression;

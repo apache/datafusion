@@ -21,12 +21,6 @@ use datafusion::assert_batches_eq;
 use datafusion::prelude::SessionContext;
 use log::debug;
 
-#[cfg(test)]
-#[ctor::ctor]
-fn init() {
-    let _ = env_logger::try_init();
-}
-
 #[tokio::test]
 async fn correlated_recursive_scalar_subquery() -> Result<()> {
     let ctx = SessionContext::new();

@@ -17,13 +17,13 @@
 
 //! Execution plan for reading line-delimited Avro files
 use crate::error::Result;
-use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_execution::TaskContext;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
@@ -165,8 +165,9 @@ impl ExecutionPlan for AvroExec {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
-    use crate::physical_plan::file_format::file_stream::{FileOpenFuture, FileOpener};
-    use crate::physical_plan::file_format::FileMeta;
+    use crate::datasource::avro_to_arrow::Reader as AvroReader;
+    use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
+    use crate::datasource::physical_plan::FileMeta;
     use bytes::Buf;
     use futures::StreamExt;
     use object_store::{GetResult, ObjectStore};
@@ -179,11 +180,8 @@ mod private {
     }
 
     impl AvroConfig {
-        fn open<R: std::io::Read>(
-            &self,
-            reader: R,
-        ) -> Result<crate::avro_to_arrow::Reader<'static, R>> {
-            crate::avro_to_arrow::Reader::try_new(
+        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
+            AvroReader::try_new(
                 reader,
                 self.schema.clone(),
                 self.batch_size,
@@ -222,7 +220,7 @@ mod tests {
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
+    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;

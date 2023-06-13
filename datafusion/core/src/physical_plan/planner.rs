@@ -32,8 +32,10 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
-    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
+    Repartition, Union, UserDefinedLogicalNode,
 };
+use datafusion_common::display::ToStringifiedPlan;
+
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
@@ -1927,10 +1929,8 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::file_format::options::CsvReadOptions;
     use crate::datasource::MemTable;
-    use crate::execution::context::TaskContext;
-    use crate::execution::options::CsvReadOptions;
-    use crate::execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
@@ -1943,6 +1943,8 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{assert_contains, TableReference};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::TaskContext;
     use datafusion_expr::{
         col, lit, sum, Extension, GroupingSet, LogicalPlanBuilder,
         UserDefinedLogicalNodeCore,

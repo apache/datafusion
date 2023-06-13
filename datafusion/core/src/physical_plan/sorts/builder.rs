@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::common::Result;
 use arrow::compute::interleave;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 
 #[derive(Debug, Copy, Clone, Default)]
 struct BatchCursor {

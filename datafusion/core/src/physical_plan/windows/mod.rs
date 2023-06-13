@@ -17,21 +17,20 @@
 
 //! Physical expressions for window functions
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
     expressions::{
         cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
-    type_coercion::coerce,
     udaf, ExecutionPlan, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::SchemaRef;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
-    window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
+    window_function::{BuiltInWindowFunction, WindowFunction},
     WindowFrame,
 };
 use datafusion_physical_expr::window::{
@@ -48,14 +47,11 @@ pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceBuilder;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr::{
-    OrderedColumn, OrderingEquivalenceProperties, PhysicalSortRequirement,
-};
+use datafusion_physical_expr::{OrderingEquivalenceProperties, PhysicalSortRequirement};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -135,8 +131,7 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
         BuiltInWindowFunction::Ntile => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let n: i64 = get_scalar_value_from_args(&coerced_args, 0)?
+            let n: i64 = get_scalar_value_from_args(args, 0)?
                 .ok_or_else(|| {
                     DataFusionError::Execution(
                         "NTILE requires at least 1 argument".to_string(),
@@ -147,33 +142,26 @@ fn create_built_in_window_expr(
             Arc::new(Ntile::new(name, n))
         }
         BuiltInWindowFunction::Lag => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let arg = coerced_args[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)?
+            let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(&coerced_args, 2)?;
+            let default_value = get_scalar_value_from_args(args, 2)?;
             Arc::new(lag(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::Lead => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let arg = coerced_args[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
-            let shift_offset = get_scalar_value_from_args(&coerced_args, 1)?
+            let shift_offset = get_scalar_value_from_args(args, 1)?
                 .map(|v| v.try_into())
                 .and_then(|v| v.ok());
-            let default_value = get_scalar_value_from_args(&coerced_args, 2)?;
+            let default_value = get_scalar_value_from_args(args, 2)?;
             Arc::new(lead(name, data_type, arg, shift_offset, default_value))
         }
         BuiltInWindowFunction::NthValue => {
-            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let arg = coerced_args[0].clone();
-            let n = coerced_args[1]
-                .as_any()
-                .downcast_ref::<Literal>()
-                .unwrap()
-                .value();
+            let arg = args[0].clone();
+            let n = args[1].as_any().downcast_ref::<Literal>().unwrap().value();
             let n: i64 = n
                 .clone()
                 .try_into()
@@ -183,14 +171,12 @@ fn create_built_in_window_expr(
             Arc::new(NthValue::nth(name, arg, data_type, n)?)
         }
         BuiltInWindowFunction::FirstValue => {
-            let arg =
-                coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::first(name, arg, data_type))
         }
         BuiltInWindowFunction::LastValue => {
-            let arg =
-                coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
+            let arg = args[0].clone();
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::last(name, arg, data_type))
         }
@@ -258,29 +244,14 @@ pub(crate) fn window_ordering_equivalence(
         .with_equivalences(input.equivalence_properties())
         .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
         .extend(input.ordering_equivalence_properties());
+
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            // Only the built-in `RowNumber` window function introduces a new
-            // ordering:
-            if builtin_window_expr
+            builtin_window_expr
                 .get_built_in_func_expr()
-                .as_any()
-                .is::<RowNumber>()
-            {
-                if let Some((idx, field)) =
-                    schema.column_with_name(expr.field().unwrap().name())
-                {
-                    let column = Column::new(field.name(), idx);
-                    let options = SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    }; // ASC, NULLS LAST
-                    let rhs = OrderedColumn::new(column, options);
-                    builder.add_equal_conditions(vec![rhs]);
-                }
-            }
+                .add_equal_orderings(&mut builder);
         }
     }
     builder.build()
@@ -288,9 +259,9 @@ pub(crate) fn window_ordering_equivalence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::physical_plan::CsvExec;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::CsvExec;
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};

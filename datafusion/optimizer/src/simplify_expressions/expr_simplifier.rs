@@ -2478,6 +2478,37 @@ mod tests {
             regex_not_match(col("c1"), lit("^foo$")),
             col("c1").not_eq(lit("foo")),
         );
+
+        // regular expressions that match exact captured literals
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar)$")),
+            col("c1").eq(lit("foo")).or(col("c1").eq(lit("bar"))),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("^(foo|bar)$")),
+            col("c1")
+                .not_eq(lit("foo"))
+                .and(col("c1").not_eq(lit("bar"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo)$")),
+            col("c1").eq(lit("foo")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz)$")),
+            ((col("c1").eq(lit("foo"))).or(col("c1").eq(lit("bar"))))
+                .or(col("c1").eq(lit("baz"))),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("^(foo|bar|baz|qux)$")),
+            col("c1")
+                .in_list(vec![lit("foo"), lit("bar"), lit("baz"), lit("qux")], false),
+        );
+
+        // regular expressions that mismatch captured literals
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)")));
+        assert_no_change(regex_match(col("c1"), lit("(foo|bar)*")));
+        assert_no_change(regex_match(col("c1"), lit("^(foo|bar)*")));
         assert_no_change(regex_match(col("c1"), lit("^foo|bar$")));
         assert_no_change(regex_match(col("c1"), lit("^(foo)(bar)$")));
         assert_no_change(regex_match(col("c1"), lit("^")));

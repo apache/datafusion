@@ -21,8 +21,8 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -30,9 +30,9 @@ use datafusion_common::{ScalarValue, Statistics, ToDFSchema};
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr::execution_props::ExecutionProps;
+use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use tokio_stream::StreamExt;
 
 async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -47,6 +47,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         location,
         last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
         size: metadata.len() as usize,
+        e_tag: None,
     };
 
     let schema = ParquetFormat::default()

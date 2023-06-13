@@ -17,6 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use ahash::RandomState;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
+use std::collections::HashSet;
 
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
@@ -39,104 +41,8 @@ use crate::aggregate::row_accumulator::{
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
-use arrow::array::PrimitiveArray;
-use arrow::datatypes::ArrowNativeTypeOp;
-use arrow::datatypes::ArrowNumericType;
+use arrow::compute::{bit_and, bit_or, bit_xor};
 use datafusion_row::accessor::RowAccessor;
-use std::ops::BitAnd as BitAndImplementation;
-use std::ops::BitOr as BitOrImplementation;
-use std::ops::BitXor as BitXorImplementation;
-
-// TODO: remove this macro rules after implementation in arrow-rs
-// https://github.com/apache/arrow-rs/pull/4210
-macro_rules! bit_operation {
-    ($NAME:ident, $OP:ident, $NATIVE:ident, $DEFAULT:expr, $DOC:expr) => {
-        #[doc = $DOC]
-        ///
-        /// Returns `None` if the array is empty or only contains null values.
-        fn $NAME<T>(array: &PrimitiveArray<T>) -> Option<T::Native>
-        where
-            T: ArrowNumericType,
-            T::Native: $NATIVE<Output = T::Native> + ArrowNativeTypeOp,
-        {
-            let default;
-            if $DEFAULT == -1 {
-                default = T::Native::ONE.neg_wrapping();
-            } else {
-                default = T::default_value();
-            }
-
-            let null_count = array.null_count();
-
-            if null_count == array.len() {
-                return None;
-            }
-
-            let data: &[T::Native] = array.values();
-
-            match array.nulls() {
-                None => {
-                    let result = data
-                        .iter()
-                        .fold(default, |accumulator, value| accumulator.$OP(*value));
-
-                    Some(result)
-                }
-                Some(nulls) => {
-                    let mut result = default;
-                    let data_chunks = data.chunks_exact(64);
-                    let remainder = data_chunks.remainder();
-
-                    let bit_chunks = nulls.inner().bit_chunks();
-                    data_chunks
-                        .zip(bit_chunks.iter())
-                        .for_each(|(chunk, mask)| {
-                            // index_mask has value 1 << i in the loop
-                            let mut index_mask = 1;
-                            chunk.iter().for_each(|value| {
-                                if (mask & index_mask) != 0 {
-                                    result = result.$OP(*value);
-                                }
-                                index_mask <<= 1;
-                            });
-                        });
-
-                    let remainder_bits = bit_chunks.remainder_bits();
-
-                    remainder.iter().enumerate().for_each(|(i, value)| {
-                        if remainder_bits & (1 << i) != 0 {
-                            result = result.$OP(*value);
-                        }
-                    });
-
-                    Some(result)
-                }
-            }
-        }
-    };
-}
-
-bit_operation!(
-    bit_and,
-    bitand,
-    BitAndImplementation,
-    -1,
-    "Returns the bitwise and of all non-null input values."
-);
-bit_operation!(
-    bit_or,
-    bitor,
-    BitOrImplementation,
-    0,
-    "Returns the bitwise or of all non-null input values."
-);
-bit_operation!(
-    bit_xor,
-    bitxor,
-    BitXorImplementation,
-    0,
-    "Returns the bitwise xor of all non-null input values."
-);
 
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
 macro_rules! typed_bit_and_or_xor_batch {
@@ -847,6 +753,170 @@ impl RowAccumulator for BitXorRowAccumulator {
     }
 }
 
+/// Expression for a BIT_XOR(DISTINCT) aggregation.
+#[derive(Debug, Clone)]
+pub struct DistinctBitXor {
+    name: String,
+    pub data_type: DataType,
+    expr: Arc<dyn PhysicalExpr>,
+    nullable: bool,
+}
+
+impl DistinctBitXor {
+    /// Create a new DistinctBitXor aggregate function
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            expr,
+            data_type,
+            nullable: true,
+        }
+    }
+}
+
+impl AggregateExpr for DistinctBitXor {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(
+            &self.name,
+            self.data_type.clone(),
+            self.nullable,
+        ))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(DistinctBitXorAccumulator::try_new(
+            &self.data_type,
+        )?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        // State field is a List which stores items to rebuild hash set.
+        Ok(vec![Field::new_list(
+            format_state_name(&self.name, "bit_xor distinct"),
+            Field::new("item", self.data_type.clone(), true),
+            false,
+        )])
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl PartialEq<dyn Any> for DistinctBitXor {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && self.data_type == x.data_type
+                    && self.nullable == x.nullable
+                    && self.expr.eq(&x.expr)
+            })
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug)]
+struct DistinctBitXorAccumulator {
+    hash_values: HashSet<ScalarValue, RandomState>,
+    data_type: DataType,
+}
+
+impl DistinctBitXorAccumulator {
+    pub fn try_new(data_type: &DataType) -> Result<Self> {
+        Ok(Self {
+            hash_values: HashSet::default(),
+            data_type: data_type.clone(),
+        })
+    }
+}
+
+impl Accumulator for DistinctBitXorAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        // 1. Stores aggregate state in `ScalarValue::List`
+        // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
+        let state_out = {
+            let mut distinct_values = Vec::new();
+            self.hash_values
+                .iter()
+                .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
+            vec![ScalarValue::new_list(
+                Some(distinct_values),
+                self.data_type.clone(),
+            )]
+        };
+        Ok(state_out)
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &values[0];
+        (0..values[0].len()).try_for_each(|index| {
+            if !arr.is_null(index) {
+                let v = ScalarValue::try_from_array(arr, index)?;
+                self.hash_values.insert(v);
+            }
+            Ok(())
+        })
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let arr = &states[0];
+        (0..arr.len()).try_for_each(|index| {
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+
+            if let ScalarValue::List(Some(scalar), _) = scalar {
+                scalar.iter().for_each(|scalar| {
+                    if !ScalarValue::is_null(scalar) {
+                        self.hash_values.insert(scalar.clone());
+                    }
+                });
+            } else {
+                return Err(DataFusionError::Internal(
+                    "Unexpected accumulator state".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        let mut bit_xor_value = ScalarValue::try_from(&self.data_type)?;
+        for distinct_value in self.hash_values.iter() {
+            bit_xor_value = bit_xor_value.bitxor(distinct_value)?;
+        }
+        Ok(bit_xor_value)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) + ScalarValue::size_of_hashset(&self.hash_values)
+            - std::mem::size_of_val(&self.hash_values)
+            + self.data_type.size()
+            - std::mem::size_of_val(&self.data_type)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,15 +979,20 @@ mod tests {
 
     #[test]
     fn bit_xor_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![4, 7, 15]));
-        generic_test_op!(a, DataType::Int32, BitXor, ScalarValue::from(12i32))
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![4, 7, 4, 7, 15]));
+        generic_test_op!(a, DataType::Int32, BitXor, ScalarValue::from(15i32))
     }
 
     #[test]
     fn bit_xor_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(5)]));
-        generic_test_op!(a, DataType::Int32, BitXor, ScalarValue::from(7i32))
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            Some(3),
+            Some(5),
+        ]));
+        generic_test_op!(a, DataType::Int32, BitXor, ScalarValue::from(6i32))
     }
 
     #[test]
@@ -928,7 +1003,44 @@ mod tests {
 
     #[test]
     fn bit_xor_u32() -> Result<()> {
-        let a: ArrayRef = Arc::new(UInt32Array::from(vec![4_u32, 7_u32, 15_u32]));
-        generic_test_op!(a, DataType::UInt32, BitXor, ScalarValue::from(12u32))
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![4_u32, 7_u32, 4_u32, 7_u32, 15_u32]));
+        generic_test_op!(a, DataType::UInt32, BitXor, ScalarValue::from(15u32))
+    }
+
+    #[test]
+    fn bit_xor_distinct_i32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![4, 7, 4, 7, 15]));
+        generic_test_op!(a, DataType::Int32, DistinctBitXor, ScalarValue::from(12i32))
+    }
+
+    #[test]
+    fn bit_xor_distinct_i32_with_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            Some(3),
+            Some(5),
+        ]));
+        generic_test_op!(a, DataType::Int32, DistinctBitXor, ScalarValue::from(7i32))
+    }
+
+    #[test]
+    fn bit_xor_distinct_i32_all_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        generic_test_op!(a, DataType::Int32, DistinctBitXor, ScalarValue::Int32(None))
+    }
+
+    #[test]
+    fn bit_xor_distinct_u32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![4_u32, 7_u32, 4_u32, 7_u32, 15_u32]));
+        generic_test_op!(
+            a,
+            DataType::UInt32,
+            DistinctBitXor,
+            ScalarValue::from(12u32)
+        )
     }
 }

@@ -20,19 +20,19 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use log::trace;
 
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
-use crate::execution::context::TaskContext;
+use datafusion_execution::TaskContext;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]

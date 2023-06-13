@@ -133,8 +133,8 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use crate::assert_batches_eq;
-    use crate::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
+    use crate::catalog::{CatalogProvider, MemoryCatalogProvider};
     use crate::datasource::empty::EmptyTable;
     use crate::datasource::listing::{ListingTable, ListingTableConfig, ListingTableUrl};
     use crate::prelude::SessionContext;

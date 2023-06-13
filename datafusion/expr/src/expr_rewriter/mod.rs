@@ -241,11 +241,6 @@ mod test {
     use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
     use datafusion_common::{DFField, DFSchema, ScalarValue};
 
-    #[ctor::ctor]
-    fn init() {
-        let _ = env_logger::try_init();
-    }
-
     #[derive(Default)]
     struct RecordingRewriter {
         v: Vec<String>,

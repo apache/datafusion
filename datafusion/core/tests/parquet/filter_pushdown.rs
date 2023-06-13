@@ -63,13 +63,6 @@ fn generate_file(tempdir: &TempDir, props: WriterProperties) -> TestParquetFile 
     test_parquet_file
 }
 
-#[cfg(test)]
-#[ctor::ctor]
-fn init() {
-    // enable logging so RUST_LOG works
-    let _ = env_logger::try_init();
-}
-
 #[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn single_file() {

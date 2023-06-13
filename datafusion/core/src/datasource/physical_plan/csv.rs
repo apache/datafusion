@@ -18,14 +18,13 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::file_type::FileCompressionType;
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::TaskContext;
-use crate::physical_plan::common::AbortOnDropSingle;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::file_format::file_stream::{
+use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::FileMeta;
+use crate::datasource::physical_plan::FileMeta;
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
     ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
@@ -33,7 +32,10 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
+
+use super::FileScanConfig;
 
 use bytes::{Buf, Bytes};
 use futures::ready;
@@ -45,8 +47,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::task::{self, JoinHandle};
-
-use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
@@ -369,7 +369,7 @@ pub async fn plan_to_csv(
 mod tests {
     use super::*;
     use crate::datasource::file_format::file_type::FileType;
-    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
+    use crate::datasource::physical_plan::chunked_store::ChunkedStore;
     use crate::prelude::*;
     use crate::test::{partitioned_csv_config, partitioned_file_groups};
     use crate::test_util::{aggr_test_schema_with_missing_col, arrow_test_data};

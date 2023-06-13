@@ -43,6 +43,7 @@ use datafusion_common::{
     Result,
 };
 use datafusion_expr::logical_plan::DdlStatement;
+use datafusion_expr::DropView;
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -352,7 +353,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .with_has_header(*has_header)
                                 .with_delimiter(str_to_byte(delimiter)?),
                         ),
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
+                        FileFormatType::Avro(..) => Arc::new(AvroFormat),
                     };
 
                 let table_paths = &scan
@@ -769,6 +770,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .prepare(prepare.name.clone(), data_types)?
                     .build()
             }
+            LogicalPlanType::DropView(dropview) => Ok(datafusion_expr::LogicalPlan::Ddl(
+                datafusion_expr::DdlStatement::DropView(DropView {
+                    name: from_owned_table_reference(dropview.name.as_ref(), "DropView")?,
+                    if_exists: dropview.if_exists,
+                    schema: Arc::new(convert_required!(dropview.schema)?),
+                }),
+            )),
         }
     }
 
@@ -1385,9 +1393,19 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::DropTable(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropTable",
             )),
-            LogicalPlan::Ddl(DdlStatement::DropView(_)) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for DropView",
-            )),
+            LogicalPlan::Ddl(DdlStatement::DropView(DropView {
+                name,
+                if_exists,
+                schema,
+            })) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::DropView(
+                    protobuf::DropViewNode {
+                        name: Some(name.clone().into()),
+                        if_exists: *if_exists,
+                        schema: Some(schema.try_into()?),
+                    },
+                )),
+            }),
             LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_)) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DropCatalogSchema",
             )),
@@ -1421,7 +1439,7 @@ mod roundtrip_tests {
             TimeUnit, UnionMode,
         },
     };
-    use datafusion::datasource::datasource::TableProviderFactory;
+    use datafusion::datasource::provider::TableProviderFactory;
     use datafusion::datasource::TableProvider;
     use datafusion::execution::context::SessionState;
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -1658,13 +1676,23 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
+
+        // SELECT
         let plan = ctx
             .sql("SELECT * FROM view_t1")
             .await?
             .into_optimized_plan()?;
+
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+        // DROP
+        let plan = ctx.sql("DROP VIEW view_t1").await?.into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
         Ok(())
     }
 

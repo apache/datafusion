@@ -27,7 +27,7 @@ use parquet::file::{
     metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
 };
 
-use crate::physical_plan::file_format::parquet::{
+use crate::datasource::physical_plan::parquet::{
     from_bytes_to_i128, parquet_to_arrow_decimal_type,
 };
 use crate::{
