@@ -15,7 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-macro_rules! for_all_supported_data_types {
+#[macro_export]
+macro_rules! matches_all_supported_data_types {
+    ($expression:expr) => {
+        matches!(
+            $expression,
+            DataType::Boolean
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal128(_, _)
+        )
+    };
+}
+pub use matches_all_supported_data_types;
+
+#[macro_export]
+macro_rules! dispatch_all_supported_data_types {
     ($macro:ident $(, $x:ident)*) => {
         $macro! {
                 [$($x),*],
@@ -34,9 +57,11 @@ macro_rules! for_all_supported_data_types {
         }
     };
 }
-pub(crate) use for_all_supported_data_types;
+pub use dispatch_all_supported_data_types;
 
-macro_rules! for_all_supported_data_types2 {
+// TODO generate the matching type pairs
+#[macro_export]
+macro_rules! dispatch_all_supported_data_types_pairs {
     ($macro:ident $(, $x:ident)*) => {
        $macro! {
                 [$($x),*],
@@ -188,12 +213,13 @@ macro_rules! for_all_supported_data_types2 {
     };
 }
 
-pub(crate) use for_all_supported_data_types2;
+pub use dispatch_all_supported_data_types_pairs;
 
 /// Generate one row accumulator dispatch logic
+#[macro_export]
 macro_rules! impl_one_row_accumulator_dispatch {
     (
-        [$array1_dt:ident, $array1:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $acc_idx1:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident}),*
+        [$array1_dt:ident, $array1:ident, $acc_idx1:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident}),*
     ) => {
         match ($array1_dt) {
             $(
@@ -215,12 +241,13 @@ macro_rules! impl_one_row_accumulator_dispatch {
     };
 }
 
-pub(crate) use impl_one_row_accumulator_dispatch;
+pub use impl_one_row_accumulator_dispatch;
 
 /// Generate two row accumulators dispatch logic
+#[macro_export]
 macro_rules! impl_two_row_accumulators_dispatch {
     (
-        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $acc_idx1:ident, $acc_idx2:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),*
+        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $acc_idx1:ident, $acc_idx2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),*
     ) => {
         match ($array1_dt, $array2_dt) {
             $(
@@ -245,7 +272,56 @@ macro_rules! impl_two_row_accumulators_dispatch {
     };
 }
 
-pub(crate) use impl_two_row_accumulators_dispatch;
+pub use impl_two_row_accumulators_dispatch;
+
+/// Generate row accumulator update single row dispatch logic
+#[macro_export]
+macro_rules! impl_row_accumulator_update_single_row_dispatch {
+    (
+        [$array_dt:ident, $array:ident, $row_index:ident, $update_func:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
+    ) => {
+        match ($array_dt) {
+            $(
+                $i1t! { datatype_match_pattern } => {
+                        let typed_array = downcast_value!($array, $i1);
+                        let value = typed_array.value_at($row_index);
+                        value.$update_func($self.index, $accessor);
+                }
+            )*
+            _ => return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {} in RowAccumulator",
+                        $array_dt
+                    )))
+        }
+    };
+}
+
+pub use impl_row_accumulator_update_single_row_dispatch;
+
+/// Generate AvgRowAccumulator update single row dispatch logic
+#[macro_export]
+macro_rules! impl_avg_row_accumulator_update_single_row_dispatch {
+    (
+        [$array_dt:ident, $array:ident, $row_index:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
+    ) => {
+        match ($array_dt) {
+            $(
+                $i1t! { datatype_match_pattern } => {
+                        let typed_array = downcast_value!($array, $i1);
+                        let value = typed_array.value_at($row_index);
+                        $accessor.add_u64($self.state_index, 1);
+                        value.add_to_row($self.state_index + 1, $accessor);
+                }
+            )*
+            _ => return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {} in AvgRowAccumulator",
+                        $array_dt
+                    )))
+        }
+    };
+}
+
+pub use impl_avg_row_accumulator_update_single_row_dispatch;
 
 /// The type match pattern of the type macro. e.g., 'DataType::Decimal { .. }'.
 #[macro_export]
@@ -255,7 +331,7 @@ macro_rules! datatype_match_pattern {
     };
 }
 
-pub(crate) use datatype_match_pattern;
+pub use datatype_match_pattern;
 
 /// The type match pattern of the type 'DataType::Boolean'.
 #[macro_export]
@@ -267,7 +343,7 @@ macro_rules! Boolean {
     };
 }
 
-pub(crate) use Boolean;
+pub use Boolean;
 
 /// The type match pattern of the type 'DataType::Int8'.
 #[macro_export]
@@ -279,7 +355,7 @@ macro_rules! Int8 {
     };
 }
 
-pub(crate) use Int8;
+pub use Int8;
 
 /// The type match pattern of the type 'DataType::Int16'.
 #[macro_export]
@@ -291,7 +367,7 @@ macro_rules! Int16 {
     };
 }
 
-pub(crate) use Int16;
+pub use Int16;
 
 /// The type match pattern of the type 'DataType::Int32'.
 #[macro_export]
@@ -303,7 +379,7 @@ macro_rules! Int32 {
     };
 }
 
-pub(crate) use Int32;
+pub use Int32;
 
 /// The type match pattern of the type 'DataType::Int64'.
 #[macro_export]
@@ -315,7 +391,7 @@ macro_rules! Int64 {
     };
 }
 
-pub(crate) use Int64;
+pub use Int64;
 
 /// The type match pattern of the type 'DataType::UInt8'.
 #[macro_export]
@@ -327,7 +403,7 @@ macro_rules! UInt8 {
     };
 }
 
-pub(crate) use UInt8;
+pub use UInt8;
 
 /// The type match pattern of the type 'DataType::UInt16'.
 #[macro_export]
@@ -339,7 +415,7 @@ macro_rules! UInt16 {
     };
 }
 
-pub(crate) use UInt16;
+pub use UInt16;
 
 /// The type match pattern of the type 'DataType::UInt32'.
 #[macro_export]
@@ -351,7 +427,7 @@ macro_rules! UInt32 {
     };
 }
 
-pub(crate) use UInt32;
+pub use UInt32;
 
 /// The type match pattern of the type 'DataType::UInt64'.
 #[macro_export]
@@ -363,7 +439,7 @@ macro_rules! UInt64 {
     };
 }
 
-pub(crate) use UInt64;
+pub use UInt64;
 
 /// The type match pattern of the type 'DataType::Float32'.
 #[macro_export]
@@ -375,7 +451,7 @@ macro_rules! Float32 {
     };
 }
 
-pub(crate) use Float32;
+pub use Float32;
 
 /// The type match pattern of the type 'DataType::Float64'.
 #[macro_export]
@@ -387,7 +463,7 @@ macro_rules! Float64 {
     };
 }
 
-pub(crate) use Float64;
+pub use Float64;
 
 /// The type match pattern of the type 'DataType::Decimal128'.
 #[macro_export]
@@ -399,4 +475,4 @@ macro_rules! Decimal128 {
     };
 }
 
-pub(crate) use Decimal128;
+pub use Decimal128;

@@ -107,7 +107,7 @@ macro_rules! bool_and_or_v2 {
     }};
 }
 
-pub fn bool_and_row_with_scalar(
+pub fn bool_and_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -115,7 +115,7 @@ pub fn bool_and_row_with_scalar(
     bool_and_or_v2!(index, accessor, s, bitand)
 }
 
-pub fn bool_or_row_with_scalar(
+pub fn bool_or_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -273,7 +273,7 @@ impl RowAccumulator for BoolAndRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bool_and_batch(values)?;
-        bool_and_row_with_scalar(self.index, accessor, delta)
+        bool_and_row(self.index, accessor, delta)
     }
 
     fn update_single_row(
@@ -489,7 +489,7 @@ impl RowAccumulator for BoolOrRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bool_or_batch(values)?;
-        bool_or_row_with_scalar(self.index, accessor, delta)?;
+        bool_or_row(self.index, accessor, delta)?;
         Ok(())
     }
 

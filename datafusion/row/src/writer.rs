@@ -76,7 +76,6 @@ pub fn bench_write_batch(
 #[macro_export]
 macro_rules! set_idx {
     ($WIDTH: literal, $SELF: ident, $IDX: ident, $VALUE: ident) => {{
-        $SELF.assert_index_valid($IDX);
         let offset = $SELF.field_offsets()[$IDX];
         $SELF.data[offset..offset + $WIDTH].copy_from_slice(&$VALUE.to_le_bytes());
     }};
@@ -87,7 +86,6 @@ macro_rules! fn_set_idx {
     ($NATIVE: ident, $WIDTH: literal) => {
         paste::item! {
             fn [<set_ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
-                self.assert_index_valid(idx);
                 let offset = self.field_offsets()[idx];
                 self.data[offset..offset + $WIDTH].copy_from_slice(&value.to_le_bytes());
             }
@@ -139,7 +137,8 @@ impl RowWriter {
         self.row_width = self.layout.fixed_part_width();
     }
 
-    #[inline]
+    #[allow(dead_code)]
+    #[inline(always)]
     fn assert_index_valid(&self, idx: usize) {
         assert!(idx < self.layout.field_count);
     }
@@ -177,13 +176,11 @@ impl RowWriter {
     }
 
     fn set_bool(&mut self, idx: usize, value: bool) {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = u8::from(value);
     }
 
     fn set_u8(&mut self, idx: usize, value: u8) {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = value;
     }
@@ -198,7 +195,6 @@ impl RowWriter {
     fn_set_idx!(f64, 8);
 
     fn set_i8(&mut self, idx: usize, value: i8) {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = value.to_le_bytes()[0];
     }

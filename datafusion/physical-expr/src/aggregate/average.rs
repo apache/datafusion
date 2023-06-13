@@ -24,6 +24,7 @@ use std::sync::Arc;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
 };
+use crate::aggregate::row_agg_macros::*;
 use crate::aggregate::sum;
 use crate::aggregate::sum::sum_batch;
 use crate::aggregate::utils::calculate_result_decimal_for_avg;
@@ -36,10 +37,9 @@ use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
-use arrow_array::cast::{as_boolean_array, as_decimal_array, as_primitive_array};
 use arrow_array::{
-    Array, ArrayAccessor, BooleanArray, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt8Array,
+    Array, ArrayAccessor, BooleanArray, Decimal128Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt8Array,
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
@@ -295,7 +295,7 @@ impl RowAccumulator for AvgRowAccumulator {
         accessor.add_u64(self.state_index(), delta);
 
         // sum
-        sum::add_to_row_with_scalar(
+        sum::add_to_row(
             self.state_index() + 1,
             accessor,
             &sum::sum_batch(values, &self.sum_datatype)?,
@@ -318,86 +318,9 @@ impl RowAccumulator for AvgRowAccumulator {
                 return Ok(());
             }
         }
-        match array.data_type() {
-            DataType::Boolean => {
-                let typed_array = as_boolean_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Int8 => {
-                let typed_array: &Int8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Int16 => {
-                let typed_array: &Int16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Int32 => {
-                let typed_array: &Int32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Int64 => {
-                let typed_array: &Int64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::UInt8 => {
-                let typed_array: &UInt8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::UInt16 => {
-                let typed_array: &UInt16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::UInt32 => {
-                let typed_array: &UInt32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::UInt64 => {
-                let typed_array: &UInt64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Float32 => {
-                let typed_array: &Float32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Float64 => {
-                let typed_array: &Float64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            DataType::Decimal128(_, _) => {
-                let typed_array = as_decimal_array(array);
-                let value = typed_array.value_at(row_index);
-                accessor.add_u64(self.state_index, 1);
-                value.add_to_row(self.state_index + 1, accessor);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in AvgRowAccumulator: {}",
-                    array.data_type()
-                )))
-            }
-        }
+
+        let array_dt = array.data_type();
+        dispatch_all_supported_data_types! { impl_avg_row_accumulator_update_single_row_dispatch, array_dt, array, row_index, accessor, self}
 
         Ok(())
     }
@@ -426,7 +349,7 @@ impl RowAccumulator for AvgRowAccumulator {
 
         // sum
         let difference = sum::sum_batch(&states[1], &self.sum_datatype)?;
-        sum::add_to_row_with_scalar(self.state_index() + 1, accessor, &difference)
+        sum::add_to_row(self.state_index() + 1, accessor, &difference)
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
@@ -478,8 +401,8 @@ mod tests {
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use crate::generic_test_op;
+    use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
-    use arrow::{array::*, datatypes::*};
     use datafusion_common::Result;
 
     #[test]

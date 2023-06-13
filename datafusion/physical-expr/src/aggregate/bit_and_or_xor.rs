@@ -159,7 +159,7 @@ macro_rules! bit_and_or_xor_v2 {
     }};
 }
 
-pub fn bit_and_row_with_scalar(
+pub fn bit_and_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -167,7 +167,7 @@ pub fn bit_and_row_with_scalar(
     bit_and_or_xor_v2!(index, accessor, s, bitand)
 }
 
-pub fn bit_or_row_with_scalar(
+pub fn bit_or_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -175,7 +175,7 @@ pub fn bit_or_row_with_scalar(
     bit_and_or_xor_v2!(index, accessor, s, bitor)
 }
 
-pub fn bit_xor_row_with_scalar(
+pub fn bit_xor_row(
     index: usize,
     accessor: &mut RowAccessor,
     s: &ScalarValue,
@@ -329,7 +329,7 @@ impl RowAccumulator for BitAndRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bit_and_batch(values)?;
-        bit_and_row_with_scalar(self.index, accessor, delta)
+        bit_and_row(self.index, accessor, delta)
     }
 
     fn update_single_row(
@@ -576,7 +576,7 @@ impl RowAccumulator for BitOrRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bit_or_batch(values)?;
-        bit_or_row_with_scalar(self.index, accessor, delta)?;
+        bit_or_row(self.index, accessor, delta)?;
         Ok(())
     }
 
@@ -824,7 +824,7 @@ impl RowAccumulator for BitXorRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &bit_xor_batch(values)?;
-        bit_xor_row_with_scalar(self.index, accessor, delta)?;
+        bit_xor_row(self.index, accessor, delta)?;
         Ok(())
     }
 

@@ -63,7 +63,6 @@ pub fn read_as_batch(
 #[macro_export]
 macro_rules! get_idx {
     ($NATIVE: ident, $SELF: ident, $IDX: ident, $WIDTH: literal) => {{
-        //$SELF.assert_index_valid($IDX);
         let offset = $SELF.field_offsets()[$IDX];
         let start = $SELF.base_offset + offset;
         let end = start + $WIDTH;
@@ -76,7 +75,6 @@ macro_rules! fn_get_idx {
     ($NATIVE: ident, $WIDTH: literal) => {
         paste::item! {
             fn [<get_ $NATIVE>](&self, idx: usize) -> $NATIVE {
-                //self.assert_index_valid(idx);
                 let offset = self.field_offsets()[idx];
                 let start = self.base_offset + offset;
                 let end = start + $WIDTH;
@@ -142,7 +140,8 @@ impl<'a> RowReader<'a> {
         self.data = data;
     }
 
-    #[inline]
+    #[allow(dead_code)]
+    #[inline(always)]
     fn assert_index_valid(&self, idx: usize) {
         assert!(idx < self.layout.field_count);
     }
@@ -182,14 +181,12 @@ impl<'a> RowReader<'a> {
     }
 
     fn get_bool(&self, idx: usize) -> bool {
-        //self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         let value = &self.data[self.base_offset + offset..];
         value[0] != 0
     }
 
     fn get_u8(&self, idx: usize) -> u8 {
-        //self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[self.base_offset + offset]
     }

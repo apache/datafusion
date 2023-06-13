@@ -29,7 +29,7 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::physical_plan::aggregates::agg_macros::*;
+use crate::physical_plan::aggregates::row_agg_macros::*;
 use crate::physical_plan::aggregates::utils::{
     aggr_state_schema, col_to_value, get_at_indices, get_optional_filters, read_as_batch,
     slice_and_maybe_filter, ExecutionState, GroupState,
@@ -513,19 +513,19 @@ impl GroupedHashAggregateStream {
                 };
             });
 
-        if single_value_acc_idx.len() == 1 && single_row_acc_idx.len() == 0 {
+        if single_value_acc_idx.len() == 1 && single_row_acc_idx.is_empty() {
             let acc_idx1 = single_value_acc_idx[0];
             let array1 = &row_values[acc_idx1][0];
             let array1_dt = array1.data_type();
-            for_all_supported_data_types! { impl_one_row_accumulator_dispatch, array1_dt, array1, self, update_one_accumulator_with_native_value, groups_with_rows, acc_idx1, filter_bool_array}
-        } else if single_value_acc_idx.len() == 2 && single_row_acc_idx.len() == 0 {
+            dispatch_all_supported_data_types! { impl_one_row_accumulator_dispatch, array1_dt, array1, acc_idx1, self, update_one_accumulator_with_native_value, groups_with_rows, filter_bool_array}
+        } else if single_value_acc_idx.len() == 2 && single_row_acc_idx.is_empty() {
             let acc_idx1 = single_value_acc_idx[0];
             let acc_idx2 = single_value_acc_idx[1];
             let array1 = &row_values[acc_idx1][0];
             let array2 = &row_values[acc_idx2][0];
             let array1_dt = array1.data_type();
             let array2_dt = array2.data_type();
-            for_all_supported_data_types2! { impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, self, update_two_accumulator2_with_native_value, groups_with_rows, acc_idx1, acc_idx2,filter_bool_array}
+            dispatch_all_supported_data_types_pairs! { impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, acc_idx1, acc_idx2, self, update_two_accumulator2_with_native_value, groups_with_rows, filter_bool_array}
         } else {
             for group_idx in groups_with_rows {
                 let group_state = &mut self.aggr_state.group_states[*group_idx];

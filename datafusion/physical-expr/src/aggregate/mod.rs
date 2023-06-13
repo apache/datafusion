@@ -55,6 +55,9 @@ mod tdigest;
 pub mod utils;
 pub(crate) mod variance;
 
+#[macro_use]
+pub mod row_agg_macros;
+
 /// An aggregate expression that:
 /// * knows its resulting field
 /// * knows how to create its accumulator

@@ -33,6 +33,7 @@ use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
+use datafusion_physical_expr::aggregate::row_agg_macros;
 use datafusion_physical_expr::{
     equivalence::project_equivalence_properties,
     expressions::{Avg, CastExpr, Column, Sum},
@@ -45,7 +46,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-mod agg_macros;
 mod bounded_aggregate_stream;
 mod no_grouping;
 mod row_hash;

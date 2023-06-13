@@ -54,7 +54,7 @@ pub struct RowAccessor<'a> {
     base_offset: usize,
 }
 
-impl<'a> std::fmt::Debug for RowAccessor<'a> {
+impl<'a> Debug for RowAccessor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.null_free() {
             write!(f, "null_free")
@@ -162,7 +162,8 @@ impl<'a> RowAccessor<'a> {
         self.data = data;
     }
 
-    #[inline]
+    #[allow(dead_code)]
+    #[inline(always)]
     fn assert_index_valid(&self, idx: usize) {
         assert!(idx < self.layout.field_count);
     }
@@ -196,14 +197,12 @@ impl<'a> RowAccessor<'a> {
     // ------------------------------
 
     fn get_bool(&self, idx: usize) -> bool {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         let value = &self.data[self.base_offset + offset..];
         value[0] != 0
     }
 
     fn get_u8(&self, idx: usize) -> u8 {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[self.base_offset + offset]
     }
@@ -286,13 +285,11 @@ impl<'a> RowAccessor<'a> {
     }
 
     fn set_bool(&mut self, idx: usize, value: bool) {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = u8::from(value);
     }
 
     fn set_u8(&mut self, idx: usize, value: u8) {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = value;
     }
@@ -308,7 +305,6 @@ impl<'a> RowAccessor<'a> {
     fn_set_idx!(i128, 16);
 
     fn set_i8(&mut self, idx: usize, value: i8) {
-        self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = value.to_le_bytes()[0];
     }

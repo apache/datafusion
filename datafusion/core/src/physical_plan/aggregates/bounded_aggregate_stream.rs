@@ -31,6 +31,7 @@ use futures::stream::{Stream, StreamExt};
 use hashbrown::raw::RawTable;
 use itertools::izip;
 
+use crate::physical_plan::aggregates::row_agg_macros::*;
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
     AggregationOrdering, GroupByOrderMode, PhysicalGroupBy, RowAccumulatorItem,
@@ -43,20 +44,21 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 
 use crate::physical_plan::aggregates::utils::{
-    aggr_state_schema, get_at_indices, get_optional_filters, read_as_batch,
+    aggr_state_schema, col_to_value, get_at_indices, get_optional_filters, read_as_batch,
     slice_and_maybe_filter, ExecutionState, GroupState,
 };
-use arrow::array::{new_null_array, ArrayRef, UInt32Builder};
+use arrow::array::*;
 use arrow::compute::{cast, SortColumn};
 use arrow::datatypes::DataType;
 use arrow::row::{OwnedRow, RowConverter, SortField};
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow_array::BooleanArray;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{evaluate_partition_ranges, get_row_at_idx};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::hash_utils::create_hashes;
-use datafusion_row::accessor::RowAccessor;
+use datafusion_row::accessor::{ArrowArrayReader, RowAccessor};
 use datafusion_row::layout::RowLayout;
 
 use super::AggregateExec;
@@ -650,28 +652,59 @@ impl BoundedAggregateStream {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        for group_idx in groups_with_rows {
-            let group_state =
-                &mut self.aggr_state.ordered_group_states[*group_idx].group_state;
-            let mut state_accessor =
-                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
-            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-            for idx in &group_state.indices {
-                for (accumulator, values_array, filter_array) in izip!(
-                    self.row_accumulators.iter_mut(),
-                    row_values.iter(),
-                    filter_bool_array.iter()
-                ) {
-                    accumulator.update_single_row(
-                        values_array,
-                        filter_array,
-                        *idx as usize,
-                        &mut state_accessor,
-                    )?;
+        let mut single_value_acc_idx = vec![];
+        let mut single_row_acc_idx = vec![];
+        self.row_accumulators
+            .iter()
+            .zip(row_values.iter())
+            .enumerate()
+            .for_each(|(idx, (acc, values))| {
+                if let RowAccumulatorItem::COUNT(_) = acc {
+                    single_row_acc_idx.push(idx);
+                } else if values.len() == 1 {
+                    single_value_acc_idx.push(idx);
+                } else {
+                    single_row_acc_idx.push(idx);
+                };
+            });
+
+        if single_value_acc_idx.len() == 1 && single_row_acc_idx.is_empty() {
+            let acc_idx1 = single_value_acc_idx[0];
+            let array1 = &row_values[acc_idx1][0];
+            let array1_dt = array1.data_type();
+            dispatch_all_supported_data_types! { impl_one_row_accumulator_dispatch, array1_dt, array1, acc_idx1, self, update_one_accumulator_with_native_value, groups_with_rows, filter_bool_array}
+        } else if single_value_acc_idx.len() == 2 && single_row_acc_idx.is_empty() {
+            let acc_idx1 = single_value_acc_idx[0];
+            let acc_idx2 = single_value_acc_idx[1];
+            let array1 = &row_values[acc_idx1][0];
+            let array2 = &row_values[acc_idx2][0];
+            let array1_dt = array1.data_type();
+            let array2_dt = array2.data_type();
+            dispatch_all_supported_data_types_pairs! { impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, acc_idx1, acc_idx2, self, update_two_accumulator2_with_native_value, groups_with_rows, filter_bool_array}
+        } else {
+            for group_idx in groups_with_rows {
+                let group_state =
+                    &mut self.aggr_state.ordered_group_states[*group_idx].group_state;
+                let mut state_accessor =
+                    RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+                state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+                for idx in &group_state.indices {
+                    for (accumulator, values_array, filter_array) in izip!(
+                        self.row_accumulators.iter_mut(),
+                        row_values.iter(),
+                        filter_bool_array.iter()
+                    ) {
+                        accumulator.update_single_row(
+                            values_array,
+                            filter_array,
+                            *idx as usize,
+                            &mut state_accessor,
+                        )?;
+                    }
                 }
+                // clear the group indices in this group
+                group_state.indices.clear();
             }
-            // clear the group indices in this group
-            group_state.indices.clear();
         }
 
         Ok(())
@@ -825,6 +858,71 @@ impl BoundedAggregateStream {
         }
 
         Ok(allocated)
+    }
+
+    fn update_one_accumulator_with_native_value<T1>(
+        &mut self,
+        groups_with_rows: &[usize],
+        agg_input_array1: &T1,
+        acc_idx1: usize,
+        filter_bool_array: &[Option<&BooleanArray>],
+    ) -> Result<()>
+    where
+        T1: ArrowArrayReader,
+    {
+        let accumulator1 = &self.row_accumulators[acc_idx1];
+        let filter_array1 = &filter_bool_array[acc_idx1];
+        for group_idx in groups_with_rows {
+            let group_state =
+                &mut self.aggr_state.ordered_group_states[*group_idx].group_state;
+            let mut state_accessor =
+                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                let value = col_to_value(agg_input_array1, filter_array1, *idx as usize);
+                accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
+    }
+
+    fn update_two_accumulator2_with_native_value<T1, T2>(
+        &mut self,
+        groups_with_rows: &[usize],
+        agg_input_array1: &T1,
+        agg_input_array2: &T2,
+        acc_idx1: usize,
+        acc_idx2: usize,
+        filter_bool_array: &[Option<&BooleanArray>],
+    ) -> Result<()>
+    where
+        T1: ArrowArrayReader,
+        T2: ArrowArrayReader,
+    {
+        let accumulator1 = &self.row_accumulators[acc_idx1];
+        let accumulator2 = &self.row_accumulators[acc_idx2];
+        let filter_array1 = &filter_bool_array[acc_idx1];
+        let filter_array2 = &filter_bool_array[acc_idx2];
+        for group_idx in groups_with_rows {
+            let group_state =
+                &mut self.aggr_state.ordered_group_states[*group_idx].group_state;
+            let mut state_accessor =
+                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                let value = col_to_value(agg_input_array1, filter_array1, *idx as usize);
+                accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
+                let value = col_to_value(agg_input_array2, filter_array2, *idx as usize);
+                accumulator2.update_value::<T2::Item>(value, &mut state_accessor);
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
     }
 }
 

@@ -24,6 +24,7 @@ use crate::aggregate::bit_and_or_xor::{
 use crate::aggregate::bool_and_or::{BoolAndRowAccumulator, BoolOrRowAccumulator};
 use crate::aggregate::count::CountRowAccumulator;
 use crate::aggregate::min_max::{MaxRowAccumulator, MinRowAccumulator};
+use crate::aggregate::row_agg_macros::matches_all_supported_data_types;
 use crate::aggregate::sum::SumRowAccumulator;
 use arrow::array::ArrayRef;
 use arrow_array::BooleanArray;
@@ -94,21 +95,7 @@ pub trait RowAccumulator:
 
 /// Returns if `data_type` is supported with `RowAccumulator`
 pub fn is_row_accumulator_support_dtype(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Boolean
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-    )
+    matches_all_supported_data_types!(data_type)
 }
 
 /// Enum to dispatch the RowAccumulator, RowAccumulator contains generic methods and can not be used as the trait objects

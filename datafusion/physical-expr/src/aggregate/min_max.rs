@@ -21,6 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use crate::aggregate::row_agg_macros::*;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::{DataType, TimeUnit};
@@ -46,7 +47,6 @@ use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
-use arrow_array::cast::{as_boolean_array, as_decimal_array, as_primitive_array};
 use arrow_array::ArrayAccessor;
 use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 
@@ -591,11 +591,7 @@ pub fn min(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     min_max!(lhs, rhs, min)
 }
 
-pub fn min_row_with_scalar(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
+pub fn min_row(index: usize, accessor: &mut RowAccessor, s: &ScalarValue) -> Result<()> {
     min_max_v2!(index, accessor, s, min)
 }
 
@@ -604,11 +600,7 @@ pub fn max(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     min_max!(lhs, rhs, max)
 }
 
-pub fn max_row_with_scalar(
-    index: usize,
-    accessor: &mut RowAccessor,
-    s: &ScalarValue,
-) -> Result<()> {
+pub fn max_row(index: usize, accessor: &mut RowAccessor, s: &ScalarValue) -> Result<()> {
     min_max_v2!(index, accessor, s, max)
 }
 
@@ -728,7 +720,7 @@ impl RowAccumulator for MaxRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &max_batch(values)?;
-        max_row_with_scalar(self.index, accessor, delta)
+        max_row(self.index, accessor, delta)
     }
 
     fn update_single_row(
@@ -747,74 +739,9 @@ impl RowAccumulator for MaxRowAccumulator {
                 return Ok(());
             }
         }
-        match array.data_type() {
-            DataType::Boolean => {
-                let typed_array = as_boolean_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Int8 => {
-                let typed_array: &Int8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Int16 => {
-                let typed_array: &Int16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Int32 => {
-                let typed_array: &Int32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Int64 => {
-                let typed_array: &Int64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::UInt8 => {
-                let typed_array: &UInt8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::UInt16 => {
-                let typed_array: &UInt16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::UInt32 => {
-                let typed_array: &UInt32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::UInt64 => {
-                let typed_array: &UInt64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Float32 => {
-                let typed_array: &Float32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Float64 => {
-                let typed_array: &Float64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            DataType::Decimal128(_, _) => {
-                let typed_array = as_decimal_array(array);
-                let value = typed_array.value_at(row_index);
-                value.max_to_row(self.index, accessor)
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in MaxRowAccumulator: {}",
-                    array.data_type()
-                )))
-            }
-        }
+        let array_dt = array.data_type();
+
+        dispatch_all_supported_data_types! { impl_row_accumulator_update_single_row_dispatch, array_dt, array, row_index, max_to_row, accessor, self}
 
         Ok(())
     }
@@ -1063,7 +990,7 @@ impl RowAccumulator for MinRowAccumulator {
     ) -> Result<()> {
         let values = &values[0];
         let delta = &min_batch(values)?;
-        min_row_with_scalar(self.index, accessor, delta)?;
+        min_row(self.index, accessor, delta)?;
         Ok(())
     }
 
@@ -1083,74 +1010,10 @@ impl RowAccumulator for MinRowAccumulator {
                 return Ok(());
             }
         }
-        match array.data_type() {
-            DataType::Boolean => {
-                let typed_array = as_boolean_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Int8 => {
-                let typed_array: &Int8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Int16 => {
-                let typed_array: &Int16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Int32 => {
-                let typed_array: &Int32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Int64 => {
-                let typed_array: &Int64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::UInt8 => {
-                let typed_array: &UInt8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::UInt16 => {
-                let typed_array: &UInt16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::UInt32 => {
-                let typed_array: &UInt32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::UInt64 => {
-                let typed_array: &UInt64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Float32 => {
-                let typed_array: &Float32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Float64 => {
-                let typed_array: &Float64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            DataType::Decimal128(_, _) => {
-                let typed_array = as_decimal_array(array);
-                let value = typed_array.value_at(row_index);
-                value.min_to_row(self.index, accessor)
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in MinRowAccumulator: {}",
-                    array.data_type()
-                )))
-            }
-        }
+
+        let array_dt = array.data_type();
+
+        dispatch_all_supported_data_types! { impl_row_accumulator_update_single_row_dispatch, array_dt, array, row_index, min_to_row, accessor, self}
 
         Ok(())
     }
