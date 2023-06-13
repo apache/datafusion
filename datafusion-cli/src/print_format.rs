@@ -90,7 +90,6 @@ mod tests {
     use super::*;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::from_slice::FromSlice;
     use std::sync::Arc;
 
     #[test]
@@ -107,9 +106,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )
         .unwrap();
@@ -137,9 +136,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema,
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )
         .unwrap();

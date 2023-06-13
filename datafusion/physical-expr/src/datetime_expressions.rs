@@ -285,31 +285,31 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let nano = (f)(*v)?;
             match granularity.as_str() {
                 "minute" => {
-                    // cast to second
-                    let second = ScalarValue::TimestampSecond(
-                        Some(nano.unwrap() / 1_000_000_000),
+                    // trunc to minute
+                    let second = ScalarValue::TimestampNanosecond(
+                        Some(nano.unwrap() / 1_000_000_000 * 1_000_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(second)
                 }
                 "second" => {
-                    // cast to millisecond
-                    let mill = ScalarValue::TimestampMillisecond(
-                        Some(nano.unwrap() / 1_000_000),
+                    // trunc to second
+                    let mill = ScalarValue::TimestampNanosecond(
+                        Some(nano.unwrap() / 1_000_000 * 1_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(mill)
                 }
                 "millisecond" => {
-                    // cast to microsecond
-                    let micro = ScalarValue::TimestampMicrosecond(
-                        Some(nano.unwrap() / 1_000),
+                    // trunc to microsecond
+                    let micro = ScalarValue::TimestampNanosecond(
+                        Some(nano.unwrap() / 1_000 * 1_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(micro)
                 }
                 _ => {
-                    // cast to nanosecond
+                    // trunc to nanosecond
                     let nano = ScalarValue::TimestampNanosecond(
                         Some(nano.unwrap()),
                         tz_opt.clone(),
@@ -329,7 +329,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         _ => {
             return Err(DataFusionError::Execution(
-                "array of `date_trunc` must be non-null scalar Utf8".to_string(),
+                "second argument of `date_trunc` must be nanosecond timestamp scalar or array".to_string(),
             ));
         }
     })

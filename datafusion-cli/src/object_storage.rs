@@ -57,8 +57,7 @@ pub async fn get_s3_object_store_builder(
             .ok_or_else(|| {
                 DataFusionError::ObjectStore(object_store::Error::Generic {
                     store: "S3",
-                    source: format!("Failed to get S3 credentials from environment")
-                        .into(),
+                    source: "Failed to get S3 credentials from environment".into(),
                 })
             })?
             .clone();

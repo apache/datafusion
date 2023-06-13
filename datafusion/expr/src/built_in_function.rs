@@ -17,11 +17,17 @@
 
 //! Built-in functions module contains all the built-in functions definitions.
 
-use crate::Volatility;
+use crate::nullif::SUPPORTED_NULLIF_TYPES;
+use crate::type_coercion::functions::data_types;
+use crate::{
+    conditional_expressions, struct_expressions, Signature, TypeSignature, Volatility,
+};
+use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -271,6 +277,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::CurrentDate
                 | BuiltinScalarFunction::CurrentTime
                 | BuiltinScalarFunction::Uuid
+                | BuiltinScalarFunction::MakeArray
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -381,6 +388,675 @@ impl BuiltinScalarFunction {
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
             BuiltinScalarFunction::Uuid => Volatility::Volatile,
+        }
+    }
+
+    /// Creates a detailed error message for a function with wrong signature.
+    ///
+    /// For example, a query like `select round(3.14, 1.1);` would yield:
+    /// ```text
+    /// Error during planning: No function matches 'round(Float64, Float64)'. You might need to add explicit type casts.
+    ///     Candidate functions:
+    ///     round(Float64, Int64)
+    ///     round(Float32, Int64)
+    ///     round(Float64)
+    ///     round(Float32)
+    /// ```
+    fn generate_signature_error_msg(&self, input_expr_types: &[DataType]) -> String {
+        let candidate_signatures = self
+            .signature()
+            .type_signature
+            .to_string_repr()
+            .iter()
+            .map(|args_str| format!("\t{self}({args_str})"))
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        format!(
+            "No function matches the given name and argument types '{}({})'. You might need to add explicit type casts.\n\tCandidate functions:\n{}",
+            self, TypeSignature::join_types(input_expr_types, ", "), candidate_signatures
+        )
+    }
+
+    /// Returns the output [`DataType` of this function
+    pub fn return_type(self, input_expr_types: &[DataType]) -> Result<DataType> {
+        use DataType::*;
+        use TimeUnit::*;
+
+        // Note that this function *must* return the same type that the respective physical expression returns
+        // or the execution panics.
+
+        if input_expr_types.is_empty() && !self.supports_zero_argument() {
+            return Err(DataFusionError::Plan(
+                self.generate_signature_error_msg(input_expr_types),
+            ));
+        }
+
+        // verify that this is a valid set of data types for this function
+        data_types(input_expr_types, &self.signature()).map_err(|_| {
+            DataFusionError::Plan(self.generate_signature_error_msg(input_expr_types))
+        })?;
+
+        // the return type of the built in function.
+        // Some built-in functions' return type depends on the incoming type.
+        match self {
+            BuiltinScalarFunction::ArrayAppend => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::ArrayConcat => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept fixed size list as the args."
+                ))),
+            },
+            BuiltinScalarFunction::ArrayDims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
+                "item",
+                input_expr_types[0].clone(),
+                true,
+            )))),
+            BuiltinScalarFunction::ArrayLength => Ok(UInt8),
+            BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayPosition => Ok(UInt8),
+            BuiltinScalarFunction::ArrayPositions => Ok(UInt8),
+            BuiltinScalarFunction::ArrayPrepend => match &input_expr_types[1] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::ArrayRemove => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::ArrayReplace => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::ArrayToString => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::Cardinality => Ok(UInt64),
+            BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
+                0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
+                _ => Ok(List(Arc::new(Field::new(
+                    "item",
+                    input_expr_types[0].clone(),
+                    true,
+                )))),
+            },
+            BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
+                List(field) => Ok(List(Arc::new(Field::new(
+                    "item",
+                    field.data_type().clone(),
+                    true,
+                )))),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept list as the first argument"
+                ))),
+            },
+            BuiltinScalarFunction::Ascii => Ok(Int32),
+            BuiltinScalarFunction::BitLength => {
+                utf8_to_int_type(&input_expr_types[0], "bit_length")
+            }
+            BuiltinScalarFunction::Btrim => {
+                utf8_to_str_type(&input_expr_types[0], "btrim")
+            }
+            BuiltinScalarFunction::CharacterLength => {
+                utf8_to_int_type(&input_expr_types[0], "character_length")
+            }
+            BuiltinScalarFunction::Chr => Ok(Utf8),
+            BuiltinScalarFunction::Coalesce => {
+                // COALESCE has multiple args and they might get coerced, get a preview of this
+                let coerced_types = data_types(input_expr_types, &self.signature());
+                coerced_types.map(|types| types[0].clone())
+            }
+            BuiltinScalarFunction::Concat => Ok(Utf8),
+            BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
+            BuiltinScalarFunction::DatePart => Ok(Float64),
+            // DateTrunc always makes nanosecond timestamps
+            BuiltinScalarFunction::DateTrunc => Ok(Timestamp(Nanosecond, None)),
+            BuiltinScalarFunction::DateBin => match input_expr_types[1] {
+                Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
+                Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
+                Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
+                Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                _ => Err(DataFusionError::Internal(format!(
+                    "The {self} function can only accept timestamp as the second arg."
+                ))),
+            },
+            BuiltinScalarFunction::InitCap => {
+                utf8_to_str_type(&input_expr_types[0], "initcap")
+            }
+            BuiltinScalarFunction::Left => utf8_to_str_type(&input_expr_types[0], "left"),
+            BuiltinScalarFunction::Lower => {
+                utf8_to_str_type(&input_expr_types[0], "lower")
+            }
+            BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
+            BuiltinScalarFunction::Ltrim => {
+                utf8_to_str_type(&input_expr_types[0], "ltrim")
+            }
+            BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
+            BuiltinScalarFunction::NullIf => {
+                // NULLIF has two args and they might get coerced, get a preview of this
+                let coerced_types = data_types(input_expr_types, &self.signature());
+                coerced_types.map(|typs| typs[0].clone())
+            }
+            BuiltinScalarFunction::OctetLength => {
+                utf8_to_int_type(&input_expr_types[0], "octet_length")
+            }
+            BuiltinScalarFunction::Pi => Ok(Float64),
+            BuiltinScalarFunction::Random => Ok(Float64),
+            BuiltinScalarFunction::Uuid => Ok(Utf8),
+            BuiltinScalarFunction::RegexpReplace => {
+                utf8_to_str_type(&input_expr_types[0], "regex_replace")
+            }
+            BuiltinScalarFunction::Repeat => {
+                utf8_to_str_type(&input_expr_types[0], "repeat")
+            }
+            BuiltinScalarFunction::Replace => {
+                utf8_to_str_type(&input_expr_types[0], "replace")
+            }
+            BuiltinScalarFunction::Reverse => {
+                utf8_to_str_type(&input_expr_types[0], "reverse")
+            }
+            BuiltinScalarFunction::Right => {
+                utf8_to_str_type(&input_expr_types[0], "right")
+            }
+            BuiltinScalarFunction::Rpad => utf8_to_str_type(&input_expr_types[0], "rpad"),
+            BuiltinScalarFunction::Rtrim => {
+                utf8_to_str_type(&input_expr_types[0], "rtrimp")
+            }
+            BuiltinScalarFunction::SHA224 => {
+                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha224")
+            }
+            BuiltinScalarFunction::SHA256 => {
+                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha256")
+            }
+            BuiltinScalarFunction::SHA384 => {
+                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha384")
+            }
+            BuiltinScalarFunction::SHA512 => {
+                utf8_or_binary_to_binary_type(&input_expr_types[0], "sha512")
+            }
+            BuiltinScalarFunction::Digest => {
+                utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
+            }
+            BuiltinScalarFunction::SplitPart => {
+                utf8_to_str_type(&input_expr_types[0], "split_part")
+            }
+            BuiltinScalarFunction::StartsWith => Ok(Boolean),
+            BuiltinScalarFunction::Strpos => {
+                utf8_to_int_type(&input_expr_types[0], "strpos")
+            }
+            BuiltinScalarFunction::Substr => {
+                utf8_to_str_type(&input_expr_types[0], "substr")
+            }
+            BuiltinScalarFunction::ToHex => Ok(match input_expr_types[0] {
+                Int8 | Int16 | Int32 | Int64 => Utf8,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(
+                        "The to_hex function can only accept integers.".to_string(),
+                    ));
+                }
+            }),
+            BuiltinScalarFunction::ToTimestamp => Ok(Timestamp(Nanosecond, None)),
+            BuiltinScalarFunction::ToTimestampMillis => Ok(Timestamp(Millisecond, None)),
+            BuiltinScalarFunction::ToTimestampMicros => Ok(Timestamp(Microsecond, None)),
+            BuiltinScalarFunction::ToTimestampSeconds => Ok(Timestamp(Second, None)),
+            BuiltinScalarFunction::FromUnixtime => Ok(Timestamp(Second, None)),
+            BuiltinScalarFunction::Now => {
+                Ok(Timestamp(Nanosecond, Some("+00:00".into())))
+            }
+            BuiltinScalarFunction::CurrentDate => Ok(Date32),
+            BuiltinScalarFunction::CurrentTime => Ok(Time64(Nanosecond)),
+            BuiltinScalarFunction::Translate => {
+                utf8_to_str_type(&input_expr_types[0], "translate")
+            }
+            BuiltinScalarFunction::Trim => utf8_to_str_type(&input_expr_types[0], "trim"),
+            BuiltinScalarFunction::Upper => {
+                utf8_to_str_type(&input_expr_types[0], "upper")
+            }
+            BuiltinScalarFunction::RegexpMatch => Ok(match input_expr_types[0] {
+                LargeUtf8 => List(Arc::new(Field::new("item", LargeUtf8, true))),
+                Utf8 => List(Arc::new(Field::new("item", Utf8, true))),
+                Null => Null,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(
+                        "The regexp_extract function can only accept strings."
+                            .to_string(),
+                    ));
+                }
+            }),
+
+            BuiltinScalarFunction::Factorial
+            | BuiltinScalarFunction::Gcd
+            | BuiltinScalarFunction::Lcm => Ok(Int64),
+
+            BuiltinScalarFunction::Power => match &input_expr_types[0] {
+                Int64 => Ok(Int64),
+                _ => Ok(Float64),
+            },
+
+            BuiltinScalarFunction::Struct => {
+                let return_fields = input_expr_types
+                    .iter()
+                    .enumerate()
+                    .map(|(pos, dt)| Field::new(format!("c{pos}"), dt.clone(), true))
+                    .collect::<Vec<Field>>();
+                Ok(Struct(Fields::from(return_fields)))
+            }
+
+            BuiltinScalarFunction::Atan2 => match &input_expr_types[0] {
+                Float32 => Ok(Float32),
+                _ => Ok(Float64),
+            },
+
+            BuiltinScalarFunction::Log => match &input_expr_types[0] {
+                Float32 => Ok(Float32),
+                _ => Ok(Float64),
+            },
+
+            BuiltinScalarFunction::ArrowTypeof => Ok(Utf8),
+
+            BuiltinScalarFunction::Abs
+            | BuiltinScalarFunction::Acos
+            | BuiltinScalarFunction::Asin
+            | BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Cos
+            | BuiltinScalarFunction::Cosh
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Round
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sin
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Tan
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc => match input_expr_types[0] {
+                Float32 => Ok(Float32),
+                _ => Ok(Float64),
+            },
+        }
+    }
+
+    /// Return the argument [`Signature`] supported by this function
+    pub fn signature(&self) -> Signature {
+        use DataType::*;
+        use IntervalUnit::*;
+        use TimeUnit::*;
+        use TypeSignature::*;
+        // note: the physical expression must accept the type returned by this function or the execution panics.
+
+        // for now, the list is small, as we do not have many built-in functions.
+        match self {
+            BuiltinScalarFunction::ArrayAppend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayConcat => {
+                Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayDims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayFill => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayLength => {
+                Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayNdims => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::ArrayPosition => {
+                Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayPositions => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayPrepend => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayRemove => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::ArrayReplace => {
+                Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::ArrayToString => {
+                Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::Cardinality => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::MakeArray => {
+                Signature::variadic_any(self.volatility())
+            }
+            BuiltinScalarFunction::TrimArray => Signature::any(2, self.volatility()),
+            BuiltinScalarFunction::Struct => Signature::variadic(
+                struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Concat
+            | BuiltinScalarFunction::ConcatWithSeparator => {
+                Signature::variadic(vec![Utf8], self.volatility())
+            }
+            BuiltinScalarFunction::Coalesce => Signature::variadic(
+                conditional_expressions::SUPPORTED_COALESCE_TYPES.to_vec(),
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::SHA224
+            | BuiltinScalarFunction::SHA256
+            | BuiltinScalarFunction::SHA384
+            | BuiltinScalarFunction::SHA512
+            | BuiltinScalarFunction::MD5 => Signature::uniform(
+                1,
+                vec![Utf8, LargeUtf8, Binary, LargeBinary],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Ascii
+            | BuiltinScalarFunction::BitLength
+            | BuiltinScalarFunction::CharacterLength
+            | BuiltinScalarFunction::InitCap
+            | BuiltinScalarFunction::Lower
+            | BuiltinScalarFunction::OctetLength
+            | BuiltinScalarFunction::Reverse
+            | BuiltinScalarFunction::Upper => {
+                Signature::uniform(1, vec![Utf8, LargeUtf8], self.volatility())
+            }
+            BuiltinScalarFunction::Btrim
+            | BuiltinScalarFunction::Ltrim
+            | BuiltinScalarFunction::Rtrim
+            | BuiltinScalarFunction::Trim => Signature::one_of(
+                vec![Exact(vec![Utf8]), Exact(vec![Utf8, Utf8])],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
+                Signature::uniform(1, vec![Int64], self.volatility())
+            }
+            BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => {
+                Signature::one_of(
+                    vec![
+                        Exact(vec![Utf8, Int64]),
+                        Exact(vec![LargeUtf8, Int64]),
+                        Exact(vec![Utf8, Int64, Utf8]),
+                        Exact(vec![LargeUtf8, Int64, Utf8]),
+                        Exact(vec![Utf8, Int64, LargeUtf8]),
+                        Exact(vec![LargeUtf8, Int64, LargeUtf8]),
+                    ],
+                    self.volatility(),
+                )
+            }
+            BuiltinScalarFunction::Left
+            | BuiltinScalarFunction::Repeat
+            | BuiltinScalarFunction::Right => Signature::one_of(
+                vec![Exact(vec![Utf8, Int64]), Exact(vec![LargeUtf8, Int64])],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::ToTimestamp => Signature::uniform(
+                1,
+                vec![
+                    Int64,
+                    Timestamp(Nanosecond, None),
+                    Timestamp(Microsecond, None),
+                    Timestamp(Millisecond, None),
+                    Timestamp(Second, None),
+                    Utf8,
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::ToTimestampMillis => Signature::uniform(
+                1,
+                vec![
+                    Int64,
+                    Timestamp(Nanosecond, None),
+                    Timestamp(Microsecond, None),
+                    Timestamp(Millisecond, None),
+                    Timestamp(Second, None),
+                    Utf8,
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
+                1,
+                vec![
+                    Int64,
+                    Timestamp(Nanosecond, None),
+                    Timestamp(Microsecond, None),
+                    Timestamp(Millisecond, None),
+                    Timestamp(Second, None),
+                    Utf8,
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::ToTimestampSeconds => Signature::uniform(
+                1,
+                vec![
+                    Int64,
+                    Timestamp(Nanosecond, None),
+                    Timestamp(Microsecond, None),
+                    Timestamp(Millisecond, None),
+                    Timestamp(Second, None),
+                    Utf8,
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::FromUnixtime => {
+                Signature::uniform(1, vec![Int64], self.volatility())
+            }
+            BuiltinScalarFunction::Digest => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Binary, Utf8]),
+                    Exact(vec![LargeBinary, Utf8]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::DateTrunc => Signature::exact(
+                vec![Utf8, Timestamp(Nanosecond, None)],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::DateBin => {
+                let base_sig = |array_type: TimeUnit| {
+                    vec![
+                        Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), None),
+                            Timestamp(Nanosecond, None),
+                        ]),
+                        Exact(vec![
+                            Interval(DayTime),
+                            Timestamp(array_type.clone(), None),
+                            Timestamp(Nanosecond, None),
+                        ]),
+                        Exact(vec![
+                            Interval(MonthDayNano),
+                            Timestamp(array_type.clone(), None),
+                        ]),
+                        Exact(vec![Interval(DayTime), Timestamp(array_type, None)]),
+                    ]
+                };
+
+                let full_sig = [Nanosecond, Microsecond, Millisecond, Second]
+                    .into_iter()
+                    .map(base_sig)
+                    .collect::<Vec<_>>()
+                    .concat();
+
+                Signature::one_of(full_sig, self.volatility())
+            }
+            BuiltinScalarFunction::DatePart => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Date32]),
+                    Exact(vec![Utf8, Date64]),
+                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Nanosecond, Some("+00:00".into()))]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::SplitPart => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Int64]),
+                    Exact(vec![LargeUtf8, Utf8, Int64]),
+                    Exact(vec![Utf8, LargeUtf8, Int64]),
+                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                ],
+                self.volatility(),
+            ),
+
+            BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
+                Signature::one_of(
+                    vec![
+                        Exact(vec![Utf8, Utf8]),
+                        Exact(vec![Utf8, LargeUtf8]),
+                        Exact(vec![LargeUtf8, Utf8]),
+                        Exact(vec![LargeUtf8, LargeUtf8]),
+                    ],
+                    self.volatility(),
+                )
+            }
+
+            BuiltinScalarFunction::Substr => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Int64]),
+                    Exact(vec![LargeUtf8, Int64]),
+                    Exact(vec![Utf8, Int64, Int64]),
+                    Exact(vec![LargeUtf8, Int64, Int64]),
+                ],
+                self.volatility(),
+            ),
+
+            BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
+                Signature::one_of(vec![Exact(vec![Utf8, Utf8, Utf8])], self.volatility())
+            }
+            BuiltinScalarFunction::RegexpReplace => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8, Utf8]),
+                ],
+                self.volatility(),
+            ),
+
+            BuiltinScalarFunction::NullIf => {
+                Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), self.volatility())
+            }
+            BuiltinScalarFunction::RegexpMatch => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8]),
+                    Exact(vec![Utf8, Utf8, Utf8]),
+                    Exact(vec![LargeUtf8, Utf8, Utf8]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Pi => Signature::exact(vec![], self.volatility()),
+            BuiltinScalarFunction::Random => Signature::exact(vec![], self.volatility()),
+            BuiltinScalarFunction::Uuid => Signature::exact(vec![], self.volatility()),
+            BuiltinScalarFunction::Power => Signature::one_of(
+                vec![Exact(vec![Int64, Int64]), Exact(vec![Float64, Float64])],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Round => Signature::one_of(
+                vec![
+                    Exact(vec![Float64, Int64]),
+                    Exact(vec![Float32, Int64]),
+                    Exact(vec![Float64]),
+                    Exact(vec![Float32]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Atan2 => Signature::one_of(
+                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Log => Signature::one_of(
+                vec![
+                    Exact(vec![Float32]),
+                    Exact(vec![Float64]),
+                    Exact(vec![Float32, Float32]),
+                    Exact(vec![Float64, Float64]),
+                ],
+                self.volatility(),
+            ),
+            BuiltinScalarFunction::Factorial => {
+                Signature::uniform(1, vec![Int64], self.volatility())
+            }
+            BuiltinScalarFunction::Gcd | BuiltinScalarFunction::Lcm => {
+                Signature::uniform(2, vec![Int64], self.volatility())
+            }
+            BuiltinScalarFunction::ArrowTypeof => Signature::any(1, self.volatility()),
+            BuiltinScalarFunction::Abs
+            | BuiltinScalarFunction::Acos
+            | BuiltinScalarFunction::Asin
+            | BuiltinScalarFunction::Atan
+            | BuiltinScalarFunction::Acosh
+            | BuiltinScalarFunction::Asinh
+            | BuiltinScalarFunction::Atanh
+            | BuiltinScalarFunction::Cbrt
+            | BuiltinScalarFunction::Ceil
+            | BuiltinScalarFunction::Cos
+            | BuiltinScalarFunction::Cosh
+            | BuiltinScalarFunction::Degrees
+            | BuiltinScalarFunction::Exp
+            | BuiltinScalarFunction::Floor
+            | BuiltinScalarFunction::Ln
+            | BuiltinScalarFunction::Log10
+            | BuiltinScalarFunction::Log2
+            | BuiltinScalarFunction::Radians
+            | BuiltinScalarFunction::Signum
+            | BuiltinScalarFunction::Sin
+            | BuiltinScalarFunction::Sinh
+            | BuiltinScalarFunction::Sqrt
+            | BuiltinScalarFunction::Tan
+            | BuiltinScalarFunction::Tanh
+            | BuiltinScalarFunction::Trunc => {
+                // math expressions expect 1 argument of type f64 or f32
+                // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
+                // return the best approximation for it (in f64).
+                // We accept f32 because in this case it is clear that the best approximation
+                // will be as good as the number of digits in the number
+                Signature::uniform(1, vec![Float64, Float32], self.volatility())
+            }
+            BuiltinScalarFunction::Now
+            | BuiltinScalarFunction::CurrentDate
+            | BuiltinScalarFunction::CurrentTime => {
+                Signature::uniform(0, vec![], self.volatility())
+            }
         }
     }
 }
@@ -524,6 +1200,44 @@ impl FromStr for BuiltinScalarFunction {
             )))
         }
     }
+}
+
+macro_rules! make_utf8_to_return_type {
+    ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
+        fn $FUNC(arg_type: &DataType, name: &str) -> Result<DataType> {
+            Ok(match arg_type {
+                DataType::LargeUtf8 => $largeUtf8Type,
+                DataType::Utf8 => $utf8Type,
+                DataType::Null => DataType::Null,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(format!(
+                        "The {:?} function can only accept strings.",
+                        name
+                    )));
+                }
+            })
+        }
+    };
+}
+
+make_utf8_to_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
+make_utf8_to_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
+
+fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<DataType> {
+    Ok(match arg_type {
+        DataType::LargeUtf8
+        | DataType::Utf8
+        | DataType::Binary
+        | DataType::LargeBinary => DataType::Binary,
+        DataType::Null => DataType::Null,
+        _ => {
+            // this error is internal as `data_types` should have captured this.
+            return Err(DataFusionError::Internal(format!(
+                "The {name:?} function can only accept strings or binary arrays."
+            )));
+        }
+    })
 }
 
 #[cfg(test)]
