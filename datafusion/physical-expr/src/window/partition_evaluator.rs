@@ -17,7 +17,6 @@
 
 //! Partition evaluation module
 
-use crate::window::window_expr::BuiltinWindowState;
 use crate::window::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
@@ -78,8 +77,7 @@ use std::ops::Range;
 ///
 /// In this case, [`Self::evaluate_stateful`] is called to calculate
 /// the results of the window function incrementally for each new
-/// batch, saving and restoring any state needed to do so as
-/// [`BuiltinWindowState`].
+/// batch.
 ///
 /// For example, when computing `ROW_NUMBER` incrementally,
 /// [`Self::evaluate_stateful`] will be called multiple times with
@@ -91,14 +89,6 @@ use std::ops::Range;
 /// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
 /// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
 pub trait PartitionEvaluator: Debug + Send {
-    /// Returns the internal state of the window function
-    ///
-    /// Only used for stateful evaluation
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::Default)
-    }
-
     /// Updates the internal state for window function
     ///
     /// Only used for stateful evaluation
@@ -118,13 +108,16 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// Sets the internal state for window function
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED
+    /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
+    /// NTH_VALUE do not need the (unbounded) input once they have
+    /// seen a certain amount of input.
     ///
-    /// Only used for stateful evaluation
-    fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "set_state is not implemented for this window function".to_string(),
-        ))
+    /// `memoize` is called after each input batch is processed, and
+    /// such functions can save whatever they need and modify
+    /// [`WindowAggState`] appropriately to allow rows to be pruned
+    fn memoize(&mut self, _state: &mut WindowAggState) -> Result<()> {
+        Ok(())
     }
 
     /// Gets the range where the window function result is calculated.
