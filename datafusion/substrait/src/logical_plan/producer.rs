@@ -622,9 +622,10 @@ pub fn to_substrait_rex(
         }) => {
             let substrait_list = list
                 .iter()
-                .map(|x| to_substrait_rex(x, schema, extension_info))
+                .map(|x| to_substrait_rex(x, schema, col_ref_offset, extension_info))
                 .collect::<Result<Vec<Expression>>>()?;
-            let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
+            let substrait_expr =
+                to_substrait_rex(expr, schema, col_ref_offset, extension_info)?;
 
             let substrait_or_list = Expression {
                 rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
