@@ -2337,3 +2337,603 @@ WHERE NOT EXISTS(
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
+
+# test timestamp join on nanos datatype
+query PPPPTPPPPT rowsort
+SELECT * FROM test_timestamps_table as t1 JOIN (SELECT * FROM test_timestamps_table ) as t2 ON t1.nanos = t2.nanos;
+----
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
+
+# test timestamp join on micros datatype
+query PPPPTPPPPT rowsort
+SELECT * FROM test_timestamps_table as t1 JOIN (SELECT * FROM test_timestamps_table ) as t2 ON t1.micros = t2.micros
+----
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
+
+# test timestamp join on millis datatype
+query PPPPTPPPPT rowsort
+SELECT * FROM test_timestamps_table as t1 JOIN (SELECT * FROM test_timestamps_table ) as t2 ON t1.millis = t2.millis
+----
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0 2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
+
+# left_join_using_2
+query II
+SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 USING (c2) ORDER BY t2.c2;
+----
+0 1
+0 2
+0 3
+0 4
+0 5
+0 6
+0 7
+0 8
+0 9
+0 10
+
+# left_join_using_join_key_projection
+query III
+SELECT t1.c1, t1.c2, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 USING (c2) ORDER BY t2.c2
+----
+0 1 1
+0 2 2
+0 3 3
+0 4 4
+0 5 5
+0 6 6
+0 7 7
+0 8 8
+0 9 9
+0 10 10
+
+# left_join_2
+query III
+SELECT t1.c1, t1.c2, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 ON t1.c2 = t2.c2 ORDER BY t1.c2
+----
+0 1 1
+0 2 2
+0 3 3
+0 4 4
+0 5 5
+0 6 6
+0 7 7
+0 8 8
+0 9 9
+0 10 10
+
+####
+# Config setup
+####
+
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+# explain hash_join_with_date32
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
+----
+logical_plan
+Inner Join: t1.c1 = t2.c1
+--SubqueryAlias: t1
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+--SubqueryAlias: t2
+----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
+
+# hash_join_with_date32
+query DDR?DDR? rowsort
+select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
+----
+1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
+1970-01-04 NULL -123.12 jkl 1970-01-04 NULL 789 qwe
+
+
+# explain hash_join_with_date64
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 left join hashjoin_datatype_table_t2 t2 on t1.c2 = t2.c2
+----
+logical_plan
+Left Join: t1.c2 = t2.c2
+--SubqueryAlias: t1
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+--SubqueryAlias: t2
+----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
+
+# hash_join_with_date64
+query DDR?DDR? rowsort
+select * from hashjoin_datatype_table_t1 t1 left join hashjoin_datatype_table_t2 t2 on t1.c2 = t2.c2
+----
+1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
+1970-01-03 1970-01-03T00:00:00 456 def NULL NULL NULL NULL
+1970-01-04 NULL -123.12 jkl NULL NULL NULL NULL
+NULL 1970-01-04T00:00:00 789 ghi NULL 1970-01-04T00:00:00 0 qwerty
+
+
+# explain hash_join_with_decimal
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t1 t2 on t1.c3 = t2.c3
+----
+logical_plan
+Right Join: t1.c3 = t2.c3
+--SubqueryAlias: t1
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+--SubqueryAlias: t2
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+
+# hash_join_with_decimal
+query DDR?DDR? rowsort
+select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t1 t2 on t1.c3 = t2.c3
+----
+1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 1.23 abc
+1970-01-03 1970-01-03T00:00:00 456 def 1970-01-03 1970-01-03T00:00:00 456 def
+1970-01-04 NULL -123.12 jkl 1970-01-04 NULL -123.12 jkl
+NULL 1970-01-04T00:00:00 789 ghi NULL 1970-01-04T00:00:00 789 ghi
+
+# explain hash_join_with_dictionary
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t1 t2 on t1.c4 = t2.c4
+----
+logical_plan
+Inner Join: t1.c4 = t2.c4
+--SubqueryAlias: t1
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+--SubqueryAlias: t2
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+
+# hash_join_with_dictionary
+query DDR?DDR? rowsort
+select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c4 = t2.c4
+----
+1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
+
+####
+# Config teardown
+####
+statement ok
+set datafusion.explain.logical_plan_only = false
+
+
+####
+# Config setup
+####
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+# explain sort_merge_join_on_date32 inner sort merge join on data type (Date32)
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
+----
+logical_plan
+Inner Join: t1.c1 = t2.c1
+--SubqueryAlias: t1
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+--SubqueryAlias: t2
+----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
+physical_plan
+SortMergeJoin: join_type=Inner, on=[(Column { name: "c1", index: 0 }, Column { name: "c1", index: 0 })]
+--SortExec: expr=[c1@0 ASC]
+----CoalesceBatchesExec: target_batch_size=4096
+------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
+--SortExec: expr=[c1@0 ASC]
+----CoalesceBatchesExec: target_batch_size=4096
+------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+----------MemoryExec: partitions=1, partition_sizes=[1]
+
+# sort_merge_join_on_date32 inner sort merge join on data type (Date32)
+query DDR?DDR? rowsort
+select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
+----
+1970-01-02 1970-01-02T00:00:00 1.23 abc 1970-01-02 1970-01-02T00:00:00 -123.12 abc
+1970-01-04 NULL -123.12 jkl 1970-01-04 NULL 789 qwe
+
+# explain sort_merge_join_on_decimal right join on data type (Decimal)
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t2 t2 on t1.c3 = t2.c3
+----
+logical_plan
+Right Join: CAST(t1.c3 AS Decimal128(10, 2)) = t2.c3
+--SubqueryAlias: t1
+----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+--SubqueryAlias: t2
+----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
+physical_plan
+ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]
+--SortMergeJoin: join_type=Right, on=[(Column { name: "CAST(t1.c3 AS Decimal128(10, 2))", index: 4 }, Column { name: "c3", index: 2 })]
+----SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]
+------CoalesceBatchesExec: target_batch_size=4096
+--------RepartitionExec: partitioning=Hash([Column { name: "CAST(t1.c3 AS Decimal128(10, 2))", index: 4 }], 2), input_partitions=2
+----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+----SortExec: expr=[c3@2 ASC]
+------CoalesceBatchesExec: target_batch_size=4096
+--------RepartitionExec: partitioning=Hash([Column { name: "c3", index: 2 }], 2), input_partitions=2
+----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+------------MemoryExec: partitions=1, partition_sizes=[1]
+
+# sort_merge_join_on_decimal right join on data type (Decimal)
+query DDR?DDR? rowsort
+select * from hashjoin_datatype_table_t1 t1 right join hashjoin_datatype_table_t2 t2 on t1.c3 = t2.c3
+----
+1970-01-04 NULL -123.12 jkl 1970-01-02 1970-01-02T00:00:00 -123.12 abc
+NULL 1970-01-04T00:00:00 789 ghi 1970-01-04 NULL 789 qwe
+NULL NULL NULL NULL NULL 1970-01-04T00:00:00 0 qwerty
+NULL NULL NULL NULL NULL NULL 100000 abcdefg
+
+####
+# Config teardown
+####
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+
+
+#Test the left_semi_join scenarios where the current repartition_joins parameter is set to true .
+####
+# Config setup
+####
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+query TT
+explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE t1_id IN (SELECT t2_id FROM left_semi_anti_join_table_t2 t2) ORDER BY t1_id
+----
+physical_plan
+SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+--SortExec: expr=[t1_id@0 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query IT rowsort
+SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE t1_id IN (SELECT t2_id FROM left_semi_anti_join_table_t2 t2) ORDER BY t1_id
+----
+11 a
+11 a
+22 b
+44 d
+
+query IT rowsort
+SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE EXISTS (SELECT 1 FROM left_semi_anti_join_table_t2 t2 WHERE t1_id = t2_id) ORDER BY t1_id
+----
+11 a
+11 a
+22 b
+44 d
+
+query I rowsort
+SELECT t1_id FROM left_semi_anti_join_table_t1 t1 INTERSECT SELECT t2_id FROM left_semi_anti_join_table_t2 t2 ORDER BY t1_id
+----
+11
+22
+44
+NULL
+
+query TT
+explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 LEFT SEMI JOIN left_semi_anti_join_table_t2 t2 ON (t1_id = t2_id) ORDER BY t1_id
+----
+physical_plan
+SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+--SortExec: expr=[t1_id@0 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query IT
+SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 LEFT SEMI JOIN left_semi_anti_join_table_t2 t2 ON (t1_id = t2_id) ORDER BY t1_id
+----
+11 a
+11 a
+22 b
+44 d
+
+####
+# Config teardown
+####
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+#Test the left_semi_join scenarios where the current repartition_joins parameter is set to false .
+####
+# Config setup
+####
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+query TT
+explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE t1_id IN (SELECT t2_id FROM left_semi_anti_join_table_t2 t2) ORDER BY t1_id
+----
+physical_plan
+SortExec: expr=[t1_id@0 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=4096
+----HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+------MemoryExec: partitions=1, partition_sizes=[1]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query IT rowsort
+SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE t1_id IN (SELECT t2_id FROM left_semi_anti_join_table_t2 t2) ORDER BY t1_id
+----
+11 a
+11 a
+22 b
+44 d
+
+query IT rowsort
+SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 WHERE EXISTS (SELECT 1 FROM left_semi_anti_join_table_t2 t2 WHERE t1_id = t2_id) ORDER BY t1_id
+----
+11 a
+11 a
+22 b
+44 d
+
+query I rowsort
+SELECT t1_id FROM left_semi_anti_join_table_t1 t1 INTERSECT SELECT t2_id FROM left_semi_anti_join_table_t2 t2 ORDER BY t1_id
+----
+11
+22
+44
+NULL
+
+query TT
+explain SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 LEFT SEMI JOIN left_semi_anti_join_table_t2 t2 ON (t1_id = t2_id) ORDER BY t1_id
+----
+physical_plan
+SortExec: expr=[t1_id@0 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=4096
+----HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: "t1_id", index: 0 }, Column { name: "t2_id", index: 0 })]
+------MemoryExec: partitions=1, partition_sizes=[1]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query IT
+SELECT t1_id, t1_name FROM left_semi_anti_join_table_t1 t1 LEFT SEMI JOIN left_semi_anti_join_table_t2 t2 ON (t1_id = t2_id) ORDER BY t1_id
+----
+11 a
+11 a
+22 b
+44 d
+
+####
+# Config teardown
+####
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+
+#Test the right_semi_join scenarios where the current repartition_joins parameter is set to true .
+####
+# Config setup
+####
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+query TT
+explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t1 t1 WHERE EXISTS (SELECT * FROM right_semi_anti_join_table_t2 t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+physical_plan
+SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+--SortExec: expr=[t1_id@0 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: "t2_id", index: 0 }, Column { name: "t1_id", index: 0 })], filter=t2_name@1 != t1_name@0
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITI rowsort
+SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t1 t1 WHERE EXISTS (SELECT * FROM right_semi_anti_join_table_t2 t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+11 a 1
+
+query TT
+explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGHT SEMI JOIN right_semi_anti_join_table_t1 t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+physical_plan
+SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+--SortExec: expr=[t1_id@0 ASC NULLS LAST]
+----CoalesceBatchesExec: target_batch_size=4096
+------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: "t2_id", index: 0 }, Column { name: "t1_id", index: 0 })], filter=t2_name@0 != t1_name@1
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t2_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+--------CoalesceBatchesExec: target_batch_size=4096
+----------RepartitionExec: partitioning=Hash([Column { name: "t1_id", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+--------------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITI rowsort
+SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGHT SEMI JOIN right_semi_anti_join_table_t1 t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+11 a 1
+
+####
+# Config teardown
+####
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+
+#Test the right_semi_join scenarios where the current repartition_joins parameter is set to false .
+####
+# Config setup
+####
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+query TT
+explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t1 t1 WHERE EXISTS (SELECT * FROM right_semi_anti_join_table_t2 t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+physical_plan
+SortExec: expr=[t1_id@0 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=4096
+----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: "t2_id", index: 0 }, Column { name: "t1_id", index: 0 })], filter=t2_name@1 != t1_name@0
+------MemoryExec: partitions=1, partition_sizes=[1]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITI rowsort
+SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t1 t1 WHERE EXISTS (SELECT * FROM right_semi_anti_join_table_t2 t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+11 a 1
+
+query TT
+explain SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGHT SEMI JOIN right_semi_anti_join_table_t1 t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+physical_plan
+SortExec: expr=[t1_id@0 ASC NULLS LAST]
+--CoalesceBatchesExec: target_batch_size=4096
+----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: "t2_id", index: 0 }, Column { name: "t1_id", index: 0 })], filter=t2_name@0 != t1_name@1
+------MemoryExec: partitions=1, partition_sizes=[1]
+------MemoryExec: partitions=1, partition_sizes=[1]
+
+query ITI rowsort
+SELECT t1_id, t1_name, t1_int FROM right_semi_anti_join_table_t2 t2 RIGHT SEMI JOIN right_semi_anti_join_table_t1 t1 on (t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id
+----
+11 a 1
+
+####
+# Config teardown
+####
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.execution.batch_size = 4096;
+

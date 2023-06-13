@@ -19,7 +19,7 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, NthValueKind, NthValueState};
+use crate::window::window_expr::{NthValueKind, NthValueState};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
@@ -152,11 +152,6 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::NthValue(self.state.clone()))
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
@@ -169,9 +164,35 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        if let BuiltinWindowState::NthValue(nth_value_state) = state {
-            self.state = nth_value_state.clone()
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED
+    /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
+    /// NTH_VALUE we can memoize result.  Once result is calculated it
+    /// will always stay same. Hence, we do not need to keep past data
+    /// as we process the entire dataset. This feature enables us to
+    /// prune rows from table. The default implementation does nothing
+    fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
+        let out = &state.out_col;
+        let size = out.len();
+        let (is_prunable, is_last) = match self.state.kind {
+            NthValueKind::First => {
+                let n_range =
+                    state.window_frame_range.end - state.window_frame_range.start;
+                (n_range > 0 && size > 0, false)
+            }
+            NthValueKind::Last => (true, true),
+            NthValueKind::Nth(n) => {
+                let n_range =
+                    state.window_frame_range.end - state.window_frame_range.start;
+                (n_range >= (n as usize) && size >= (n as usize), false)
+            }
+        };
+        if is_prunable {
+            if self.state.finalized_result.is_none() && !is_last {
+                let result = ScalarValue::try_from_array(out, size - 1)?;
+                self.state.finalized_result = Some(result);
+            }
+            state.window_frame_range.start =
+                state.window_frame_range.end.saturating_sub(1);
         }
         Ok(())
     }

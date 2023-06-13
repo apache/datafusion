@@ -35,10 +35,11 @@ use datafusion_expr::{
 };
 use std::convert::TryInto;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 /// expression to get a field of a struct array.
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct GetIndexedFieldExpr {
     arg: Arc<dyn PhysicalExpr>,
     key: ScalarValue,
@@ -152,6 +153,11 @@ impl PhysicalExpr for GetIndexedFieldExpr {
             children[0].clone(),
             self.key.clone(),
         )))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

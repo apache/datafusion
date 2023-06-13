@@ -19,7 +19,7 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, LeadLagState};
+use crate::window::window_expr::LeadLagState;
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
@@ -182,11 +182,6 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::LeadLag(self.state.clone()))
-    }
-
     fn update_state(
         &mut self,
         _state: &WindowAggState,
