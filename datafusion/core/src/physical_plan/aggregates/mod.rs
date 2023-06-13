@@ -45,14 +45,15 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod agg_macros;
 mod bounded_aggregate_stream;
 mod no_grouping;
 mod row_hash;
 mod utils;
 
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulatorItem;
 use datafusion_physical_expr::aggregate::is_order_sensitive;
+use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulatorItem;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,

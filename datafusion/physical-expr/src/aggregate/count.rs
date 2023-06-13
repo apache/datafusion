@@ -138,10 +138,7 @@ impl AggregateExpr for Count {
         true
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<RowAccumulatorItem> {
+    fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
         Ok(CountRowAccumulator::new(start_index).into())
     }
 

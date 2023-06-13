@@ -34,7 +34,9 @@ use arrow::{
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::{is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem};
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
+};
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
@@ -135,14 +137,8 @@ impl AggregateExpr for Sum {
         true
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<RowAccumulatorItem> {
-        Ok(SumRowAccumulator::new(
-            start_index,
-            self.data_type.clone(),
-        ).into())
+    fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
+        Ok(SumRowAccumulator::new(start_index, self.data_type.clone()).into())
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

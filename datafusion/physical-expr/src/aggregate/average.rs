@@ -21,7 +21,9 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::{is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem};
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
+};
 use crate::aggregate::sum;
 use crate::aggregate::sum::sum_batch;
 use crate::aggregate::utils::calculate_result_decimal_for_avg;
@@ -140,15 +142,11 @@ impl AggregateExpr for Avg {
         true
     }
 
-    fn create_row_accumulator(
-        &self,
-        start_index: usize,
-    ) -> Result<RowAccumulatorItem> {
-        Ok(AvgRowAccumulator::new(
-            start_index,
-            &self.sum_data_type,
-            &self.rt_data_type,
-        ).into())
+    fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
+        Ok(
+            AvgRowAccumulator::new(start_index, &self.sum_data_type, &self.rt_data_type)
+                .into(),
+        )
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {

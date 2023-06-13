@@ -107,10 +107,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     ///
     /// We recommend implementing `RowAccumulator` along with the standard `Accumulator`,
     /// when its state is of fixed size, as RowAccumulator is more memory efficient and CPU-friendly.
-    fn create_row_accumulator(
-        &self,
-        _start_index: usize,
-    ) -> Result<RowAccumulatorItem> {
+    fn create_row_accumulator(&self, _start_index: usize) -> Result<RowAccumulatorItem> {
         Err(DataFusionError::NotImplemented(format!(
             "RowAccumulator hasn't been implemented for {self:?} yet"
         )))
