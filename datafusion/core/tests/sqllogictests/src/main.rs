@@ -290,7 +290,6 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
             setup::register_timestamps_table(test_ctx.session_ctx()).await;
             setup::register_hashjoin_datatype_table(test_ctx.session_ctx()).await;
             setup::register_left_semi_anti_join_table(test_ctx.session_ctx()).await;
-            setup::register_right_semi_anti_join_table(test_ctx.session_ctx()).await;
 
             let mut test_ctx = test_ctx;
             setup::register_partition_table(&mut test_ctx).await;

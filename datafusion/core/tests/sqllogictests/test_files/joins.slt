@@ -76,6 +76,23 @@ AS VALUES
 (NULL, 'v', 0);
 
 statement ok
+CREATE TABLE right_semi_anti_join_table_t1(t1_id INT UNSIGNED, t1_name VARCHAR, t1_int INT UNSIGNED)
+AS VALUES
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4),
+(NULL, 'e', 0);
+
+statement ok
+CREATE TABLE right_semi_anti_join_table_t2(t2_id INT UNSIGNED, t2_name VARCHAR)
+AS VALUES
+(11, 'a'),
+(11, 'x'),
+(NULL, NULL);
+
+
+statement ok
 set datafusion.execution.target_partitions = 2;
 
 ##########
@@ -2936,4 +2953,3 @@ set datafusion.execution.target_partitions = 2;
 
 statement ok
 set datafusion.execution.batch_size = 4096;
-
