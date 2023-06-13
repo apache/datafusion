@@ -17,6 +17,7 @@
 
 //! IS NULL expression
 
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use arrow::compute;
@@ -32,7 +33,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 
 /// IS NULL expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct IsNullExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
@@ -91,6 +92,11 @@ impl PhysicalExpr for IsNullExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNullExpr::new(children[0].clone())))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

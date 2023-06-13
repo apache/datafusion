@@ -18,6 +18,7 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::{
@@ -32,7 +33,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Literal {
     value: ScalarValue,
 }
@@ -92,6 +93,11 @@ impl PhysicalExpr for Literal {
             self.value.clone(),
             Some(1),
         )))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 
