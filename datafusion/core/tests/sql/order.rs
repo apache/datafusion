@@ -16,9 +16,9 @@
 // under the License.
 
 use super::*;
-use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::listing::ListingTable;
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
+use datafusion::datasource::provider::TableProviderFactory;
 use datafusion_expr::logical_plan::DdlStatement;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 

@@ -19,8 +19,8 @@ use async_trait::async_trait;
 use datafusion::execution::context::SessionState;
 use datafusion::{
     catalog::{
-        catalog::{CatalogProvider, MemoryCatalogProvider},
         schema::{MemorySchemaProvider, SchemaProvider},
+        CatalogProvider, MemoryCatalogProvider,
     },
     datasource::{TableProvider, TableType},
 };

@@ -1439,7 +1439,7 @@ mod roundtrip_tests {
             TimeUnit, UnionMode,
         },
     };
-    use datafusion::datasource::datasource::TableProviderFactory;
+    use datafusion::datasource::provider::TableProviderFactory;
     use datafusion::datasource::TableProvider;
     use datafusion::execution::context::SessionState;
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
