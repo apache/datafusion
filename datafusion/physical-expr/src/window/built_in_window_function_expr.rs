@@ -95,10 +95,13 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         false
     }
 
-    /// Does the window function use the values from its window frame?
+    /// Does the window function use the values from the window frame,
+    /// if one is specified?
     ///
     /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_inside_range`]
+    /// implement [`PartitionEvaluator::evaluate_inside_range`]. See
+    /// details and examples on [`PartitionEvaluator::evaluate`].
+
     fn uses_window_frame(&self) -> bool {
         false
     }

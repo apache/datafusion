@@ -130,9 +130,41 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// Called for window functions that *do not use* values from the
-    /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
-    /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`).
+    /// Evaluate a window function on the entire input partition,
+    /// `values`, producing one output row for each input.
+    ///
+    /// This function is called once per input *partition* for window
+    /// functions that *do not use* values from the window frame,
+    /// such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`,
+    /// `CUME_DIST`, `LEAD`, `LAG`).
+    ///
+    /// The function is passed the window as the `value` and must
+    /// produce an output column with one output row for every input
+    /// row.
+    ///
+    /// `num_rows` is requied to correctly compute the output in case
+    /// `values.len() == 0`
+    ///
+    /// Using this function is an optimization: certain window
+    /// functions are not affected by the window frame definition, and
+    /// thus using `evaluate`, DataFusion can skip the (costly) window
+    /// frame boundary calculation.
+    ///
+    /// For example, the `LAG` built in window function does not use
+    /// the values of its window frame (it can be computed in one shot
+    /// on the entire partition with `Self::evalute` regardless of the
+    /// window defined in the `OVER` clause)
+    ///
+    /// ```sql
+    /// lag(x, 1) OVER (ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
+    ///
+    /// However, `avg()` computes the average in the window and thus
+    /// does use its window frame
+    ///
+    /// ```sql
+    /// avg(x) OVER (PARTITION BY y ORDER BY z ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
     fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),
@@ -189,7 +221,13 @@ pub trait PartitionEvaluator: Debug + Send {
     /// such as `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE` and produce a
     /// single value for every row in the partition.
     ///
-    /// Returns a [`ScalarValue`] that is the value of the window function for the entire partition
+    /// This is the simplest and most general function to implement
+    /// but also the least performant as it creates output one row
+    /// at a time. It is typically much faster to implement stateful
+    /// evaluation of the other specialized methods on this trait.
+    ///
+    /// Returns a [`ScalarValue`] that is the value of the window
+    /// function within the rangefor the entire partition
     fn evaluate_inside_range(
         &self,
         _values: &[ArrayRef],
