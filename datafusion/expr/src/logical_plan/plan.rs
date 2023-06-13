@@ -19,6 +19,7 @@
 
 use crate::expr::InSubquery;
 use crate::expr::{Exists, Placeholder};
+use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -404,6 +405,80 @@ impl LogicalPlan {
         })?;
 
         Ok(using_columns)
+    }
+
+    /// returns the first output expression of this `LogicalPlan` node.
+    pub fn head_output_expr(&self) -> Result<Option<Expr>> {
+        match self {
+            LogicalPlan::Projection(projection) => {
+                Ok(Some(projection.expr.as_slice()[0].clone()))
+            }
+            LogicalPlan::Aggregate(agg) => {
+                if agg.group_expr.is_empty() {
+                    Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
+                } else {
+                    Ok(Some(agg.group_expr.as_slice()[0].clone()))
+                }
+            }
+            LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    if left.schema().fields().is_empty() {
+                        right.head_output_expr()
+                    } else {
+                        left.head_output_expr()
+                    }
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
+                JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
+            },
+            LogicalPlan::CrossJoin(cross) => {
+                if cross.left.schema().fields().is_empty() {
+                    cross.right.head_output_expr()
+                } else {
+                    cross.left.head_output_expr()
+                }
+            }
+            LogicalPlan::Union(union) => Ok(Some(Expr::Column(
+                union.schema.fields()[0].qualified_column(),
+            ))),
+            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(
+                table.projected_schema.fields()[0].qualified_column(),
+            ))),
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                let expr_opt = subquery_alias.input.head_output_expr()?;
+                expr_opt
+                    .map(|expr| {
+                        Ok(Expr::Column(create_col_from_scalar_expr(
+                            &expr,
+                            subquery_alias.alias.to_string(),
+                        )?))
+                    })
+                    .map_or(Ok(None), |v| v.map(Some))
+            }
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Unnest(_) => Ok(None),
+        }
     }
 
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
