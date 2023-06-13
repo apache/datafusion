@@ -165,7 +165,7 @@ impl PartitionEvaluator for NthValueEvaluator {
     }
 
     /// When the window frame has a fixed beginning (e.g UNBOUNDED
-    /// PRECEDING), some functions such as FIRST_VALUE, LAST_VALUE and
+    /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
     /// NTH_VALUE we can memoize result.  Once result is calculated it
     /// will always stay same. Hence, we do not need to keep past data
     /// as we process the entire dataset. This feature enables us to
@@ -173,21 +173,21 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
-        let (is_prunable, new_prunable) = match self.state.kind {
+        let (is_prunable, is_last) = match self.state.kind {
             NthValueKind::First => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
-                (n_range > 0 && size > 0, true)
+                (n_range > 0 && size > 0, false)
             }
-            NthValueKind::Last => (true, false),
+            NthValueKind::Last => (true, true),
             NthValueKind::Nth(n) => {
                 let n_range =
                     state.window_frame_range.end - state.window_frame_range.start;
-                (n_range >= (n as usize) && size >= (n as usize), true)
+                (n_range >= (n as usize) && size >= (n as usize), false)
             }
         };
         if is_prunable {
-            if self.state.finalized_result.is_none() && new_prunable {
+            if self.state.finalized_result.is_none() && !is_last {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
             }
