@@ -387,15 +387,13 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(expr)
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let mut new_expr = coerce_arguments_for_signature(
+                let new_args = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
                     &fun.signature(),
                 )?;
-                if fun == BuiltinScalarFunction::MakeArray {
-                    new_expr = coerce_arguments(new_expr.as_slice())?;
-                }
-                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_expr)))
+                let new_args = coerce_arguments_for_fun(fun, new_args.as_slice())?;
+                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
@@ -604,28 +602,36 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
-fn coerce_arguments(expressions: &[Expr]) -> Result<Vec<Expr>> {
+fn coerce_arguments_for_fun(
+    fun: BuiltinScalarFunction,
+    expressions: &[Expr],
+) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(vec![]);
     }
 
-    let current_types = expressions
-        .iter()
-        .map(|e| e.get_type(&DFSchema::empty()))
-        .collect::<Result<Vec<_>>>()?;
+    if fun == BuiltinScalarFunction::MakeArray {
+        // Find the final data type for the function arguments
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(&DFSchema::empty()))
+            .collect::<Result<Vec<_>>>()?;
 
-    let new_type = current_types
-        .iter()
-        .skip(1)
-        .fold(current_types.first().unwrap().clone(), |acc, x| {
-            comparison_coercion(&acc, x).unwrap_or(acc)
-        });
+        let new_type = current_types
+            .iter()
+            .skip(1)
+            .fold(current_types.first().unwrap().clone(), |acc, x| {
+                comparison_coercion(&acc, x).unwrap_or(acc)
+            });
 
-    expressions
-        .iter()
-        .enumerate()
-        .map(|(_, expr)| cast_expr(expr, &new_type, &DFSchema::empty()))
-        .collect()
+        return expressions
+            .iter()
+            .enumerate()
+            .map(|(_, expr)| cast_expr(expr, &new_type, &DFSchema::empty()))
+            .collect();
+    }
+
+    Ok(expressions.to_vec())
 }
 
 /// Cast `expr` to the specified type, if possible

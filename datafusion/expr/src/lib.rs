@@ -71,7 +71,6 @@ pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
-pub use type_coercion::comparison_coercion;
 pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

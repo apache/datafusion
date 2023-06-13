@@ -36,8 +36,6 @@ pub mod binary;
 pub mod functions;
 pub mod other;
 
-pub use binary::comparison_coercion;
-
 use arrow::datatypes::DataType;
 /// Determine whether the given data type `dt` represents signed numeric values.
 pub fn is_signed_numeric(dt: &DataType) -> bool {
