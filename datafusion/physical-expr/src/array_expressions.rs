@@ -27,6 +27,17 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
+macro_rules! downcast_arg {
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast to {}",
+                type_name::<$ARRAY_TYPE>()
+            ))
+        })?
+    }};
+}
+
 macro_rules! downcast_vec {
     ($ARGS:expr, $ARRAY_TYPE:ident) => {{
         $ARGS
@@ -55,20 +66,29 @@ macro_rules! new_builder {
 
 macro_rules! array {
     ($ARGS:expr, $ARRAY_TYPE:ident, $BUILDER_TYPE:ident) => {{
-        // downcast all arguments to their common format
-        let args =
-            downcast_vec!($ARGS, $ARRAY_TYPE).collect::<Result<Vec<&$ARRAY_TYPE>>>()?;
-
-        let builder = new_builder!($BUILDER_TYPE, args[0].len());
+        let builder = new_builder!($BUILDER_TYPE, $ARGS[0].len());
         let mut builder =
-            ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, args.len());
+            ListBuilder::<$BUILDER_TYPE>::with_capacity(builder, $ARGS.len());
+
         // for each entry in the array
-        for index in 0..args[0].len() {
-            for arg in &args {
-                if arg.is_null(index) {
-                    builder.values().append_null();
-                } else {
-                    builder.values().append_value(arg.value(index));
+        for index in 0..$ARGS[0].len() {
+            for arg in $ARGS {
+                match arg.as_any().downcast_ref::<$ARRAY_TYPE>() {
+                    Some(arr) => {
+                        builder.values().append_value(arr.value(index));
+                    }
+                    None => match arg.as_any().downcast_ref::<NullArray>() {
+                        Some(arr) => {
+                            for _ in 0..arr.len() {
+                                builder.values().append_null();
+                            }
+                        }
+                        None => {
+                            return Err(DataFusionError::Internal(
+                                "failed to downcast".to_string(),
+                            ))
+                        }
+                    },
                 }
             }
             builder.append(true);
@@ -77,15 +97,7 @@ macro_rules! array {
     }};
 }
 
-fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
-    // do not accept 0 arguments.
-    if args.is_empty() {
-        return Err(DataFusionError::Internal(
-            "Array requires at least one argument".to_string(),
-        ));
-    }
-
-    let data_type = args[0].data_type();
+fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
     let res = match data_type {
         DataType::List(..) => {
             let arrays =
@@ -104,7 +116,7 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
 
             let list_data_type =
-                DataType::List(Arc::new(Field::new("item", data_type.clone(), true)));
+                DataType::List(Arc::new(Field::new("item", data_type.clone(), false)));
 
             let list_data = ArrayData::builder(list_data_type)
                 .len(1)
@@ -147,27 +159,31 @@ pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
             ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
         })
         .collect();
-    Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
+
+    let mut data_type = DataType::Null;
+    for arg in &arrays {
+        let arg_data_type = arg.data_type();
+        if !arg_data_type.equals_datatype(&DataType::Null) {
+            data_type = arg_data_type.clone();
+            break;
+        }
+    }
+
+    match data_type {
+        DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::new_list(
+            Some(vec![]),
+            DataType::Null,
+        ))),
+        _ => Ok(ColumnarValue::Array(array_array(
+            arrays.as_slice(),
+            data_type,
+        )?)),
+    }
 }
 
 /// `make_array` SQL function
 pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    match values[0].data_type() {
-        DataType::Null => Ok(datafusion_expr::ColumnarValue::Scalar(
-            ScalarValue::new_list(Some(vec![]), DataType::Null),
-        )),
-        _ => array(values),
-    }
-}
-macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast to {}",
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
+    array(values)
 }
 
 macro_rules! append {
@@ -1188,6 +1204,61 @@ mod tests {
                 .unwrap()
                 .values()
         );
+    }
+
+    #[test]
+    fn test_array_with_nulls() {
+        // make_array(NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5) = [NULL, 1, NULL, 2, NULL, 3, NULL, NULL, 4, 5]
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(1))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(2))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
+            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+        ];
+        let array = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        let result = as_list_array(&array).expect("failed to initialize function array");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &[0, 1, 0, 2, 0, 3, 0, 0, 4, 5],
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+        )
+    }
+
+    #[test]
+    fn test_array_all_nulls() {
+        // make_array(NULL, NULL, NULL) = []
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Null),
+            ColumnarValue::Scalar(ScalarValue::Null),
+        ];
+        let array = array(&args)
+            .expect("failed to initialize function array")
+            .into_array(1);
+        let result = as_list_array(&array).expect("failed to initialize function array");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            0,
+            result
+                .value(0)
+                .as_any()
+                .downcast_ref::<NullArray>()
+                .unwrap()
+                .null_count()
+        )
     }
 
     #[test]
