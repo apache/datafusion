@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///! Logical plan types
+//! Logical plan types
+
 use crate::expr::InSubquery;
 use crate::expr::{Exists, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
