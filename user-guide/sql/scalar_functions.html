@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <title>Scalar Functions &#8212; Arrow DataFusion  documentation</title>
     
@@ -2454,7 +2453,7 @@ The random seed is unique to each row.</p>
 <section id="round">
 <h3><code class="docutils literal notranslate"><span class="pre">round</span></code><a class="headerlink" href="#round" title="Permalink to this heading">¶</a></h3>
 <p>Rounds a number to the nearest integer.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">round</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">)</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">round</span><span class="p">(</span><span class="n">numeric_expression</span><span class="p">[,</span> <span class="n">decimal_places</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id24">
@@ -2462,6 +2461,8 @@ The random seed is unique to each row.</p>
 <ul class="simple">
 <li><p><strong>numeric_expression</strong>: Numeric expression to operate on.
 Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
+<li><p><strong>decimal_places</strong>: Optional. The number of decimal places to round to.
+Defaults to 0.</p></li>
 </ul>
 </section>
 </section>
@@ -3915,7 +3916,7 @@ string operators.</p></li>
     
     <div class="footer-item">
       <p class="sphinx-version">
-Created using <a href="http://sphinx-doc.org/">Sphinx</a> 6.2.1.<br>
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 7.0.1.<br>
 </p>
     </div>
     
