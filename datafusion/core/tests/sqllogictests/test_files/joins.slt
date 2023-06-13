@@ -1700,10 +1700,10 @@ from join_t1
 where join_t1.t1_id + 12 in (select join_t2.t2_id + 1 from join_t2)
 ----
 logical_plan
-LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_5.CAST(t2_id AS Int64) + Int64(1)
+LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_5.join_t2.t2_id + Int64(1)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_5
-----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1)
+----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
 ------TableScan: join_t2 projection=[t2_id]
 
 query ITI rowsort
@@ -1729,10 +1729,10 @@ where join_t1.t1_id + 12 in
     )
 ----
 logical_plan
-LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_7.CAST(t2_id AS Int64) + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_7.t2_int
+LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_7.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_7.t2_int
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_7
-----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), join_t2.t2_int
+----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int
 ------Filter: join_t2.t2_int > UInt32(0)
 --------TableScan: join_t2 projection=[t2_id, t2_int]
 
@@ -1765,10 +1765,10 @@ where join_t1.t1_id + 12 in
     )
 ----
 logical_plan
-LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_9.CAST(t2_id AS Int64) + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_9.t2_int AND join_t1.t1_name != __correlated_sq_9.t2_name
+LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_9.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_9.t2_int AND join_t1.t1_name != __correlated_sq_9.t2_name
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_9
-----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
+----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
 ------Filter: join_t2.t2_int > UInt32(0)
 --------TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
@@ -1797,11 +1797,11 @@ where join_t1.t1_id + 12 in
     (select join_t2.t2_id + 1 from join_t2 where join_t1.t1_int > 0)
 ----
 logical_plan
-LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_11.CAST(t2_id AS Int64) + Int64(1)
+LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_11.join_t2.t2_id + Int64(1)
 --Filter: join_t1.t1_int > UInt32(0)
 ----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_11
-----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1)
+----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
 ------TableScan: join_t2 projection=[t2_id]
 
 # Not in subquery to join with correlated outer filter
@@ -1814,10 +1814,10 @@ where join_t1.t1_id + 12 not in
     (select join_t2.t2_id + 1 from join_t2 where join_t1.t1_int > 0)
 ----
 logical_plan
-LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_12.CAST(t2_id AS Int64) + Int64(1) Filter: join_t1.t1_int > UInt32(0)
+LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_12.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_12
-----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1)
+----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
 ------TableScan: join_t2 projection=[t2_id]
 
 # In subquery to join with outer filter
@@ -1836,11 +1836,11 @@ where join_t1.t1_id + 12 in
   and join_t1.t1_id > 0
 ----
 logical_plan
-LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_13.CAST(t2_id AS Int64) + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_13.t2_int AND join_t1.t1_name != __correlated_sq_13.t2_name
+LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_13.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_13.t2_int AND join_t1.t1_name != __correlated_sq_13.t2_name
 --Filter: join_t1.t1_id > UInt32(0)
 ----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_13
-----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
+----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
 ------TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 query ITI rowsort
@@ -1869,15 +1869,15 @@ where join_t1.t1_id + 12 in (select join_t2.t2_id + 1 from join_t2)
   and join_t1.t1_id > 0
 ----
 logical_plan
-LeftSemi Join: CAST(join_t1.t1_int AS Int64) = __correlated_sq_16.CAST(t2_int AS Int64) + Int64(1)
---LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_15.CAST(t2_id AS Int64) + Int64(1)
+LeftSemi Join: CAST(join_t1.t1_int AS Int64) = __correlated_sq_16.join_t2.t2_int + Int64(1)
+--LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_15.join_t2.t2_id + Int64(1)
 ----Filter: join_t1.t1_id > UInt32(0)
 ------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 ----SubqueryAlias: __correlated_sq_15
-------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1)
+------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
 --------TableScan: join_t2 projection=[t2_id]
 --SubqueryAlias: __correlated_sq_16
-----Projection: CAST(join_t2.t2_int AS Int64) + Int64(1) AS CAST(t2_int AS Int64) + Int64(1)
+----Projection: CAST(join_t2.t2_int AS Int64) + Int64(1)
 ------TableScan: join_t2 projection=[t2_int]
 
 query ITI
@@ -2197,8 +2197,10 @@ logical_plan
 LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_31.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_31
-----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
-------TableScan: join_t2 projection=[t2_id]
+----Projection: join_t2.t2_id
+------Aggregate: groupBy=[[join_t2.t2_int, join_t2.t2_id]], aggr=[[]]
+--------Projection: join_t2.t2_int, join_t2.t2_id
+----------TableScan: join_t2 projection=[t2_id, t2_int]
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
@@ -2244,8 +2246,10 @@ logical_plan
 LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_34.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_34
-----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
-------TableScan: join_t2 projection=[t2_id]
+----Projection: join_t2.t2_id
+------Aggregate: groupBy=[[join_t2.t2_id + join_t2.t2_int, join_t2.t2_int, join_t2.t2_id]], aggr=[[]]
+--------Projection: join_t2.t2_id + join_t2.t2_int, join_t2.t2_int, join_t2.t2_id
+----------TableScan: join_t2 projection=[t2_id, t2_int]
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;
@@ -2293,8 +2297,10 @@ logical_plan
 LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_37.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_37
-----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
-------TableScan: join_t2 projection=[t2_id]
+----Projection: join_t2.t2_id
+------Aggregate: groupBy=[[Int64(1), join_t2.t2_int, join_t2.t2_id]], aggr=[[]]
+--------Projection: Int64(1), join_t2.t2_int, join_t2.t2_id
+----------TableScan: join_t2 projection=[t2_id, t2_int]
 
 query ITI
 SELECT * FROM join_t1
@@ -2322,8 +2328,10 @@ logical_plan
 LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_39.t2_id AS Int64) * Int64(2)
 --TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 --SubqueryAlias: __correlated_sq_39
-----Aggregate: groupBy=[[join_t2.t2_id]], aggr=[[]]
-------TableScan: join_t2 projection=[t2_id]
+----Projection: join_t2.t2_id
+------Aggregate: groupBy=[[Int64(1), join_t2.t2_int, join_t2.t2_id]], aggr=[[]]
+--------Projection: Int64(1), join_t2.t2_int, join_t2.t2_id
+----------TableScan: join_t2 projection=[t2_id, t2_int]
 
 query ITI
 SELECT * FROM join_t1
@@ -2936,4 +2944,3 @@ set datafusion.execution.target_partitions = 2;
 
 statement ok
 set datafusion.execution.batch_size = 4096;
-
