@@ -1691,6 +1691,18 @@ mod tests {
             vec![0u64, 0u64, 1u64],
         );
         test_coercion!(
+            Int16Array,
+            DataType::Int16,
+            vec![3i16, 2i16, 3i16],
+            Int64Array,
+            DataType::Int64,
+            vec![10i64, 6i64, 5i64],
+            Operator::BitwiseOr,
+            Int64Array,
+            DataType::Int64,
+            vec![11i64, 6i64, 7i64],
+        );
+        test_coercion!(
             UInt16Array,
             DataType::UInt16,
             vec![1u16, 2u16, 3u16],
@@ -1725,6 +1737,54 @@ mod tests {
             UInt64Array,
             DataType::UInt64,
             vec![9u64, 4u64, 6u64],
+        );
+        test_coercion!(
+            Int16Array,
+            DataType::Int16,
+            vec![4i16, 27i16, 35i16],
+            Int64Array,
+            DataType::Int64,
+            vec![2i64, 3i64, 4i64],
+            Operator::BitwiseShiftRight,
+            Int64Array,
+            DataType::Int64,
+            vec![1i64, 3i64, 2i64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![4u16, 27u16, 35u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![2u64, 3u64, 4u64],
+            Operator::BitwiseShiftRight,
+            UInt64Array,
+            DataType::UInt64,
+            vec![1u64, 3u64, 2u64],
+        );
+        test_coercion!(
+            Int16Array,
+            DataType::Int16,
+            vec![2i16, 3i16, 4i16],
+            Int64Array,
+            DataType::Int64,
+            vec![4i64, 12i64, 7i64],
+            Operator::BitwiseShiftLeft,
+            Int64Array,
+            DataType::Int64,
+            vec![32i64, 12288i64, 512i64],
+        );
+        test_coercion!(
+            UInt16Array,
+            DataType::UInt16,
+            vec![2u16, 3u16, 4u16],
+            UInt64Array,
+            DataType::UInt64,
+            vec![4u64, 12u64, 7u64],
+            Operator::BitwiseShiftLeft,
+            UInt64Array,
+            DataType::UInt64,
+            vec![32u64, 12288u64, 512u64],
         );
         Ok(())
     }
