@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::types::Int32Type;
-use arrow_array::{Date32Array, Date64Array, Decimal128Array, DictionaryArray};
 use datafusion::{
     arrow::{
         array::{
@@ -249,76 +247,5 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             CsvReadOptions::new().schema(&schema),
         )
         .await
-        .unwrap();
-}
-
-pub async fn register_hashjoin_datatype_table(ctx: &SessionContext) {
-    let t1_schema = Schema::new(vec![
-        Field::new("c1", DataType::Date32, true),
-        Field::new("c2", DataType::Date64, true),
-        Field::new("c3", DataType::Decimal128(5, 2), true),
-        Field::new(
-            "c4",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            true,
-        ),
-    ]);
-    let dict1: DictionaryArray<Int32Type> =
-        vec!["abc", "def", "ghi", "jkl"].into_iter().collect();
-    let t1_data = RecordBatch::try_new(
-        Arc::new(t1_schema),
-        vec![
-            Arc::new(Date32Array::from(vec![Some(1), Some(2), None, Some(3)])),
-            Arc::new(Date64Array::from(vec![
-                Some(86400000),
-                Some(172800000),
-                Some(259200000),
-                None,
-            ])),
-            Arc::new(
-                Decimal128Array::from_iter_values([123, 45600, 78900, -12312])
-                    .with_precision_and_scale(5, 2)
-                    .unwrap(),
-            ),
-            Arc::new(dict1),
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("hashjoin_datatype_table_t1", t1_data)
-        .unwrap();
-
-    let t2_schema = Schema::new(vec![
-        Field::new("c1", DataType::Date32, true),
-        Field::new("c2", DataType::Date64, true),
-        Field::new("c3", DataType::Decimal128(10, 2), true),
-        Field::new(
-            "c4",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            true,
-        ),
-    ]);
-    let dict2: DictionaryArray<Int32Type> = vec!["abc", "abcdefg", "qwerty", "qwe"]
-        .into_iter()
-        .collect();
-    let t2_data = RecordBatch::try_new(
-        Arc::new(t2_schema),
-        vec![
-            Arc::new(Date32Array::from(vec![Some(1), None, None, Some(3)])),
-            Arc::new(Date64Array::from(vec![
-                Some(86400000),
-                None,
-                Some(259200000),
-                None,
-            ])),
-            Arc::new(
-                Decimal128Array::from_iter_values([-12312, 10000000, 0, 78900])
-                    .with_precision_and_scale(10, 2)
-                    .unwrap(),
-            ),
-            Arc::new(dict2),
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("hashjoin_datatype_table_t2", t2_data)
         .unwrap();
 }

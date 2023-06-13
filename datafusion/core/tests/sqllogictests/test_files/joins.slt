@@ -112,8 +112,7 @@ AS VALUES
 (11, 'x'),
 (NULL, NULL);
 
-# Return record batch with all of the supported timestamp types
-# values
+# Table with all of the supported timestamp types values
 #
 # Columns are named:
 # "nanos" --> TimestampNanosecondArray
@@ -140,6 +139,47 @@ SELECT
   names
 FROM
   test_timestamps_table_source;
+
+
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t1_source(c1 INT, c2 BIGINT, c3 DECIMAL(5,2), c4 VARCHAR)
+AS VALUES
+(1,    86400000,  1.23,    'abc'),
+(2,    172800000, 456.00,  'def'),
+(null, 259200000, 789.000, 'ghi'),
+(3,    null,      -123.12, 'jkl')
+;
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t1
+AS SELECT
+  arrow_cast(c1, 'Date32') as c1,
+  arrow_cast(c2, 'Date64') as c2,
+  c3,
+  arrow_cast(c4, 'Dictionary(Int32, Utf8)') as c4
+FROM
+  hashjoin_datatype_table_t1_source
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t2_source(c1 INT, c2 BIGINT, c3 DECIMAL(10,2), c4 VARCHAR)
+AS VALUES
+(1,    86400000,  -123.12,   'abc'),
+(null, null,      100000.00, 'abcdefg'),
+(null, 259200000, 0.00,      'qwerty'),
+(3,   null,       789.000,   'qwe')
+;
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t2
+AS SELECT
+  arrow_cast(c1, 'Date32') as c1,
+  arrow_cast(c2, 'Date64') as c2,
+  c3,
+  arrow_cast(c4, 'Dictionary(Int32, Utf8)') as c4
+FROM
+  hashjoin_datatype_table_t2_source
+
 
 
 statement ok
