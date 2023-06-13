@@ -112,6 +112,35 @@ AS VALUES
 (11, 'x'),
 (NULL, NULL);
 
+# Return record batch with all of the supported timestamp types
+# values
+#
+# Columns are named:
+# "nanos" --> TimestampNanosecondArray
+# "micros" --> TimestampMicrosecondArray
+# "millis" --> TimestampMillisecondArray
+# "secs" --> TimestampSecondArray
+# "names" --> StringArray
+statement ok
+CREATE TABLE test_timestamps_table_source(ts varchar, names varchar)
+AS VALUES
+('2018-11-13T17:11:10.011375885995', 'Row 0'),
+('2011-12-13T11:13:10.12345', 'Row 1'),
+(NULL, 'Row 2'),
+('2021-01-01T05:11:10.432', 'Row 3');
+
+
+statement ok
+CREATE TABLE test_timestamps_table as
+SELECT
+  arrow_cast(ts::timestamp::bigint, 'Timestamp(Nanosecond, None)') as nanos,
+  arrow_cast(ts::timestamp::bigint / 1000, 'Timestamp(Microsecond, None)') as micros,
+  arrow_cast(ts::timestamp::bigint / 1000000, 'Timestamp(Millisecond, None)') as millis,
+  arrow_cast(ts::timestamp::bigint / 1000000000, 'Timestamp(Second, None)') as secs,
+  names
+FROM
+  test_timestamps_table_source;
+
 
 statement ok
 set datafusion.execution.target_partitions = 2;
@@ -2376,6 +2405,15 @@ WHERE NOT EXISTS(
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
+# test timestamp join on nanos datatype
+query PPPPT
+select * from
+test_timestamps_table
+----
+2018-11-13T17:11:10.011375885 2018-11-13T17:11:10.011375 2018-11-13T17:11:10.011 2018-11-13T17:11:10 Row 0
+2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10 Row 1
+NULL NULL NULL NULL Row 2
+2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10 Row 3
 
 # test timestamp join on nanos datatype
 query PPPPTPPPPT rowsort

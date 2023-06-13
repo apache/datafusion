@@ -287,7 +287,6 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
         }
         "joins.slt" => {
             info!("Registering timestamps tables");
-            setup::register_timestamps_table(test_ctx.session_ctx()).await;
             setup::register_hashjoin_datatype_table(test_ctx.session_ctx()).await;
 
             let mut test_ctx = test_ctx;
