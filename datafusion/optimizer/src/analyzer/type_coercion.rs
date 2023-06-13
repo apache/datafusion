@@ -392,7 +392,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                     &self.schema,
                     &fun.signature(),
                 )?;
-                let new_args = coerce_arguments_for_fun(fun, new_args.as_slice())?;
+                let new_args =
+                    coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
                 Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
@@ -603,18 +604,19 @@ fn coerce_arguments_for_signature(
 }
 
 fn coerce_arguments_for_fun(
-    fun: BuiltinScalarFunction,
     expressions: &[Expr],
+    schema: &DFSchema,
+    fun: &BuiltinScalarFunction,
 ) -> Result<Vec<Expr>> {
     if expressions.is_empty() {
         return Ok(vec![]);
     }
 
-    if fun == BuiltinScalarFunction::MakeArray {
+    if *fun == BuiltinScalarFunction::MakeArray {
         // Find the final data type for the function arguments
         let current_types = expressions
             .iter()
-            .map(|e| e.get_type(&DFSchema::empty()))
+            .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
 
         let new_type = current_types
@@ -627,7 +629,7 @@ fn coerce_arguments_for_fun(
         return expressions
             .iter()
             .enumerate()
-            .map(|(_, expr)| cast_expr(expr, &new_type, &DFSchema::empty()))
+            .map(|(_, expr)| cast_expr(expr, &new_type, schema))
             .collect();
     }
 
