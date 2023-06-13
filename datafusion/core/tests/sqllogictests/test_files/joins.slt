@@ -2445,7 +2445,7 @@ WHERE NOT EXISTS(
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
-# test timestamp join on nanos datatype
+# show the contents of the timestamp table
 query PPPPT
 select * from
 test_timestamps_table
