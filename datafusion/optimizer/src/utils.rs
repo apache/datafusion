@@ -23,7 +23,6 @@ use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{replace_col, strip_outer_reference};
-use datafusion_expr::logical_plan::LogicalPlanBuilder;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     and,
@@ -343,29 +342,6 @@ pub fn merge_schema(inputs: Vec<&LogicalPlan>) -> DFSchema {
                 lhs
             },
         )
-    }
-}
-
-/// Extract join predicates from the correlated subquery's [Filter] expressions.
-/// The join predicate means that the expression references columns
-/// from both the subquery and outer table or only from the outer table.
-///
-/// Returns join predicates and subquery(extracted).
-pub(crate) fn extract_join_filters(
-    maybe_filter: &LogicalPlan,
-) -> Result<(Vec<Expr>, LogicalPlan)> {
-    if let LogicalPlan::Filter(plan_filter) = maybe_filter {
-        let subquery_filter_exprs = split_conjunction(&plan_filter.predicate);
-        let (join_filters, subquery_filters) = find_join_exprs(subquery_filter_exprs)?;
-        // if the subquery still has filter expressions, restore them.
-        let mut plan = LogicalPlanBuilder::from((*plan_filter.input).clone());
-        if let Some(expr) = conjunction(subquery_filters) {
-            plan = plan.filter(expr)?
-        }
-
-        Ok((join_filters, plan.build()?))
-    } else {
-        Ok((vec![], maybe_filter.clone()))
     }
 }
 

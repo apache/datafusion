@@ -137,6 +137,23 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     .expect("Unnormalize is infallable")
 }
 
+/// Create a Column from the Scalar Expr
+pub fn create_col_from_scalar_expr(
+    scalar_expr: &Expr,
+    subqry_alias: String,
+) -> Result<Column> {
+    match scalar_expr {
+        Expr::Alias(_, alias) => Ok(Column::new(Some(subqry_alias), alias)),
+        Expr::Column(Column { relation: _, name }) => {
+            Ok(Column::new(Some(subqry_alias), name))
+        }
+        _ => {
+            let scalar_column = scalar_expr.display_name()?;
+            Ok(Column::new(Some(subqry_alias), scalar_column))
+        }
+    }
+}
+
 /// Recursively un-normalize all [`Column`] expressions in a list of expression trees
 #[inline]
 pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
