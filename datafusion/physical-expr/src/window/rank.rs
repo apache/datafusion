@@ -19,7 +19,7 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, RankState};
+use crate::window::window_expr::RankState;
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
@@ -127,10 +127,6 @@ impl PartitionEvaluator for RankEvaluator {
         let start = idx;
         let end = idx + 1;
         Ok(Range { start, end })
-    }
-
-    fn state(&self) -> Result<BuiltinWindowState> {
-        Ok(BuiltinWindowState::Rank(self.state.clone()))
     }
 
     fn update_state(
