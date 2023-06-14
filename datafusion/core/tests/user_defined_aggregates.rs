@@ -188,7 +188,7 @@ impl TestContext {
 struct TestCounters {
     /// was update_batch called?
     update_batch: AtomicBool,
-    /// was retract batch called?
+    /// was retract_batch called?
     retract_batch: AtomicBool,
 }
 
@@ -202,7 +202,7 @@ impl TestCounters {
         self.update_batch.load(Ordering::SeqCst)
     }
 
-    /// Has `update_batch` been called?
+    /// Has `retract_batch` been called?
     fn retract_batch(&self) -> bool {
         self.retract_batch.load(Ordering::SeqCst)
     }
