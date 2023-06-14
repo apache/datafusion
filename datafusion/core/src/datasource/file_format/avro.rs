@@ -27,7 +27,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
-use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
 use crate::error::Result;
 use crate::execution::context::SessionState;

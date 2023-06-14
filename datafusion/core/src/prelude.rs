@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.pub},
 
-//! A "prelude" for users of the datafusion crate.
+//! DataFusion "prelude" to simplify importing common types.
 //!
 //! Like the standard library's prelude, this module simplifies importing of
 //! common items. Unlike the standard prelude, the contents of this module must

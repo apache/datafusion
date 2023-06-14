@@ -179,6 +179,39 @@ async fn scalar_udf_zero_params() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from(vec![-100]))],
+    )?;
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", batch)?;
+    // register a UDF that has the same name as a builtin function (abs) and just returns 1 regardless of input
+    ctx.register_udf(create_udf(
+        "abs",
+        vec![DataType::Int32],
+        Arc::new(DataType::Int32),
+        Volatility::Immutable,
+        Arc::new(move |_| Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))))),
+    ));
+
+    // Make sure that the UDF is used instead of the built-in function
+    let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
+    let expected = vec![
+        "+---+", //
+        "| a |", //
+        "+---+", //
+        "| 1 |", //
+        "+---+", //
+    ];
+    assert_batches_eq!(expected, &result);
+    Ok(())
+}
+
 /// tests the creation, registration and usage of a UDAF
 #[tokio::test]
 async fn simple_udaf() -> Result<()> {

@@ -318,3 +318,41 @@ query ??? rowsort
 select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_array('e', 'l', 'l', 'o');
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# make_array
+
+query ?
+select make_array(1, 2.0)
+----
+[1.0, 2.0]
+
+query ?
+select make_array(null, 1.0)
+----
+[, 1.0]
+
+query ?
+select make_array(1, 2.0, null, 3)
+----
+[1.0, 2.0, , 3.0]
+
+query ?
+select make_array(1.0, '2', null)
+----
+[1.0, 2, ]
+
+statement ok
+create table foo1 (x int, y double) as values (1, 2.0);
+
+query ?
+select make_array(x, y) from foo1;
+----
+[1.0, 2.0]
+
+statement ok
+create table foo2 (x float, y varchar) as values (1.0, '1');
+
+query ?
+select make_array(x, y) from foo2;
+----
+[1.0, 1]
