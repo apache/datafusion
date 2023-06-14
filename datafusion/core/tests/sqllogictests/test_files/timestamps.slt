@@ -907,7 +907,7 @@ SELECT DATE_TRUNC('SECOND', TIMESTAMP '2022-08-03 14:38:50Z');
 ----
 2022-08-03T14:38:50
 
-# Test date trunc on different timestamp types
+# Test date trunc on different timestamp types and ensure types are consistent
 query TP rowsort
 SELECT 'ts_data_nanos', DATE_TRUNC('day', ts) FROM ts_data_nanos
  UNION ALL
@@ -929,6 +929,21 @@ ts_data_nanos 2020-09-08T00:00:00
 ts_data_secs 2020-09-08T00:00:00
 ts_data_secs 2020-09-08T00:00:00
 ts_data_secs 2020-09-08T00:00:00
+
+# test date trunc on different timestamp scalar types and ensure they are consistent
+query P rowsort
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Nanosecond, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Microsecond, None)')) as ts
+  UNION ALL
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Millisecond, None)')) as ts
+----
+2023-08-03T00:00:00
+2023-08-03T00:00:00
+2023-08-03T14:38:50
+2023-08-03T14:38:50
 
 
 

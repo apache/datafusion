@@ -17,11 +17,11 @@
 
 //! [`SessionContext`] contains methods for registering data sources and executing queries
 use crate::{
-    catalog::catalog::{CatalogList, MemoryCatalogList},
+    catalog::{CatalogList, MemoryCatalogList},
     datasource::{
-        datasource::TableProviderFactory,
         listing::{ListingOptions, ListingTable},
         listing_table_factory::ListingTableFactory,
+        provider::TableProviderFactory,
     },
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
@@ -52,8 +52,8 @@ use arrow::{
 };
 
 use crate::catalog::{
-    catalog::{CatalogProvider, MemoryCatalogProvider},
     schema::{MemorySchemaProvider, SchemaProvider},
+    {CatalogProvider, MemoryCatalogProvider},
 };
 use crate::dataframe::DataFrame;
 use crate::datasource::{
