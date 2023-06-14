@@ -24,15 +24,13 @@ use datafusion::{
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
-    datasource::MemTable,
     prelude::{CsvReadOptions, SessionContext},
-    test_util,
 };
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 
-use crate::{utils, TestContext};
+use crate::TestContext;
 
 #[cfg(feature = "avro")]
 pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
@@ -67,7 +65,6 @@ pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
 }
 
 pub async fn register_aggregate_tables(ctx: &SessionContext) {
-    register_decimal_table(ctx);
     register_median_test_tables(ctx);
     register_test_data(ctx);
 }
@@ -171,14 +168,6 @@ fn register_test_data(ctx: &SessionContext) {
     .unwrap();
 
     ctx.register_batch("test", data).unwrap();
-}
-
-fn register_decimal_table(ctx: &SessionContext) {
-    let batch_decimal = utils::make_decimal();
-    let schema = batch_decimal.schema();
-    let partitions = vec![vec![batch_decimal]];
-    let provider = Arc::new(MemTable::try_new(schema, partitions).unwrap());
-    ctx.register_table("d_table", provider).unwrap();
 }
 
 pub async fn register_scalar_tables(ctx: &SessionContext) {

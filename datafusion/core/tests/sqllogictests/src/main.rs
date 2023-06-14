@@ -33,7 +33,6 @@ use crate::engines::postgres::Postgres;
 
 mod engines;
 mod setup;
-mod utils;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
