@@ -157,7 +157,11 @@ impl PartitionEvaluator for RankEvaluator {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(
                 self.state.last_rank_boundary as u64 + 1,
@@ -169,7 +173,7 @@ impl PartitionEvaluator for RankEvaluator {
         }
     }
 
-    fn evaluate_with_rank(
+    fn evaluate_with_rank_all(
         &self,
         num_rows: usize,
         ranks_in_partition: &[Range<usize>],
@@ -238,7 +242,7 @@ mod tests {
     ) -> Result<()> {
         let result = expr
             .create_evaluator()?
-            .evaluate_with_rank(num_rows, &ranks)?;
+            .evaluate_with_rank_all(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);
@@ -250,7 +254,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let result = expr.create_evaluator()?.evaluate_with_rank(8, &ranks)?;
+        let result = expr.create_evaluator()?.evaluate_with_rank_all(8, &ranks)?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);

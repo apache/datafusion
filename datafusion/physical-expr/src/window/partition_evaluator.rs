@@ -69,18 +69,17 @@ use std::ops::Range;
 ///
 /// # Stateless `PartitionEvaluator`
 ///
-/// In this case, [`Self::evaluate`], [`Self::evaluate_with_rank`] or
-/// [`Self::evaluate_inside_range`] is called with values for the
+/// In this case, [`Self::evaluate_all`], [`Self::evaluate_with_rank_all`] is called with values for the
 /// entire partition.
 ///
 /// # Stateful `PartitionEvaluator`
 ///
-/// In this case, [`Self::evaluate_stateful`] is called to calculate
+/// In this case, [`Self::evaluate`] is called to calculate
 /// the results of the window function incrementally for each new
 /// batch.
 ///
 /// For example, when computing `ROW_NUMBER` incrementally,
-/// [`Self::evaluate_stateful`] will be called multiple times with
+/// [`Self::evaluate`] will be called multiple times with
 /// different batches. For all batches after the first, the output
 /// `row_number` must start from last `row_number` produced for the
 /// previous batch. The previous row number is saved and restored as
@@ -133,22 +132,26 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Called for window functions that *do not use* values from the
     /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
     /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`).
-    fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
-            "evaluate is not implemented by default".into(),
+            "evaluate_all is not implemented by default".into(),
         ))
     }
 
     /// Evaluate window function result inside given range.
     ///
     /// Only used for stateful evaluation
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
-            "evaluate_stateful is not implemented by default".into(),
+            "evaluate is not implemented by default".into(),
         ))
     }
 
-    /// [`PartitionEvaluator::evaluate_with_rank`] is called for window
+    /// [`PartitionEvaluator::evaluate_with_rank_all`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
     ///
@@ -175,28 +178,13 @@ pub trait PartitionEvaluator: Debug + Send {
     ///   (3,4),
     /// ]
     /// ```
-    fn evaluate_with_rank(
+    fn evaluate_with_rank_all(
         &self,
         _num_rows: usize,
         _ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate_partition_with_rank is not implemented by default".into(),
-        ))
-    }
-
-    /// Called for window functions that use values from window frame,
-    /// such as `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE` and produce a
-    /// single value for every row in the partition.
-    ///
-    /// Returns a [`ScalarValue`] that is the value of the window function for the entire partition
-    fn evaluate_inside_range(
-        &self,
-        _values: &[ArrayRef],
-        _range: &Range<usize>,
-    ) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_inside_range is not implemented by default".into(),
         ))
     }
 }

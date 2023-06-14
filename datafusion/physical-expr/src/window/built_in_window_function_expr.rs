@@ -90,7 +90,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// bounded memory?
     ///
     /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_stateful`]
+    /// implement [`PartitionEvaluator::evaluate`]
     fn supports_bounded_execution(&self) -> bool {
         false
     }
@@ -98,7 +98,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Does the window function use the values from its window frame?
     ///
     /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_inside_range`]
+    /// implement [`PartitionEvaluator::evaluate`]
     fn uses_window_frame(&self) -> bool {
         false
     }
@@ -106,7 +106,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Can this function be evaluated with (only) rank
     ///
     /// If `include_rank` is true, then [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_with_rank`]
+    /// implement [`PartitionEvaluator::evaluate_with_rank_all`]
     fn include_rank(&self) -> bool {
         false
     }

@@ -95,7 +95,7 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let evaluator = self.expr.create_evaluator()?;
+        let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
         if self.expr.uses_window_frame() {
             let sort_options: Vec<SortOptions> =
@@ -114,7 +114,7 @@ impl WindowExpr for BuiltInWindowExpr {
                     num_rows,
                     idx,
                 )?;
-                let value = evaluator.evaluate_inside_range(&values, &range)?;
+                let value = evaluator.evaluate(&values, &range)?;
                 row_wise_results.push(value);
                 last_range = range;
             }
@@ -122,10 +122,10 @@ impl WindowExpr for BuiltInWindowExpr {
         } else if self.expr.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
-            evaluator.evaluate_with_rank(num_rows, &sort_partition_points)
+            evaluator.evaluate_with_rank_all(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
-            evaluator.evaluate(&values, num_rows)
+            evaluator.evaluate_all(&values, num_rows)
         }
     }
 
@@ -199,7 +199,8 @@ impl WindowExpr for BuiltInWindowExpr {
                 // Update last range
                 state.window_frame_range = frame_range;
                 evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
-                row_wise_results.push(evaluator.evaluate_stateful(&values)?);
+                row_wise_results
+                    .push(evaluator.evaluate(&values, &state.window_frame_range)?);
             }
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)

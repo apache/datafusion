@@ -197,36 +197,32 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
-    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
-        if let Some(ref result) = self.state.finalized_result {
-            Ok(result.clone())
-        } else {
-            self.evaluate_inside_range(values, &self.state.range)
-        }
-    }
-
-    fn evaluate_inside_range(
-        &self,
+    fn evaluate(
+        &mut self,
         values: &[ArrayRef],
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
-        let arr = &values[0];
-        let n_range = range.end - range.start;
-        if n_range == 0 {
-            // We produce None if the window is empty.
-            return ScalarValue::try_from(arr.data_type());
-        }
-        match self.state.kind {
-            NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
-            NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
-            NthValueKind::Nth(n) => {
-                // We are certain that n > 0.
-                let index = (n as usize) - 1;
-                if index >= n_range {
-                    ScalarValue::try_from(arr.data_type())
-                } else {
-                    ScalarValue::try_from_array(arr, range.start + index)
+        if let Some(ref result) = self.state.finalized_result {
+            Ok(result.clone())
+        } else {
+            // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
+            let arr = &values[0];
+            let n_range = range.end - range.start;
+            if n_range == 0 {
+                // We produce None if the window is empty.
+                return ScalarValue::try_from(arr.data_type());
+            }
+            match self.state.kind {
+                NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
+                NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
+                NthValueKind::Nth(n) => {
+                    // We are certain that n > 0.
+                    let index = (n as usize) - 1;
+                    if index >= n_range {
+                        ScalarValue::try_from(arr.data_type())
+                    } else {
+                        ScalarValue::try_from_array(arr, range.start + index)
+                    }
                 }
             }
         }
@@ -254,11 +250,11 @@ mod tests {
                 end: i + 1,
             })
         }
-        let evaluator = expr.create_evaluator()?;
+        let mut evaluator = expr.create_evaluator()?;
         let values = expr.evaluate_args(&batch)?;
         let result = ranges
             .iter()
-            .map(|range| evaluator.evaluate_inside_range(&values, range))
+            .map(|range| evaluator.evaluate(&values, range))
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = as_int32_array(&result)?;

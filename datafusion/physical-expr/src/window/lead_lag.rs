@@ -206,7 +206,11 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
-    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         let array = &values[0];
         let dtype = array.data_type();
         let idx = self.state.idx as i64 - self.shift_offset;
@@ -217,7 +221,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
-    fn evaluate(&self, values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(&self, values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
         shift_with_default_value(value, self.shift_offset, self.default_value.as_ref())
@@ -258,7 +262,7 @@ mod tests {
         let values = expr.evaluate_args(&batch)?;
         let result = expr
             .create_evaluator()?
-            .evaluate(&values, batch.num_rows())?;
+            .evaluate_all(&values, batch.num_rows())?;
         let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())
