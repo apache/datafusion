@@ -37,12 +37,7 @@ impl OptimizerRule for EliminateSubqueryAliases {
         _: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::SubqueryAlias(SubqueryAlias {
-                input,
-                alias: _alias,
-                schema,
-                ..
-            }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, schema, .. }) => {
                 let exprs = input
                     .expressions()
                     .iter()
@@ -81,21 +76,16 @@ mod tests {
     use super::*;
 
     use crate::analyzer::count_wildcard_rule::COUNT_STAR;
+    use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
     use crate::test::{
-        assert_optimized_plan_eq_display_indent, test_table_scan_with_name,
+        assert_multi_rules_optimized_plan_eq_display_indent,
+        assert_optimized_plan_eq_display_indent, test_subquery_with_name,
+        test_table_scan, test_table_scan_with_name,
     };
+    use crate::OptimizerContext;
     use datafusion_expr::Expr::Wildcard;
-    use datafusion_expr::{col, count, LogicalPlanBuilder};
+    use datafusion_expr::{col, count, in_subquery, or, LogicalPlanBuilder};
     use std::sync::Arc;
-
-    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq_display_indent(
-            Arc::new(EliminateSubqueryAliases::new()),
-            plan,
-            expected,
-        );
-        Ok(())
-    }
 
     #[test]
     fn eliminate_subquery_aliases() -> Result<()> {
@@ -114,7 +104,12 @@ mod tests {
           \n    Projection: t.a, t.b, t.c [a:UInt32, b:UInt32, c:UInt32]\
           \n      TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(EliminateSubqueryAliases::new())],
+            &plan,
+            expected,
+        );
+        Ok(())
     }
 
     #[test]
@@ -133,7 +128,12 @@ mod tests {
           \n    Projection: t.a, t.b, t.c [a:UInt32, b:UInt32, c:UInt32]\
           \n      TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&plan, expected)
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(EliminateSubqueryAliases::new())],
+            &plan,
+            expected,
+        );
+        Ok(())
     }
 
     #[test]
@@ -148,7 +148,7 @@ mod tests {
             .alias("t2")?
             .build()?;
 
-        let origin_plan = LogicalPlanBuilder::from(sq_t2)
+        let plan = LogicalPlanBuilder::from(sq_t2)
             .project(vec![Wildcard])?
             .build()?;
 
@@ -159,7 +159,12 @@ mod tests {
           \n        Projection: t.a, t.b, t.c [a:UInt32, b:UInt32, c:UInt32]\
           \n          TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&origin_plan, expected)
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(EliminateSubqueryAliases::new())],
+            &plan,
+            expected,
+        );
+        Ok(())
     }
 
     #[test]
@@ -170,7 +175,7 @@ mod tests {
             .alias("t1")?
             .build()?;
 
-        let origin_plan = LogicalPlanBuilder::from(sq)
+        let plan = LogicalPlanBuilder::from(sq)
             .project(vec![Wildcard])?
             .build()?;
 
@@ -180,7 +185,12 @@ mod tests {
           \n      Aggregate: groupBy=[[]], aggr=[[COUNT(t.a)]] [COUNT(t.a):Int64;N]\
           \n        TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&origin_plan, expected)
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(EliminateSubqueryAliases::new())],
+            &plan,
+            expected,
+        );
+        Ok(())
     }
     #[test]
     fn eliminate_subquery_aliases_with_gby_agg() -> Result<()> {
@@ -190,7 +200,7 @@ mod tests {
             .alias("t1")?
             .build()?;
 
-        let origin_plan = LogicalPlanBuilder::from(sq)
+        let plan = LogicalPlanBuilder::from(sq)
             .project(vec![Wildcard])?
             .build()?;
 
@@ -199,7 +209,45 @@ mod tests {
           \n    Projection: t.b, COUNT(t.a) AS COUNT(*) [b:UInt32, COUNT(*):Int64;N]\
           \n      Aggregate: groupBy=[[t.b]], aggr=[[COUNT(t.a)]] [b:UInt32, COUNT(t.a):Int64;N]\
           \n        TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![Arc::new(EliminateSubqueryAliases::new())],
+            &plan,
+            expected,
+        );
+        Ok(())
+    }
 
-        assert_optimized_plan_equal(&origin_plan, expected)
+    /// Test for single IN subquery filter
+    #[test]
+    fn in_subquery_simple() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(in_subquery(col("c"), test_subquery_with_name("sq")?))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    SubqueryAlias: __correlated_sq_1 [c:UInt32]\
+        \n      Projection: sq.c [c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        let expected = "Projection: test.b [b:UInt32]\
+            \n  LeftSemi Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+            \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+            \n    Projection: sq.c AS __correlated_sq_1.c [__correlated_sq_1.c:UInt32]\
+            \n      Projection: sq.c [c:UInt32]\
+            \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_multi_rules_optimized_plan_eq_display_indent(
+            vec![
+                Arc::new(DecorrelatePredicateSubquery::new()),
+                Arc::new(EliminateSubqueryAliases::new()),
+            ],
+            &plan,
+            expected,
+        );
+        Ok(())
     }
 }
