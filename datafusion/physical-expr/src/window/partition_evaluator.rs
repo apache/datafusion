@@ -136,6 +136,9 @@ pub trait PartitionEvaluator: Debug + Send {
     /// as a single batch.
     fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         // When window frame boundaries are not used and evaluator supports bounded execution
+        // We can calculate evaluate result by repeatedly calling `self.evaluate` `num_rows` times
+        // If user wants to implement more efficient version, this method should be overwritten
+        // Default implementation may behave suboptimally (For instance `NumRowEvaluator` overwrites it)
         if !self.uses_window_frame() && self.supports_bounded_execution() {
             let res = (0..num_rows)
                 .map(|_idx| self.evaluate(values, &Range { start: 0, end: 1 }))
