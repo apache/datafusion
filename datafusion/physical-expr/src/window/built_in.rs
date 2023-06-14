@@ -95,9 +95,9 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let evaluator = self.expr.create_evaluator()?;
+        let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
-        if self.expr.uses_window_frame() {
+        if evaluator.uses_window_frame() {
             let sort_options: Vec<SortOptions> =
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
@@ -114,18 +114,18 @@ impl WindowExpr for BuiltInWindowExpr {
                     num_rows,
                     idx,
                 )?;
-                let value = evaluator.evaluate_inside_range(&values, &range)?;
+                let value = evaluator.evaluate(&values, &range)?;
                 row_wise_results.push(value);
                 last_range = range;
             }
             ScalarValue::iter_to_array(row_wise_results.into_iter())
-        } else if self.expr.include_rank() {
+        } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
-            evaluator.evaluate_with_rank(num_rows, &sort_partition_points)
+            evaluator.evaluate_with_rank_all(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
-            evaluator.evaluate(&values, num_rows)
+            evaluator.evaluate_all(&values, num_rows)
         }
     }
 
@@ -164,7 +164,7 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
-            let sort_partition_points = if self.expr.include_rank() {
+            let sort_partition_points = if evaluator.include_rank() {
                 let columns = self.sort_columns(record_batch)?;
                 evaluate_partition_ranges(num_rows, &columns)?
             } else {
@@ -172,7 +172,7 @@ impl WindowExpr for BuiltInWindowExpr {
             };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
             for idx in state.last_calculated_index..num_rows {
-                let frame_range = if self.expr.uses_window_frame() {
+                let frame_range = if evaluator.uses_window_frame() {
                     state
                         .window_frame_ctx
                         .get_or_insert_with(|| {
@@ -199,7 +199,8 @@ impl WindowExpr for BuiltInWindowExpr {
                 // Update last range
                 state.window_frame_range = frame_range;
                 evaluator.update_state(state, idx, &order_bys, &sort_partition_points)?;
-                row_wise_results.push(evaluator.evaluate_stateful(&values)?);
+                row_wise_results
+                    .push(evaluator.evaluate(&values, &state.window_frame_range)?);
             }
             let out_col = if row_wise_results.is_empty() {
                 new_empty_array(out_type)
@@ -231,8 +232,12 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        self.expr.supports_bounded_execution()
-            && (!self.expr.uses_window_frame()
-                || !self.window_frame.end_bound.is_unbounded())
+        if let Ok(evaluator) = self.expr.create_evaluator() {
+            evaluator.supports_bounded_execution()
+                && (!evaluator.uses_window_frame()
+                    || !self.window_frame.end_bound.is_unbounded())
+        } else {
+            false
+        }
     }
 }
