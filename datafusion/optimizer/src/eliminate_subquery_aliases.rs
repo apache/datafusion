@@ -17,7 +17,6 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, OwnedTableReference, Result};
 use datafusion_expr::{Expr, LogicalPlan, Projection, SubqueryAlias};
 
@@ -82,17 +81,20 @@ mod tests {
     use super::*;
 
     use crate::analyzer::count_wildcard_rule::COUNT_STAR;
-    use crate::test::{assert_optimized_plan_eq, test_table_scan_with_name};
+    use crate::test::{
+        assert_optimized_plan_eq_display_indent, test_table_scan_with_name,
+    };
     use datafusion_expr::Expr::Wildcard;
     use datafusion_expr::{col, count, LogicalPlanBuilder};
     use std::sync::Arc;
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq(
+        assert_optimized_plan_eq_display_indent(
             Arc::new(EliminateSubqueryAliases::new()),
             plan,
             expected,
-        )
+        );
+        Ok(())
     }
 
     #[test]
@@ -106,17 +108,11 @@ mod tests {
         let plan = LogicalPlanBuilder::from(sq)
             .project(vec![col("a")])?
             .build()?;
-        let expected = "Projection: t1.a\
-          \n  SubqueryAlias: t1\
-          \n    Projection: t.a, t.b, t.c\
-          \n      TableScan: t";
-        let origin_plan = format!("{plan:?}");
-        assert_eq!(origin_plan, expected);
 
-        let expected = "Projection: t1.a\
-          \n  Projection: t.a AS t1.a, t.b AS t1.b, t.c AS t1.c\
-          \n    Projection: t.a, t.b, t.c\
-          \n      TableScan: t";
+        let expected = "Projection: t1.a [a:UInt32]\
+          \n  Projection: t.a AS t1.a, t.b AS t1.b, t.c AS t1.c [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]\
+          \n    Projection: t.a, t.b, t.c [a:UInt32, b:UInt32, c:UInt32]\
+          \n      TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
     }
@@ -128,21 +124,16 @@ mod tests {
             .alias("t1")?
             .build()?;
 
-        let origin_plan = LogicalPlanBuilder::from(sq)
+        let plan = LogicalPlanBuilder::from(sq)
             .project(vec![Wildcard])?
             .build()?;
-        let expected = "Projection: t1.a, t1.b, t1.c\
-          \n  SubqueryAlias: t1\
-          \n    Projection: t.a, t.b, t.c\
-          \n      TableScan: t";
-        assert_eq!(format!("{origin_plan:?}"), expected);
 
-        let expected = "Projection: t1.a, t1.b, t1.c\
-          \n  Projection: t.a AS t1.a, t.b AS t1.b, t.c AS t1.c\
-          \n    Projection: t.a, t.b, t.c\
-          \n      TableScan: t";
+        let expected = "Projection: t1.a, t1.b, t1.c [a:UInt32, b:UInt32, c:UInt32]\
+          \n  Projection: t.a AS t1.a, t.b AS t1.b, t.c AS t1.c [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]\
+          \n    Projection: t.a, t.b, t.c [a:UInt32, b:UInt32, c:UInt32]\
+          \n      TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_equal(&origin_plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -161,20 +152,12 @@ mod tests {
             .project(vec![Wildcard])?
             .build()?;
 
-        let expected = "Projection: t2.a, t2.b, t2.c\
-          \n  SubqueryAlias: t2\
-          \n    Projection: t1.a, t1.b, t1.c\
-          \n      SubqueryAlias: t1\
-          \n        Projection: t.a, t.b, t.c\
-          \n          TableScan: t";
-        assert_eq!(format!("{origin_plan:?}"), expected);
-
-        let expected = "Projection: t2.a, t2.b, t2.c\
-          \n  Projection: t1.a AS t2.a, t1.b AS t2.b, t1.c AS t2.c\
-          \n    Projection: t1.a, t1.b, t1.c\
-          \n      Projection: t.a AS t1.a, t.b AS t1.b, t.c AS t1.c\
-          \n        Projection: t.a, t.b, t.c\
-          \n          TableScan: t";
+        let expected = "Projection: t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32]\
+          \n  Projection: t1.a AS t2.a, t1.b AS t2.b, t1.c AS t2.c [t2.a:UInt32, t2.b:UInt32, t2.c:UInt32]\
+          \n    Projection: t1.a, t1.b, t1.c [a:UInt32, b:UInt32, c:UInt32]\
+          \n      Projection: t.a AS t1.a, t.b AS t1.b, t.c AS t1.c [t1.a:UInt32, t1.b:UInt32, t1.c:UInt32]\
+          \n        Projection: t.a, t.b, t.c [a:UInt32, b:UInt32, c:UInt32]\
+          \n          TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&origin_plan, expected)
     }
@@ -191,19 +174,11 @@ mod tests {
             .project(vec![Wildcard])?
             .build()?;
 
-        let expected = "Projection: t1.COUNT(*)\
-          \n  SubqueryAlias: t1\
-          \n    Projection: COUNT(t.a) AS COUNT(*)\
-          \n      Aggregate: groupBy=[[]], aggr=[[COUNT(t.a)]]\
-          \n        TableScan: t";
-
-        assert_eq!(format!("{origin_plan:?}"), expected);
-
-        let expected = "Projection: t1.COUNT(*)\
-          \n  Projection: COUNT(*) AS t1.COUNT(*)\
-          \n    Projection: COUNT(t.a) AS COUNT(*)\
-          \n      Aggregate: groupBy=[[]], aggr=[[COUNT(t.a)]]\
-          \n        TableScan: t";
+        let expected = "Projection: t1.COUNT(*) [COUNT(*):Int64;N]\
+          \n  Projection: COUNT(*) AS t1.COUNT(*) [t1.COUNT(*):Int64;N]\
+          \n    Projection: COUNT(t.a) AS COUNT(*) [COUNT(*):Int64;N]\
+          \n      Aggregate: groupBy=[[]], aggr=[[COUNT(t.a)]] [COUNT(t.a):Int64;N]\
+          \n        TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&origin_plan, expected)
     }
@@ -219,19 +194,11 @@ mod tests {
             .project(vec![Wildcard])?
             .build()?;
 
-        let expected = "Projection: t1.b, t1.COUNT(*)\
-          \n  SubqueryAlias: t1\
-          \n    Projection: t.b, COUNT(t.a) AS COUNT(*)\
-          \n      Aggregate: groupBy=[[t.b]], aggr=[[COUNT(t.a)]]\
-          \n        TableScan: t";
-
-        assert_eq!(format!("{origin_plan:?}"), expected);
-
-        let expected = "Projection: t1.b, t1.COUNT(*)\
-          \n  Projection: t.b AS t1.b, COUNT(*) AS t1.COUNT(*)\
-          \n    Projection: t.b, COUNT(t.a) AS COUNT(*)\
-          \n      Aggregate: groupBy=[[t.b]], aggr=[[COUNT(t.a)]]\
-          \n        TableScan: t";
+        let expected = "Projection: t1.b, t1.COUNT(*) [b:UInt32, COUNT(*):Int64;N]\
+          \n  Projection: t.b AS t1.b, COUNT(*) AS t1.COUNT(*) [t1.b:UInt32, t1.COUNT(*):Int64;N]\
+          \n    Projection: t.b, COUNT(t.a) AS COUNT(*) [b:UInt32, COUNT(*):Int64;N]\
+          \n      Aggregate: groupBy=[[t.b]], aggr=[[COUNT(t.a)]] [b:UInt32, COUNT(t.a):Int64;N]\
+          \n        TableScan: t [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&origin_plan, expected)
     }
