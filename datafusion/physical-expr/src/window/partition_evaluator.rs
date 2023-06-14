@@ -128,14 +128,20 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// Gets the range where the window function result is calculated.
-    ///
-    /// `idx`: is the index of last row for which result is calculated.
-    /// `n_rows`: is the number of rows of the input record batch (Used during bounds check)
-    fn get_range(&self, _idx: usize, _n_rows: usize) -> Result<Range<usize>> {
-        Err(DataFusionError::NotImplemented(
-            "get_range is not implemented for this window function".to_string(),
-        ))
+    /// If `uses_window_frame` flag is `false`. This method is used to calculate required range for the window function
+    /// Generally there is no required range, hence by default this returns smallest range(current row). e.g seeing current row
+    /// is enough to calculate window result (such as row_number, rank, etc)
+    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
+        if self.uses_window_frame() {
+            Err(DataFusionError::Execution(
+                "Range should be calculated from window frame".to_string(),
+            ))
+        } else {
+            Ok(Range {
+                start: idx,
+                end: idx + 1,
+            })
+        }
     }
 
     /// Called for window functions that *do not use* values from the
@@ -150,7 +156,7 @@ pub trait PartitionEvaluator: Debug + Send {
         // Default implementation may behave suboptimally (For instance `NumRowEvaluator` overwrites it)
         if !self.uses_window_frame() && self.supports_bounded_execution() {
             let res = (0..num_rows)
-                .map(|_idx| self.evaluate(values, &Range { start: 0, end: 1 }))
+                .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?))
                 .collect::<Result<Vec<_>>>()?;
             ScalarValue::iter_to_array(res.into_iter())
         } else {
