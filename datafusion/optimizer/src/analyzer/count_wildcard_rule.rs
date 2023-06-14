@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{Column, DFField, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::expr::{AggregateFunction, Alias, InSubquery};
+use datafusion_common::Result;
+use datafusion_expr::expr::{AggregateFunction, InSubquery};
+use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::ScalarSubquery;
 use datafusion_expr::{
@@ -26,9 +28,6 @@ use datafusion_expr::{
     LogicalPlanBuilder, Projection, Sort, Subquery,
 };
 use std::sync::Arc;
-
-use crate::analyzer::AnalyzerRule;
-use crate::utils::rewrite_preserving_name;
 
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
@@ -76,11 +75,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Transformed::Yes(LogicalPlan::Aggregate(
-                Aggregate::try_new(
-                    agg.input.clone(),
-                    agg.group_expr.clone(),
-                    aggr_expr,
-                )?,
+                Aggregate::try_new(agg.input.clone(), agg.group_expr.clone(), aggr_expr)?,
             )))
         }
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
@@ -246,9 +241,9 @@ mod tests {
             .project(vec![count(Expr::Wildcard)])?
             .sort(vec![count(Expr::Wildcard).sort(true, false)])?
             .build()?;
-        let expected = "Sort: COUNT(UInt8(1)) AS COUNT(*) ASC NULLS LAST [COUNT(UInt8(1)):Int64;N]\
-        \n  Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(UInt8(1)):Int64;N]\
-        \n    Aggregate: groupBy=[[test.b]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [b:UInt32, COUNT(UInt8(1)):Int64;N]\
+        let expected = "Sort: COUNT(*) ASC NULLS LAST [COUNT(*):Int64;N]\
+        \n  Projection: COUNT(*) [COUNT(*):Int64;N]\
+        \n    Aggregate: groupBy=[[test.b]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [b:UInt32, COUNT(*):Int64;N]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
     }
@@ -271,9 +266,9 @@ mod tests {
             .build()?;
 
         let expected = "Filter: t1.a IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Subquery: [COUNT(UInt8(1)):Int64;N]\
-        \n    Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(UInt8(1)):Int64;N]\
-        \n      Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [COUNT(UInt8(1)):Int64;N]\
+        \n  Subquery: [COUNT(*):Int64;N]\
+        \n    Projection: COUNT(*) [COUNT(*):Int64;N]\
+        \n      Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
@@ -294,9 +289,9 @@ mod tests {
             .build()?;
 
         let expected = "Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
-        \n  Subquery: [COUNT(UInt8(1)):Int64;N]\
-        \n    Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(UInt8(1)):Int64;N]\
-        \n      Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [COUNT(UInt8(1)):Int64;N]\
+        \n  Subquery: [COUNT(*):Int64;N]\
+        \n    Projection: COUNT(*) [COUNT(*):Int64;N]\
+        \n      Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
         \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
@@ -355,8 +350,8 @@ mod tests {
             .project(vec![count(Expr::Wildcard)])?
             .build()?;
 
-        let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(UInt8(1)):Int64;N]\
-        \n  WindowAggr: windowExpr=[[COUNT(UInt8(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, COUNT(UInt8(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
+        let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(*):Int64;N]\
+        \n  WindowAggr: windowExpr=[[COUNT(UInt8(1)) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]] [a:UInt32, b:UInt32, c:UInt32, COUNT(*) ORDER BY [test.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING:Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
     }
@@ -369,8 +364,8 @@ mod tests {
             .project(vec![count(Expr::Wildcard)])?
             .build()?;
 
-        let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(UInt8(1)):Int64;N]\
-        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [COUNT(UInt8(1)):Int64;N]\
+        let expected = "Projection: COUNT(*) [COUNT(*):Int64;N]\
+        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1)) AS COUNT(*)]] [COUNT(*):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
     }
@@ -383,8 +378,8 @@ mod tests {
             .project(vec![count(Expr::Wildcard)])?
             .build()?;
 
-        let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(UInt8(1)):Int64;N]\
-        \n  Aggregate: groupBy=[[]], aggr=[[MAX(COUNT(UInt8(1))) AS MAX(COUNT(*))]] [MAX(COUNT(UInt8(1))):Int64;N]\
+        let expected = "Projection: COUNT(UInt8(1)) AS COUNT(*) [COUNT(*):Int64;N]\
+        \n  Aggregate: groupBy=[[]], aggr=[[MAX(COUNT(UInt8(1))) AS MAX(COUNT(*))]] [MAX(COUNT(*)):Int64;N]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
         assert_plan_eq(&plan, expected)
     }
