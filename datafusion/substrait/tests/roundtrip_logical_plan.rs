@@ -31,6 +31,7 @@ mod tests {
     use datafusion::execution::registry::SerializerRegistry;
     use datafusion::execution::runtime_env::RuntimeEnv;
     use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
+    use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
     use datafusion::prelude::*;
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
 
@@ -347,7 +348,12 @@ mod tests {
     #[tokio::test]
     // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
     async fn roundtrip_inlist_3() -> Result<()> {
-        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c', 'd')").await
+        let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
+            .map(|i| format!("'{}'", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        roundtrip(&format!("SELECT * FROM data WHERE f IN ({})", inlist)).await
     }
 
     #[tokio::test]

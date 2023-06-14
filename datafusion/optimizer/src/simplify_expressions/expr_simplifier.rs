@@ -46,7 +46,7 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
-const THRESHOLD_INLINE_INLIST: usize = 3;
+pub const THRESHOLD_INLINE_INLIST: usize = 3;
 
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
