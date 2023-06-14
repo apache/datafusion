@@ -131,11 +131,21 @@ pub trait PartitionEvaluator: Debug + Send {
 
     /// Called for window functions that *do not use* values from the
     /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
-    /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`).
-    fn evaluate_all(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_all is not implemented by default".into(),
-        ))
+    /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`). It produces result
+    /// of all rows in a single pass. It expects to receive whole table data
+    /// as a single batch.
+    fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+        // When window frame boundaries are not used and evaluator supports bounded execution
+        if !self.uses_window_frame() && self.supports_bounded_execution() {
+            let res = (0..num_rows)
+                .map(|_idx| self.evaluate(values, &Range { start: 0, end: 1 }))
+                .collect::<Result<Vec<_>>>()?;
+            ScalarValue::iter_to_array(res.into_iter())
+        } else {
+            Err(DataFusionError::NotImplemented(
+                "evaluate_all is not implemented by default".into(),
+            ))
+        }
     }
 
     /// Evaluate window function result inside given range.
@@ -186,5 +196,20 @@ pub trait PartitionEvaluator: Debug + Send {
         Err(DataFusionError::NotImplemented(
             "evaluate_partition_with_rank is not implemented by default".into(),
         ))
+    }
+
+    /// Can the window function be incrementally computed using
+    /// bounded memory?
+    ///
+    /// If this function returns true, implement [`PartitionEvaluator::evaluate`]
+    fn supports_bounded_execution(&self) -> bool {
+        false
+    }
+
+    /// Does the window function use the values from its window frame?
+    ///
+    /// If this function returns true, implement [`PartitionEvaluator::evaluate`]
+    fn uses_window_frame(&self) -> bool {
+        false
     }
 }

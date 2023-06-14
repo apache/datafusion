@@ -86,23 +86,6 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// The default implementation does nothing
     fn add_equal_orderings(&self, _builder: &mut OrderingEquivalenceBuilder) {}
 
-    /// Can the window function be incrementally computed using
-    /// bounded memory?
-    ///
-    /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate`]
-    fn supports_bounded_execution(&self) -> bool {
-        false
-    }
-
-    /// Does the window function use the values from its window frame?
-    ///
-    /// If this function returns true, [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate`]
-    fn uses_window_frame(&self) -> bool {
-        false
-    }
-
     /// Can this function be evaluated with (only) rank
     ///
     /// If `include_rank` is true, then [`Self::create_evaluator`] must

@@ -85,10 +85,6 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Default, Debug)]
@@ -113,10 +109,18 @@ impl PartitionEvaluator for NumRowsEvaluator {
         Ok(ScalarValue::UInt64(Some(self.state.n_rows as u64)))
     }
 
-    fn evaluate_all(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 }
 

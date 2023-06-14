@@ -97,7 +97,7 @@ impl WindowExpr for BuiltInWindowExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
-        if self.expr.uses_window_frame() {
+        if evaluator.uses_window_frame() {
             let sort_options: Vec<SortOptions> =
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
@@ -172,7 +172,7 @@ impl WindowExpr for BuiltInWindowExpr {
             };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
             for idx in state.last_calculated_index..num_rows {
-                let frame_range = if self.expr.uses_window_frame() {
+                let frame_range = if evaluator.uses_window_frame() {
                     state
                         .window_frame_ctx
                         .get_or_insert_with(|| {
@@ -232,8 +232,12 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        self.expr.supports_bounded_execution()
-            && (!self.expr.uses_window_frame()
-                || !self.window_frame.end_bound.is_unbounded())
+        if let Ok(evaluator) = self.expr.create_evaluator() {
+            evaluator.supports_bounded_execution()
+                && (!evaluator.uses_window_frame()
+                    || !self.window_frame.end_bound.is_unbounded())
+        } else {
+            false
+        }
     }
 }
