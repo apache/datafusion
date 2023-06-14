@@ -67,7 +67,6 @@ pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
 }
 
 pub async fn register_aggregate_tables(ctx: &SessionContext) {
-    register_aggregate_test_100(ctx).await;
     register_decimal_table(ctx);
     register_median_test_tables(ctx);
     register_test_data(ctx);
@@ -180,18 +179,6 @@ fn register_decimal_table(ctx: &SessionContext) {
     let partitions = vec![vec![batch_decimal]];
     let provider = Arc::new(MemTable::try_new(schema, partitions).unwrap());
     ctx.register_table("d_table", provider).unwrap();
-}
-
-async fn register_aggregate_test_100(ctx: &SessionContext) {
-    let test_data = datafusion::test_util::arrow_test_data();
-    let schema = test_util::aggr_test_schema();
-    ctx.register_csv(
-        "aggregate_test_100",
-        &format!("{test_data}/csv/aggregate_test_100.csv"),
-        CsvReadOptions::new().schema(&schema),
-    )
-    .await
-    .unwrap();
 }
 
 pub async fn register_scalar_tables(ctx: &SessionContext) {
