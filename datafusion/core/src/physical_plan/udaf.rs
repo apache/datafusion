@@ -28,7 +28,7 @@ use arrow::{
 
 use super::{expressions::format_state_name, Accumulator, AggregateExpr};
 use crate::physical_plan::PhysicalExpr;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 pub use datafusion_expr::AggregateUDF;
 
 use datafusion_physical_expr::aggregate::utils::down_cast_any_ref;
@@ -41,7 +41,7 @@ pub fn create_aggregate_expr(
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: impl Into<String>,
-) -> Result<Arc<dyn AggregateExpr>> {
+) -> Result<Arc<AggregateFunctionExpr>> {
     let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(input_schema))
@@ -69,6 +69,11 @@ impl AggregateFunctionExpr {
     /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
     pub fn fun(&self) -> &AggregateUDF {
         &self.fun
+    }
+
+    /// Returns true if this can support sliding accumulators
+    pub fn retractable(&self) -> Result<bool> {
+        Ok((self.fun.accumulator)(&self.data_type)?.supports_retract_batch())
     }
 }
 
@@ -107,7 +112,16 @@ impl AggregateExpr for AggregateFunctionExpr {
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        (self.fun.accumulator)(&self.data_type)
+        let accumulator = (self.fun.accumulator)(&self.data_type)?;
+
+        if !accumulator.supports_retract_batch() {
+            return Err(DataFusionError::Internal(
+                format!(
+                    "Can't make sliding accumulator because retractable_accumulator not available for {}",
+                    self.name)
+            ));
+        }
+        Ok(accumulator)
     }
 
     fn name(&self) -> &str {

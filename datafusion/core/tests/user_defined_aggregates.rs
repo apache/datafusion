@@ -40,13 +40,32 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::cast::as_primitive_array;
+use datafusion_common::{cast::as_primitive_array, DataFusionError};
+
+/// Test to show the contents of the setup
+#[tokio::test]
+async fn test_setup() {
+    let TestContext { ctx, test_state: _ } = TestContext::new();
+    let sql = "SELECT * from t order by time";
+    let expected = vec![
+        "+-------+----------------------------+",
+        "| value | time                       |",
+        "+-------+----------------------------+",
+        "| 2.0   | 1970-01-01T00:00:00.000002 |",
+        "| 3.0   | 1970-01-01T00:00:00.000003 |",
+        "| 1.0   | 1970-01-01T00:00:00.000004 |",
+        "| 5.0   | 1970-01-01T00:00:00.000005 |",
+        "| 5.0   | 1970-01-01T00:00:00.000005 |",
+        "+-------+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+}
 
 /// Basic user defined aggregate
 #[tokio::test]
 async fn test_udaf() {
-    let TestContext { ctx, counters } = TestContext::new();
-    assert!(!counters.update_batch());
+    let TestContext { ctx, test_state } = TestContext::new();
+    assert!(!test_state.update_batch());
     let sql = "SELECT time_sum(time) from t";
     let expected = vec![
         "+----------------------------+",
@@ -57,14 +76,14 @@ async fn test_udaf() {
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await);
     // normal aggregates call update_batch
-    assert!(counters.update_batch());
-    assert!(!counters.retract_batch());
+    assert!(test_state.update_batch());
+    assert!(!test_state.retract_batch());
 }
 
 /// User defined aggregate used as a window function
 #[tokio::test]
 async fn test_udaf_as_window() {
-    let TestContext { ctx, counters } = TestContext::new();
+    let TestContext { ctx, test_state } = TestContext::new();
     let sql = "SELECT time_sum(time) OVER() as time_sum from t";
     let expected = vec![
         "+----------------------------+",
@@ -79,15 +98,41 @@ async fn test_udaf_as_window() {
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await);
     // aggregate over the entire window function call update_batch
-    assert!(counters.update_batch());
-    assert!(!counters.retract_batch());
+    assert!(test_state.update_batch());
+    assert!(!test_state.retract_batch());
 }
 
 /// User defined aggregate used as a window function with a window frame
 #[tokio::test]
 async fn test_udaf_as_window_with_frame() {
-    let TestContext { ctx, counters } = TestContext::new();
+    let TestContext { ctx, test_state } = TestContext::new();
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
+    let expected = vec![
+        "+----------------------------+",
+        "| time_sum                   |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000005 |",
+        "| 1970-01-01T00:00:00.000009 |",
+        "| 1970-01-01T00:00:00.000012 |",
+        "| 1970-01-01T00:00:00.000014 |",
+        "| 1970-01-01T00:00:00.000010 |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    // user defined aggregates with window frame should be calling retract batch
+    assert!(test_state.update_batch());
+    assert!(test_state.retract_batch());
+}
+
+/// Ensure that User defined aggregate used as a window function with a window
+/// frame, but that does not implement retract_batch, does not error
+#[tokio::test]
+async fn test_udaf_as_window_with_frame_without_retract_batch() {
+    let test_state = Arc::new(TestState::new().with_error_on_retract_batch());
+
+    let TestContext { ctx, test_state } = TestContext::new_with_test_state(test_state);
+    let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
+    // TODO: It is not clear why this is a different value than when retract batch is used
     let expected = vec![
         "+----------------------------+",
         "| time_sum                   |",
@@ -100,16 +145,14 @@ async fn test_udaf_as_window_with_frame() {
         "+----------------------------+",
     ];
     assert_batches_eq!(expected, &execute(&ctx, sql).await);
-    // user defined aggregates with window frame should be calling retract batch
-    // but doesn't yet: https://github.com/apache/arrow-datafusion/issues/6611
-    assert!(counters.update_batch());
-    assert!(!counters.retract_batch());
+    assert!(test_state.update_batch());
+    assert!(!test_state.retract_batch());
 }
 
 /// Basic query for with a udaf returning a structure
 #[tokio::test]
 async fn test_udaf_returning_struct() {
-    let TestContext { ctx, counters: _ } = TestContext::new();
+    let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "SELECT first(value, time) from t";
     let expected = vec![
         "+------------------------------------------------+",
@@ -124,7 +167,7 @@ async fn test_udaf_returning_struct() {
 /// Demonstrate extracting the fields from a structure using a subquery
 #[tokio::test]
 async fn test_udaf_returning_struct_subquery() {
-    let TestContext { ctx, counters: _ } = TestContext::new();
+    let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
     let expected = vec![
         "+-----------------+----------------------------+",
@@ -155,13 +198,16 @@ async fn execute(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
 /// ```
 struct TestContext {
     ctx: SessionContext,
-    counters: Arc<TestCounters>,
+    test_state: Arc<TestState>,
 }
 
 impl TestContext {
     fn new() -> Self {
-        let counters = Arc::new(TestCounters::new());
+        let test_state = Arc::new(TestState::new());
+        Self::new_with_test_state(test_state)
+    }
 
+    fn new_with_test_state(test_state: Arc<TestState>) -> Self {
         let value = Float64Array::from(vec![3.0, 2.0, 1.0, 5.0, 5.0]);
         let time = TimestampNanosecondArray::from(vec![3000, 2000, 4000, 5000, 5000]);
 
@@ -178,21 +224,24 @@ impl TestContext {
         // Tell DataFusion about the "first" function
         FirstSelector::register(&mut ctx);
         // Tell DataFusion about the "time_sum" function
-        TimeSum::register(&mut ctx, Arc::clone(&counters));
+        TimeSum::register(&mut ctx, Arc::clone(&test_state));
 
-        Self { ctx, counters }
+        Self { ctx, test_state }
     }
 }
 
 #[derive(Debug, Default)]
-struct TestCounters {
+struct TestState {
     /// was update_batch called?
     update_batch: AtomicBool,
     /// was retract_batch called?
     retract_batch: AtomicBool,
+    /// should the udaf throw an error if retract batch is called? Can
+    /// only be configured at construction time.
+    error_on_retract_batch: bool,
 }
 
-impl TestCounters {
+impl TestState {
     fn new() -> Self {
         Default::default()
     }
@@ -202,9 +251,30 @@ impl TestCounters {
         self.update_batch.load(Ordering::SeqCst)
     }
 
+    /// Set the `update_batch` flag
+    fn set_update_batch(&self) {
+        self.update_batch.store(true, Ordering::SeqCst)
+    }
+
     /// Has `retract_batch` been called?
     fn retract_batch(&self) -> bool {
         self.retract_batch.load(Ordering::SeqCst)
+    }
+
+    /// set the `retract_batch` flag
+    fn set_retract_batch(&self) {
+        self.retract_batch.store(true, Ordering::SeqCst)
+    }
+
+    /// Is this state configured to return an error on retract batch?
+    fn error_on_retract_batch(&self) -> bool {
+        self.error_on_retract_batch
+    }
+
+    /// Configure the test to return error on retract batch
+    fn with_error_on_retract_batch(mut self) -> Self {
+        self.error_on_retract_batch = true;
+        self
     }
 }
 
@@ -213,15 +283,15 @@ impl TestCounters {
 #[derive(Debug)]
 struct TimeSum {
     sum: i64,
-    counters: Arc<TestCounters>,
+    test_state: Arc<TestState>,
 }
 
 impl TimeSum {
-    fn new(counters: Arc<TestCounters>) -> Self {
-        Self { sum: 0, counters }
+    fn new(test_state: Arc<TestState>) -> Self {
+        Self { sum: 0, test_state }
     }
 
-    fn register(ctx: &mut SessionContext, counters: Arc<TestCounters>) {
+    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
         let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
         // Returns the same type as its input
@@ -237,8 +307,9 @@ impl TimeSum {
 
         let signature = Signature::exact(vec![timestamp_type], volatility);
 
+        let captured_state = Arc::clone(&test_state);
         let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&counters)))));
+            Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
 
         let name = "time_sum";
 
@@ -256,12 +327,13 @@ impl Accumulator for TimeSum {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.counters.update_batch.store(true, Ordering::SeqCst);
+        self.test_state.set_update_batch();
         assert_eq!(values.len(), 1);
         let arr = &values[0];
         let arr = arr.as_primitive::<TimestampNanosecondType>();
 
         for v in arr.values().iter() {
+            println!("Adding {v}");
             self.sum += v;
         }
         Ok(())
@@ -273,6 +345,7 @@ impl Accumulator for TimeSum {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        println!("Evaluating to {}", self.sum);
         Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
     }
 
@@ -282,15 +355,26 @@ impl Accumulator for TimeSum {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.counters.retract_batch.store(true, Ordering::SeqCst);
+        if self.test_state.error_on_retract_batch() {
+            return Err(DataFusionError::Execution(
+                "Error in Retract Batch".to_string(),
+            ));
+        }
+
+        self.test_state.set_retract_batch();
         assert_eq!(values.len(), 1);
         let arr = &values[0];
         let arr = arr.as_primitive::<TimestampNanosecondType>();
 
         for v in arr.values().iter() {
+            println!("Retracting {v}");
             self.sum -= v;
         }
         Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        !self.test_state.error_on_retract_batch()
     }
 }
 

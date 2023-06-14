@@ -64,14 +64,14 @@ pub fn create_window_expr(
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
+    // Is there a potentially unlimited sized window frame?
+    let unbounded_window = window_frame.start_bound.is_unbounded();
+
     Ok(match fun {
-        WindowFunction::AggregateFunction(_) | WindowFunction::AggregateUDF(_) => {
-            let aggregate = match fun {
-                WindowFunction::AggregateFunction(fun) => aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?,
-                WindowFunction::AggregateUDF(fun) => udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
-                _ => unreachable!()
-            };
-            if !window_frame.start_bound.is_unbounded() {
+        WindowFunction::AggregateFunction(fun) => {
+            let aggregate =
+                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+            if !unbounded_window {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     aggregate,
                     partition_by,
@@ -93,6 +93,26 @@ pub fn create_window_expr(
             order_by,
             window_frame,
         )),
+        WindowFunction::AggregateUDF(fun) => {
+            let aggregate =
+                udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
+
+            if !unbounded_window && aggregate.retractable()? {
+                Arc::new(SlidingAggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            } else {
+                Arc::new(PlainAggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            }
+        }
     })
 }
 

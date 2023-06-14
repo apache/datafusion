@@ -24,13 +24,20 @@ use crate::{
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-/// Logical representation of a user-defined aggregate function (UDAF)
-/// A UDAF is different from a UDF in that it is stateful across batches.
+/// Logical representation of a user-defined aggregate function (UDAF).
+///
+/// A UDAF is different from a user-defined scalar function (UDF) in
+/// that it is stateful across batches. UDAFs can be used as normal
+/// aggregate functions as well as window functions (the `OVER` clause)
+///
+/// For more information, please see [the examples]
+///
+/// [the examples]: https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples#single-process
 #[derive(Clone)]
 pub struct AggregateUDF {
     /// name
     pub name: String,
-    /// signature
+    /// Signature (input arguments)
     pub signature: Signature,
     /// Return type
     pub return_type: ReturnTypeFunction,
