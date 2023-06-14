@@ -69,7 +69,7 @@ use std::ops::Range;
 ///
 /// # Stateless `PartitionEvaluator`
 ///
-/// In this case, [`Self::evaluate_all`], [`Self::evaluate_with_rank_all`] is called with values for the
+/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_with_rank_all`] is called with values for the
 /// entire partition.
 ///
 /// # Stateful `PartitionEvaluator`
@@ -87,6 +87,15 @@ use std::ops::Range;
 ///
 /// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
 /// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
+/// When implementing a new `PartitionEvaluator`,
+/// `uses_window_frame` and `supports_bounded_execution` flags determine which evaluation method will be called
+/// during runtime. Implement corresponding evaluator according to table below.
+/// |uses_window_frame|supports_bounded_execution|function_to_implement|
+/// |---|---|----|
+/// |false|false|`evaluate_all` (if we were to implement `PERCENT_RANK` it would end up in this quadrant, we cannot produce any result without seeing whole data)|
+/// |false|true|`evaluate` (optionally can also implement `evaluate_all` for more optimized implementation. However, there will be default implementation that is suboptimal) . If we were to implement `ROW_NUMBER` it will end up in this quadrant. Example `OddRowNumber` showcases this use case|
+/// |true|false|`evaluate` (I think as long as `uses_window_frame` is `true`. There is no way for `supports_bounded_execution` to be false). I couldn't come up with any example for this quadrant |
+/// |true|true|`evaluate`. If we were to implement `FIRST_VALUE`, it would end up in this quadrant|.
 pub trait PartitionEvaluator: Debug + Send {
     /// Updates the internal state for window function
     ///
