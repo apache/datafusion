@@ -17,7 +17,7 @@
 
 use datafusion::{
     arrow::{
-        array::{Float64Array, Int64Array},
+        array::Float64Array,
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
@@ -59,40 +59,6 @@ pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
         )
         .await
         .unwrap();
-}
-
-pub async fn register_aggregate_tables(ctx: &SessionContext) {
-    register_test_data(ctx);
-}
-
-fn register_test_data(ctx: &SessionContext) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Int64, true),
-        Field::new("c2", DataType::Int64, true),
-    ]));
-
-    let data = RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(Int64Array::from(vec![
-                Some(0),
-                Some(1),
-                None,
-                Some(3),
-                Some(3),
-            ])),
-            Arc::new(Int64Array::from(vec![
-                None,
-                Some(1),
-                Some(1),
-                Some(2),
-                Some(2),
-            ])),
-        ],
-    )
-    .unwrap();
-
-    ctx.register_batch("test", data).unwrap();
 }
 
 pub async fn register_scalar_tables(ctx: &SessionContext) {
