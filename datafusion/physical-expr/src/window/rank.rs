@@ -19,7 +19,7 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, RankState};
+use crate::window::window_expr::RankState;
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
@@ -104,6 +104,10 @@ impl BuiltInWindowFunctionExpr for Rank {
         matches!(self.rank_type, RankType::Basic | RankType::Dense)
     }
 
+    fn include_rank(&self) -> bool {
+        true
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             state: RankState::default(),
@@ -123,10 +127,6 @@ impl PartitionEvaluator for RankEvaluator {
         let start = idx;
         let end = idx + 1;
         Ok(Range { start, end })
-    }
-
-    fn state(&self) -> Result<BuiltinWindowState> {
-        Ok(BuiltinWindowState::Rank(self.state.clone()))
     }
 
     fn update_state(
@@ -167,10 +167,6 @@ impl PartitionEvaluator for RankEvaluator {
                 "Can not execute PERCENT_RANK in a streaming fashion".to_string(),
             )),
         }
-    }
-
-    fn include_rank(&self) -> bool {
-        true
     }
 
     fn evaluate_with_rank(

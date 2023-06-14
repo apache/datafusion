@@ -28,9 +28,11 @@ use datafusion::{
     prelude::{CsvReadOptions, SessionContext},
     test_util,
 };
+use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 
-use crate::utils;
+use crate::{utils, TestContext};
 
 #[cfg(feature = "avro")]
 pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
@@ -211,4 +213,39 @@ fn register_nan_table(ctx: &SessionContext) {
     )
     .unwrap();
     ctx.register_batch("test_float", data).unwrap();
+}
+
+/// Generate a partitioned CSV file and register it with an execution context
+pub async fn register_partition_table(test_ctx: &mut TestContext) {
+    test_ctx.enable_testdir();
+    let partition_count = 1;
+    let file_extension = "csv";
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::UInt32, false),
+        Field::new("c2", DataType::UInt64, false),
+        Field::new("c3", DataType::Boolean, false),
+    ]));
+    // generate a partitioned file
+    for partition in 0..partition_count {
+        let filename = format!("partition-{partition}.{file_extension}");
+        let file_path = test_ctx.testdir_path().join(filename);
+        let mut file = File::create(file_path).unwrap();
+
+        // generate some data
+        for i in 0..=10 {
+            let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
+            file.write_all(data.as_bytes()).unwrap()
+        }
+    }
+
+    // register csv file with the execution context
+    test_ctx
+        .ctx
+        .register_csv(
+            "test_partition_table",
+            test_ctx.testdir_path().to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema),
+        )
+        .await
+        .unwrap();
 }

@@ -18,13 +18,13 @@
 //! Defines common code used in execution plans
 
 use super::SendableRecordBatchStream;
-use crate::error::{DataFusionError, Result};
-use crate::execution::memory_pool::MemoryReservation;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use futures::{Future, StreamExt, TryStreamExt};
@@ -289,7 +289,6 @@ mod tests {
     use std::ops::Not;
 
     use super::*;
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::union::UnionExec;
@@ -601,8 +600,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Float32Array::from_slice([1., 2., 3.])),
-                Arc::new(Float64Array::from_slice([9., 8., 7.])),
+                Arc::new(Float32Array::from(vec![1., 2., 3.])),
+                Arc::new(Float64Array::from(vec![9., 8., 7.])),
             ],
         )?;
         let actual =

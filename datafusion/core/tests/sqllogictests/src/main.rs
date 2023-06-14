@@ -285,6 +285,13 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
                 return None;
             }
         }
+        "joins.slt" => {
+            info!("Registering partition table tables");
+
+            let mut test_ctx = test_ctx;
+            setup::register_partition_table(&mut test_ctx).await;
+            return Some(test_ctx);
+        }
         _ => {
             info!("Using default SessionContext");
         }

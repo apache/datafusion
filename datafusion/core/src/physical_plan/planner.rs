@@ -32,8 +32,10 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
-    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
+    Repartition, Union, UserDefinedLogicalNode,
 };
+use datafusion_common::display::ToStringifiedPlan;
+
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
@@ -65,11 +67,10 @@ use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
     GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
-use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
-use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;

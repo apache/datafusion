@@ -65,7 +65,7 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 
 mod metrics;
-mod page_filter;
+pub mod page_filter;
 mod row_filter;
 mod row_groups;
 
@@ -612,12 +612,14 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
+/// Default parquet reader factory.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
 }
 
 impl DefaultParquetFileReaderFactory {
+    /// Create a factory.
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
         Self { store }
     }

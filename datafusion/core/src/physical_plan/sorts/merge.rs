@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::common::Result;
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::sorts::builder::BatchBuilder;
 use crate::physical_plan::sorts::cursor::Cursor;
@@ -28,6 +27,7 @@ use crate::physical_plan::{
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::*;
+use datafusion_common::Result;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};

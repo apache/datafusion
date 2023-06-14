@@ -17,7 +17,6 @@
 
 //! Physical expressions for window functions
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
     expressions::{
@@ -26,9 +25,10 @@ use crate::physical_plan::{
     },
     udaf, ExecutionPlan, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow_schema::SchemaRef;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     WindowFrame,
@@ -47,7 +47,6 @@ pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use bounded_window_agg_exec::PartitionSearchMode;
 use datafusion_common::utils::longest_consecutive_prefix;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceBuilder;
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::{convert_to_expr, get_indices_of_matching_exprs};
 pub use datafusion_physical_expr::window::{
     BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
@@ -245,32 +244,14 @@ pub(crate) fn window_ordering_equivalence(
         .with_equivalences(input.equivalence_properties())
         .with_existing_ordering(input.output_ordering().map(|elem| elem.to_vec()))
         .extend(input.ordering_equivalence_properties());
+
     for expr in window_expr {
         if let Some(builtin_window_expr) =
             expr.as_any().downcast_ref::<BuiltInWindowExpr>()
         {
-            // Only the built-in `RowNumber` window function introduces a new
-            // ordering:
-            if builtin_window_expr
+            builtin_window_expr
                 .get_built_in_func_expr()
-                .as_any()
-                .is::<RowNumber>()
-            {
-                if let Some((idx, field)) =
-                    schema.column_with_name(builtin_window_expr.name())
-                {
-                    let column = Column::new(field.name(), idx);
-                    let options = SortOptions {
-                        descending: false,
-                        nulls_first: false,
-                    }; // ASC, NULLS LAST
-                    let rhs = PhysicalSortExpr {
-                        expr: Arc::new(column) as _,
-                        options,
-                    };
-                    builder.add_equal_conditions(vec![rhs]);
-                }
-            }
+                .add_equal_orderings(&mut builder);
         }
     }
     builder.build()

@@ -132,6 +132,13 @@ impl TreeNodeRewriter for CountWildcardRewriter {
 
     fn mutate(&mut self, old_expr: Expr) -> Result<Expr> {
         let new_expr = match old_expr.clone() {
+            Expr::Alias(expr, alias) if alias.contains(COUNT_STAR) => Expr::Alias(
+                expr,
+                alias.replace(
+                    COUNT_STAR,
+                    count(lit(COUNT_STAR_EXPANSION)).to_string().as_str(),
+                ),
+            ),
             Expr::Column(Column { name, relation }) if name.contains(COUNT_STAR) => {
                 Expr::Column(Column {
                     name: name.replace(

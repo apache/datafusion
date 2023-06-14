@@ -237,9 +237,16 @@ impl Accumulator for AvgAccumulator {
             ScalarValue::Float64(e) => {
                 Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
             }
-            ScalarValue::Decimal128(value, precision, scale) => {
-                Ok(match value {
-                    None => ScalarValue::Decimal128(None, precision, scale),
+            ScalarValue::Decimal128(value, _, scale) => {
+                match value {
+                    None => match &self.return_data_type {
+                        DataType::Decimal128(p, s) => {
+                            Ok(ScalarValue::Decimal128(None, *p, *s))
+                        }
+                        other => Err(DataFusionError::Internal(format!(
+                            "Error returned data type in AvgAccumulator {other:?}"
+                        ))),
+                    },
                     Some(value) => {
                         // now the sum_type and return type is not the same, need to convert the sum type to return type
                         calculate_result_decimal_for_avg(
@@ -247,9 +254,9 @@ impl Accumulator for AvgAccumulator {
                             self.count as i128,
                             scale,
                             &self.return_data_type,
-                        )?
+                        )
                     }
-                })
+                }
             }
             _ => Err(DataFusionError::Internal(
                 "Sum should be f64 or decimal128 on average".to_string(),

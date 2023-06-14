@@ -23,7 +23,8 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::sync::Arc;
 
 /// Represents a collection of [`EquivalentClass`] (equivalences
@@ -39,7 +40,7 @@ pub struct EquivalenceProperties<T = Column> {
     schema: SchemaRef,
 }
 
-impl<T: PartialEq + Clone> EquivalenceProperties<T> {
+impl<T: Eq + Clone + Hash> EquivalenceProperties<T> {
     pub fn new(schema: SchemaRef) -> Self {
         EquivalenceProperties {
             classes: vec![],
@@ -113,33 +114,6 @@ impl<T: PartialEq + Clone> EquivalenceProperties<T> {
     }
 }
 
-/// Remove duplicates inside the `in_data` vector, returned vector would consist of unique entries
-fn deduplicate_vector<T: PartialEq>(in_data: Vec<T>) -> Vec<T> {
-    let mut result = vec![];
-    for elem in in_data {
-        if !result.contains(&elem) {
-            result.push(elem);
-        }
-    }
-    result
-}
-
-/// Find the position of `entry` inside `in_data`, if `entry` is not found return `None`.
-fn get_entry_position<T: PartialEq>(in_data: &[T], entry: &T) -> Option<usize> {
-    in_data.iter().position(|item| item.eq(entry))
-}
-
-/// Remove `entry` for the `in_data`, returns `true` if removal is successful (e.g `entry` is indeed in the `in_data`)
-/// Otherwise return `false`
-fn remove_from_vec<T: PartialEq>(in_data: &mut Vec<T>, entry: &T) -> bool {
-    if let Some(idx) = get_entry_position(in_data, entry) {
-        in_data.remove(idx);
-        true
-    } else {
-        false
-    }
-}
-
 // Helper function to calculate column info recursively
 fn get_column_indices_helper(
     indices: &mut Vec<(usize, String)>,
@@ -187,20 +161,22 @@ pub struct EquivalentClass<T = Column> {
     /// First element in the EquivalentClass
     head: T,
     /// Other equal columns
-    others: Vec<T>,
+    others: HashSet<T>,
 }
 
-impl<T: PartialEq + Clone> EquivalentClass<T> {
+impl<T: Eq + Hash + Clone> EquivalentClass<T> {
     pub fn new(head: T, others: Vec<T>) -> EquivalentClass<T> {
-        let others = deduplicate_vector(others);
-        EquivalentClass { head, others }
+        EquivalentClass {
+            head,
+            others: HashSet::from_iter(others),
+        }
     }
 
     pub fn head(&self) -> &T {
         &self.head
     }
 
-    pub fn others(&self) -> &[T] {
+    pub fn others(&self) -> &HashSet<T> {
         &self.others
     }
 
@@ -209,24 +185,20 @@ impl<T: PartialEq + Clone> EquivalentClass<T> {
     }
 
     pub fn insert(&mut self, col: T) -> bool {
-        if self.head != col && !self.others.contains(&col) {
-            self.others.push(col);
-            true
-        } else {
-            false
-        }
+        self.head != col && self.others.insert(col)
     }
 
     pub fn remove(&mut self, col: &T) -> bool {
-        let removed = remove_from_vec(&mut self.others, col);
-        // If we are removing the head, shift others so that its first entry becomes the new head.
+        let removed = self.others.remove(col);
+        // If we are removing the head, adjust others so that its first entry becomes the new head.
         if !removed && *col == self.head {
-            let one_col = self.others.first().cloned();
-            if let Some(col) = one_col {
-                let removed = remove_from_vec(&mut self.others, &col);
+            if let Some(col) = self.others.iter().next().cloned() {
+                let removed = self.others.remove(&col);
                 self.head = col;
                 removed
             } else {
+                // We don't allow empty equivalence classes, reject removal if one tries removing
+                // the only element in an equivalence class.
                 false
             }
         } else {
@@ -296,16 +268,18 @@ pub struct OrderingEquivalenceBuilder {
     eq_properties: EquivalenceProperties,
     ordering_eq_properties: OrderingEquivalenceProperties,
     existing_ordering: Vec<PhysicalSortExpr>,
+    schema: SchemaRef,
 }
 
 impl OrderingEquivalenceBuilder {
     pub fn new(schema: SchemaRef) -> Self {
         let eq_properties = EquivalenceProperties::new(schema.clone());
-        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema);
+        let ordering_eq_properties = OrderingEquivalenceProperties::new(schema.clone());
         Self {
             eq_properties,
             ordering_eq_properties,
             existing_ordering: vec![],
+            schema,
         }
     }
 
@@ -356,6 +330,11 @@ impl OrderingEquivalenceBuilder {
                 &new_equivalent_ordering,
             ));
         }
+    }
+
+    /// Return a reference to the schema with which this builder was constructed with
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     pub fn build(self) -> OrderingEquivalenceProperties {
@@ -553,40 +532,6 @@ mod tests {
         assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
         assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_deduplicate_vector() -> Result<()> {
-        assert_eq!(deduplicate_vector(vec![1, 1, 2, 3, 3]), vec![1, 2, 3]);
-        assert_eq!(
-            deduplicate_vector(vec![1, 2, 3, 4, 3, 2, 1, 0]),
-            vec![1, 2, 3, 4, 0]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_entry_position() -> Result<()> {
-        assert_eq!(get_entry_position(&[1, 1, 2, 3, 3], &2), Some(2));
-        assert_eq!(get_entry_position(&[1, 1, 2, 3, 3], &1), Some(0));
-        assert_eq!(get_entry_position(&[1, 1, 2, 3, 3], &5), None);
-        Ok(())
-    }
-
-    #[test]
-    fn test_remove_from_vec() -> Result<()> {
-        let mut in_data = vec![1, 1, 2, 3, 3];
-        remove_from_vec(&mut in_data, &5);
-        assert_eq!(in_data, vec![1, 1, 2, 3, 3]);
-        remove_from_vec(&mut in_data, &2);
-        assert_eq!(in_data, vec![1, 1, 3, 3]);
-        remove_from_vec(&mut in_data, &2);
-        assert_eq!(in_data, vec![1, 1, 3, 3]);
-        remove_from_vec(&mut in_data, &3);
-        assert_eq!(in_data, vec![1, 1, 3]);
-        remove_from_vec(&mut in_data, &3);
-        assert_eq!(in_data, vec![1, 1]);
         Ok(())
     }
 

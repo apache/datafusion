@@ -353,7 +353,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 .with_has_header(*has_header)
                                 .with_delimiter(str_to_byte(delimiter)?),
                         ),
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
+                        FileFormatType::Avro(..) => Arc::new(AvroFormat),
                     };
 
                 let table_paths = &scan
@@ -1439,7 +1439,7 @@ mod roundtrip_tests {
             TimeUnit, UnionMode,
         },
     };
-    use datafusion::datasource::datasource::TableProviderFactory;
+    use datafusion::datasource::provider::TableProviderFactory;
     use datafusion::datasource::TableProvider;
     use datafusion::execution::context::SessionState;
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};

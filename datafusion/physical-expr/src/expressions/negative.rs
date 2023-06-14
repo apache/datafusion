@@ -18,6 +18,7 @@
 //! Negation (-) expression
 
 use std::any::Any;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -52,7 +53,7 @@ macro_rules! compute_op {
 }
 
 /// Negative expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct NegativeExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
@@ -127,6 +128,11 @@ impl PhysicalExpr for NegativeExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NegativeExpr::new(children[0].clone())))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

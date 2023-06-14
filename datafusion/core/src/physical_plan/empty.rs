@@ -20,13 +20,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use log::trace;
 
 use super::expressions::PhysicalSortExpr;
