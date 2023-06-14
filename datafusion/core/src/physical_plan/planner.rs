@@ -67,11 +67,10 @@ use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
     GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
-use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
-use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;

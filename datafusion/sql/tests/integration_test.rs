@@ -881,7 +881,7 @@ fn select_aggregate_with_having_referencing_column_not_in_select() {
     assert_eq!(
         "Plan(\"HAVING clause references non-aggregate values: \
             Expression person.first_name could not be resolved from available columns: \
-            COUNT(UInt8(1))\")",
+            COUNT(*)\")",
         format!("{err:?}")
     );
 }
@@ -1084,8 +1084,8 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND COUNT(*) < 50";
     let expected = "Projection: person.first_name, MAX(person.age)\
-                        \n  Filter: MAX(person.age) > Int64(100) AND COUNT(UInt8(1)) < Int64(50)\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age), COUNT(UInt8(1))]]\
+                        \n  Filter: MAX(person.age) > Int64(100) AND COUNT(*) < Int64(50)\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age), COUNT(*)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1665,8 +1665,8 @@ fn select_group_by_columns_not_in_select() {
 #[test]
 fn select_group_by_count_star() {
     let sql = "SELECT state, COUNT(*) FROM person GROUP BY state";
-    let expected = "Projection: person.state, COUNT(UInt8(1))\
-                        \n  Aggregate: groupBy=[[person.state]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.state, COUNT(*)\
+                        \n  Aggregate: groupBy=[[person.state]], aggr=[[COUNT(*)]]\
                         \n    TableScan: person";
 
     quick_test(sql, expected);
@@ -2884,8 +2884,8 @@ fn scalar_subquery_reference_outer_field() {
     let expected = "Projection: j1.j1_string, j2.j2_string\
         \n  Filter: j1.j1_id = j2.j2_id - Int64(1) AND j2.j2_id < (<subquery>)\
         \n    Subquery:\
-        \n      Projection: COUNT(UInt8(1))\
-        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n      Projection: COUNT(*)\
+        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(*)]]\
         \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
         \n            CrossJoin:\
         \n              TableScan: j1\
@@ -2983,8 +2983,8 @@ fn cte_unbalanced_number_of_columns() {
 fn aggregate_with_rollup() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -2993,8 +2993,8 @@ fn aggregate_with_rollup() {
 fn aggregate_with_rollup_with_grouping() {
     let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3025,8 +3025,8 @@ fn rank_partition_grouping() {
 fn aggregate_with_cube() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3042,8 +3042,8 @@ fn round_decimal() {
 #[test]
 fn aggregate_with_grouping_sets() {
     let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }

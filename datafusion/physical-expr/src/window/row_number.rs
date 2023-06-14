@@ -85,10 +85,6 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Default, Debug)]
@@ -97,22 +93,28 @@ pub(crate) struct NumRowsEvaluator {
 }
 
 impl PartitionEvaluator for NumRowsEvaluator {
-    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
-        let start = idx;
-        let end = idx + 1;
-        Ok(Range { start, end })
-    }
-
     /// evaluate window function result inside given range
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         self.state.n_rows += 1;
         Ok(ScalarValue::UInt64(Some(self.state.n_rows as u64)))
     }
 
-    fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 }
 
@@ -134,7 +136,7 @@ mod tests {
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
-            .evaluate(&values, batch.num_rows())?;
+            .evaluate_all(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
@@ -152,7 +154,7 @@ mod tests {
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
-            .evaluate(&values, batch.num_rows())?;
+            .evaluate_all(&values, batch.num_rows())?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], *result);
