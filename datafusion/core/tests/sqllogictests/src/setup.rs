@@ -17,10 +17,7 @@
 
 use datafusion::{
     arrow::{
-        array::{
-            ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-            Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-        },
+        array::{Float64Array, Int64Array},
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     },
@@ -65,79 +62,7 @@ pub async fn register_avro_tables(ctx: &mut crate::TestContext) {
 }
 
 pub async fn register_aggregate_tables(ctx: &SessionContext) {
-    register_median_test_tables(ctx);
     register_test_data(ctx);
-}
-
-fn register_median_test_tables(ctx: &SessionContext) {
-    // Register median tables
-    let items: Vec<(&str, DataType, ArrayRef)> = vec![
-        (
-            "i8",
-            DataType::Int8,
-            Arc::new(Int8Array::from(vec![i8::MIN, i8::MIN, 100, i8::MAX])),
-        ),
-        (
-            "i16",
-            DataType::Int16,
-            Arc::new(Int16Array::from(vec![i16::MIN, i16::MIN, 100, i16::MAX])),
-        ),
-        (
-            "i32",
-            DataType::Int32,
-            Arc::new(Int32Array::from(vec![i32::MIN, i32::MIN, 100, i32::MAX])),
-        ),
-        (
-            "i64",
-            DataType::Int64,
-            Arc::new(Int64Array::from(vec![i64::MIN, i64::MIN, 100, i64::MAX])),
-        ),
-        (
-            "u8",
-            DataType::UInt8,
-            Arc::new(UInt8Array::from(vec![u8::MIN, u8::MIN, 100, u8::MAX])),
-        ),
-        (
-            "u16",
-            DataType::UInt16,
-            Arc::new(UInt16Array::from(vec![u16::MIN, u16::MIN, 100, u16::MAX])),
-        ),
-        (
-            "u32",
-            DataType::UInt32,
-            Arc::new(UInt32Array::from(vec![u32::MIN, u32::MIN, 100, u32::MAX])),
-        ),
-        (
-            "u64",
-            DataType::UInt64,
-            Arc::new(UInt64Array::from(vec![u64::MIN, u64::MIN, 100, u64::MAX])),
-        ),
-        (
-            "f32",
-            DataType::Float32,
-            Arc::new(Float32Array::from(vec![1.1, 4.4, 5.5, 3.3, 2.2])),
-        ),
-        (
-            "f64",
-            DataType::Float64,
-            Arc::new(Float64Array::from(vec![1.1, 4.4, 5.5, 3.3, 2.2])),
-        ),
-        (
-            "f64_nan",
-            DataType::Float64,
-            Arc::new(Float64Array::from(vec![1.1, f64::NAN, f64::NAN, f64::NAN])),
-        ),
-    ];
-
-    for (name, data_type, values) in items {
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("a", data_type, false)])),
-            vec![values],
-        )
-        .unwrap();
-        let table_name = &format!("median_{name}");
-        ctx.register_batch(table_name, batch).unwrap();
-    }
 }
 
 fn register_test_data(ctx: &SessionContext) {

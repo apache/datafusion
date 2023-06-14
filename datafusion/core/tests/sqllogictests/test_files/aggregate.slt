@@ -43,6 +43,25 @@ CREATE TABLE d_table (c1 decimal(10,3)) as values
 (110.000), (110.001), (110.002), (110.003), (110.004), (110.005), (110.006), (110.007), (110.008), (110.009),
 (-100.000),(-100.001),(-100.002),(-100.003),(-100.004),(-100.005),(-100.006),(-100.007),(-100.008),(-100.009)
 
+statement ok
+CREATE TABLE median_table (
+    col_i8 TINYINT,
+    col_i16 SMALLINT,
+    col_i32 INT,
+    col_i64 BIGINT,
+    col_u8 TINYINT UNSIGNED,
+    col_u16 SMALLINT UNSIGNED,
+    col_u32 INT UNSIGNED,
+    col_u64 BIGINT UNSIGNED,
+    col_f32 FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE
+) as VALUES
+( -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0, 0, 0, arrow_cast(0,'UInt64'), 1.1, 1.1, 1.1 ),
+( -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0, 0, 0, arrow_cast(0,'UInt64'), 4.4, 4.4, arrow_cast('NAN','Float64') ),
+( 100,  100,    100,         arrow_cast(100,'Int64'),              100,100,100, arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
+( 127, 32767, 2147483647, arrow_cast(9223372036854775807,'Int64'), 255, 65535,  4294967295, 18446744073709551615, 2.2, 2.2, arrow_cast('NAN','Float64') )
+
 #######
 # Error tests
 #######
@@ -334,73 +353,73 @@ SELECT median(c12) FROM aggregate_test_100
 
 # median_i8
 query I
-SELECT median(a) FROM median_i8
+SELECT median(col_i8) FROM median_table
 ----
 -14
 
 # median_i16
 query I
-SELECT median(a) FROM median_i16
+SELECT median(col_i16) FROM median_table
 ----
 -16334
 
 # median_i32
 query I
-SELECT median(a) FROM median_i32
+SELECT median(col_i32) FROM median_table
 ----
 -1073741774
 
 # median_i64
 query I
-SELECT median(a) FROM median_i64
+SELECT median(col_i64) FROM median_table
 ----
 -4611686018427387854
 
 # median_u8
 query I
-SELECT median(a) FROM median_u8
+SELECT median(col_u8) FROM median_table
 ----
 50
 
 # median_u16
 query I
-SELECT median(a) FROM median_u16
+SELECT median(col_u16) FROM median_table
 ----
 50
 
 # median_u32
 query I
-SELECT median(a) FROM median_u32
+SELECT median(col_u32) FROM median_table
 ----
 50
 
 # median_u64
 query I
-SELECT median(a) FROM median_u64
+SELECT median(col_u64) FROM median_table
 ----
 50
 
 # median_f32
 query R
-SELECT median(a) FROM median_f32
+SELECT median(col_f32) FROM median_table
 ----
-3.3
+2.75
 
 # median_f64
 query R
-SELECT median(a) FROM median_f64
+SELECT median(col_f64) FROM median_table
 ----
-3.3
+2.75
 
 # median_f64_nan
 query R
-SELECT median(a) FROM median_f64_nan
+SELECT median(col_f64_nan) FROM median_table
 ----
 NaN
 
 # approx_median_f64_nan
 query R
-SELECT approx_median(a) FROM median_f64_nan
+SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
