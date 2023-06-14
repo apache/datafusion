@@ -172,7 +172,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// window defined in the `OVER` clause)
     ///
     /// ```sql
-    /// lag(x, 1) OVER (ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// lag(x, 1) OVER (ORDER BY z ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
     /// ```
     ///
     /// However, `avg()` computes the average in the window and thus
