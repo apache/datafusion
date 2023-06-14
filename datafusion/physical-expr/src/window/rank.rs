@@ -100,10 +100,6 @@ impl BuiltInWindowFunctionExpr for Rank {
         &self.name
     }
 
-    fn include_rank(&self) -> bool {
-        true
-    }
-
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             state: RankState::default(),
@@ -218,6 +214,10 @@ impl PartitionEvaluator for RankEvaluator {
 
     fn supports_bounded_execution(&self) -> bool {
         matches!(self.rank_type, RankType::Basic | RankType::Dense)
+    }
+
+    fn include_rank(&self) -> bool {
+        true
     }
 }
 

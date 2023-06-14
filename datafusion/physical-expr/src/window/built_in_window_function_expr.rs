@@ -85,12 +85,4 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     ///
     /// The default implementation does nothing
     fn add_equal_orderings(&self, _builder: &mut OrderingEquivalenceBuilder) {}
-
-    /// Can this function be evaluated with (only) rank
-    ///
-    /// If `include_rank` is true, then [`Self::create_evaluator`] must
-    /// implement [`PartitionEvaluator::evaluate_with_rank_all`]
-    fn include_rank(&self) -> bool {
-        false
-    }
 }

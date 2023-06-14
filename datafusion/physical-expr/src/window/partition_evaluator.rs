@@ -224,4 +224,11 @@ pub trait PartitionEvaluator: Debug + Send {
     fn uses_window_frame(&self) -> bool {
         false
     }
+
+    /// Can this function be evaluated with (only) rank
+    ///
+    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_with_rank_all`]
+    fn include_rank(&self) -> bool {
+        false
+    }
 }

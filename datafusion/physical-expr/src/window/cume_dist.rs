@@ -64,10 +64,6 @@ impl BuiltInWindowFunctionExpr for CumeDist {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(CumeDistEvaluator {}))
     }
-
-    fn include_rank(&self) -> bool {
-        true
-    }
 }
 
 #[derive(Debug)]
@@ -93,6 +89,10 @@ impl PartitionEvaluator for CumeDistEvaluator {
                 .flatten(),
         );
         Ok(Arc::new(result))
+    }
+
+    fn include_rank(&self) -> bool {
+        true
     }
 }
 
