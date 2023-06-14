@@ -325,13 +325,44 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             }
         }
         ColumnarValue::Array(array) => {
+            let array_type = array.data_type();
             let array = as_timestamp_nanosecond_array(array)?;
-            let array = array
-                .iter()
-                .map(f)
-                .collect::<Result<TimestampNanosecondArray>>()?;
 
-            ColumnarValue::Array(Arc::new(array))
+            match array_type {
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    let array = array
+                        .iter()
+                        .map(f)
+                        .collect::<Result<TimestampNanosecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    let array = array
+                        .iter()
+                        .map(|x| f(x).map(|x| x.map(|x| x / 1_000)))
+                        .collect::<Result<TimestampMicrosecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    let array = array
+                        .iter()
+                        .map(|x| f(x).map(|x| x.map(|x| x / 1_000_000)))
+                        .collect::<Result<TimestampMillisecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    let array = array
+                        .iter()
+                        .map(|x| f(x).map(|x| x.map(|x| x / 1_000_000_000)))
+                        .collect::<Result<TimestampSecondArray>>()?;
+                    ColumnarValue::Array(Arc::new(array))
+                }
+                _ => {
+                    return Err(DataFusionError::Execution(
+                        "second argument of `date_trunc` must be nanosecond timestamp scalar or array".to_string(),
+                    ));
+                }
+            }
         }
         _ => {
             return Err(DataFusionError::Execution(
