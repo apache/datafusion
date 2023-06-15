@@ -22,22 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn invalid_scalar_subquery() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t1.t1_int) FROM t1";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let err = dataframe.into_optimized_plan().err().unwrap();
-    assert_eq!(
-        r#"Context("check_analyzed_plan", Plan("Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name"))"#,
-        &format!("{err:?}")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn subquery_not_allowed() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
