@@ -567,3 +567,21 @@ Filter: EXISTS (<subquery>)
 ----Projection: NULL
 ------EmptyRelation
 --TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_limit
+#de-correlated, limit is removed
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1)
+----
+logical_plan
+LeftSemi Join: t1.t1_id = __correlated_sq_25.t2_id
+--TableScan: t1 projection=[t1_id, t1_name]
+--SubqueryAlias: __correlated_sq_25
+----TableScan: t2 projection=[t2_id]
+
+query IT rowsort
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1)
+----
+11 a
+22 b
+44 d

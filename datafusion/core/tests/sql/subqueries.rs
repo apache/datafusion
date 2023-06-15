@@ -22,45 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn exists_subquery_with_limit() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1)";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let plan = dataframe.into_optimized_plan()?;
-
-    // de-correlated, limit is removed
-    let expected = vec![
-        "LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "  TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "  SubqueryAlias: __correlated_sq_1 [t2_id:UInt32;N]",
-        "    TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+---------+",
-        "| t1_id | t1_name |",
-        "+-------+---------+",
-        "| 11    | a       |",
-        "| 22    | b       |",
-        "| 44    | d       |",
-        "+-------+---------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn exists_subquery_with_limit0() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
