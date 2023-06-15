@@ -861,3 +861,30 @@ SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1
 22 2
 33 NULL
 44 2
+
+#correlated_scalar_subquery_count_agg_in_having
+query TT
+explain select t1.t1_int from t1 group by t1.t1_int having (select count(*) from t2 where t1.t1_int = t2.t2_int) = 0
+----
+logical_plan
+Projection: t1.t1_int
+--Filter: CASE WHEN __scalar_sq_39.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_39.COUNT(UInt8(1)) END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_39.COUNT(UInt8(1)), __scalar_sq_39.__always_true
+------Left Join: t1.t1_int = __scalar_sq_39.t2_int
+--------Aggregate: groupBy=[[t1.t1_int]], aggr=[[]]
+----------TableScan: t1 projection=[t1_int]
+--------SubqueryAlias: __scalar_sq_39
+----------Projection: COUNT(UInt8(1)), t2.t2_int, __always_true
+------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
+--------------TableScan: t2 projection=[t2_int]
+
+
+query I rowsort
+select t1.t1_int from t1 group by t1.t1_int having (select count(*) from t2 where t1.t1_int = t2.t2_int) = 0
+----
+2
+4
+
+
+
+
