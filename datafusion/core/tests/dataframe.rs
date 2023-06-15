@@ -24,7 +24,6 @@ use arrow::{
     },
     record_batch::RecordBatch,
 };
-use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
@@ -38,7 +37,6 @@ use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::Wildcard;
 use datafusion_expr::{
     avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col, scalar_subquery,
@@ -235,7 +233,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
     // https://github.com/apache/arrow-datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
-    // for compare difference betwwen sql and df logical plan, we need to create a new SessionContext here
+    // for compare difference between sql and df logical plan, we need to create a new SessionContext here
     let ctx = create_join_context()?;
     let df_results = ctx
         .table("t1")
@@ -245,8 +243,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
-                    .aggregate(vec![], vec![count(lit(COUNT_STAR_EXPANSION))])?
-                    .select(vec![count(lit(COUNT_STAR_EXPANSION))])?
+                    .aggregate(vec![], vec![count(Wildcard)])?
+                    .select(vec![col(count(Wildcard).to_string())])?
                     .into_unoptimized_plan(),
             ))
             .gt(lit(ScalarValue::UInt8(Some(0)))),
@@ -268,7 +266,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 #[tokio::test]
 async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let testdata = parquet_test_data();
     ctx.register_parquet(
         "alltypes_tiny_pages",
         &format!("{testdata}/alltypes_tiny_pages.parquet"),
@@ -342,16 +340,16 @@ async fn join() -> Result<()> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
     // define data.
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
 
@@ -384,8 +382,8 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
         ],
     )
     .unwrap();
@@ -429,8 +427,8 @@ async fn sort_on_distinct_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 3, 4, 5])),
         ],
     )
     .unwrap();
@@ -473,8 +471,8 @@ async fn sort_on_distinct_unprojected_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice([2, 3, 4, 5])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![2, 3, 4, 5])),
         ],
     )?;
 
@@ -574,7 +572,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from(vec![1, 10, 10, 100]))],
     )
     .unwrap();
 
@@ -611,7 +609,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from(vec![1, 10, 10, 100]))],
     )?;
 
     let ctx = SessionContext::new();
@@ -1090,13 +1088,13 @@ async fn create_test_table(name: &str) -> Result<DataFrame> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice([
+            Arc::new(StringArray::from(vec![
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
 
@@ -1133,18 +1131,18 @@ fn create_join_context() -> Result<SessionContext> {
     let batch1 = RecordBatch::try_new(
         t1,
         vec![
-            Arc::new(UInt32Array::from_slice([1, 10, 11, 100])),
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([10, 20, 30, 40])),
+            Arc::new(UInt32Array::from(vec![1, 10, 11, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
         ],
     )?;
     // define data.
     let batch2 = RecordBatch::try_new(
         t2,
         vec![
-            Arc::new(UInt32Array::from_slice([3, 10, 13, 100])),
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from(vec![3, 10, 13, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
         ],
     )?;
 

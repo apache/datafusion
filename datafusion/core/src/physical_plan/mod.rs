@@ -22,9 +22,9 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-pub use crate::common::{ColumnStatistics, Statistics};
-use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use datafusion_common::Result;
+pub use datafusion_common::{ColumnStatistics, Statistics};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -703,9 +703,7 @@ use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_execution::TaskContext;
-pub use datafusion_physical_expr::{
-    expressions, functions, hash_utils, type_coercion, udf,
-};
+pub use datafusion_physical_expr::{expressions, functions, hash_utils, udf};
 
 #[cfg(test)]
 mod tests {

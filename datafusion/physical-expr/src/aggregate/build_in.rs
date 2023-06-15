@@ -69,56 +69,36 @@ pub fn create_aggregate_expr(
             name,
             rt_type,
         )),
-        (AggregateFunction::BitAnd, false) => Arc::new(expressions::BitAnd::new(
+        (AggregateFunction::BitAnd, _) => Arc::new(expressions::BitAnd::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BitAnd, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BIT_AND(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
-        (AggregateFunction::BitOr, false) => Arc::new(expressions::BitOr::new(
+        (AggregateFunction::BitOr, _) => Arc::new(expressions::BitOr::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BitOr, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BIT_OR(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
         (AggregateFunction::BitXor, false) => Arc::new(expressions::BitXor::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BitXor, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BIT_XOR(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
-        (AggregateFunction::BoolAnd, false) => Arc::new(expressions::BoolAnd::new(
+        (AggregateFunction::BitXor, true) => Arc::new(expressions::DistinctBitXor::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BoolAnd, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BOOL_AND(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
-        (AggregateFunction::BoolOr, false) => Arc::new(expressions::BoolOr::new(
+        (AggregateFunction::BoolAnd, _) => Arc::new(expressions::BoolAnd::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BoolOr, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BOOL_OR(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
+        (AggregateFunction::BoolOr, _) => Arc::new(expressions::BoolOr::new(
+            input_phy_exprs[0].clone(),
+            name,
+            rt_type,
+        )),
         (AggregateFunction::Sum, false) => {
             let cast_to_sum_type = rt_type != input_phy_types[0];
             Arc::new(expressions::Sum::new_with_pre_cast(

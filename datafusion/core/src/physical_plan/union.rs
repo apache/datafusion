@@ -42,10 +42,8 @@ use super::{
 };
 use crate::physical_plan::common::get_meet_of_orderings;
 use crate::physical_plan::stream::ObservedStream;
-use crate::{
-    error::Result,
-    physical_plan::{expressions, metrics::BaselineMetrics},
-};
+use crate::physical_plan::{expressions, metrics::BaselineMetrics};
+use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 use tokio::macros::support::thread_rng_n;
 
@@ -244,7 +242,7 @@ impl ExecutionPlan for UnionExec {
 
         warn!("Error in Union: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in Union"
         )))
     }
@@ -418,7 +416,7 @@ impl ExecutionPlan for InterleaveExec {
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
 
-        Err(crate::error::DataFusionError::Execution(format!(
+        Err(DataFusionError::Execution(format!(
             "Partition {partition} not found in InterleaveExec"
         )))
     }

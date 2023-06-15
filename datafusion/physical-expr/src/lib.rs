@@ -37,7 +37,6 @@ mod sort_expr;
 pub mod string_expressions;
 pub mod struct_expressions;
 pub mod tree_node;
-pub mod type_coercion;
 pub mod udf;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
@@ -47,7 +46,6 @@ pub mod window;
 
 // reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
-pub use datafusion_common::from_slice;
 pub use equivalence::{
     project_equivalence_properties, project_ordering_equivalence_properties,
     EquivalenceProperties, EquivalentClass, OrderingEquivalenceProperties,

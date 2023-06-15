@@ -412,13 +412,15 @@ random()
 Rounds a number to the nearest integer.
 
 ```
-round(numeric_expression)
+round(numeric_expression[, decimal_places])
 ```
 
 #### Arguments
 
 - **numeric_expression**: Numeric expression to operate on.
   Can be a constant, column, or function, and any combination of arithmetic operators.
+- **decimal_places**: Optional. The number of decimal places to round to.
+  Defaults to 0.
 
 ### `signum`
 

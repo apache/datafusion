@@ -176,8 +176,8 @@ fn write_files(table_path: &Path, schemas: Vec<Schema>) {
         let mut writer = ArrowWriter::try_new(file, schema.clone(), None).unwrap();
 
         // create mock record batch
-        let ids = Arc::new(Int32Array::from_slice([i as i32]));
-        let names = Arc::new(StringArray::from_slice(["test"]));
+        let ids = Arc::new(Int32Array::from(vec![i as i32]));
+        let names = Arc::new(StringArray::from(vec!["test"]));
         let rec_batch = RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
 
         writer.write(&rec_batch).unwrap();

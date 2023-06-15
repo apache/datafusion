@@ -15,6 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Variable provider
+//! Variable provider for `@name` and `@@name` style runtime values.
 
 pub use datafusion_physical_expr::var_provider::{VarProvider, VarType};

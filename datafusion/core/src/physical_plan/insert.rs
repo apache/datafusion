@@ -21,13 +21,13 @@ use super::expressions::PhysicalSortExpr;
 use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use core::fmt;
+use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::StreamExt;
 use std::any::Any;
@@ -206,7 +206,7 @@ impl ExecutionPlan for InsertExec {
 /// +-------+,
 /// ```
 fn make_count_batch(count: u64) -> RecordBatch {
-    let array = Arc::new(UInt64Array::from_iter_values(vec![count])) as ArrayRef;
+    let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;
 
     RecordBatch::try_from_iter_with_nullable(vec![("count", array, false)]).unwrap()
 }

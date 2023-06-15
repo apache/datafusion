@@ -56,17 +56,21 @@ impl ReaderBuilder {
     /// # Example
     ///
     /// ```
-    /// extern crate apache_avro;
-    ///
     /// use std::fs::File;
     ///
-    /// fn example() -> crate::datafusion::avro_to_arrow::Reader<'static, File> {
+    /// use datafusion::datasource::avro_to_arrow::{Reader, ReaderBuilder};
+    ///
+    /// fn example() -> Reader<'static, File> {
     ///     let file = File::open("test/data/basic.avro").unwrap();
     ///
     ///     // create a builder, inferring the schema with the first 100 records
-    ///     let builder = crate::datafusion::avro_to_arrow::ReaderBuilder::new().read_schema().with_batch_size(100);
+    ///     let builder = ReaderBuilder::new()
+    ///       .read_schema()
+    ///       .with_batch_size(100);
     ///
-    ///     let reader = builder.build::<File>(file).unwrap();
+    ///     let reader = builder
+    ///       .build::<File>(file)
+    ///       .unwrap();
     ///
     ///     reader
     /// }
