@@ -976,6 +976,7 @@ mod tests {
     use crate::physical_plan::joins::SortMergeJoinExec;
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::memory::MemoryExec;
+    use crate::physical_plan::repartition::sort_preserving_repartition::SPRepartitionExec;
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
@@ -2720,6 +2721,41 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_sort_preserved_repartition_rr() -> Result<()> {
+        let schema = create_test_schema()?;
+
+        let sort_exprs1 = vec![sort_expr("nullable_col", &schema)];
+        let source1 = parquet_exec_sorted(&schema, sort_exprs1.clone());
+        let sort1 = sort_exec(sort_exprs1, source1.clone());
+        let repartition = repartition_exec(sort1);
+        let repartition_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let preserving_sort_exprs = vec![sort_expr("nullable_col", &schema)];
+        let spr = sort_preserving_repartition_exec_round_robin(
+            repartition_sort_exprs.clone(),
+            source1,
+        );
+        let spr =
+            sort_preserving_repartition_exec_round_robin(repartition_sort_exprs, spr);
+        let physical_plan = sort_preserving_merge_exec(preserving_sort_exprs, spr);
+
+        let expected_input = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortPreservingRepartitionExec: [nullable_col@0 ASC], partitioning=RoundRobinBatch(10), input_partitions=10",
+            "    SortPreservingRepartitionExec: [nullable_col@0 ASC], partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
+        ];
+
+        let expected_optimized = vec![
+            "SortPreservingMergeExec: [nullable_col@0 ASC]",
+            "  SortPreservingRepartitionExec: [nullable_col@0 ASC], partitioning=RoundRobinBatch(10), input_partitions=10",
+            "    SortPreservingRepartitionExec: [nullable_col@0 ASC], partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
+        ];
+        assert_optimized!(expected_input, expected_optimized, physical_plan);
+        Ok(())
+    }
+
     /// make PhysicalSortExpr with default options
     fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
         sort_expr_options(name, schema, SortOptions::default())
@@ -2888,6 +2924,20 @@ mod tests {
                 *join_type,
                 vec![SortOptions::default(); join_on.len()],
                 false,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn sort_preserving_repartition_exec_round_robin(
+        sort_expr: Vec<PhysicalSortExpr>,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            SPRepartitionExec::try_new(
+                sort_expr,
+                input,
+                Partitioning::RoundRobinBatch(10),
             )
             .unwrap(),
         )
