@@ -22,23 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn non_aggregated_correlated_scalar_subquery_with_limit() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 2) as t2_int from t1";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let err = dataframe.into_optimized_plan().err().unwrap();
-
-    assert_eq!(
-        r#"Context("check_analyzed_plan", Plan("Correlated scalar subquery must be aggregated to return at most one row"))"#,
-        &format!("{err:?}")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn non_aggregated_correlated_scalar_subquery_with_single_row() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
