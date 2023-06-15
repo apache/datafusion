@@ -155,8 +155,11 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        self.aggregate.supports_bounded_execution()
-            && !self.window_frame.end_bound.is_unbounded()
+        if let Ok(acc) = self.aggregate.create_sliding_accumulator() {
+            acc.supports_retract_batch() && !self.window_frame.end_bound.is_unbounded()
+        } else {
+            false
+        }
     }
 }
 
