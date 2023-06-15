@@ -328,3 +328,26 @@ Sort: customer.c_custkey ASC NULLS LAST
 --------------------Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]
 ----------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
 
+# correlated_where_in
+query TT
+explain select o_orderkey from orders
+where o_orderstatus in (
+    select l_linestatus from lineitem where l_orderkey = orders.o_orderkey
+);
+----
+logical_plan
+Projection: orders.o_orderkey
+--LeftSemi Join: orders.o_orderstatus = __correlated_sq_6.l_linestatus, orders.o_orderkey = __correlated_sq_6.l_orderkey
+----TableScan: orders projection=[o_orderkey, o_orderstatus]
+----SubqueryAlias: __correlated_sq_6
+------Projection: lineitem.l_linestatus, lineitem.l_orderkey
+--------TableScan: lineitem projection=[l_orderkey, l_linestatus]
+
+query I
+select o_orderkey from orders
+where o_orderstatus in (
+    select l_linestatus from lineitem where l_orderkey = orders.o_orderkey
+);
+----
+3
+2

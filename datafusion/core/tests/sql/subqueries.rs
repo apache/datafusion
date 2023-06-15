@@ -22,53 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn correlated_where_in() -> Result<()> {
-    let orders = r#"1,3691,O,194029.55,1996-01-02,5-LOW,Clerk#000000951,0,
-65,1627,P,99763.79,1995-03-18,1-URGENT,Clerk#000000632,0,
-"#;
-    let lineitems = r#"1,15519,785,1,17,24386.67,0.04,0.02,N,O,1996-03-13,1996-02-12,1996-03-22,DELIVER IN PERSON,TRUCK,
-1,6731,732,2,36,58958.28,0.09,0.06,N,O,1996-04-12,1996-02-28,1996-04-20,TAKE BACK RETURN,MAIL,
-65,5970,481,1,26,48775.22,0.03,0.03,A,F,1995-04-20,1995-04-25,1995-05-13,NONE,TRUCK,
-65,7382,897,2,22,28366.36,0,0.05,N,O,1995-07-17,1995-06-04,1995-07-19,COLLECT COD,FOB,
-"#;
-
-    let ctx = SessionContext::new();
-    register_tpch_csv_data(&ctx, "orders", orders).await?;
-    register_tpch_csv_data(&ctx, "lineitem", lineitems).await?;
-
-    let sql = r#"select o_orderkey from orders
-where o_orderstatus in (
-    select l_linestatus from lineitem where l_orderkey = orders.o_orderkey
-);"#;
-
-    // assert plan
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let plan = dataframe.into_optimized_plan().unwrap();
-    let actual = format!("{}", plan.display_indent());
-
-    let expected = "Projection: orders.o_orderkey\
-    \n  LeftSemi Join: orders.o_orderstatus = __correlated_sq_1.l_linestatus, orders.o_orderkey = __correlated_sq_1.l_orderkey\
-    \n    TableScan: orders projection=[o_orderkey, o_orderstatus]\
-    \n    SubqueryAlias: __correlated_sq_1\
-    \n      Projection: lineitem.l_linestatus, lineitem.l_orderkey\
-    \n        TableScan: lineitem projection=[l_orderkey, l_linestatus]";
-    assert_eq!(actual, expected);
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------+",
-        "| o_orderkey |",
-        "+------------+",
-        "| 1          |",
-        "+------------+",
-    ];
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn exists_subquery_with_same_table() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
