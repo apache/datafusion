@@ -60,6 +60,8 @@ jobs:
         run: du -s -h $GITHUB_WORKSPACE/* || true
       - name: Check disk space on /
         run: du -s -h / || true
+      - name: Check disk space on /*
+        run: du -s -h /* || true
       - name: Run tests (excluding doctests), ignoring faulures
         run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions || true
       - name: Check disk space in $GITHUB_WORKSPACE
