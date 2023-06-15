@@ -543,3 +543,17 @@ LeftSemi Join: t0.t0_id = __correlated_sq_20.t1_id, t0.t0_name = __correlated_sq
 ----------TableScan: t1 projection=[t1_id]
 --------SubqueryAlias: y
 ----------TableScan: t2 projection=[t2_id, t2_name]
+
+
+#support_order_by_correlated_columns
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id >= t1_id order by t1_id)
+----
+logical_plan
+Filter: EXISTS (<subquery>)
+--Subquery:
+----Sort: outer_ref(t1.t1_id) ASC NULLS LAST
+------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+--------Filter: t2.t2_id >= outer_ref(t1.t1_id)
+----------TableScan: t2
+--TableScan: t1 projection=[t1_id, t1_name]
