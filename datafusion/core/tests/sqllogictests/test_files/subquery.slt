@@ -23,7 +23,14 @@
 #############
 ## Setup test data table
 #############
-# two tables for subquery
+# there tables for subquery
+statement ok
+CREATE TABLE t0(t0_id INT, t0_name TEXT, t0_int INT) AS VALUES
+(11, 'o', 6),
+(22, 'p', 7),
+(33, 'q', 8),
+(44, 'r', 9);
+
 statement ok
 CREATE TABLE t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
 (11, 'a', 1),
@@ -494,3 +501,16 @@ Filter: EXISTS (<subquery>)
 ----------Filter: outer_ref(t1.t1_name) = t2.t2_name
 ------------TableScan: t2
 --TableScan: t1 projection=[t1_id, t1_name]
+
+#support_join_correlated_columns
+query TT
+explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN t2 ON(t1.t1_id = t2.t2_id and t1.t1_name = t0.t0_name))
+----
+logical_plan
+Filter: EXISTS (<subquery>)
+--Subquery:
+----Projection: Int64(1)
+------Inner Join:  Filter: t1.t1_id = t2.t2_id AND t1.t1_name = outer_ref(t0.t0_name)
+--------TableScan: t1
+--------TableScan: t2
+--TableScan: t0 projection=[t0_id, t0_name]
