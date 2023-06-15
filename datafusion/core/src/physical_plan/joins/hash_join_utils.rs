@@ -30,13 +30,13 @@ use datafusion_physical_expr::intervals::Interval;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use hashbrown::raw::RawTable;
-use smallvec::SmallVec;
 
 use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use datafusion_common::Result;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
-//
+// The indices (values) are stored in a separate chained list based on (index, next).
+// The first item in the list is reserved.
 // Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
 // to put the indices in a certain bucket.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
@@ -47,9 +47,13 @@ use datafusion_common::Result;
 // but the values don't match. Those are checked in the [equal_rows] macro
 // TODO: speed up collision check and move away from using a hashbrown HashMap
 // https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
+pub struct JoinHashMap(pub RawTable<(u64, u64)>, pub Vec<u64>);
 
 impl JoinHashMap {
+    pub(crate) fn with_capacity(capacity: usize) -> JoinHashMap {
+        JoinHashMap(RawTable::with_capacity(capacity), vec![0; capacity + 1])
+    } 
+
     /// In this implementation, the scale_factor variable determines how conservative the shrinking strategy is.
     /// The value of scale_factor is set to 4, which means the capacity will be reduced by 25%
     /// when necessary. You can adjust the scale_factor value to achieve the desired
@@ -67,10 +71,11 @@ impl JoinHashMap {
             let new_capacity = (capacity * (scale_factor - 1)) / scale_factor;
             self.0.shrink_to(new_capacity, |(hash, _)| *hash)
         }
+        // todo handle chained list
     }
 
     pub(crate) fn size(&self) -> usize {
-        self.0.allocation_info().1.size()
+        self.0.allocation_info().1.size() + self.1.capacity() * 16 + 16
     }
 }
 
@@ -290,7 +295,6 @@ pub mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col, lit};
-    use smallvec::smallvec;
     use std::sync::Arc;
 
     /// Filter expr for a + b > c + 10 AND a + b < c + 100
@@ -628,14 +632,14 @@ pub mod tests {
     #[test]
     fn test_shrink_if_necessary() {
         let scale_factor = 4;
-        let mut join_hash_map = JoinHashMap(RawTable::with_capacity(100));
+        let mut join_hash_map = JoinHashMap::with_capacity(100);
         let data_size = 2000;
         let deleted_part = 3 * data_size / 4;
         // Add elements to the JoinHashMap
         for hash_value in 0..data_size {
             join_hash_map.0.insert(
                 hash_value,
-                (hash_value, smallvec![hash_value]),
+                (hash_value, hash_value),
                 |(hash, _)| *hash,
             );
         }

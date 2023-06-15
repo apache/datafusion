@@ -43,8 +43,6 @@ use arrow::{
     util::bit_util,
 };
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use hashbrown::raw::RawTable;
-use smallvec::smallvec;
 use std::fmt;
 use std::sync::Arc;
 use std::task::Poll;
@@ -518,9 +516,9 @@ async fn collect_left_input(
     reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
 
-    let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
+    let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
-    let mut offset = 0;
+    let mut offset = 1;
     for batch in batches.iter() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
@@ -565,14 +563,20 @@ pub fn update_hash(
         let item = hash_map
             .0
             .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-        if let Some((_, indices)) = item {
-            indices.push((row + offset) as u64);
+        if let Some((_, index)) = item {
+            // Already exists: add index to next array
+            let prev_index = *index;
+            *index = (row + offset) as u64;
+            // update chained Vec
+            hash_map.1[*index as usize] = prev_index;
+
         } else {
             hash_map.0.insert(
                 *hash_value,
-                (*hash_value, smallvec![(row + offset) as u64]),
+                (*hash_value, (row + offset) as u64),
                 |(hash, _)| *hash,
             );
+            // chained list is initalized with 0
         }
     }
     Ok(())
@@ -727,13 +731,13 @@ pub fn build_equal_condition_join_indices(
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, indices)) = build_hashmap
+        if let Some((_, index)) = build_hashmap
             .0
             .get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
-            for &i in indices {
-                // Check hash collisions
-                let offset_build_index = i as usize - offset_value;
+            let mut i = *index;
+            loop {
+                let offset_build_index = i as usize - offset_value - 1;
                 // Check hash collisions
                 if equal_rows(
                     offset_build_index,
@@ -744,6 +748,11 @@ pub fn build_equal_condition_join_indices(
                 )? {
                     build_indices.append(offset_build_index as u64);
                     probe_indices.append(row as u32);
+                }
+                if build_hashmap.1[i as usize] != 0 {
+                    i = build_hashmap.1[i as usize];
+                } else {
+                    break;
                 }
             }
         }
@@ -1258,11 +1267,11 @@ mod tests {
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
-    use smallvec::smallvec;
 
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
+    use hashbrown::raw::RawTable;
 
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
@@ -2616,8 +2625,10 @@ mod tests {
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
         // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
+
+        let next = vec![0, 2, 0];
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
@@ -2625,7 +2636,7 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (JoinHashMap(hashmap_left), left);
+        let left_data = (JoinHashMap(hashmap_left, next), left);
         let (l, r) = build_equal_condition_join_indices(
             &left_data.0,
             &left_data.1,

@@ -702,8 +702,30 @@ fn prune_hash_values(
             .0
             .get_mut(*hash_value, |(hash, _)| hash_value == hash)
         {
-            separation_chain.retain(|n| !index_set.contains(n));
-            if separation_chain.is_empty() {
+            let mut size = 0;
+            let mut i = separation_chain;
+            let mut prev_i = i;
+
+            let mut keep = false;
+
+            // TODO
+            // loop {
+            //     if !index_set.contains(i) {
+            //         if !keep {
+            //             *prev_i = i;
+            //         }
+            //         // retain this value
+            //         keep = true;
+            //         size += 1;
+            //     }
+            //     // drop value
+            //     *prev_i = i;
+
+            //     if *i == 0 {
+            //         break;
+            //     }
+            // }
+            if size == 0 {
                 hashmap
                     .0
                     .remove_entry(*hash_value, |(hash, _)| hash_value == hash);
@@ -1076,7 +1098,7 @@ impl OneSideHashJoiner {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
             on,
-            hashmap: JoinHashMap(RawTable::with_capacity(0)),
+            hashmap: JoinHashMap::with_capacity(0),
             row_hash_values: VecDeque::new(),
             hashes_buffer: vec![],
             visited_rows: HashSet::new(),
