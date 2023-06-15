@@ -22,45 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn uncorrelated_scalar_subquery_with_limit0() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let plan = dataframe.into_optimized_plan()?;
-
-    let expected = vec![
-        "Projection: t1.t1_id, __scalar_sq_1.t2_id AS t2_id [t1_id:UInt32;N, t2_id:UInt32;N]",
-        "  Left Join:  [t1_id:UInt32;N, t2_id:UInt32;N]",
-        "    TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
-        "    EmptyRelation [t2_id:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+-------+",
-        "| t1_id | t2_id |",
-        "+-------+-------+",
-        "| 11    |       |",
-        "| 22    |       |",
-        "| 33    |       |",
-        "| 44    |       |",
-        "+-------+-------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn support_union_subquery() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 

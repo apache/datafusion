@@ -644,3 +644,22 @@ LeftSemi Join: t1.t1_id = __correlated_sq_33.t2_id
 --SubqueryAlias: __correlated_sq_33
 ----Limit: skip=0, fetch=10
 ------TableScan: t2 projection=[t2_id], fetch=10
+
+
+#uncorrelated_scalar_subquery_with_limit0
+query TT
+explain SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
+----
+logical_plan
+Projection: t1.t1_id, __scalar_sq_18.t2_id AS t2_id
+--Left Join:
+----TableScan: t1 projection=[t1_id]
+----EmptyRelation
+
+query II rowsort
+SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
+----
+11 NULL
+22 NULL
+33 NULL
+44 NULL
