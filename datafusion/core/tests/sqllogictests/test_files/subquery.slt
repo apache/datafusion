@@ -585,3 +585,17 @@ SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id
 11 a
 22 b
 44 d
+
+#exists_subquery_with_limit0
+#de-correlated, limit is removed and replaced with EmptyRelation
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
+----
+logical_plan
+LeftSemi Join: t1.t1_id = __correlated_sq_27.t2_id
+--TableScan: t1 projection=[t1_id, t1_name]
+--EmptyRelation
+
+query IT rowsort
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
+----
