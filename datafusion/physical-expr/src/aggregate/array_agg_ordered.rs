@@ -478,7 +478,6 @@ mod tests {
     use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
     use arrow_array::{Array, ArrayRef, Int64Array};
     use arrow_schema::SortOptions;
-    use datafusion_common::from_slice::FromSlice;
     use datafusion_common::utils::get_row_at_idx;
     use datafusion_common::{Result, ScalarValue};
     use std::sync::Arc;
@@ -486,8 +485,8 @@ mod tests {
     #[test]
     fn test_merge_asc() -> Result<()> {
         let lhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2])),
-            Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])),
+            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2])),
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
         ];
         let n_row = lhs_arrays[0].len();
         let lhs_orderings = (0..n_row)
@@ -495,8 +494,8 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
 
         let rhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2])),
-            Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])),
+            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2])),
+            Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])),
         ];
         let n_row = rhs_arrays[0].len();
         let rhs_orderings = (0..n_row)
@@ -513,17 +512,17 @@ mod tests {
             },
         ];
 
-        let lhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let lhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef;
         let lhs_vals = (0..lhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
             .collect::<Result<Vec<_>>>()?;
 
-        let rhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let rhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4])) as ArrayRef;
         let rhs_vals = (0..rhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
             .collect::<Result<Vec<_>>>()?;
         let expected =
-            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
+            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
 
         let merged_vals = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
@@ -539,8 +538,8 @@ mod tests {
     #[test]
     fn test_merge_desc() -> Result<()> {
         let lhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from_slice([2, 1, 1, 0, 0])),
-            Arc::new(Int64Array::from_slice([4, 3, 2, 1, 0])),
+            Arc::new(Int64Array::from(vec![2, 1, 1, 0, 0])),
+            Arc::new(Int64Array::from(vec![4, 3, 2, 1, 0])),
         ];
         let n_row = lhs_arrays[0].len();
         let lhs_orderings = (0..n_row)
@@ -548,8 +547,8 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
 
         let rhs_arrays: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from_slice([2, 1, 1, 0, 0])),
-            Arc::new(Int64Array::from_slice([4, 3, 2, 1, 0])),
+            Arc::new(Int64Array::from(vec![2, 1, 1, 0, 0])),
+            Arc::new(Int64Array::from(vec![4, 3, 2, 1, 0])),
         ];
         let n_row = rhs_arrays[0].len();
         let rhs_orderings = (0..n_row)
@@ -567,17 +566,17 @@ mod tests {
         ];
 
         // Values (which will be merged) doesn't have to be ordered.
-        let lhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 1, 2])) as ArrayRef;
+        let lhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 1, 2])) as ArrayRef;
         let lhs_vals = (0..lhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
             .collect::<Result<Vec<_>>>()?;
 
-        let rhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 1, 2])) as ArrayRef;
+        let rhs_vals_arr = Arc::new(Int64Array::from(vec![0, 1, 2, 1, 2])) as ArrayRef;
         let rhs_vals = (0..rhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
             .collect::<Result<Vec<_>>>()?;
         let expected =
-            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
+            Arc::new(Int64Array::from(vec![0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
 
         let merged_vals = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],

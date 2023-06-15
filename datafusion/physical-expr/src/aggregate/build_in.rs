@@ -138,6 +138,11 @@ pub fn create_aggregate_expr(
             }
         }
         (AggregateFunction::ArrayAgg, true) => {
+            if !ordering_req.is_empty() {
+                return Err(DataFusionError::NotImplemented(
+                    "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available".to_string(),
+                ));
+            }
             Arc::new(expressions::DistinctArrayAgg::new(
                 input_phy_exprs[0].clone(),
                 name,
