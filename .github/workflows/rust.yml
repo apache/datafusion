@@ -55,20 +55,20 @@ jobs:
         with:
           rust-version: stable
       - name: Check disk space in $GITHUB_WORKSPACE
-        run: du -s -h $GITHUB_WORKSPACE
+        run: du -s -h $GITHUB_WORKSPACE || true
       - name: Check disk space in $GITHUB_WORKSPACE/*
-        run: du -s -h $GITHUB_WORKSPACE/*
+        run: du -s -h $GITHUB_WORKSPACE/* || true
       - name: Check disk space on /
-        run: du -s -h /
+        run: du -s -h / || true
       - name: Run tests (excluding doctests), ignoring faulures
         run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions || true
       - name: Check disk space in $GITHUB_WORKSPACE
-        run: du -s -h $GITHUB_WORKSPACE
+        run: du -s -h $GITHUB_WORKSPACE || true
       - name: Check disk space in $GITHUB_WORKSPACE/*
-        run: du -s -h $GITHUB_WORKSPACE/*
+        run: du -s -h $GITHUB_WORKSPACE/* || true
       - name: Check disk space on /
-        run: du -s -h /
-      - name: List all files afterto run
-        run: find /
+        run: du -s -h / || true
+      - name: List all files after to run
+        run: find / || true
       - name: Verify Working Directory Clean
         run: git diff --exit-code
