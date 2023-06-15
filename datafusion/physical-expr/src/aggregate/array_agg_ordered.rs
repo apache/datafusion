@@ -28,6 +28,7 @@ use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
+use itertools::izip;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -183,6 +184,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         // However, values inside are ordering expression results
         let agg_orderings = &states[1];
         if agg_orderings.as_any().is::<ListArray>() {
+            let mut partition_values = vec![];
+            let mut partition_ordering_values = vec![];
             for index in 0..agg_orderings.len() {
                 let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
                 let other_ordering_values =
@@ -190,26 +193,26 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 // First entry in the state is Array_agg result
                 let array_agg_res = ScalarValue::try_from_array(array_agg_values, index)?;
                 if let ScalarValue::List(Some(other_values), _) = array_agg_res {
-                    let sort_options = self
-                        .ordering_req
-                        .iter()
-                        .map(|sort_expr| sort_expr.options)
-                        .collect::<Vec<_>>();
-                    let (new_values, new_ordering_values) = merge_ordered_arrays(
-                        &self.values,
-                        &other_values,
-                        &self.ordering_values,
-                        &other_ordering_values,
-                        &sort_options,
-                    )?;
-                    self.values = new_values;
-                    self.ordering_values = new_ordering_values;
+                    partition_values.push(other_values);
+                    partition_ordering_values.push(other_ordering_values);
                 } else {
                     return Err(DataFusionError::Internal(
                         "array_agg state must be list!".into(),
                     ));
                 }
             }
+            let sort_options = self
+                .ordering_req
+                .iter()
+                .map(|sort_expr| sort_expr.options)
+                .collect::<Vec<_>>();
+            let (merged_values, merged_ordering_values) = merge_ordered_arrays(
+                &partition_values,
+                &partition_ordering_values,
+                &sort_options,
+            )?;
+            self.values = merged_values;
+            self.ordering_values = merged_ordering_values;
         } else {
             return Err(DataFusionError::Execution(
                 "Expects to receive list array".to_string(),
@@ -305,48 +308,183 @@ impl OrderSensitiveArrayAggAccumulator {
 }
 
 fn merge_ordered_arrays(
-    lhs_values: &[ScalarValue],
-    rhs_values: &[ScalarValue],
-    lhs_ordering: &[Vec<ScalarValue>],
-    rhs_ordering: &[Vec<ScalarValue>],
+    values: &[Vec<ScalarValue>],
+    ordering_values: &[Vec<Vec<ScalarValue>>],
     sort_options: &[SortOptions],
 ) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
-    if (lhs_values.len() != lhs_ordering.len()) | (rhs_values.len() != rhs_ordering.len())
+    if values.len() != ordering_values.len()
+        || values
+            .iter()
+            .zip(ordering_values.iter())
+            .any(|(vals, ordering_vals)| vals.len() != ordering_vals.len())
     {
         return Err(DataFusionError::Execution(
             "Expects lhs arguments and/or rhs arguments to have same size".to_string(),
         ));
     }
-    let mut lidx = 0;
-    let mut ridx = 0;
-    let lend = lhs_values.len();
-    let rend = rhs_values.len();
-    let mut new_values = vec![];
-    let mut new_ordering_values = vec![];
+    let n_branch = values.len();
+    let mut indices = vec![0_usize; n_branch];
+    let end_indices = (0..n_branch)
+        .map(|idx| values[idx].len())
+        .collect::<Vec<_>>();
+    let mut merged_values = vec![];
+    let mut merged_ordering_values = vec![];
     // Create comparator to decide insertion order of right and left arrays
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| -> Result<bool> {
         let cmp = compare_rows(current, target, sort_options)?;
         Ok(cmp.is_lt())
     };
-    while lidx < lend || ridx < rend {
-        if lidx == lend {
-            new_values.extend(rhs_values[ridx..].to_vec());
-            new_ordering_values.extend(rhs_ordering[ridx..].to_vec());
-            ridx = rend;
-        } else if ridx == rend {
-            new_values.extend(lhs_values[lidx..].to_vec());
-            new_ordering_values.extend(lhs_ordering[lidx..].to_vec());
-            lidx = lend;
-        } else if compare_fn(&lhs_ordering[lidx], &rhs_ordering[ridx])? {
-            new_values.push(lhs_values[lidx].clone());
-            new_ordering_values.push(lhs_ordering[lidx].clone());
-            lidx += 1;
+
+    loop {
+        let mut branch_idx = None;
+        let mut min_ordering = None;
+        for (idx, end_idx, ordering, branch_idxx) in izip!(
+            indices.iter(),
+            end_indices.iter(),
+            ordering_values.iter(),
+            0..n_branch
+        ) {
+            if idx == end_idx {
+                continue;
+            }
+            let ordering_row = &ordering[*idx];
+            let mut reset = false;
+            if let Some(min_ordering) = min_ordering {
+                if compare_fn(ordering_row, min_ordering)? {
+                    reset = true;
+                }
+            } else {
+                reset = true;
+            }
+            if reset {
+                min_ordering = Some(ordering_row);
+                branch_idx = Some(branch_idxx);
+            }
+        }
+
+        if let Some(branch_idx) = branch_idx {
+            let row_idx = (&indices)[branch_idx];
+            merged_values.push(values[branch_idx][row_idx].clone());
+            merged_ordering_values.push(ordering_values[branch_idx][row_idx].clone());
+            indices[branch_idx] += 1;
         } else {
-            new_values.push(rhs_values[ridx].clone());
-            new_ordering_values.push(rhs_ordering[ridx].clone());
-            ridx += 1;
+            // All branches consumed exit from the loop
+            break;
         }
     }
 
-    Ok((new_values, new_ordering_values))
+    Ok((merged_values, merged_ordering_values))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::aggregate::array_agg_ordered::merge_ordered_arrays;
+    use arrow_array::{Array, ArrayRef, Int64Array};
+    use arrow_schema::SortOptions;
+    use datafusion_common::from_slice::FromSlice;
+    use datafusion_common::utils::get_row_at_idx;
+    use datafusion_common::{Result, ScalarValue};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_merge_asc() -> Result<()> {
+        let lhs_arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2])),
+            Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])),
+        ];
+        let n_row = lhs_arrays[0].len();
+        let lhs_orderings = (0..n_row)
+            .map(|idx| get_row_at_idx(&lhs_arrays, idx))
+            .collect::<Result<Vec<_>>>()?;
+
+        let rhs_arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2])),
+            Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])),
+        ];
+        let n_row = rhs_arrays[0].len();
+        let rhs_orderings = (0..n_row)
+            .map(|idx| get_row_at_idx(&rhs_arrays, idx))
+            .collect::<Result<Vec<_>>>()?;
+        let sort_options = vec![
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        ];
+
+        let lhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let lhs_vals = (0..lhs_vals_arr.len())
+            .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
+            .collect::<Result<Vec<_>>>()?;
+
+        let rhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let rhs_vals = (0..rhs_vals_arr.len())
+            .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
+            .collect::<Result<Vec<_>>>()?;
+        let expected =
+            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
+        let (merged_vals, _) = merge_ordered_arrays(
+            &[lhs_vals, rhs_vals],
+            &[lhs_orderings, rhs_orderings],
+            &sort_options,
+        )?;
+        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        assert_eq!(&merged_vals, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_desc() -> Result<()> {
+        let lhs_arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from_slice([2, 1, 1, 0, 0])),
+            Arc::new(Int64Array::from_slice([4, 3, 2, 1, 0])),
+        ];
+        let n_row = lhs_arrays[0].len();
+        let lhs_orderings = (0..n_row)
+            .map(|idx| get_row_at_idx(&lhs_arrays, idx))
+            .collect::<Result<Vec<_>>>()?;
+
+        let rhs_arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from_slice([2, 1, 1, 0, 0])),
+            Arc::new(Int64Array::from_slice([4, 3, 2, 1, 0])),
+        ];
+        let n_row = rhs_arrays[0].len();
+        let rhs_orderings = (0..n_row)
+            .map(|idx| get_row_at_idx(&rhs_arrays, idx))
+            .collect::<Result<Vec<_>>>()?;
+        let sort_options = vec![
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ];
+
+        let lhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let lhs_vals = (0..lhs_vals_arr.len())
+            .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
+            .collect::<Result<Vec<_>>>()?;
+
+        let rhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let rhs_vals = (0..rhs_vals_arr.len())
+            .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
+            .collect::<Result<Vec<_>>>()?;
+        let expected =
+            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
+        let (merged_vals, _) = merge_ordered_arrays(
+            &[lhs_vals, rhs_vals],
+            &[lhs_orderings, rhs_orderings],
+            &sort_options,
+        )?;
+        let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+        assert_eq!(&merged_vals, &expected);
+        Ok(())
+    }
 }
