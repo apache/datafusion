@@ -55,7 +55,7 @@ jobs:
         with:
           rust-version: stable
       - name: Print environment
-        run: setenv
+        run: set
       - name: Check disk space in $GITHUB_WORKSPACE
         run: du -s -h $GITHUB_WORKSPACE || true
       - name: Check disk space in $GITHUB_WORKSPACE/*
