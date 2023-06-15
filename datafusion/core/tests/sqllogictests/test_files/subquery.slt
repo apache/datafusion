@@ -343,11 +343,25 @@ Projection: orders.o_orderkey
 ------Projection: lineitem.l_linestatus, lineitem.l_orderkey
 --------TableScan: lineitem projection=[l_orderkey, l_linestatus]
 
-query I
+query I rowsort
 select o_orderkey from orders
 where o_orderstatus in (
     select l_linestatus from lineitem where l_orderkey = orders.o_orderkey
 );
 ----
-3
 2
+3
+
+#exists_subquery_with_same_table
+#Subquery and outer query refer to the same table.
+#It will not be rewritten to join because it is not a correlated subquery.
+query TT
+explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)
+----
+logical_plan
+Filter: EXISTS (<subquery>)
+--Subquery:
+----Projection: t1.t1_int
+------Filter: t1.t1_id > t1.t1_int
+--------TableScan: t1
+--TableScan: t1 projection=[t1_id, t1_name, t1_int]
