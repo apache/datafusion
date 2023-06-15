@@ -1024,6 +1024,9 @@ fn aggregate_expressions(
                         })
                     })
                     .collect::<Vec<_>>();
+                // In partial mode, append ordering_requirements to the expressions results
+                // Ordering_requirement columns are used by subsequent executors to satisfy required ordering
+                // for the `AggregateMode::FinalPartitioned`, `AggregateMode::Final` modes.
                 if matches!(mode, AggregateMode::Partial) {
                     if let Some(ordering_req) = agg.order_bys() {
                         let ordering_exprs = ordering_req
