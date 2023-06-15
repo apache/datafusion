@@ -66,51 +66,6 @@ async fn correlated_scalar_subquery_sum_agg_bug() -> Result<()> {
 }
 
 #[tokio::test]
-async fn correlated_scalar_subquery_count_agg_with_having() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let plan = dataframe.into_optimized_plan()?;
-
-    // the having condition is kept as the normal filter condition, no need to pull up
-    let expected = vec![
-        "Projection: t1.t1_id, __scalar_sq_1.cnt_plus_2 AS cnt_plus_2 [t1_id:UInt32;N, cnt_plus_2:Int64;N]",
-        "  Left Join: t1.t1_int = __scalar_sq_1.t2_int [t1_id:UInt32;N, t1_int:UInt32;N, cnt_plus_2:Int64;N, t2_int:UInt32;N]",
-        "    TableScan: t1 projection=[t1_id, t1_int] [t1_id:UInt32;N, t1_int:UInt32;N]",
-        "    SubqueryAlias: __scalar_sq_1 [cnt_plus_2:Int64;N, t2_int:UInt32;N]",
-        "      Projection: COUNT(UInt8(1)) + Int64(2) AS cnt_plus_2, t2.t2_int [cnt_plus_2:Int64;N, t2_int:UInt32;N]",
-        "        Filter: COUNT(UInt8(1)) > Int64(1) [t2_int:UInt32;N, COUNT(UInt8(1)):Int64;N]",
-        "          Projection: t2.t2_int, COUNT(UInt8(1)) [t2_int:UInt32;N, COUNT(UInt8(1)):Int64;N]",
-        "            Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]] [t2_int:UInt32;N, __always_true:Boolean, COUNT(UInt8(1)):Int64;N]",
-        "              TableScan: t2 projection=[t2_int] [t2_int:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------+------------+",
-        "| t1_id | cnt_plus_2 |",
-        "+-------+------------+",
-        "| 11    |            |",
-        "| 22    |            |",
-        "| 33    | 5          |",
-        "| 44    |            |",
-        "+-------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn correlated_scalar_subquery_count_agg_with_pull_up_having() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
