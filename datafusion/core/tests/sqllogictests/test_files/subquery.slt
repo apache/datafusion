@@ -514,3 +514,17 @@ Filter: EXISTS (<subquery>)
 --------TableScan: t1
 --------TableScan: t2
 --TableScan: t0 projection=[t0_id, t0_name]
+
+#subquery_contains_join_contains_correlated_columns
+query TT
+explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as t2 ON(t1.t1_id = t2.t2_id ))
+----
+logical_plan
+LeftSemi Join: t0.t0_name = __correlated_sq_19.t2_name
+--TableScan: t0 projection=[t0_id, t0_name]
+--SubqueryAlias: __correlated_sq_19
+----Projection: t2.t2_name
+------Inner Join: t1.t1_id = t2.t2_id
+--------TableScan: t1 projection=[t1_id]
+--------SubqueryAlias: t2
+----------TableScan: t2 projection=[t2_id, t2_name]
