@@ -17,12 +17,13 @@
 
 //! Partition evaluation module
 
-use crate::window::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
+
+use crate::window_state::WindowAggState;
 
 /// Partition evaluator for Window Functions
 ///
