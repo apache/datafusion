@@ -37,7 +37,6 @@ use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::Expr::Wildcard;
 use datafusion_expr::{
     avg, col, count, exists, expr, in_subquery, lit, max, out_ref_col, scalar_subquery,
@@ -234,7 +233,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
     // https://github.com/apache/arrow-datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
-    // for compare difference betwwen sql and df logical plan, we need to create a new SessionContext here
+    // for compare difference between sql and df logical plan, we need to create a new SessionContext here
     let ctx = create_join_context()?;
     let df_results = ctx
         .table("t1")
@@ -244,8 +243,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
-                    .aggregate(vec![], vec![count(lit(COUNT_STAR_EXPANSION))])?
-                    .select(vec![count(lit(COUNT_STAR_EXPANSION))])?
+                    .aggregate(vec![], vec![count(Wildcard)])?
+                    .select(vec![col(count(Wildcard).to_string())])?
                     .into_unoptimized_plan(),
             ))
             .gt(lit(ScalarValue::UInt8(Some(0)))),
@@ -267,7 +266,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 #[tokio::test]
 async fn describe() -> Result<()> {
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+    let testdata = parquet_test_data();
     ctx.register_parquet(
         "alltypes_tiny_pages",
         &format!("{testdata}/alltypes_tiny_pages.parquet"),
