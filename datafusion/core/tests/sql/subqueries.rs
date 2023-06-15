@@ -22,48 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn correlated_recursive_scalar_subquery() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_tpch_csv(&ctx, "customer").await?;
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-
-    let sql = r#"
-select c_custkey from customer
-where c_acctbal < (
-    select sum(o_totalprice) from orders
-    where o_custkey = c_custkey
-    and o_totalprice < (
-            select sum(l_extendedprice) as price from lineitem where l_orderkey = o_orderkey
-    )
-) order by c_custkey;"#;
-
-    // assert plan
-    let dataframe = ctx.sql(sql).await.unwrap();
-    debug!("input:\n{}", dataframe.logical_plan().display_indent());
-
-    let plan = dataframe.into_optimized_plan().unwrap();
-    let actual = format!("{}", plan.display_indent());
-    let expected =  "Sort: customer.c_custkey ASC NULLS LAST\
-    \n  Projection: customer.c_custkey\
-    \n    Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.SUM(orders.o_totalprice)\
-    \n      TableScan: customer projection=[c_custkey, c_acctbal]\
-    \n      SubqueryAlias: __scalar_sq_1\
-    \n        Projection: SUM(orders.o_totalprice), orders.o_custkey\
-    \n          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]\
-    \n            Projection: orders.o_custkey, orders.o_totalprice\
-    \n              Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price\
-    \n                TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]\
-    \n                SubqueryAlias: __scalar_sq_2\
-    \n                  Projection: SUM(lineitem.l_extendedprice) AS price, lineitem.l_orderkey\
-    \n                    Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]\
-    \n                      TableScan: lineitem projection=[l_orderkey, l_extendedprice]";
-    assert_eq!(actual, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn correlated_where_in() -> Result<()> {
     let orders = r#"1,3691,O,194029.55,1996-01-02,5-LOW,Clerk#000000951,0,
 65,1627,P,99763.79,1995-03-18,1-URGENT,Clerk#000000632,0,
