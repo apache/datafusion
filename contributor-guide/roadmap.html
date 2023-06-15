@@ -283,74 +283,15 @@
 <nav id="bd-toc-nav">
     <ul class="visible nav section-nav flex-column">
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#datafusion">
-   DataFusion
+  <a class="reference internal nav-link" href="#planning-epics">
+   Planning
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     EPIC
+    </span>
+   </code>
+   s
   </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#additional-sql-language-features">
-     Additional SQL Language Features
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#query-optimizer">
-     Query Optimizer
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#datasources">
-     Datasources
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#runtime-infrastructure">
-     Runtime / Infrastructure
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#resource-management">
-     Resource Management
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#python-interface">
-     Python Interface
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#datafusion-cli-datafusion-cli">
-     DataFusion CLI (
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       datafusion-cli
-      </span>
-     </code>
-     )
-    </a>
-   </li>
-  </ul>
- </li>
- <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#ballista">
-   Ballista
-  </a>
-  <ul class="nav section-nav flex-column">
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#ballista-roadmap">
-     Ballista Roadmap
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#move-query-scheduler-into-datafusion">
-     Move query scheduler into DataFusion
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#implement-execution-time-cost-based-optimizations-based-on-statistics">
-     Implement execution-time cost-based optimizations based on statistics
-    </a>
-   </li>
-  </ul>
  </li>
 </ul>
 
@@ -400,113 +341,26 @@ under the License.
 -->
 <section id="roadmap">
 <h1>Roadmap<a class="headerlink" href="#roadmap" title="Permalink to this heading">¶</a></h1>
-<p>This document describes high level goals of the DataFusion and
-Ballista development community. It is not meant to restrict
-possibilities, but rather help newcomers understand the broader
-context of where the community is headed, and inspire
-additional contributions.</p>
-<p>DataFusion and Ballista are part of the <a class="reference external" href="https://arrow.apache.org/">Apache
-Arrow</a> project and governed by the Apache
-Software Foundation governance model. These projects are entirely
-driven by volunteers, and we welcome contributions for items not on
-this roadmap. However, before submitting a large PR, we strongly
-suggest you start a conversation using a github issue or the
-dev&#64;arrow.apache.org mailing list to make review efficient and avoid
-surprises.</p>
-<section id="datafusion">
-<h2>DataFusion<a class="headerlink" href="#datafusion" title="Permalink to this heading">¶</a></h2>
-<p>DataFusion’s goal is to become the embedded query engine of choice
-for new analytic applications, by leveraging the unique features of
-<a class="reference external" href="https://www.rust-lang.org/">Rust</a> and <a class="reference external" href="https://arrow.apache.org/">Apache Arrow</a>
-to provide:</p>
-<ol class="arabic simple">
-<li><p>Best-in-class single node query performance</p></li>
-<li><p>A Declarative SQL query interface compatible with PostgreSQL</p></li>
-<li><p>A Dataframe API, similar to those offered by Pandas and Spark</p></li>
-<li><p>A Procedural API for programmatically creating and running execution plans</p></li>
-<li><p>High performance, data race free, ergonomic extensibility points at at every layer</p></li>
-</ol>
-<section id="additional-sql-language-features">
-<h3>Additional SQL Language Features<a class="headerlink" href="#additional-sql-language-features" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p>Decimal Support <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/122">#122</a></p></li>
-<li><p>Complete support list on <a class="reference external" href="https://github.com/apache/arrow-datafusion/blob/main/README.md#status">status</a></p></li>
-<li><p>Timestamp Arithmetic <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/194">#194</a></p></li>
-<li><p>SQL Parser extension point <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/533">#533</a></p></li>
-<li><p>Support for nested structures (fields, lists, structs) <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/119">#119</a></p></li>
-<li><p>Run all queries from the TPCH benchmark (see <a class="reference external" href="https://github.com/apache/arrow-datafusion/milestone/2">milestone</a> for more details)</p></li>
-</ul>
-</section>
-<section id="query-optimizer">
-<h3>Query Optimizer<a class="headerlink" href="#query-optimizer" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p>More sophisticated cost based optimizer for join ordering</p></li>
-<li><p>Implement advanced query optimization framework (Tokomak) <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/440">#440</a></p></li>
-<li><p>Finer optimizations for group by and aggregate functions</p></li>
-</ul>
-</section>
-<section id="datasources">
-<h3>Datasources<a class="headerlink" href="#datasources" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p>Better support for reading data from remote filesystems (e.g. S3) without caching it locally <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/907">#907</a> <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/1060">#1060</a></p></li>
-<li><p>Improve performances of file format datasources (parallelize file listings, async Arrow readers, file chunk prefetching capability…)</p></li>
-</ul>
-</section>
-<section id="runtime-infrastructure">
-<h3>Runtime / Infrastructure<a class="headerlink" href="#runtime-infrastructure" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p>Migrate to some sort of arrow2 based implementation (see <a class="reference external" href="https://github.com/apache/arrow-datafusion/milestone/3">milestone</a> for more details)</p></li>
-<li><p>Add DataFusion to h2oai/db-benchmark <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/147">#147</a></p></li>
-<li><p>Improve build time <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/348">#348</a></p></li>
-</ul>
-</section>
-<section id="resource-management">
-<h3>Resource Management<a class="headerlink" href="#resource-management" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p>Finer grain control and limit of runtime memory <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/587">#587</a> and CPU usage <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/64">#54</a></p></li>
-</ul>
-</section>
-<section id="python-interface">
-<h3>Python Interface<a class="headerlink" href="#python-interface" title="Permalink to this heading">¶</a></h3>
-<p>TBD</p>
-</section>
-<section id="datafusion-cli-datafusion-cli">
-<h3>DataFusion CLI (<code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code>)<a class="headerlink" href="#datafusion-cli-datafusion-cli" title="Permalink to this heading">¶</a></h3>
-<p>Note: There are some additional thoughts on a datafusion-cli vision on <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues/1096#issuecomment-939418770">#1096</a>.</p>
-<ul class="simple">
-<li><p>Better abstraction between REPL parsing and queries so that commands are separated and handled correctly</p></li>
-<li><p>Connect to the <code class="docutils literal notranslate"><span class="pre">Statistics</span></code> subsystem and have the cli print out more stats for query debugging, etc.</p></li>
-<li><p>Improved error handling for interactive use and shell scripting usage</p></li>
-<li><p>publishing to apt, brew, and possible NuGet registry so that people can use it more easily</p></li>
-<li><p>adopt a shorter name, like dfcli?</p></li>
-</ul>
-</section>
-</section>
-<section id="ballista">
-<h2>Ballista<a class="headerlink" href="#ballista" title="Permalink to this heading">¶</a></h2>
-<p>Ballista is a distributed compute platform based on Apache Arrow and DataFusion. It provides a query scheduler that
-breaks a physical plan into stages and tasks and then schedules tasks for execution across the available executors
-in the cluster.</p>
-<p>Having Ballista as part of the DataFusion codebase helps ensure that DataFusion remains suitable for distributed
-compute. For example, it helps ensure that physical query plans can be serialized to protobuf format and that they
-remain language-agnostic so that executors can be built in languages other than Rust.</p>
-<section id="ballista-roadmap">
-<h3>Ballista Roadmap<a class="headerlink" href="#ballista-roadmap" title="Permalink to this heading">¶</a></h3>
-</section>
-<section id="move-query-scheduler-into-datafusion">
-<h3>Move query scheduler into DataFusion<a class="headerlink" href="#move-query-scheduler-into-datafusion" title="Permalink to this heading">¶</a></h3>
-<p>The Ballista scheduler has some advantages over DataFusion query execution because it doesn’t try to eagerly execute
-the entire query at once but breaks it down into a directionally-acyclic graph (DAG) of stages and executes a
-configurable number of stages and tasks concurrently. It should be possible to push some of this logic down to
-DataFusion so that the same scheduler can be used to scale across cores in-process and across nodes in a cluster.</p>
-</section>
-<section id="implement-execution-time-cost-based-optimizations-based-on-statistics">
-<h3>Implement execution-time cost-based optimizations based on statistics<a class="headerlink" href="#implement-execution-time-cost-based-optimizations-based-on-statistics" title="Permalink to this heading">¶</a></h3>
-<p>After the execution of a query stage, accurate statistics are available for the resulting data. These statistics
-could be leveraged by the scheduler to optimize the query during execution. For example, when performing a hash join
-it is desirable to load the smaller side of the join into memory and in some cases we cannot predict which side will
-be smaller until execution time.</p>
-</section>
+<p>The <a class="reference internal" href="../user-guide/introduction.html"><span class="doc std std-doc">project introduction</span></a> explains the
+overview and goals of DataFusion, and our development efforts largely
+align to that vision.</p>
+<section id="planning-epics">
+<h2>Planning <code class="docutils literal notranslate"><span class="pre">EPIC</span></code>s<a class="headerlink" href="#planning-epics" title="Permalink to this heading">¶</a></h2>
+<p>DataFusion uses <a class="reference external" href="https://github.com/apache/arrow-datafusion/issues">GitHub
+issues</a> to track
+planned work. We collect related tickets using tracking issues labeled
+with <code class="docutils literal notranslate"><span class="pre">[EPIC]</span></code> which contain discussion and links to more detailed items.</p>
+<p>Epics offer a high level roadmap of what the DataFusion
+community is thinking about. The epics are not meant to restrict
+possibilities, but rather help the community see where development is
+headed, align our work, and inspire additional contributions.</p>
+<p>As this project is entirely driven by volunteers, we welcome
+contributions for items not currently covered by epics. However,
+before submitting a large PR, we strongly suggest and request you
+start a conversation using a github issue or the
+<a class="reference external" href="mailto:dev&#37;&#52;&#48;arrow&#46;apache&#46;org">dev<span>&#64;</span>arrow<span>&#46;</span>apache<span>&#46;</span>org</a> mailing list to
+make review efficient and avoid surprises.</p>
+<p><a class="reference external" href="https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+epic">The current list of <code class="docutils literal notranslate"><span class="pre">EPIC</span></code>s can be found here</a>.</p>
 </section>
 </section>
 
