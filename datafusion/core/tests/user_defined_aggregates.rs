@@ -40,7 +40,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::{cast::as_primitive_array, DataFusionError};
+use datafusion_common::{assert_contains, cast::as_primitive_array, DataFusionError};
 
 /// Test to show the contents of the setup
 #[tokio::test]
@@ -58,7 +58,7 @@ async fn test_setup() {
         "| 5.0   | 1970-01-01T00:00:00.000005 |",
         "+-------+----------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
 /// Basic user defined aggregate
@@ -74,7 +74,7 @@ async fn test_udaf() {
         "| 1970-01-01T00:00:00.000019 |",
         "+----------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
     // normal aggregates call update_batch
     assert!(test_state.update_batch());
     assert!(!test_state.retract_batch());
@@ -96,7 +96,7 @@ async fn test_udaf_as_window() {
         "| 1970-01-01T00:00:00.000019 |",
         "+----------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
     // aggregate over the entire window function call update_batch
     assert!(test_state.update_batch());
     assert!(!test_state.retract_batch());
@@ -118,35 +118,23 @@ async fn test_udaf_as_window_with_frame() {
         "| 1970-01-01T00:00:00.000010 |",
         "+----------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
     // user defined aggregates with window frame should be calling retract batch
     assert!(test_state.update_batch());
     assert!(test_state.retract_batch());
 }
 
 /// Ensure that User defined aggregate used as a window function with a window
-/// frame, but that does not implement retract_batch, does not error
+/// frame, but that does not implement retract_batch, returns an error
 #[tokio::test]
 async fn test_udaf_as_window_with_frame_without_retract_batch() {
     let test_state = Arc::new(TestState::new().with_error_on_retract_batch());
 
-    let TestContext { ctx, test_state } = TestContext::new_with_test_state(test_state);
+    let TestContext { ctx, test_state: _ } = TestContext::new_with_test_state(test_state);
     let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
-    // TODO: It is not clear why this is a different value than when retract batch is used
-    let expected = vec![
-        "+----------------------------+",
-        "| time_sum                   |",
-        "+----------------------------+",
-        "| 1970-01-01T00:00:00.000005 |",
-        "| 1970-01-01T00:00:00.000009 |",
-        "| 1970-01-01T00:00:00.000014 |",
-        "| 1970-01-01T00:00:00.000019 |",
-        "| 1970-01-01T00:00:00.000019 |",
-        "+----------------------------+",
-    ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
-    assert!(test_state.update_batch());
-    assert!(!test_state.retract_batch());
+    // Note if this query ever does start working
+    let err = execute(&ctx, sql).await.unwrap_err();
+    assert_contains!(err.to_string(), "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: AggregateUDF { name: \"time_sum\"");
 }
 
 /// Basic query for with a udaf returning a structure
@@ -161,7 +149,7 @@ async fn test_udaf_returning_struct() {
         "| {value: 2.0, time: 1970-01-01T00:00:00.000002} |",
         "+------------------------------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
 /// Demonstrate extracting the fields from a structure using a subquery
@@ -176,11 +164,11 @@ async fn test_udaf_returning_struct_subquery() {
         "| 2.0             | 1970-01-01T00:00:00.000002 |",
         "+-----------------+----------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
-async fn execute(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
-    ctx.sql(sql).await.unwrap().collect().await.unwrap()
+async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
 }
 
 /// Returns an context with a table "t" and the "first" and "time_sum"
