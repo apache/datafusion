@@ -618,3 +618,17 @@ SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t
 22 b
 33 c
 44 d
+
+#in_correlated_subquery_with_limit
+#not de-correlated
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 where t1_name = t2_name limit 10)
+----
+logical_plan
+Filter: t1.t1_id IN (<subquery>)
+--Subquery:
+----Limit: skip=0, fetch=10
+------Projection: t2.t2_id
+--------Filter: outer_ref(t1.t1_name) = t2.t2_name
+----------TableScan: t2
+--TableScan: t1 projection=[t1_id, t1_name]
