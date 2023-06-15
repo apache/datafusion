@@ -511,7 +511,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?)),
                 order_by,
             ))),
-            _ => Err(DataFusionError::Internal(
+            _ => Err(DataFusionError::Plan(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
                     .to_string(),
             )),
@@ -563,7 +563,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
         }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsuported index key expression: {key:?}"
+                "Unsupported index key expression: {key:?}"
             ))));
         }
     };

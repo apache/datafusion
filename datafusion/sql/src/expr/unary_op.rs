@@ -44,7 +44,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         Err(_) => Ok(lit(-n
                             .parse::<f64>()
                             .map_err(|_e| {
-                                DataFusionError::Internal(format!(
+                                DataFusionError::Plan(format!(
                                     "negative operator can be only applied to integer and float operands, got: {n}"))
                             })?)),
                     },
