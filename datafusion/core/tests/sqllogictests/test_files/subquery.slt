@@ -380,3 +380,17 @@ LeftSemi Join: t1.t1_id = __correlated_sq_10.t1_int
 ----Projection: t1.t1_int
 ------Filter: t1.t1_id > t1.t1_int
 --------TableScan: t1 projection=[t1_id, t1_int]
+
+#in_subquery_nested_exist_subquery
+query TT
+explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t2_id FROM t2 WHERE EXISTS(select * from t1 WHERE t1.t1_int > t2.t2_int))
+----
+logical_plan
+LeftSemi Join: t1.t1_id = __correlated_sq_11.t2_id
+--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+--SubqueryAlias: __correlated_sq_11
+----Projection: t2.t2_id
+------LeftSemi Join:  Filter: __correlated_sq_12.t1_int > t2.t2_int
+--------TableScan: t2 projection=[t2_id, t2_int]
+--------SubqueryAlias: __correlated_sq_12
+----------TableScan: t1 projection=[t1_int]
