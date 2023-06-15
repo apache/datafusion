@@ -43,7 +43,6 @@ jobs:
   # test the crate
   linux-test:
     name: cargo test (amd64)
-    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
