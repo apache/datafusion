@@ -64,8 +64,14 @@ jobs:
         run: du -s -h / || true
       - name: Check disk space on /*
         run: du -s -h /* || true
-      - name: Run tests (excluding doctests), ignoring faulures
-        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions || true
+      - name: Check disk space on /lib/*
+        run: du -s -h /lib/* || true
+      - name: Check disk space on /usr/*
+        run: du -s -h /usr/* || true
+      - name: Check disk space on /usr/local/*
+        run: du -s -h /usr/local/* || true
+      - name: Run tests (excluding doctests), ignoring failures
+        run: cargo test --lib --tests --bins --features avro,json,dictionary_expressions --norun || true
       - name: Check disk space in $GITHUB_WORKSPACE
         run: du -s -h $GITHUB_WORKSPACE || true
       - name: Check disk space in $GITHUB_WORKSPACE/*
