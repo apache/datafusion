@@ -414,3 +414,48 @@ SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1_int group by t2_int) a
 #non_aggregated_correlated_scalar_subquery_with_limit
 statement error DataFusion error: check_analyzed_plan\ncaused by\nError during planning: Correlated scalar subquery must be aggregated to return at most one row
 SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 2) as t2_int from t1
+
+#non_aggregated_correlated_scalar_subquery_with_single_row
+query TT
+explain SELECT t1_id, (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1) as t2_int from t1
+----
+logical_plan
+Projection: t1.t1_id, (<subquery>) AS t2_int
+--Subquery:
+----Limit: skip=0, fetch=1
+------Projection: t2.t2_int
+--------Filter: t2.t2_int = outer_ref(t1.t1_int)
+----------TableScan: t2
+--TableScan: t1 projection=[t1_id]
+
+query TT
+explain SELECT t1_id from t1 where t1_int = (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1)
+----
+logical_plan
+Projection: t1.t1_id
+--Filter: t1.t1_int = (<subquery>)
+----Subquery:
+------Limit: skip=0, fetch=1
+--------Projection: t2.t2_int
+----------Filter: t2.t2_int = outer_ref(t1.t1_int)
+------------TableScan: t2
+----TableScan: t1 projection=[t1_id, t1_int]
+
+query TT
+explain SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
+----
+logical_plan
+Projection: t1.t1_id, __scalar_sq_16.a AS t2_int
+--Left Join: CAST(t1.t1_int AS Int64) = __scalar_sq_16.a
+----TableScan: t1 projection=[t1_id, t1_int]
+----SubqueryAlias: __scalar_sq_16
+------Projection: Int64(1) AS a
+--------EmptyRelation
+
+query II rowsort
+SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
+----
+11 1
+22 NULL
+33 NULL
+44 NULL
