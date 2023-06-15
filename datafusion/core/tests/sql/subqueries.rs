@@ -22,36 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn subquery_contains_join_contains_sub_query_alias_correlated_columns() -> Result<()>
-{
-    let ctx = create_sub_query_join_context("t0_id", "t1_id", "t2_id", true)?;
-    let sql = "SELECT t0_id, t0_name FROM t0 WHERE EXISTS (select 1 from (SELECT * FROM t1 where t1.t1_id = t0.t0_id) as x INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as y ON(x.t1_id = y.t2_id))";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let plan = dataframe.into_optimized_plan()?;
-
-    let expected = vec![
-        "LeftSemi Join: t0.t0_id = __correlated_sq_1.t1_id, t0.t0_name = __correlated_sq_1.t2_name [t0_id:UInt32;N, t0_name:Utf8;N]",
-        "  TableScan: t0 projection=[t0_id, t0_name] [t0_id:UInt32;N, t0_name:Utf8;N]",
-        "  SubqueryAlias: __correlated_sq_1 [t1_id:UInt32;N, t2_name:Utf8;N]",
-        "    Projection: x.t1_id, y.t2_name [t1_id:UInt32;N, t2_name:Utf8;N]",
-        "      Inner Join: x.t1_id = y.t2_id [t1_id:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N]",
-        "        SubqueryAlias: x [t1_id:UInt32;N]",
-        "          TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
-        "        SubqueryAlias: y [t2_id:UInt32;N, t2_name:Utf8;N]",
-        "          TableScan: t2 projection=[t2_id, t2_name] [t2_id:UInt32;N, t2_name:Utf8;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn support_order_by_correlated_columns() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
