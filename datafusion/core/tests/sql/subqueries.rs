@@ -22,24 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn subquery_not_allowed() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    // In/Exist Subquery is not allowed in ORDER BY clause.
-    let sql = "SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let err = dataframe.into_optimized_plan().err().unwrap();
-
-    assert_eq!(
-        r#"Context("check_analyzed_plan", Plan("In/Exist subquery can only be used in Projection, Filter, Window functions, Aggregate and Join plan nodes"))"#,
-        &format!("{err:?}")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn non_aggregated_correlated_scalar_subquery() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 
