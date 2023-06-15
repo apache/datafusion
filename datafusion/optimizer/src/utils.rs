@@ -22,7 +22,6 @@ use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::expr_rewriter::{replace_col, strip_outer_reference};
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
@@ -44,7 +43,6 @@ pub fn optimize_children(
     plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
 ) -> Result<Option<LogicalPlan>> {
-    let new_exprs = plan.expressions();
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     let mut plan_is_changed = false;
     for input in plan.inputs() {
@@ -53,7 +51,7 @@ pub fn optimize_children(
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
     if plan_is_changed {
-        Ok(Some(from_plan(plan, &new_exprs, &new_inputs)?))
+        Ok(Some(plan.with_new_inputs(&new_inputs)?))
     } else {
         Ok(None)
     }
