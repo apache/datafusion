@@ -712,7 +712,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+--------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"minute\"),to_timestamp_seconds(Int64(61)))) |",
         "+--------------------------------------------------------------------------+",
-        "| Timestamp(Nanosecond, None)                                              |",
+        "| Timestamp(Second, None)                                                  |",
         "+--------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -723,7 +723,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+-------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"second\"),to_timestamp_millis(Int64(61)))) |",
         "+-------------------------------------------------------------------------+",
-        "| Timestamp(Second, None)                                                 |",
+        "| Timestamp(Millisecond, None)                                            |",
         "+-------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -734,7 +734,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+------------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"millisecond\"),to_timestamp_micros(Int64(61)))) |",
         "+------------------------------------------------------------------------------+",
-        "| Timestamp(Millisecond, None)                                                 |",
+        "| Timestamp(Microsecond, None)                                                 |",
         "+------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -745,7 +745,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+-----------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"microsecond\"),to_timestamp(Int64(61)))) |",
         "+-----------------------------------------------------------------------+",
-        "| Timestamp(Microsecond, None)                                          |",
+        "| Timestamp(Nanosecond, None)                                           |",
         "+-----------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
