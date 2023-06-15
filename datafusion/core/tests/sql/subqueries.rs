@@ -22,23 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn non_equal_correlated_scalar_subquery() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id < t1.t1_id) as t2_sum from t1";
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let err = dataframe.into_optimized_plan().err().unwrap();
-
-    assert_eq!(
-        r#"Context("check_analyzed_plan", Plan("Correlated column is not allowed in predicate: t2.t2_id < outer_ref(t1.t1_id)"))"#,
-        &format!("{err:?}")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn aggregated_correlated_scalar_subquery_with_extra_group_by_columns() -> Result<()>
 {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
