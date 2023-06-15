@@ -30,6 +30,9 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use itertools::izip;
 use std::any::Any;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// ARRAY_AGG aggregate expression, where ordering requirement is given
@@ -206,13 +209,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 .iter()
                 .map(|sort_expr| sort_expr.options)
                 .collect::<Vec<_>>();
-            let (merged_values, merged_ordering_values) = merge_ordered_arrays(
+            let merged_values = merge_ordered_arrays(
                 &partition_values,
                 &partition_ordering_values,
                 &sort_options,
             )?;
             self.values = merged_values;
-            self.ordering_values = merged_ordering_values;
         } else {
             return Err(DataFusionError::Execution(
                 "Expects to receive list array".to_string(),
@@ -307,73 +309,168 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct CustomOrdering {
+    sort_options: Vec<SortOptions>,
+}
+
+impl CustomOrdering {
+    fn new(sort_options: Vec<SortOptions>) -> Self {
+        Self { sort_options }
+    }
+
+    fn ordering(
+        &self,
+        current: &[ScalarValue],
+        target: &[ScalarValue],
+    ) -> Result<Ordering> {
+        Ok(compare_rows(current, target, &self.sort_options)?.reverse())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CustomElement<'a> {
+    branch_idx: usize,
+    value: ScalarValue,
+    ordering: Vec<ScalarValue>,
+    custom_ordering: &'a CustomOrdering,
+}
+
+impl<'a> CustomElement<'a> {
+    fn new(
+        branch_idx: usize,
+        value: ScalarValue,
+        ordering: Vec<ScalarValue>,
+        comparator: &'a CustomOrdering,
+    ) -> Self {
+        Self {
+            branch_idx,
+            value,
+            ordering,
+            custom_ordering: comparator,
+        }
+    }
+}
+
+impl<'a> Ord for CustomElement<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Compares according to custom ordering
+        self.custom_ordering
+            .ordering(&self.ordering, &other.ordering)
+            .unwrap()
+    }
+}
+
+impl<'a> PartialOrd for CustomElement<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+// As an example
+// values can be [
+//      [1,2,3,4,5],
+//      [1,2,3,4],
+//      [1,2,3,4,5,6],
+// ]
+// In this case we will be merging three arrays (doesn't have to be same size)
+// and produce a merged array with size 15 (sum of 5+4+6)
+// Merging will be done according to ordering at `ordering_values` vector.
+// As an example `ordering_values` can be [
+//      [(1, a),(2, b),(3, b),(4, a),(5,b)],
+//      [(1, a),(2, b),(3, b),(4, a),],
+//      [(1, b),(2, c),(3, d),(4, e),(5, a),(6, b)],
+// ]
+// For each ScalarValue in the `values` we have a corresponding `Vec<ScalarValue>` (like timestamp of it)
+// for the example above `sort_options` will have size two, that defines ordering requirement of the merge
+// Inner `Vec<ScalarValue>`s of the `ordering_values` will be compared according `sort_options` (Their sizes should match)
 fn merge_ordered_arrays(
+    // We will merge values into single `Vec<ScalarValue>`.
     values: &[Vec<ScalarValue>],
+    // `values` will be merged according to `ordering_values`.
+    // Inner `Vec<ScalarValue>` can be thought as ordering information for the
+    // each `ScalarValue` in the values`.
     ordering_values: &[Vec<Vec<ScalarValue>>],
+    // Defines according to which ordering comparisons should be done.
     sort_options: &[SortOptions],
-) -> Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
-    if values.len() != ordering_values.len()
-        || values
+) -> Result<Vec<ScalarValue>> {
+    // Keep track the most recent data of each branch, in binary heap data structure.
+    let mut heap: BinaryHeap<CustomElement> = BinaryHeap::new();
+
+    if !(values.len() == ordering_values.len()
+        && values
             .iter()
             .zip(ordering_values.iter())
-            .any(|(vals, ordering_vals)| vals.len() != ordering_vals.len())
+            .all(|(vals, ordering_vals)| vals.len() == ordering_vals.len()))
     {
         return Err(DataFusionError::Execution(
-            "Expects lhs arguments and/or rhs arguments to have same size".to_string(),
+            "Expects values arguments and/or ordering_values arguments to have same size"
+                .to_string(),
         ));
     }
     let n_branch = values.len();
+    // For each branch we keep track of indices of next will be merged entry
     let mut indices = vec![0_usize; n_branch];
+    // Keep track of sizes of each branch.
     let end_indices = (0..n_branch)
         .map(|idx| values[idx].len())
         .collect::<Vec<_>>();
     let mut merged_values = vec![];
-    let mut merged_ordering_values = vec![];
-    // Create comparator to decide insertion order of right and left arrays
-    let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| -> Result<bool> {
-        let cmp = compare_rows(current, target, sort_options)?;
-        Ok(cmp.is_lt())
-    };
-
+    // Create custom ordering according to `sort_options` to decide insertion order of right and left arrays
+    let custom_ordering = CustomOrdering::new(sort_options.to_vec());
+    // Continue iterating the loop until consuming data of all branches.
     loop {
-        let mut branch_idx = None;
-        let mut min_ordering = None;
-        for (idx, end_idx, ordering, branch_idxx) in izip!(
-            indices.iter(),
-            end_indices.iter(),
-            ordering_values.iter(),
-            0..n_branch
-        ) {
-            if idx == end_idx {
-                continue;
-            }
-            let ordering_row = &ordering[*idx];
-            let mut reset = false;
-            if let Some(min_ordering) = min_ordering {
-                if compare_fn(ordering_row, min_ordering)? {
-                    reset = true;
-                }
-            } else {
-                reset = true;
-            }
-            if reset {
-                min_ordering = Some(ordering_row);
-                branch_idx = Some(branch_idxx);
-            }
-        }
-
-        if let Some(branch_idx) = branch_idx {
-            let row_idx = (&indices)[branch_idx];
-            merged_values.push(values[branch_idx][row_idx].clone());
-            merged_ordering_values.push(ordering_values[branch_idx][row_idx].clone());
-            indices[branch_idx] += 1;
+        let min_elem = if let Some(min_elem) = heap.pop() {
+            min_elem
         } else {
-            // All branches consumed exit from the loop
-            break;
+            // Heap is empty, fill it with the next entries from each branch.
+            for (idx, end_idx, ordering, branch_index) in izip!(
+                indices.iter(),
+                end_indices.iter(),
+                ordering_values.iter(),
+                0..n_branch
+            ) {
+                // We consumed this branch, skip it
+                if idx == end_idx {
+                    continue;
+                }
+
+                // Push the next element to the heap.
+                let elem = CustomElement::new(
+                    branch_index,
+                    values[branch_index][*idx].clone(),
+                    ordering[*idx].to_vec(),
+                    &custom_ordering,
+                );
+                heap.push(elem);
+            }
+            // Now we have filled the heap, get the largest entry (this will be the next element in merge)
+            if let Some(min_elem) = heap.pop() {
+                min_elem
+            } else {
+                // Heap is empty, this means that all indices are same with end_indices. e.g
+                // We have consumed all of the branches. Merging is completed
+                // Exit from the loop
+                break;
+            }
+        };
+        let branch_idx = min_elem.branch_idx;
+        // Increment the index of merged branch,
+        indices[branch_idx] += 1;
+        let row_idx = indices[branch_idx];
+        merged_values.push(min_elem.value.clone());
+        if row_idx < end_indices[branch_idx] {
+            // Push next entry in the most recently consumed branch to the heap
+            // If there is an available entry
+            let value = values[branch_idx][row_idx].clone();
+            let ordering_row = ordering_values[branch_idx][row_idx].to_vec();
+            let elem =
+                CustomElement::new(branch_idx, value, ordering_row, &custom_ordering);
+            heap.push(elem);
         }
     }
 
-    Ok((merged_values, merged_ordering_values))
+    Ok(merged_values)
 }
 
 #[cfg(test)]
@@ -427,13 +524,15 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let expected =
             Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
-        let (merged_vals, _) = merge_ordered_arrays(
+
+        let merged_vals = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
             &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
         assert_eq!(&merged_vals, &expected);
+
         Ok(())
     }
 
@@ -467,23 +566,26 @@ mod tests {
             },
         ];
 
-        let lhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        // Values (which will be merged) doesn't have to be ordered.
+        let lhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 1, 2])) as ArrayRef;
         let lhs_vals = (0..lhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&lhs_vals_arr, idx))
             .collect::<Result<Vec<_>>>()?;
 
-        let rhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 3, 4])) as ArrayRef;
+        let rhs_vals_arr = Arc::new(Int64Array::from_slice([0, 1, 2, 1, 2])) as ArrayRef;
         let rhs_vals = (0..rhs_vals_arr.len())
             .map(|idx| ScalarValue::try_from_array(&rhs_vals_arr, idx))
             .collect::<Result<Vec<_>>>()?;
         let expected =
-            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 3, 3, 4, 4])) as ArrayRef;
-        let (merged_vals, _) = merge_ordered_arrays(
+            Arc::new(Int64Array::from_slice([0, 0, 1, 1, 2, 2, 1, 1, 2, 2])) as ArrayRef;
+
+        let merged_vals = merge_ordered_arrays(
             &[lhs_vals, rhs_vals],
             &[lhs_orderings, rhs_orderings],
             &sort_options,
         )?;
         let merged_vals = ScalarValue::iter_to_array(merged_vals.into_iter())?;
+
         assert_eq!(&merged_vals, &expected);
         Ok(())
     }
