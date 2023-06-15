@@ -839,3 +839,25 @@ SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1
 22 NULL
 33 5
 44 NULL
+
+#correlated_scalar_subquery_count_agg_with_pull_up_having
+#the having condition need to pull up and evaluated after the left out join
+query TT
+explain SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
+----
+logical_plan
+Projection: t1.t1_id, CASE WHEN __scalar_sq_37.__always_true IS NULL THEN Int64(2) AS cnt_plus_2 WHEN __scalar_sq_37.COUNT(UInt8(1)) != Int64(0) THEN NULL ELSE __scalar_sq_37.cnt_plus_2 END AS cnt_plus_2
+--Left Join: t1.t1_int = __scalar_sq_37.t2_int
+----TableScan: t1 projection=[t1_id, t1_int]
+----SubqueryAlias: __scalar_sq_37
+------Projection: COUNT(UInt8(1)) + Int64(2) AS cnt_plus_2, t2.t2_int, COUNT(UInt8(1)), __always_true
+--------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
+----------TableScan: t2 projection=[t2_int]
+
+query II rowsort
+SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
+----
+11 NULL
+22 2
+33 NULL
+44 2
