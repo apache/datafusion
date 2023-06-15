@@ -22,37 +22,6 @@ use datafusion::prelude::SessionContext;
 use log::debug;
 
 #[tokio::test]
-async fn simple_uncorrelated_scalar_subquery() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id", true)?;
-
-    let sql = "select (select count(*) from t1) as b";
-
-    let msg = format!("Creating logical plan for '{sql}'");
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let plan = dataframe.into_optimized_plan()?;
-
-    let expected = vec![
-        "Projection: __scalar_sq_1.COUNT(UInt8(1)) AS b [b:Int64;N]",
-        "  SubqueryAlias: __scalar_sq_1 [COUNT(UInt8(1)):Int64;N]",
-        "    Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]] [COUNT(UInt8(1)):Int64;N]",
-        "      TableScan: t1 projection=[t1_id] [t1_id:UInt32;N]",
-    ];
-    let formatted = plan.display_indent_schema().to_string();
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    assert_eq!(
-        expected, actual,
-        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
-
-    // assert data
-    let results = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| b |", "+---+", "| 4 |", "+---+"];
-    assert_batches_eq!(expected, &results);
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn simple_uncorrelated_scalar_subquery2() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", true)?;
 

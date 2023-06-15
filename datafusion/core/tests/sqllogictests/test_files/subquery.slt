@@ -664,8 +664,6 @@ SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
 33 NULL
 44 NULL
 
-
-
 #support_union_subquery
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id UNION ALL SELECT * FROM t2 WHERE upper(t2_name) = upper(t1.t1_name))
@@ -681,3 +679,14 @@ Filter: EXISTS (<subquery>)
 --------Filter: upper(t2.t2_name) = upper(outer_ref(t1.t1_name))
 ----------TableScan: t2
 --TableScan: t1 projection=[t1_id, t1_name]
+
+#simple_uncorrelated_scalar_subquery
+query TT
+explain select (select count(*) from t1) as b
+----
+logical_plan
+Projection: __scalar_sq_20.COUNT(UInt8(1)) AS b
+--SubqueryAlias: __scalar_sq_20
+----Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]
+------TableScan: t1 projection=[t1_id]
+
