@@ -31,7 +31,7 @@ use crate::window_state::WindowAggState;
 ///
 /// An implementation of this trait is created and used for each
 /// partition defined by an `OVER` clause and is instantiated by
-/// [`BuiltInWindowFunctionExpr::create_evaluator`]
+/// the DataFusion runtime.
 ///
 /// For example, evaluating `window_func(val) OVER (PARTITION BY col)`
 /// on the following data:
@@ -66,7 +66,8 @@ use crate::window_state::WindowAggState;
 /// ```
 ///
 /// Different methods on this trait will be called depending on the
-/// capabilities described by [`BuiltInWindowFunctionExpr`]:
+/// capabilities described by [`Self::supports_bounded_execution`],
+/// [`Self::uses_window_frame`], and [`Self::include_rank`],
 ///
 /// # Stateless `PartitionEvaluator`
 ///
@@ -96,9 +97,6 @@ use crate::window_state::WindowAggState;
 /// |false|true|`evaluate` (optionally can also implement `evaluate_all` for more optimized implementation. However, there will be default implementation that is suboptimal) . If we were to implement `ROW_NUMBER` it will end up in this quadrant. Example `OddRowNumber` showcases this use case|
 /// |true|false|`evaluate` (I think as long as `uses_window_frame` is `true`. There is no way for `supports_bounded_execution` to be false). I couldn't come up with any example for this quadrant |
 /// |true|true|`evaluate`. If we were to implement `FIRST_VALUE`, it would end up in this quadrant|.
-///
-/// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
-/// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
 pub trait PartitionEvaluator: Debug + Send {
     /// Updates the internal state for window function
     ///
