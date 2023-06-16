@@ -80,11 +80,10 @@ use datafusion::{
     },
     optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
-        expressions::PhysicalSortExpr,
-        planner::{DefaultPhysicalPlanner, ExtensionPlanner},
-        DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
-        RecordBatchStream, SendableRecordBatchStream, Statistics,
+        expressions::PhysicalSortExpr, DisplayFormatType, Distribution, ExecutionPlan,
+        Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics,
     },
+    physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::{SessionConfig, SessionContext},
 };
 
