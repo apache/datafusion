@@ -27,8 +27,8 @@ use crate::aggregate::row_accumulator::{
 use crate::aggregate::row_agg_macros::*;
 use crate::aggregate::sum;
 use crate::aggregate::sum::sum_batch;
-use crate::aggregate::utils::calculate_result_decimal_for_avg;
 use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{apply_filter_on_rows, calculate_result_decimal_for_avg};
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
@@ -38,8 +38,8 @@ use arrow::{
     datatypes::Field,
 };
 use arrow_array::{
-    Array, ArrayAccessor, BooleanArray, Decimal128Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt8Array,
+    Array, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, Int8Array, UInt16Array, UInt32Array, UInt8Array,
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
@@ -285,7 +285,7 @@ impl AvgRowAccumulator {
 
 impl RowAccumulator for AvgRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -302,25 +302,20 @@ impl RowAccumulator for AvgRowAccumulator {
         )
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            accessor.add_u64(self.state_index, selected_row_idx.len() as u64);
+            let array_dt = array.data_type();
+            dispatch_all_supported_data_types! { impl_avg_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, accessor, self}
         }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        let array_dt = array.data_type();
-        dispatch_all_supported_data_types! { impl_avg_row_accumulator_update_single_row_dispatch, array_dt, array, row_index, accessor, self}
 
         Ok(())
     }

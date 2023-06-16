@@ -57,18 +57,15 @@ pub trait RowAccumulator:
     Send + Sync + Debug + TryFrom<RowAccumulatorItem> + Into<RowAccumulatorItem>
 {
     /// updates the accumulator's state from a vector of arrays.
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()>;
+    fn update_batch(&self, values: &[ArrayRef], accessor: &mut RowAccessor)
+        -> Result<()>;
 
-    /// updates the accumulator's state for a single row.
-    fn update_single_row(
+    /// updates the accumulator's state from rows with the specified indices.
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_idx: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()>;
 
@@ -114,7 +111,7 @@ pub enum RowAccumulatorItem {
 
 impl RowAccumulatorItem {
     pub fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -132,43 +129,43 @@ impl RowAccumulatorItem {
         }
     }
 
-    pub fn update_single_row(
+    pub fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         match self {
             RowAccumulatorItem::AVG(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::SUM(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::COUNT(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::MIN(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::MAX(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::BITAND(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::BITOR(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::BITXOR(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::BOOLAND(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
             RowAccumulatorItem::BOOLOR(acc) => {
-                acc.update_single_row(values, filter, row_index, accessor)
+                acc.update_row_indices(values, filter, row_indices, accessor)
             }
         }
     }

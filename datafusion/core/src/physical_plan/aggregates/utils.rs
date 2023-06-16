@@ -48,7 +48,7 @@ pub(crate) struct GroupState {
 
     /// Scratch space used to collect indices for input rows in a
     /// batch that have values to aggregate, reset on each batch.
-    pub indices: Vec<u32>,
+    pub indices: Vec<usize>,
 }
 
 #[derive(Debug)]

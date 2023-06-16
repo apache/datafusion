@@ -349,7 +349,7 @@ impl GroupedHashAggregateStream {
                         groups_with_rows.push(*group_idx);
                     };
 
-                    group_state.indices.push_accounted(row as u32, allocated); // remember this row
+                    group_state.indices.push_accounted(row, allocated); // remember this row
                 }
                 //  1.2 Need to create new entry
                 None => {
@@ -363,7 +363,7 @@ impl GroupedHashAggregateStream {
                             self.row_aggr_layout.fixed_part_width()
                         ],
                         accumulator_set,
-                        indices: vec![row as u32], // 1.3
+                        indices: vec![row], // 1.3
                     };
                     let group_idx = group_states.len();
 
@@ -372,7 +372,7 @@ impl GroupedHashAggregateStream {
                     *allocated += std::mem::size_of_val(&group_state.group_by_values)
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
-                        + (std::mem::size_of::<u32>() * group_state.indices.capacity());
+                        + (std::mem::size_of::<usize>() * group_state.indices.capacity());
 
                     // Allocation done by normal accumulators
                     *allocated += (std::mem::size_of::<Box<dyn Accumulator>>()
@@ -532,19 +532,17 @@ impl GroupedHashAggregateStream {
                 let mut state_accessor =
                     RowAccessor::new_from_layout(self.row_aggr_layout.clone());
                 state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-                for idx in &group_state.indices {
-                    for (accumulator, values_array, filter_array) in izip!(
-                        self.row_accumulators.iter_mut(),
-                        row_values.iter(),
-                        filter_bool_array.iter()
-                    ) {
-                        accumulator.update_single_row(
-                            values_array,
-                            filter_array,
-                            *idx as usize,
-                            &mut state_accessor,
-                        )?;
-                    }
+                for (accumulator, values_array, filter_array) in izip!(
+                    self.row_accumulators.iter_mut(),
+                    row_values.iter(),
+                    filter_bool_array.iter()
+                ) {
+                    accumulator.update_row_indices(
+                        values_array,
+                        filter_array,
+                        &group_state.indices,
+                        &mut state_accessor,
+                    )?;
                 }
                 // clear the group indices in this group
                 group_state.indices.clear();
@@ -598,9 +596,12 @@ impl GroupedHashAggregateStream {
                 let mut offsets = vec![0];
                 let mut offset_so_far = 0;
                 for &group_idx in groups_with_rows.iter() {
-                    let indices = &self.aggr_state.group_states[group_idx].indices;
-                    batch_indices.append_slice(indices);
-                    offset_so_far += indices.len();
+                    let mut indices_u32 = vec![];
+                    for idx in &self.aggr_state.group_states[group_idx].indices {
+                        indices_u32.push(*idx as u32)
+                    }
+                    batch_indices.append_slice(indices_u32.as_slice());
+                    offset_so_far += indices_u32.len();
                     offsets.push(offset_so_far);
                 }
                 let batch_indices = batch_indices.finish();
@@ -803,7 +804,7 @@ impl GroupedHashAggregateStream {
                 RowAccessor::new_from_layout(self.row_aggr_layout.clone());
             state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
             for idx in &group_state.indices {
-                let value = col_to_value(agg_input_array1, filter_array1, *idx as usize);
+                let value = col_to_value(agg_input_array1, filter_array1, *idx);
                 accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
             }
             // clear the group indices in this group
@@ -836,9 +837,9 @@ impl GroupedHashAggregateStream {
                 RowAccessor::new_from_layout(self.row_aggr_layout.clone());
             state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
             for idx in &group_state.indices {
-                let value = col_to_value(agg_input_array1, filter_array1, *idx as usize);
+                let value = col_to_value(agg_input_array1, filter_array1, *idx);
                 accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
-                let value = col_to_value(agg_input_array2, filter_array2, *idx as usize);
+                let value = col_to_value(agg_input_array2, filter_array2, *idx);
                 accumulator2.update_value::<T2::Item>(value, &mut state_accessor);
             }
             // clear the group indices in this group

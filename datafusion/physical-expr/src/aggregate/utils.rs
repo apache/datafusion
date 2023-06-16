@@ -20,6 +20,7 @@
 use crate::AggregateExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
+use arrow_array::BooleanArray;
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
@@ -102,4 +103,23 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+pub fn apply_filter_on_rows(
+    filter: &Option<&BooleanArray>,
+    array: &ArrayRef,
+    row_indices: &[usize],
+) -> Vec<usize> {
+    let mut selected_row_idx = vec![];
+    for row_index in row_indices {
+        if !array.is_null(*row_index) {
+            selected_row_idx.push(*row_index);
+        }
+        if let Some(filter) = filter {
+            if filter.value(*row_index) {
+                selected_row_idx.push(*row_index);
+            }
+        }
+    }
+    selected_row_idx
 }

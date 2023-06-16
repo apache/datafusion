@@ -230,7 +230,7 @@ impl CountRowAccumulator {
 
 impl RowAccumulator for CountRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -240,22 +240,31 @@ impl RowAccumulator for CountRowAccumulator {
         Ok(())
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
-        if !values.iter().any(|array| array.is_null(row_index)) {
-            if let Some(filter_array) = filter {
-                if filter_array.value(row_index) {
-                    accessor.add_u64(self.state_index, 1)
+        let mut delta: u64 = 0;
+        if let Some(filter_array) = filter {
+            for row_index in row_indices {
+                if filter_array.value(*row_index)
+                    && !values.iter().any(|array| array.is_null(*row_index))
+                {
+                    delta += 1;
                 }
-            } else {
-                accessor.add_u64(self.state_index, 1)
+            }
+        } else {
+            for row_index in row_indices {
+                if !values.iter().any(|array| array.is_null(*row_index)) {
+                    delta += 1;
+                }
             }
         }
+
+        accessor.add_u64(self.state_index, delta);
         Ok(())
     }
 

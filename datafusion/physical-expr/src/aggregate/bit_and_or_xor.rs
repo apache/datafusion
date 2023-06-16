@@ -22,6 +22,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use crate::aggregate::row_agg_macros::*;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::datatypes::DataType;
 use arrow::{
@@ -38,12 +39,11 @@ use std::collections::HashSet;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
 };
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{apply_filter_on_rows, down_cast_any_ref};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::compute::{bit_and, bit_or, bit_xor};
-use arrow_array::cast::as_primitive_array;
-use arrow_array::{ArrayAccessor, BooleanArray};
+use arrow_array::BooleanArray;
 use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 
 // returns the new value after bit_and/bit_or/bit_xor with the new values, taking nullability into account
@@ -323,7 +323,7 @@ impl BitAndRowAccumulator {
 
 impl RowAccumulator for BitAndRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -332,70 +332,18 @@ impl RowAccumulator for BitAndRowAccumulator {
         bit_and_row(self.index, accessor, delta)
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
-        }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        match array.data_type() {
-            DataType::Int8 => {
-                let typed_array: &Int8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::Int16 => {
-                let typed_array: &Int16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::Int32 => {
-                let typed_array: &Int32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::Int64 => {
-                let typed_array: &Int64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::UInt8 => {
-                let typed_array: &UInt8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::UInt16 => {
-                let typed_array: &UInt16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::UInt32 => {
-                let typed_array: &UInt32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            DataType::UInt64 => {
-                let typed_array: &UInt64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in BitAndRowAccumulator: {}",
-                    array.data_type()
-                )))
-            }
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            let array_dt = array.data_type();
+            dispatch_all_bit_and_or_xor_supported_data_types! { impl_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, bit_and_to_row, accessor, self}
         }
 
         Ok(())
@@ -570,7 +518,7 @@ impl BitOrRowAccumulator {
 
 impl RowAccumulator for BitOrRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -580,70 +528,18 @@ impl RowAccumulator for BitOrRowAccumulator {
         Ok(())
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
-        }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        match array.data_type() {
-            DataType::Int8 => {
-                let typed_array: &Int8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::Int16 => {
-                let typed_array: &Int16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::Int32 => {
-                let typed_array: &Int32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::Int64 => {
-                let typed_array: &Int64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::UInt8 => {
-                let typed_array: &UInt8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::UInt16 => {
-                let typed_array: &UInt16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::UInt32 => {
-                let typed_array: &UInt32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            DataType::UInt64 => {
-                let typed_array: &UInt64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in BitOrRowAccumulator: {}",
-                    array.data_type()
-                )))
-            }
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            let array_dt = array.data_type();
+            dispatch_all_bit_and_or_xor_supported_data_types! { impl_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, bit_or_to_row, accessor, self}
         }
 
         Ok(())
@@ -818,7 +714,7 @@ impl BitXorRowAccumulator {
 
 impl RowAccumulator for BitXorRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -828,70 +724,18 @@ impl RowAccumulator for BitXorRowAccumulator {
         Ok(())
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
-        }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        match array.data_type() {
-            DataType::Int8 => {
-                let typed_array: &Int8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::Int16 => {
-                let typed_array: &Int16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::Int32 => {
-                let typed_array: &Int32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::Int64 => {
-                let typed_array: &Int64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::UInt8 => {
-                let typed_array: &UInt8Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::UInt16 => {
-                let typed_array: &UInt16Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::UInt32 => {
-                let typed_array: &UInt32Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            DataType::UInt64 => {
-                let typed_array: &UInt64Array = as_primitive_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_xor_to_row(self.index, accessor);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in BitXorRowAccumulator: {}",
-                    array.data_type()
-                )))
-            }
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            let array_dt = array.data_type();
+            dispatch_all_bit_and_or_xor_supported_data_types! { impl_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, bit_xor_to_row, accessor, self}
         }
 
         Ok(())

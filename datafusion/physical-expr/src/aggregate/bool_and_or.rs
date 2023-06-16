@@ -33,12 +33,11 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
 };
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{apply_filter_on_rows, down_cast_any_ref};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::compute::{bool_and, bool_or};
 use arrow_array::cast::as_boolean_array;
-use arrow_array::ArrayAccessor;
 use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
@@ -267,7 +266,7 @@ impl BoolAndRowAccumulator {
 
 impl RowAccumulator for BoolAndRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -276,34 +275,30 @@ impl RowAccumulator for BoolAndRowAccumulator {
         bool_and_row(self.index, accessor, delta)
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
-        }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        match array.data_type() {
-            DataType::Boolean => {
-                let typed_array: &BooleanArray = as_boolean_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_and_to_row(self.index, accessor);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in BoolAndRowAccumulator: {}",
-                    array.data_type()
-                )))
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            match array.data_type() {
+                DataType::Boolean => {
+                    let typed_array: &BooleanArray = as_boolean_array(array);
+                    for row_index in selected_row_idx {
+                        let value = typed_array.value_at(row_index);
+                        value.bit_and_to_row(self.index, accessor);
+                    }
+                }
+                _ => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type in BoolAndRowAccumulator: {}",
+                        array.data_type()
+                    )))
+                }
             }
         }
 
@@ -483,7 +478,7 @@ impl BoolOrRowAccumulator {
 
 impl RowAccumulator for BoolOrRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -493,34 +488,30 @@ impl RowAccumulator for BoolOrRowAccumulator {
         Ok(())
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
-        }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        match array.data_type() {
-            DataType::Boolean => {
-                let typed_array: &BooleanArray = as_boolean_array(array);
-                let value = typed_array.value_at(row_index);
-                value.bit_or_to_row(self.index, accessor);
-            }
-            _ => {
-                return Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in BoolOrRowAccumulator: {}",
-                    array.data_type()
-                )))
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            match array.data_type() {
+                DataType::Boolean => {
+                    let typed_array: &BooleanArray = as_boolean_array(array);
+                    for row_index in selected_row_idx {
+                        let value = typed_array.value_at(row_index);
+                        value.bit_or_to_row(self.index, accessor);
+                    }
+                }
+                _ => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type in BoolOrRowAccumulator: {}",
+                        array.data_type()
+                    )))
+                }
             }
         }
 

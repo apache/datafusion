@@ -43,11 +43,10 @@ use datafusion_expr::Accumulator;
 use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator, RowAccumulatorItem,
 };
-use crate::aggregate::utils::down_cast_any_ref;
+use crate::aggregate::utils::{apply_filter_on_rows, down_cast_any_ref};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
-use arrow_array::ArrayAccessor;
 use datafusion_row::accessor::{ArrowArrayReader, RowAccessor, RowAccumulatorNativeType};
 
 use super::moving_min_max;
@@ -714,7 +713,7 @@ impl MaxRowAccumulator {
 
 impl RowAccumulator for MaxRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -723,25 +722,19 @@ impl RowAccumulator for MaxRowAccumulator {
         max_row(self.index, accessor, delta)
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            let array_dt = array.data_type();
+            dispatch_all_supported_data_types! { impl_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, max_to_row, accessor, self}
         }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-        let array_dt = array.data_type();
-
-        dispatch_all_supported_data_types! { impl_row_accumulator_update_single_row_dispatch, array_dt, array, row_index, max_to_row, accessor, self}
 
         Ok(())
     }
@@ -984,7 +977,7 @@ impl MinRowAccumulator {
 
 impl RowAccumulator for MinRowAccumulator {
     fn update_batch(
-        &mut self,
+        &self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
@@ -994,26 +987,19 @@ impl RowAccumulator for MinRowAccumulator {
         Ok(())
     }
 
-    fn update_single_row(
+    fn update_row_indices(
         &self,
         values: &[ArrayRef],
         filter: &Option<&BooleanArray>,
-        row_index: usize,
+        row_indices: &[usize],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let array = &values[0];
-        if array.is_null(row_index) {
-            return Ok(());
+        let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
+        if !selected_row_idx.is_empty() {
+            let array_dt = array.data_type();
+            dispatch_all_supported_data_types! { impl_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, min_to_row, accessor, self}
         }
-        if let Some(filter) = filter {
-            if !filter.value(row_index) {
-                return Ok(());
-            }
-        }
-
-        let array_dt = array.data_type();
-
-        dispatch_all_supported_data_types! { impl_row_accumulator_update_single_row_dispatch, array_dt, array, row_index, min_to_row, accessor, self}
 
         Ok(())
     }

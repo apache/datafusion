@@ -57,6 +57,7 @@ macro_rules! dispatch_all_supported_data_types {
         }
     };
 }
+
 pub use dispatch_all_supported_data_types;
 
 // TODO generate the matching type pairs
@@ -215,6 +216,25 @@ macro_rules! dispatch_all_supported_data_types_pairs {
 
 pub use dispatch_all_supported_data_types_pairs;
 
+#[macro_export]
+macro_rules! dispatch_all_bit_and_or_xor_supported_data_types {
+    ($macro:ident $(, $x:ident)*) => {
+        $macro! {
+                [$($x),*],
+                { Int8, Int8Array },
+                { Int16, Int16Array },
+                { Int32, Int32Array },
+                { Int64, Int64Array },
+                { UInt8, UInt8Array },
+                { UInt16, UInt16Array },
+                { UInt32, UInt32Array },
+                { UInt64, UInt64Array }
+        }
+    };
+}
+
+pub use dispatch_all_bit_and_or_xor_supported_data_types;
+
 /// Generate one row accumulator dispatch logic
 #[macro_export]
 macro_rules! impl_one_row_accumulator_dispatch {
@@ -274,18 +294,20 @@ macro_rules! impl_two_row_accumulators_dispatch {
 
 pub use impl_two_row_accumulators_dispatch;
 
-/// Generate row accumulator update single row dispatch logic
+/// Generate row accumulator update row indices dispatch logic
 #[macro_export]
-macro_rules! impl_row_accumulator_update_single_row_dispatch {
+macro_rules! impl_row_accumulator_update_row_idx_dispatch {
     (
-        [$array_dt:ident, $array:ident, $row_index:ident, $update_func:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
+        [$array_dt:ident, $array:ident, $selected_row_idx:ident, $update_func:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
     ) => {
         match ($array_dt) {
             $(
                 $i1t! { datatype_match_pattern } => {
                         let typed_array = downcast_value!($array, $i1);
-                        let value = typed_array.value_at($row_index);
-                        value.$update_func($self.index, $accessor);
+                        for row_index in $selected_row_idx {
+                            let value = typed_array.value_at(row_index);
+                            value.$update_func($self.index, $accessor);
+                        }
                 }
             )*
             _ => return Err(DataFusionError::Internal(format!(
@@ -296,21 +318,22 @@ macro_rules! impl_row_accumulator_update_single_row_dispatch {
     };
 }
 
-pub use impl_row_accumulator_update_single_row_dispatch;
+pub use impl_row_accumulator_update_row_idx_dispatch;
 
-/// Generate AvgRowAccumulator update single row dispatch logic
+/// Generate AvgRowAccumulator update row indices dispatch logic
 #[macro_export]
-macro_rules! impl_avg_row_accumulator_update_single_row_dispatch {
+macro_rules! impl_avg_row_accumulator_update_row_idx_dispatch {
     (
-        [$array_dt:ident, $array:ident, $row_index:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
+        [$array_dt:ident, $array:ident, $selected_row_idx:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
     ) => {
         match ($array_dt) {
             $(
                 $i1t! { datatype_match_pattern } => {
                         let typed_array = downcast_value!($array, $i1);
-                        let value = typed_array.value_at($row_index);
-                        $accessor.add_u64($self.state_index, 1);
-                        value.add_to_row($self.state_index + 1, $accessor);
+                        for row_index in $selected_row_idx {
+                            let value = typed_array.value_at(row_index);
+                            value.add_to_row($self.state_index + 1, $accessor);
+                        }
                 }
             )*
             _ => return Err(DataFusionError::Internal(format!(
@@ -321,7 +344,7 @@ macro_rules! impl_avg_row_accumulator_update_single_row_dispatch {
     };
 }
 
-pub use impl_avg_row_accumulator_update_single_row_dispatch;
+pub use impl_avg_row_accumulator_update_row_idx_dispatch;
 
 /// The type match pattern of the type macro. e.g., 'DataType::Decimal { .. }'.
 #[macro_export]
