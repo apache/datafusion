@@ -132,7 +132,13 @@
 //!
 //! ## Customization and Extension
 //!
-//! DataFusion supports extension at many points:
+//! DataFusion is designed to be a "disaggregated" query engine.  This
+//! means that developers can mix and extend the parts of DataFusion
+//! they need for their usecase. For example, just the
+//! [`ExecutionPlan`] operators, or the [`SqlToRel`] SQL planner and
+//! optimizer.
+//!
+//! In order to achieve this, DataFusion supports extension at many points:
 //!
 //! * read from any datasource ([`TableProvider`])
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
@@ -145,7 +151,7 @@
 //! You can find examples of each of them in the [datafusion-examples] directory.
 //!
 //! [`TableProvider`]: crate::datasource::TableProvider
-//! [`CatalogProvider`]: crate::catalog::catalog::CatalogProvider
+//! [`CatalogProvider`]: crate::catalog::CatalogProvider
 //! [`LogicalPlanBuilder`]: datafusion_expr::logical_plan::builder::LogicalPlanBuilder
 //! [`ScalarUDF`]: physical_plan::udf::ScalarUDF
 //! [`AggregateUDF`]: physical_plan::udaf::AggregateUDF
@@ -398,7 +404,7 @@
 //! [`AnalyzerRule`]: datafusion_optimizer::analyzer::AnalyzerRule
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
-//! [`PhysicalPlanner`]: physical_plan::PhysicalPlanner
+//! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
 //! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
@@ -420,6 +426,7 @@ pub mod error;
 pub mod execution;
 pub mod physical_optimizer;
 pub mod physical_plan;
+pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 pub mod variable;

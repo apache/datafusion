@@ -327,16 +327,7 @@ pub struct LeadLagState {
     pub idx: usize,
 }
 
-#[derive(Debug, Clone, Default)]
-pub enum BuiltinWindowState {
-    Rank(RankState),
-    NumRows(NumRowsState),
-    NthValue(NthValueState),
-    LeadLag(LeadLagState),
-    #[default]
-    Default,
-}
-
+/// Holds the state of evaluating a window function
 #[derive(Debug)]
 pub struct WindowAggState {
     /// The range that we calculate the window function

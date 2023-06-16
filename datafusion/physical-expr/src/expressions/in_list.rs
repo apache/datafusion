@@ -20,6 +20,7 @@
 use ahash::RandomState;
 use std::any::Any;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::hash_utils::HashValue;
@@ -329,6 +330,14 @@ impl PhysicalExpr for InListExpr {
             self.negated,
             self.static_filter.clone(),
         )))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.expr.hash(&mut s);
+        self.negated.hash(&mut s);
+        self.list.hash(&mut s);
+        // Add `self.static_filter` when hash is available
     }
 }
 

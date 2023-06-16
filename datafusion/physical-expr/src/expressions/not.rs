@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::down_cast_any_ref;
@@ -29,7 +30,7 @@ use datafusion_common::{cast::as_boolean_array, DataFusionError, Result, ScalarV
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct NotExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
@@ -104,6 +105,11 @@ impl PhysicalExpr for NotExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NotExpr::new(children[0].clone())))
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

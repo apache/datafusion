@@ -26,8 +26,8 @@ use crate::utils::normalize_ident;
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ExprSchema,
-    OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
+    unqualified_field_not_found, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    ExprSchema, OwnedTableReference, Result, SchemaReference, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
@@ -981,24 +981,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let arrow_schema = (*provider.schema()).clone();
         let table_schema = DFSchema::try_from(arrow_schema)?;
 
-        let fields = if columns.is_empty() {
+        // Get insert fields and index_mapping
+        // The i-th field of the table is `fields[index_mapping[i]]`
+        let (fields, index_mapping) = if columns.is_empty() {
             // Empty means we're inserting into all columns of the table
-            table_schema.fields().clone()
+            (
+                table_schema.fields().clone(),
+                (0..table_schema.fields().len())
+                    .map(Some)
+                    .collect::<Vec<_>>(),
+            )
         } else {
+            let mut mapping = vec![None; table_schema.fields().len()];
             let fields = columns
-                .iter()
-                .map(|c| {
-                    Ok(table_schema
-                        .field_with_unqualified_name(
-                            &self.normalizer.normalize(c.clone()),
-                        )?
-                        .clone())
+                .into_iter()
+                .map(|c| self.normalizer.normalize(c))
+                .enumerate()
+                .map(|(i, c)| {
+                    let column_index = table_schema
+                        .index_of_column_by_name(None, &c)?
+                        .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
+                    if mapping[column_index].is_some() {
+                        return Err(DataFusionError::SchemaError(
+                            datafusion_common::SchemaError::DuplicateUnqualifiedField {
+                                name: c,
+                            },
+                        ));
+                    } else {
+                        mapping[column_index] = Some(i);
+                    }
+                    Ok(table_schema.field(column_index).clone())
                 })
                 .collect::<Result<Vec<DFField>>>()?;
-            // Validate no duplicate fields
-            let table_schema =
-                DFSchema::new_with_metadata(fields, table_schema.metadata().clone())?;
-            table_schema.fields().clone()
+            (fields, mapping)
         };
 
         // infer types for Values clause... other types should be resolvable the regular way
@@ -1036,10 +1051,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Column count doesn't match insert query!".to_owned(),
             ))?;
         }
-        let exprs = fields
-            .iter()
-            .zip(source.schema().fields().iter())
-            .map(|(target_field, source_field)| {
+
+        let exprs = index_mapping
+            .into_iter()
+            .flatten()
+            .map(|i| {
+                let target_field = &fields[i];
+                let source_field = source.schema().field(i);
                 let expr =
                     datafusion_expr::Expr::Column(source_field.unqualified_column())
                         .cast_to(target_field.data_type(), source.schema())?

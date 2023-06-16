@@ -57,7 +57,7 @@ use tokio::io::AsyncWrite;
 /// from the [`TableProvider`]. This helps code re-utilization across
 /// providers that support the the same file formats.
 ///
-/// [`TableProvider`]: crate::datasource::datasource::TableProvider
+/// [`TableProvider`]: crate::datasource::provider::TableProvider
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {
     /// Returns the table provider as [`Any`](std::any::Any) so that it can be

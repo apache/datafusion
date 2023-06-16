@@ -23,7 +23,7 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
@@ -453,9 +453,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-
-                let expr = curr_plan.expressions();
-                from_plan(&curr_plan, &expr, &new_inputs)
+                curr_plan.with_new_inputs(&new_inputs)
             }
         }
     }

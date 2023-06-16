@@ -21,12 +21,15 @@ use arrow::array::ArrayRef;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 
-/// An accumulator represents a stateful object that lives throughout the evaluation of multiple rows and
-/// generically accumulates values.
+/// Accumulates an aggregate's state.
+///
+/// `Accumulator`s are stateful objects that lives throughout the
+/// evaluation of multiple rows and aggregate multiple values together
+/// into a final output aggregate.
 ///
 /// An accumulator knows how to:
 /// * update its state from inputs via `update_batch`
-/// * retract an update to its state from given inputs via `retract_batch`
+/// * (optionally) retract an update to its state from given inputs via `retract_batch`
 /// * convert its internal state to a vector of aggregate values
 /// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
@@ -66,6 +69,16 @@ pub trait Accumulator: Send + Sync + Debug {
         Err(DataFusionError::Internal(
             "Retract should be implemented for aggregate functions when used with custom window frame queries".to_string()
         ))
+    }
+
+    /// Does the accumulator support incrementally updating its value
+    /// by *removing* values.
+    ///
+    /// If this function returns true, [`Self::retract_batch`] will be
+    /// called for sliding window functions such as queries with an
+    /// `OVER (ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING)`
+    fn supports_retract_batch(&self) -> bool {
+        false
     }
 
     /// Updates the accumulator's state from an `Array` containing one

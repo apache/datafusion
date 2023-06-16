@@ -17,6 +17,7 @@
 
 use std::any::Any;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::intervals::Interval;
@@ -131,6 +132,14 @@ impl PhysicalExpr for CastExpr {
         Ok(vec![Some(
             interval.cast_to(&cast_type, &self.cast_options)?,
         )])
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.expr.hash(&mut s);
+        self.cast_type.hash(&mut s);
+        // Add `self.cast_options` when hash is available
+        // https://github.com/apache/arrow-rs/pull/4395
     }
 }
 

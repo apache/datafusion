@@ -18,8 +18,11 @@
 //! This module contains end to end demonstrations of creating
 //! user defined aggregate functions
 
-use arrow::datatypes::Fields;
-use std::sync::Arc;
+use arrow::{array::AsArray, datatypes::Fields};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use datafusion::{
     arrow::{
@@ -37,12 +40,107 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
-use datafusion_common::cast::as_primitive_array;
+use datafusion_common::{assert_contains, cast::as_primitive_array, DataFusionError};
 
+/// Test to show the contents of the setup
 #[tokio::test]
+async fn test_setup() {
+    let TestContext { ctx, test_state: _ } = TestContext::new();
+    let sql = "SELECT * from t order by time";
+    let expected = vec![
+        "+-------+----------------------------+",
+        "| value | time                       |",
+        "+-------+----------------------------+",
+        "| 2.0   | 1970-01-01T00:00:00.000002 |",
+        "| 3.0   | 1970-01-01T00:00:00.000003 |",
+        "| 1.0   | 1970-01-01T00:00:00.000004 |",
+        "| 5.0   | 1970-01-01T00:00:00.000005 |",
+        "| 5.0   | 1970-01-01T00:00:00.000005 |",
+        "+-------+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+}
+
+/// Basic user defined aggregate
+#[tokio::test]
+async fn test_udaf() {
+    let TestContext { ctx, test_state } = TestContext::new();
+    assert!(!test_state.update_batch());
+    let sql = "SELECT time_sum(time) from t";
+    let expected = vec![
+        "+----------------------------+",
+        "| time_sum(t.time)           |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000019 |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+    // normal aggregates call update_batch
+    assert!(test_state.update_batch());
+    assert!(!test_state.retract_batch());
+}
+
+/// User defined aggregate used as a window function
+#[tokio::test]
+async fn test_udaf_as_window() {
+    let TestContext { ctx, test_state } = TestContext::new();
+    let sql = "SELECT time_sum(time) OVER() as time_sum from t";
+    let expected = vec![
+        "+----------------------------+",
+        "| time_sum                   |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000019 |",
+        "| 1970-01-01T00:00:00.000019 |",
+        "| 1970-01-01T00:00:00.000019 |",
+        "| 1970-01-01T00:00:00.000019 |",
+        "| 1970-01-01T00:00:00.000019 |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+    // aggregate over the entire window function call update_batch
+    assert!(test_state.update_batch());
+    assert!(!test_state.retract_batch());
+}
+
+/// User defined aggregate used as a window function with a window frame
+#[tokio::test]
+async fn test_udaf_as_window_with_frame() {
+    let TestContext { ctx, test_state } = TestContext::new();
+    let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
+    let expected = vec![
+        "+----------------------------+",
+        "| time_sum                   |",
+        "+----------------------------+",
+        "| 1970-01-01T00:00:00.000005 |",
+        "| 1970-01-01T00:00:00.000009 |",
+        "| 1970-01-01T00:00:00.000012 |",
+        "| 1970-01-01T00:00:00.000014 |",
+        "| 1970-01-01T00:00:00.000010 |",
+        "+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
+    // user defined aggregates with window frame should be calling retract batch
+    assert!(test_state.update_batch());
+    assert!(test_state.retract_batch());
+}
+
+/// Ensure that User defined aggregate used as a window function with a window
+/// frame, but that does not implement retract_batch, returns an error
+#[tokio::test]
+async fn test_udaf_as_window_with_frame_without_retract_batch() {
+    let test_state = Arc::new(TestState::new().with_error_on_retract_batch());
+
+    let TestContext { ctx, test_state: _ } = TestContext::new_with_test_state(test_state);
+    let sql = "SELECT time_sum(time) OVER(ORDER BY time ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) as time_sum from t";
+    // Note if this query ever does start working
+    let err = execute(&ctx, sql).await.unwrap_err();
+    assert_contains!(err.to_string(), "This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented: AggregateUDF { name: \"time_sum\"");
+}
+
 /// Basic query for with a udaf returning a structure
-async fn test_udf_returning_struct() {
-    let ctx = udaf_struct_context();
+#[tokio::test]
+async fn test_udaf_returning_struct() {
+    let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "SELECT first(value, time) from t";
     let expected = vec![
         "+------------------------------------------------+",
@@ -51,13 +149,13 @@ async fn test_udf_returning_struct() {
         "| {value: 2.0, time: 1970-01-01T00:00:00.000002} |",
         "+------------------------------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
+/// Demonstrate extracting the fields from a structure using a subquery
 #[tokio::test]
-/// Demonstrate extracting the fields from the a structure using a subquery
-async fn test_udf_returning_struct_sq() {
-    let ctx = udaf_struct_context();
+async fn test_udaf_returning_struct_subquery() {
+    let TestContext { ctx, test_state: _ } = TestContext::new();
     let sql = "select sq.first['value'], sq.first['time'] from (SELECT first(value, time) as first from t) as sq";
     let expected = vec![
         "+-----------------+----------------------------+",
@@ -66,14 +164,15 @@ async fn test_udf_returning_struct_sq() {
         "| 2.0             | 1970-01-01T00:00:00.000002 |",
         "+-----------------+----------------------------+",
     ];
-    assert_batches_eq!(expected, &execute(&ctx, sql).await);
+    assert_batches_eq!(expected, &execute(&ctx, sql).await.unwrap());
 }
 
-async fn execute(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
-    ctx.sql(sql).await.unwrap().collect().await.unwrap()
+async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
 }
 
-/// Returns an context with a table "t" and the "first" aggregate registered.
+/// Returns an context with a table "t" and the "first" and "time_sum"
+/// aggregate functions registered.
 ///
 /// "t" contains this data:
 ///
@@ -82,56 +181,192 @@ async fn execute(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
 ///  3.0  | 1970-01-01T00:00:00.000003
 ///  2.0  | 1970-01-01T00:00:00.000002
 ///  1.0  | 1970-01-01T00:00:00.000004
+///  5.0  | 1970-01-01T00:00:00.000005
+///  5.0  | 1970-01-01T00:00:00.000005
 /// ```
-fn udaf_struct_context() -> SessionContext {
-    let value: Float64Array = vec![3.0, 2.0, 1.0].into_iter().map(Some).collect();
-    let time = TimestampNanosecondArray::from(vec![3000, 2000, 4000]);
-
-    let batch = RecordBatch::try_from_iter(vec![
-        ("value", Arc::new(value) as _),
-        ("time", Arc::new(time) as _),
-    ])
-    .unwrap();
-
-    let mut ctx = SessionContext::new();
-    ctx.register_batch("t", batch).unwrap();
-
-    // Tell datafusion about the "first" function
-    register_aggregate(&mut ctx);
-
-    ctx
+struct TestContext {
+    ctx: SessionContext,
+    test_state: Arc<TestState>,
 }
 
-fn register_aggregate(ctx: &mut SessionContext) {
-    let return_type = Arc::new(FirstSelector::output_datatype());
-    let state_type = Arc::new(FirstSelector::state_datatypes());
+impl TestContext {
+    fn new() -> Self {
+        let test_state = Arc::new(TestState::new());
+        Self::new_with_test_state(test_state)
+    }
 
-    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
-    let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
+    fn new_with_test_state(test_state: Arc<TestState>) -> Self {
+        let value = Float64Array::from(vec![3.0, 2.0, 1.0, 5.0, 5.0]);
+        let time = TimestampNanosecondArray::from(vec![3000, 2000, 4000, 5000, 5000]);
 
-    // Possible input signatures
-    let signatures = vec![TypeSignature::Exact(FirstSelector::input_datatypes())];
+        let batch = RecordBatch::try_from_iter(vec![
+            ("value", Arc::new(value) as _),
+            ("time", Arc::new(time) as _),
+        ])
+        .unwrap();
 
-    let accumulator: AccumulatorFunctionImplementation =
-        Arc::new(|_| Ok(Box::new(FirstSelector::new())));
+        let mut ctx = SessionContext::new();
 
-    let volatility = Volatility::Immutable;
+        ctx.register_batch("t", batch).unwrap();
 
-    let name = "first";
+        // Tell DataFusion about the "first" function
+        FirstSelector::register(&mut ctx);
+        // Tell DataFusion about the "time_sum" function
+        TimeSum::register(&mut ctx, Arc::clone(&test_state));
 
-    let first = AggregateUDF::new(
-        name,
-        &Signature::one_of(signatures, volatility),
-        &return_type,
-        &accumulator,
-        &state_type,
-    );
-
-    // register the selector as "first"
-    ctx.register_udaf(first)
+        Self { ctx, test_state }
+    }
 }
 
-/// This structureg models a specialized timeseries aggregate function
+#[derive(Debug, Default)]
+struct TestState {
+    /// was update_batch called?
+    update_batch: AtomicBool,
+    /// was retract_batch called?
+    retract_batch: AtomicBool,
+    /// should the udaf throw an error if retract batch is called? Can
+    /// only be configured at construction time.
+    error_on_retract_batch: bool,
+}
+
+impl TestState {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// Has `update_batch` been called?
+    fn update_batch(&self) -> bool {
+        self.update_batch.load(Ordering::SeqCst)
+    }
+
+    /// Set the `update_batch` flag
+    fn set_update_batch(&self) {
+        self.update_batch.store(true, Ordering::SeqCst)
+    }
+
+    /// Has `retract_batch` been called?
+    fn retract_batch(&self) -> bool {
+        self.retract_batch.load(Ordering::SeqCst)
+    }
+
+    /// set the `retract_batch` flag
+    fn set_retract_batch(&self) {
+        self.retract_batch.store(true, Ordering::SeqCst)
+    }
+
+    /// Is this state configured to return an error on retract batch?
+    fn error_on_retract_batch(&self) -> bool {
+        self.error_on_retract_batch
+    }
+
+    /// Configure the test to return error on retract batch
+    fn with_error_on_retract_batch(mut self) -> Self {
+        self.error_on_retract_batch = true;
+        self
+    }
+}
+
+/// Models a user defined aggregate function that computes the a sum
+/// of timestamps (not a quantity that has much real world meaning)
+#[derive(Debug)]
+struct TimeSum {
+    sum: i64,
+    test_state: Arc<TestState>,
+}
+
+impl TimeSum {
+    fn new(test_state: Arc<TestState>) -> Self {
+        Self { sum: 0, test_state }
+    }
+
+    fn register(ctx: &mut SessionContext, test_state: Arc<TestState>) {
+        let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+
+        // Returns the same type as its input
+        let return_type = Arc::new(timestamp_type.clone());
+        let return_type: ReturnTypeFunction =
+            Arc::new(move |_| Ok(Arc::clone(&return_type)));
+
+        let state_type = Arc::new(vec![timestamp_type.clone()]);
+        let state_type: StateTypeFunction =
+            Arc::new(move |_| Ok(Arc::clone(&state_type)));
+
+        let volatility = Volatility::Immutable;
+
+        let signature = Signature::exact(vec![timestamp_type], volatility);
+
+        let captured_state = Arc::clone(&test_state);
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
+
+        let name = "time_sum";
+
+        let time_sum =
+            AggregateUDF::new(name, &signature, &return_type, &accumulator, &state_type);
+
+        // register the selector as "time_sum"
+        ctx.register_udaf(time_sum)
+    }
+}
+
+impl Accumulator for TimeSum {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.test_state.set_update_batch();
+        assert_eq!(values.len(), 1);
+        let arr = &values[0];
+        let arr = arr.as_primitive::<TimestampNanosecondType>();
+
+        for v in arr.values().iter() {
+            println!("Adding {v}");
+            self.sum += v;
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        // merge and update is the same for time sum
+        self.update_batch(states)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        println!("Evaluating to {}", self.sum);
+        Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
+    }
+
+    fn size(&self) -> usize {
+        // accurate size estimates are not important for this example
+        42
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if self.test_state.error_on_retract_batch() {
+            return Err(DataFusionError::Execution(
+                "Error in Retract Batch".to_string(),
+            ));
+        }
+
+        self.test_state.set_retract_batch();
+        assert_eq!(values.len(), 1);
+        let arr = &values[0];
+        let arr = arr.as_primitive::<TimestampNanosecondType>();
+
+        for v in arr.values().iter() {
+            println!("Retracting {v}");
+            self.sum -= v;
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        !self.test_state.error_on_retract_batch()
+    }
+}
+
+/// Models a specialized timeseries aggregate function
 /// called a "selector" in InfluxQL and Flux.
 ///
 /// It returns the value and corresponding timestamp of the
@@ -151,6 +386,35 @@ impl FirstSelector {
         }
     }
 
+    fn register(ctx: &mut SessionContext) {
+        let return_type = Arc::new(Self::output_datatype());
+        let state_type = Arc::new(Self::state_datatypes());
+
+        let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
+        let state_type: StateTypeFunction = Arc::new(move |_| Ok(state_type.clone()));
+
+        // Possible input signatures
+        let signatures = vec![TypeSignature::Exact(Self::input_datatypes())];
+
+        let accumulator: AccumulatorFunctionImplementation =
+            Arc::new(|_| Ok(Box::new(Self::new())));
+
+        let volatility = Volatility::Immutable;
+
+        let name = "first";
+
+        let first = AggregateUDF::new(
+            name,
+            &Signature::one_of(signatures, volatility),
+            &return_type,
+            &accumulator,
+            &state_type,
+        );
+
+        // register the selector as "first"
+        ctx.register_udaf(first)
+    }
+
     /// Return the schema fields
     fn fields() -> Fields {
         vec![
@@ -164,12 +428,10 @@ impl FirstSelector {
         .into()
     }
 
-    // output data type
     fn output_datatype() -> DataType {
         DataType::Struct(Self::fields())
     }
 
-    // input argument data types
     fn input_datatypes() -> Vec<DataType> {
         vec![
             DataType::Float64,
