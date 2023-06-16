@@ -39,7 +39,8 @@ mod sp_repartition_fuzz_tests {
         let n_test = 100;
         let n_row = 1000;
         // Since ordering in the test (ORDER BY a,b,c)
-        // defines all the table. Result doesn't depend on the stable/unstable sort
+        // covers all the table (table consists of a,b,c columns).
+        // Result doesn't depend on the stable/unstable sort
         // behaviour. We can choose, n_distinct as we like. However,
         // we chose it a large number to decrease probability of having same rows in the table.
         let n_distinct = 1_000_000;
@@ -173,7 +174,6 @@ mod sp_repartition_fuzz_tests {
 
     /// Return randomly sized record batches with:
     /// three sorted int64 columns 'a', 'b', 'c' ranged from 0..'n_distinct' as columns
-    /// one random int64 column 'd' as other columns
     pub(crate) fn make_staggered_batches<const STREAM: bool>(
         len: usize,
         n_distinct: usize,
