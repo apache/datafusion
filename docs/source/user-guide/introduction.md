@@ -22,8 +22,20 @@
 DataFusion is a very fast, extensible query engine for building
 high-quality data-centric systems in [Rust](http://rustlang.org),
 using the [Apache Arrow](https://arrow.apache.org) in-memory format.
+DataFusion is part of the [Apache Arrow](https://arrow.apache.org/)
+project.
 
-DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
+DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, [python bindings], extensive customization, a great community, and more.
+
+[python bindings]: https://github.com/apache/arrow-datafusion-python
+
+## Project Goals
+
+DataFusion aims to be the query engine of choice for new, fast
+data centric systems such as databases, dataframe libraries, machine
+learning and streaming applications by leveraging the unique features
+of [Rust](https://www.rust-lang.org/) and [Apache
+Arrow](https://arrow.apache.org/).
 
 ## Features
 
@@ -34,24 +46,34 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 - Many extension points: user defined scalar/aggregate/window functions, DataSources, SQL,
   other query languages, custom plan and execution nodes, optimizer passes, and more.
 - Streaming, asynchronous IO directly from popular object stores, including AWS S3,
-  Azure Blob Storage, and Google Cloud Storage. Other storage systems are supported via the
-  `ObjectStore` trait.
+  Azure Blob Storage, and Google Cloud Storage (Other storage systems are supported via the
+  `ObjectStore` trait).
 - [Excellent Documentation](https://docs.rs/datafusion/latest) and a
   [welcoming community](https://arrow.apache.org/datafusion/contributor-guide/communication.html).
-- A state of the art query optimizer with projection and filter pushdown, sort aware optimizations,
-  automatic join reordering, expression coercion, and more.
-- Permissive Apache 2.0 License, Apache Software Foundation governance
-- Written in [Rust](https://www.rust-lang.org/), a modern system language with development
-  productivity similar to Java or Golang, the performance of C++, and
-  [loved by programmers everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
-- Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion
-  with other projects, and to pass plans across language boundaries.
+- A state of the art query optimizer with expression coercion and
+  simplification, projection and filter pushdown, sort and distribution
+  aware optimizations, automatic join reordering, and more.
+- Permissive Apache 2.0 License, predictable and well understood
+  [Apache Software Foundation](https://www.apache.org/) governance.
+- Implementation in [Rust](https://www.rust-lang.org/), a modern
+  system language with development productivity similar to Java or
+  Golang, the performance of C++, and [loved by programmers
+  everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
+- Support for [Substrait](https://substrait.io/) query plans, to
+  easily pass plans across language and system boundaries.
 
 ## Use Cases
 
 DataFusion can be used without modification as an embedded SQL
 engine or can be customized and used as a foundation for
-building new systems. Here are some examples of systems built using DataFusion:
+building new systems.
+
+While most current usecases are "analytic" or (throughput) some
+components of DataFusion such as the plan representations, are
+suitable for "streaming" and "transaction" style systems (low
+latency).
+
+Here are some example systems built using DataFusion:
 
 - Specialized Analytical Database systems such as [CeresDB] and more general Apache Spark like system such a [Ballista].
 - New query language engines such as [prql-query] and accelerators such as [VegaFusion]
@@ -59,12 +81,12 @@ building new systems. Here are some examples of systems built using DataFusion:
 - SQL support to another library, such as [dask sql]
 - Streaming data platforms such as [Synnada]
 - Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
-- A faster Spark runtime replacement [Blaze]
+- Native Spark runtime replacement such as [Blaze]
 
-By using DataFusion, the projects are freed to focus on their specific
+By using DataFusion, projects are freed to focus on their specific
 features, and avoid reimplementing general (but still necessary)
 features such as an expression representation, standard optimizations,
-execution plans, file format support, etc.
+parellelized streaming execution plans, file format support, etc.
 
 ## Known Users
 
@@ -119,7 +141,7 @@ Here are some of the projects known to use DataFusion:
 ## Integrations and Extensions
 
 There are a number of community projects that extend DataFusion or
-provide integrations with other systems.
+provide integrations with other systems, some of which are described below:
 
 ### Language Bindings
 
@@ -137,5 +159,5 @@ provide integrations with other systems.
 
 - _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion is very fast.
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
-- _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
-- _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
+- _Easy to Embed_: Allowing extension at almost any point in its design, and published regularly as a crate on [crates.io](http://crates.io), DataFusion can be integrated and tailored for your specific usecase.
+- _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can and is used as the foundation for production systems.
