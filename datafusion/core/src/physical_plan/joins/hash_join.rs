@@ -568,15 +568,16 @@ pub fn update_hash(
             let prev_index = *index;
             // Store new value inside hashmap
             *index = (row + offset + 1) as u64;
-            // Update chained Vec, point to previous value
+            // Update chained Vec at row + offset with previous value
             hash_map.1[row + offset] = prev_index;
         } else {
             hash_map.0.insert(
                 *hash_value,
+                // store the value + 1 as 0 value reserved for end of list 
                 (*hash_value, (row + offset + 1) as u64),
                 |(hash, _)| *hash,
             );
-            // chained list at (row + offset) is initialized with 0
+            // chained list at (row + offset) is already initialized with 0
             // meaning end of list
         }
     }
