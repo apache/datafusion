@@ -202,7 +202,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => {
                 if negative {
-                    "-".to_owned() + &s
+                    format!("-{s}")
                 } else {
                     s
                 }
