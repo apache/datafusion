@@ -751,6 +751,7 @@ pub fn build_equal_condition_join_indices(
                     build_indices.append(offset_build_index as u64);
                     probe_indices.append(row as u32);
                 }
+                // Follow the chain to get the next index value
                 let next = build_hashmap.next[i as usize];
                 if next == 0 {
                     // end of list
