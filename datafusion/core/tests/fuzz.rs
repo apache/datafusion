@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Run all tests that are found in the `sql` directory
-mod sql;
-
-/// Run all tests that are found in the `dataframe` directory
-mod dataframe;
+/// Run all tests that are found in the `fuzz_cases` directory
+mod fuzz_cases;
 
 #[cfg(test)]
 #[ctor::ctor]

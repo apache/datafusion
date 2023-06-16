@@ -121,7 +121,7 @@ impl WindowExpr for BuiltInWindowExpr {
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
-            evaluator.evaluate_with_rank_all(num_rows, &sort_partition_points)
+            evaluator.evaluate_all_with_rank(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
             evaluator.evaluate_all(&values, num_rows)

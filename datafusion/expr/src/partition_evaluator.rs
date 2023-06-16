@@ -71,7 +71,7 @@ use crate::window_state::WindowAggState;
 ///
 /// # Stateless `PartitionEvaluator`
 ///
-/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_with_rank_all`] is called with values for the
+/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_all_with_rank`] is called with values for the
 /// entire partition.
 ///
 /// # Stateful `PartitionEvaluator`
@@ -220,7 +220,7 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// [`PartitionEvaluator::evaluate_with_rank_all`] is called for window
+    /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
     ///
@@ -247,7 +247,7 @@ pub trait PartitionEvaluator: Debug + Send {
     ///   (3,4),
     /// ]
     /// ```
-    fn evaluate_with_rank_all(
+    fn evaluate_all_with_rank(
         &self,
         _num_rows: usize,
         _ranks_in_partition: &[Range<usize>],
@@ -277,7 +277,7 @@ pub trait PartitionEvaluator: Debug + Send {
 
     /// Can this function be evaluated with (only) rank
     ///
-    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_with_rank_all`]
+    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_all_with_rank`]
     fn include_rank(&self) -> bool {
         false
     }
