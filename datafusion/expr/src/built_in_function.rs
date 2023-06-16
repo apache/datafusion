@@ -548,8 +548,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Concat => Ok(Utf8),
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
-            // DateTrunc always makes nanosecond timestamps
-            BuiltinScalarFunction::DateTrunc | BuiltinScalarFunction::DateBin => {
+            BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
                 match input_expr_types[1] {
                     Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
                     Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),

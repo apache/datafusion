@@ -396,9 +396,8 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             }
         }
         _ => {
-            println!("{}, {:?}", granularity, array);
             return Err(DataFusionError::Execution(
-                "second argument of `date_trunc` must be nanosecond timestamp scalar or array array".to_string(),
+                "second argument of `date_trunc` must be nanosecond timestamp scalar or array".to_string(),
             ));
         }
     })
