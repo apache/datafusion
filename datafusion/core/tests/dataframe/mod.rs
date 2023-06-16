@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Include tests in dataframe_functions
+mod dataframe_functions;
+
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use arrow::{

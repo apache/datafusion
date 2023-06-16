@@ -18,6 +18,9 @@
 /// Run all tests that are found in the `sql` directory
 mod sql;
 
+/// Run all tests that are found in the `dataframe` directory
+mod dataframe;
+
 #[cfg(test)]
 #[ctor::ctor]
 fn init() {
