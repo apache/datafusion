@@ -18,14 +18,17 @@
 //! The repartition operator maps N input partitions to M output partitions based on a
 //! partitioning scheme. If its input is ordered, ordering is preserved during repartitioning
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use crate::physical_plan::repartition::distributor_channels::{
-    channels, DistributionSender,
+    channels_partition_aware, DistributionReceiver, DistributionSender,
 };
 use crate::physical_plan::{
-    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
+    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    RecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -41,17 +44,35 @@ use crate::physical_plan::common::{
 };
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::repartition::{
-    BatchPartitioner, RepartitionExecState, RepartitionMetrics, RepartitionStream,
+    BatchPartitioner, MaybeBatch, RepartitionMetrics,
 };
 use crate::physical_plan::sorts::streaming_merge;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortExpr;
-use futures::StreamExt;
+use futures::{FutureExt, Stream, StreamExt};
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
-type MaybeBatch = Option<Result<RecordBatch>>;
+type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
+type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
+
+#[derive(Debug)]
+struct RepartitionExecState {
+    /// Channels for sending batches from input partitions to output partitions.
+    /// Key is the partition number.
+    channels: HashMap<
+        usize,
+        (
+            InputPartitionsToCurrentPartitionSender,
+            InputPartitionsToCurrentPartitionReceiver,
+            SharedMemoryReservation,
+        ),
+    >,
+
+    /// Helper that ensures that that background job is killed once it is no longer needed.
+    abort_helper: Arc<AbortOnDropMany<()>>,
+}
 
 /// The repartition operator maps N input partitions to M output partitions based on a
 /// partitioning scheme. If input is ordered, output is also ordered
@@ -61,7 +82,7 @@ pub struct SortPreservingRepartitionExec {
     input: Arc<dyn ExecutionPlan>,
 
     /// SortExpr
-    sort_expr: Vec<PhysicalSortExpr>,
+    sort_exprs: Vec<PhysicalSortExpr>,
 
     /// Partitioning scheme to use
     partitioning: Partitioning,
@@ -105,7 +126,7 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SortPreservingRepartitionExec::try_new(
-            self.sort_expr.clone(),
+            self.sort_exprs.clone(),
             children[0].clone(),
             self.partitioning.clone(),
         )?))
@@ -154,50 +175,50 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
             // create one channel per *output* partition
             // note we use a custom channel that ensures there is always data for each receiver
             // but limits the amount of buffering if required.
-            let (txs, rxs) = channels(num_output_partitions);
+            let (txs, rxs) =
+                channels_partition_aware(num_output_partitions, num_input_partitions);
             for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
                 let reservation = Arc::new(Mutex::new(
-                    MemoryConsumer::new(format!("SPRepartitionExec[{partition}]"))
-                        .register(context.memory_pool()),
+                    MemoryConsumer::new(format!(
+                        "SortPreservingRepartitionExec[{partition}]"
+                    ))
+                    .register(context.memory_pool()),
                 ));
                 state.channels.insert(partition, (tx, rx, reservation));
             }
 
             // launch one async task per *input* partition
             let mut join_handles = Vec::with_capacity(num_input_partitions);
+            for i in 0..num_input_partitions {
+                let txs: HashMap<_, _> = state
+                    .channels
+                    .iter()
+                    .map(|(partition, (tx, _rx, reservation))| {
+                        (*partition, (tx[i].clone(), Arc::clone(reservation)))
+                    })
+                    .collect();
+                let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-            let txs: HashMap<_, _> = state
-                .channels
-                .iter()
-                .map(|(partition, (tx, _rx, reservation))| {
-                    (*partition, (tx.clone(), Arc::clone(reservation)))
-                })
-                .collect();
+                let input_task: JoinHandle<Result<()>> =
+                    tokio::spawn(Self::pull_from_input(
+                        self.input.clone(),
+                        i,
+                        txs.clone(),
+                        self.partitioning.clone(),
+                        r_metrics,
+                        context.clone(),
+                    ));
 
-            let r_metrics = RepartitionMetrics::new(partition, partition, &self.metrics);
-
-            let input_task: JoinHandle<Result<()>> =
-                tokio::spawn(Self::pull_from_inputs(
-                    self.input.clone(),
-                    txs.clone(),
-                    self.partitioning.clone(),
-                    r_metrics,
-                    context,
-                    self.sort_expr.clone(),
-                    partition,
-                    self.schema(),
-                    self.metrics.clone(),
+                // In a separate task, wait for each input to be done
+                // (and pass along any errors, including panic!s)
+                let join_handle = tokio::spawn(Self::wait_for_task(
+                    AbortOnDropSingle::new(input_task),
+                    txs.into_iter()
+                        .map(|(partition, (tx, _reservation))| (partition, tx))
+                        .collect(),
                 ));
-
-            // In a separate task, wait for each input to be done
-            // (and pass along any errors, including panic!s)
-            let join_handle = tokio::spawn(Self::wait_for_task(
-                AbortOnDropSingle::new(input_task),
-                txs.into_iter()
-                    .map(|(partition, (tx, _reservation))| (partition, tx))
-                    .collect(),
-            ));
-            join_handles.push(join_handle);
+                join_handles.push(join_handle);
+            }
 
             state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
         }
@@ -213,14 +234,34 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
             .channels
             .remove(&partition)
             .expect("partition not used yet");
-        Ok(Box::pin(RepartitionStream {
+        assert_eq!(
+            rx.len(),
             num_input_partitions,
-            num_input_partitions_processed: 0,
-            schema: self.input.schema(),
-            input: rx,
-            drop_helper: Arc::clone(&state.abort_helper),
-            reservation,
-        }))
+            "receiver size and input partition size should match"
+        );
+        let mut input_streams = vec![];
+        for receiver in rx.into_iter() {
+            let stream = Box::pin(PerPartitionStream {
+                num_input_partitions_processed: 0,
+                num_input_partitions: 1,
+                // num_input_partitions,
+                schema: self.schema().clone(),
+                input: receiver,
+                drop_helper: Arc::clone(&state.abort_helper),
+                reservation: reservation.clone(),
+            }) as SendableRecordBatchStream;
+            input_streams.push(stream);
+        }
+        let stream = streaming_merge(
+            input_streams,
+            self.schema(),
+            &self.sort_exprs,
+            BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            100,
+        )
+        .unwrap();
+
+        Ok(stream)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -257,7 +298,7 @@ impl SortPreservingRepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         Ok(SortPreservingRepartitionExec {
-            sort_expr,
+            sort_exprs: sort_expr,
             input,
             partitioning,
             state: Arc::new(Mutex::new(RepartitionExecState {
@@ -268,14 +309,15 @@ impl SortPreservingRepartitionExec {
         })
     }
 
-    /// Pulls data from the specified input plan (all partitions of the input),
-    /// feeds sort preserved merge stream to the
+    /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
+    /// i is the input partition index
+    ///
     /// txs hold the output sending channels for each output partition
-    #[allow(clippy::too_many_arguments)]
-    async fn pull_from_inputs(
+    async fn pull_from_input(
         input: Arc<dyn ExecutionPlan>,
+        i: usize,
         mut txs: HashMap<
             usize,
             (DistributionSender<MaybeBatch>, SharedMemoryReservation),
@@ -283,29 +325,13 @@ impl SortPreservingRepartitionExec {
         partitioning: Partitioning,
         r_metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
-        sort_exprs: Vec<PhysicalSortExpr>,
-        partition: usize,
-        schema: SchemaRef,
-        metrics: ExecutionPlanMetricsSet,
     ) -> Result<()> {
         let mut partitioner =
             BatchPartitioner::try_new(partitioning, r_metrics.repart_time.clone())?;
 
         // execute the child operator
         let timer = r_metrics.fetch_time.timer();
-        let mut input_streams = vec![];
-        for i in 0..input.output_partitioning().partition_count() {
-            let stream = input.execute(i, context.clone())?;
-            input_streams.push(stream);
-        }
-        let mut stream = streaming_merge(
-            input_streams,
-            schema,
-            &sort_exprs,
-            BaselineMetrics::new(&metrics, partition),
-            context.session_config().batch_size(),
-        )?;
-        // let mut stream = input.execute(i, context)?;
+        let mut stream = input.execute(i, context)?;
         timer.done();
 
         // While there are still outputs to send to, keep
@@ -375,7 +401,7 @@ impl SortPreservingRepartitionExec {
     /// channels.
     async fn wait_for_task(
         input_task: AbortOnDropSingle<Result<()>>,
-        txs: HashMap<usize, DistributionSender<Option<Result<RecordBatch>>>>,
+        txs: HashMap<usize, DistributionSender<MaybeBatch>>,
     ) {
         // wait for completion, and propagate error
         // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
@@ -410,5 +436,73 @@ impl SortPreservingRepartitionExec {
                 }
             }
         }
+    }
+}
+
+struct PerPartitionStream {
+    /// Number of input partitions that have finished sending batches to this output channel
+    num_input_partitions_processed: usize,
+
+    num_input_partitions: usize,
+
+    /// Schema wrapped by Arc
+    schema: SchemaRef,
+
+    /// channel containing the repartitioned batches
+    input: DistributionReceiver<MaybeBatch>,
+
+    /// Handle to ensure background tasks are killed when no longer needed.
+    #[allow(dead_code)]
+    drop_helper: Arc<AbortOnDropMany<()>>,
+
+    /// Memory reservation.
+    reservation: SharedMemoryReservation,
+}
+
+impl Stream for PerPartitionStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        loop {
+            // TODO: make use of other partitions
+            match self.input.recv().poll_unpin(cx) {
+                Poll::Ready(Some(Some(v))) => {
+                    if let Ok(batch) = &v {
+                        self.reservation
+                            .lock()
+                            .shrink(batch.get_array_memory_size());
+                    }
+                    return Poll::Ready(Some(v));
+                }
+                Poll::Ready(Some(None)) => {
+                    self.num_input_partitions_processed += 1;
+                    // all input partitions have finished sending batches
+                    // return Poll::Ready(None);
+                    if self.num_input_partitions == self.num_input_partitions_processed {
+                        // all input partitions have finished sending batches
+                        return Poll::Ready(None);
+                    } else {
+                        // other partitions still have data to send
+                        continue;
+                    }
+                }
+                Poll::Ready(None) => {
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
+            }
+        }
+    }
+}
+
+impl RecordBatchStream for PerPartitionStream {
+    /// Get the schema
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }

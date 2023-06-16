@@ -22,6 +22,7 @@ mod sp_repartition_fuzz_tests {
     use arrow_schema::SortOptions;
     use datafusion::physical_plan::memory::MemoryExec;
     use datafusion::physical_plan::repartition::sort_preserving_repartition::SortPreservingRepartitionExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use datafusion::physical_plan::{collect, displayable, ExecutionPlan, Partitioning};
     use datafusion::prelude::SessionContext;
@@ -36,7 +37,8 @@ mod sp_repartition_fuzz_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn sort_preserving_repartition_test() {
-        let n_test = 100;
+        let seed_start = 0;
+        let seed_end = 100;
         let n_row = 1000;
         // Since ordering in the test (ORDER BY a,b,c)
         // covers all the table (table consists of a,b,c columns).
@@ -44,17 +46,22 @@ mod sp_repartition_fuzz_tests {
         // behaviour. We can choose, n_distinct as we like. However,
         // we chose it a large number to decrease probability of having same rows in the table.
         let n_distinct = 1_000_000;
-        for is_first_roundrobin in [false, true] {
+        for (is_first_roundrobin, is_first_sort_preserving) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
             for is_second_roundrobin in [false, true] {
                 let mut handles = Vec::new();
-                for i in 0..n_test {
+
+                for seed in seed_start..seed_end {
                     let job = tokio::spawn(run_sort_preserving_repartition_test(
-                        make_staggered_batches::<true>(n_row, n_distinct, i as u64),
+                        make_staggered_batches::<true>(n_row, n_distinct, seed as u64),
                         is_first_roundrobin,
+                        is_first_sort_preserving,
                         is_second_roundrobin,
                     ));
                     handles.push(job);
                 }
+
                 for job in handles {
                     job.await.unwrap();
                 }
@@ -71,6 +78,7 @@ mod sp_repartition_fuzz_tests {
     async fn run_sort_preserving_repartition_test(
         input1: Vec<RecordBatch>,
         is_first_roundrobin: bool,
+        is_first_sort_preserving: bool,
         is_second_roundrobin: bool,
     ) {
         let schema = input1[0].schema();
@@ -93,17 +101,18 @@ mod sp_repartition_fuzz_tests {
         );
         let hash_exprs = vec![col("c", &schema).unwrap()];
 
-        let intermediate = if is_first_roundrobin {
-            sort_preserving_repartition_exec_round_robin(
+        let intermediate = match (is_first_roundrobin, is_first_sort_preserving) {
+            (true, true) => sort_preserving_repartition_exec_round_robin(
                 sort_keys.clone(),
                 running_source,
-            )
-        } else {
-            sort_preserving_repartition_exec_hash(
+            ),
+            (true, false) => repartition_exec_round_robin(running_source),
+            (false, true) => sort_preserving_repartition_exec_hash(
                 sort_keys.clone(),
                 running_source,
                 hash_exprs.clone(),
-            )
+            ),
+            (false, false) => repartition_exec_hash(running_source, hash_exprs.clone()),
         };
 
         let intermediate = if is_second_roundrobin {
@@ -118,7 +127,7 @@ mod sp_repartition_fuzz_tests {
 
         let final_plan = sort_preserving_merge_exec(sort_keys.clone(), intermediate);
 
-        println!("-------PLAN-------");
+        println!("--------------PLAN--------------");
         print_plan(&final_plan).unwrap();
 
         let task_ctx = ctx.task_ctx();
@@ -149,6 +158,14 @@ mod sp_repartition_fuzz_tests {
         )
     }
 
+    fn repartition_exec_round_robin(
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2)).unwrap(),
+        )
+    }
+
     fn sort_preserving_repartition_exec_hash(
         sort_expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
@@ -161,6 +178,15 @@ mod sp_repartition_fuzz_tests {
                 Partitioning::Hash(hash_expr, 2),
             )
             .unwrap(),
+        )
+    }
+
+    fn repartition_exec_hash(
+        input: Arc<dyn ExecutionPlan>,
+        hash_expr: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            RepartitionExec::try_new(input, Partitioning::Hash(hash_expr, 2)).unwrap(),
         )
     }
 

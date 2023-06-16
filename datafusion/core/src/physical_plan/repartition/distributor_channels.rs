@@ -48,10 +48,11 @@ use std::{
 use parking_lot::Mutex;
 
 /// Create `n` empty channels.
-pub fn channels<T>(
+fn channels_helper<T>(
     n: usize,
+    id_offset: usize,
 ) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
-    let channels = (0..n)
+    let channels = (id_offset..id_offset + n)
         .map(|id| {
             Arc::new(Mutex::new(Channel {
                 data: VecDeque::default(),
@@ -80,6 +81,40 @@ pub fn channels<T>(
             gate: Arc::clone(&gate),
         })
         .collect();
+    (senders, receivers)
+}
+
+/// Create `n` empty channels.
+pub fn channels<T>(
+    n: usize,
+) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
+    channels_helper(n, 0)
+}
+
+type PartitionAwareSenders<T> = Vec<Vec<DistributionSender<T>>>;
+type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
+/// Create `n` empty channels.
+pub fn channels_partition_aware<T>(
+    n_out: usize,
+    n_in: usize,
+) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
+    let mut senders = vec![];
+    let mut receivers = vec![];
+    for _i in 0..n_out {
+        senders.push(vec![]);
+        receivers.push(vec![]);
+    }
+    for in_idx in 0..n_in {
+        let (senders_inner, receivers_inner) = channels_helper(n_out, n_out * in_idx);
+        for (idx, (sender, receiver)) in senders_inner
+            .into_iter()
+            .zip(receivers_inner.into_iter())
+            .enumerate()
+        {
+            senders[idx].push(sender);
+            receivers[idx].push(receiver);
+        }
+    }
     (senders, receivers)
 }
 
