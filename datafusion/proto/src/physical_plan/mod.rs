@@ -465,7 +465,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                         AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
                                             let agg_udf = registry.udaf(udaf_name)?;
                                             udaf::create_aggregate_expr(agg_udf.as_ref(), &input_phy_expr, &physical_schema, name)
-                                                .map(|func| func as Arc<dyn AggregateExpr>)
                                         }
                                     }
                                 }).transpose()?.ok_or_else(|| {

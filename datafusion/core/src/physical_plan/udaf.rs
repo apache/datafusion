@@ -41,7 +41,7 @@ pub fn create_aggregate_expr(
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: impl Into<String>,
-) -> Result<Arc<AggregateFunctionExpr>> {
+) -> Result<Arc<dyn AggregateExpr>> {
     let input_exprs_types = input_phy_exprs
         .iter()
         .map(|arg| arg.data_type(input_schema))
@@ -69,11 +69,6 @@ impl AggregateFunctionExpr {
     /// Return the `AggregateUDF` used by this `AggregateFunctionExpr`
     pub fn fun(&self) -> &AggregateUDF {
         &self.fun
-    }
-
-    /// Returns true if this can support sliding accumulators
-    pub fn retractable(&self) -> Result<bool> {
-        Ok((self.fun.accumulator)(&self.data_type)?.supports_retract_batch())
     }
 }
 
