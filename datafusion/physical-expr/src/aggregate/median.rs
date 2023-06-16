@@ -126,7 +126,7 @@ impl Accumulator for MedianAccumulator {
         let array = &values[0];
 
         assert_eq!(array.data_type(), &self.data_type);
-        self.all_values.reserve(self.all_values.len() + array.len());
+        self.all_values.reserve(array.len());
         for index in 0..array.len() {
             self.all_values
                 .push(ScalarValue::try_from_array(array, index)?);
