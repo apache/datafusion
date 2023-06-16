@@ -43,6 +43,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+/// Also run all tests that are found in the `custom_sources_cases` directory
+mod custom_sources_cases;
+
 use async_trait::async_trait;
 
 //// Custom source dataframe tests ////
