@@ -49,7 +49,9 @@ use datafusion_common::Result;
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
 pub struct JoinHashMap {
+    // Stores hash value to first index
     pub map: RawTable<(u64, u64)>,
+    // Stores indices in chained list data structure
     pub next: Vec<u64>,
 }
 

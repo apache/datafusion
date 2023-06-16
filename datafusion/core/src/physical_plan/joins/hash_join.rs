@@ -2631,7 +2631,13 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (JoinHashMap(hashmap_left, next), left);
+        let left_data = (
+            JoinHashMap {
+                map: hashmap_left,
+                next,
+            },
+            left,
+        );
         let (l, r) = build_equal_condition_join_indices(
             &left_data.0,
             &left_data.1,
