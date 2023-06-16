@@ -168,6 +168,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             })=> self.sql_interval_to_expr(
+                false,
                 *value,
                 schema,
                 planner_context,

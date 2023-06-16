@@ -169,6 +169,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sql_interval_to_expr(
         &self,
+        negative: bool,
         value: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -199,7 +200,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let value = match value {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            ) => s,
+            ) => {
+                if negative {
+                    "-".to_owned() + &s
+                } else {
+                    s
+                }
+            }
             // Support expressions like `interval '1 month' + date/timestamp`.
             // Such expressions are parsed like this by sqlparser-rs
             //
@@ -229,6 +236,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match (leading_field, left.as_ref(), right.as_ref()) {
                     (_, _, SQLExpr::Value(_)) => {
                         let left_expr = self.sql_interval_to_expr(
+                            negative,
                             *left,
                             schema,
                             planner_context,
@@ -238,6 +246,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             None,
                         )?;
                         let right_expr = self.sql_interval_to_expr(
+                            false,
                             *right,
                             schema,
                             planner_context,
@@ -259,6 +268,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // is not a value.
                     (None, _, _) => {
                         let left_expr = self.sql_interval_to_expr(
+                            negative,
                             *left,
                             schema,
                             planner_context,

@@ -18,7 +18,7 @@
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::{lit, Expr};
-use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value};
+use sqlparser::ast::{Expr as SQLExpr, Interval, UnaryOperator, Value};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn parse_sql_unary_op(
@@ -48,6 +48,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     "negative operator can be only applied to integer and float operands, got: {n}"))
                             })?)),
                     },
+                    SQLExpr::Interval(Interval {
+                        value,
+                        leading_field,
+                        leading_precision,
+                        last_field,
+                        fractional_seconds_precision,
+                    }) => self.sql_interval_to_expr(
+                        true,
+                        *value,
+                        schema,
+                        planner_context,
+                        leading_field,
+                        leading_precision,
+                        last_field,
+                        fractional_seconds_precision,
+                    ),
                     // not a literal, apply negative operator on expression
                     _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?))),
                 }
