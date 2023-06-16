@@ -757,18 +757,10 @@ pub fn build_equal_condition_join_indices(
             }
         }
     }
-    let build = ArrayData::builder(DataType::UInt64)
-        .len(build_indices.len())
-        .add_buffer(build_indices.finish())
-        .build()?;
-    let probe = ArrayData::builder(DataType::UInt32)
-        .len(probe_indices.len())
-        .add_buffer(probe_indices.finish())
-        .build()?;
 
     Ok((
-        PrimitiveArray::<UInt64Type>::from(build),
-        PrimitiveArray::<UInt32Type>::from(probe),
+        PrimitiveArray::new(build_indices.finish().into(), None),
+        PrimitiveArray::new(probe_indices.finish().into(), None),
     ))
 }
 
