@@ -43,8 +43,9 @@ use datafusion_common::Result;
 // During this stage it might be the case that a row is contained the same hashmap value,
 // but the values don't match. Those are checked in the [equal_rows] macro
 // The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
-// The first index is stored in the hashmap, whereas the next value is stored in the index.
-// A value of 0 means end of list.
+// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
+// The chain can be followed until the value "0" has been reached, meaning the end of the list.
+// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
 pub struct JoinHashMap(pub RawTable<(u64, u64)>, pub Vec<u64>);
