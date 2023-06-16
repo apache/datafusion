@@ -30,7 +30,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
         DictionaryArray, FixedSizeBinaryArray, LargeStringArray, PrimitiveArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
