@@ -404,7 +404,7 @@
 //! [`AnalyzerRule`]: datafusion_optimizer::analyzer::AnalyzerRule
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
-//! [`PhysicalPlanner`]: physical_plan::PhysicalPlanner
+//! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
 //! [`PhysicalOptimizerRule`]: datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
@@ -426,6 +426,7 @@ pub mod error;
 pub mod execution;
 pub mod physical_optimizer;
 pub mod physical_plan;
+pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 pub mod variable;
