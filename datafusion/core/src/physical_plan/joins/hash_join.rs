@@ -518,7 +518,7 @@ async fn collect_left_input(
 
     let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
-    let mut offset = 1;
+    let mut offset = 0;
     for batch in batches.iter() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
@@ -566,16 +566,18 @@ pub fn update_hash(
         if let Some((_, index)) = item {
             // Already exists: add index to next array
             let prev_index = *index;
-            *index = (row + offset) as u64;
-            // update chained Vec
-            hash_map.1[(*index - 1) as usize] = prev_index;
+            // Store new value inside hashmap
+            *index = (row + offset + 1) as u64;
+            // Update chained Vec, point to previous value
+            hash_map.1[row + offset] = prev_index;
         } else {
             hash_map.0.insert(
                 *hash_value,
-                (*hash_value, (row + offset) as u64),
+                (*hash_value, (row + offset + 1) as u64),
                 |(hash, _)| *hash,
             );
-            // chained list is initalized with 0
+            // chained list at (row + offset) is initialized with 0
+            // meaning end of list
         }
     }
     Ok(())
