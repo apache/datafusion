@@ -28,7 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, ScalarUDF, TableSource,
+    AggregateUDF, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_sql::{
     parser::DFParser,
@@ -2689,6 +2689,10 @@ impl ContextProvider for MockContextProvider {
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
         unimplemented!()
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
+        None
     }
 
     fn options(&self) -> &ConfigOptions {

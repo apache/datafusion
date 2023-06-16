@@ -90,8 +90,10 @@ impl AggregateUDF {
         }
     }
 
-    /// creates a logical expression with a call of the UDAF
-    /// This utility allows using the UDAF without requiring access to the registry.
+    /// creates an [`Expr`] that calls the aggregate function.
+    ///
+    /// This utility allows using the UDAF without requiring access to
+    /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         Expr::AggregateUDF(crate::expr::AggregateUDF {
             fun: Arc::new(self.clone()),
