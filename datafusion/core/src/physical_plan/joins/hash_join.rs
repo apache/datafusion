@@ -561,7 +561,7 @@ pub fn update_hash(
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
         let item = hash_map
-            .0
+            .map
             .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
         if let Some((_, index)) = item {
             // Already exists: add index to next array
@@ -569,9 +569,9 @@ pub fn update_hash(
             // Store new value inside hashmap
             *index = (row + offset + 1) as u64;
             // Update chained Vec at row + offset with previous value
-            hash_map.1[row + offset] = prev_index;
+            hash_map.next[row + offset] = prev_index;
         } else {
-            hash_map.0.insert(
+            hash_map.map.insert(
                 *hash_value,
                 // store the value + 1 as 0 value reserved for end of list
                 (*hash_value, (row + offset + 1) as u64),
@@ -734,7 +734,7 @@ pub fn build_equal_condition_join_indices(
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
         if let Some((_, index)) = build_hashmap
-            .0
+            .map
             .get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
             let mut i = *index - 1;
@@ -751,11 +751,12 @@ pub fn build_equal_condition_join_indices(
                     build_indices.append(offset_build_index as u64);
                     probe_indices.append(row as u32);
                 }
-                if build_hashmap.1[i as usize] == 0 {
+                let next = build_hashmap.next[i as usize];
+                if next == 0 {
                     // end of list
                     break;
                 }
-                i = build_hashmap.1[i as usize] - 1;
+                i = next - 1;
             }
         }
     }

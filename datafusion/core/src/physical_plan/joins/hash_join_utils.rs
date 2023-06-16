@@ -48,7 +48,10 @@ use datafusion_common::Result;
 // Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, u64)>, pub Vec<u64>);
+pub struct JoinHashMap {
+    pub map: RawTable<(u64, u64)>,
+    pub next: Vec<u64>,
+}
 
 /// SymmetricJoinHashMap is similar to JoinHashMap, except that it stores the indices inline, allowing it to mutate
 /// and shrink the indices.
@@ -56,7 +59,10 @@ pub struct SymmetricJoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl JoinHashMap {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        JoinHashMap(RawTable::with_capacity(capacity), vec![0; capacity])
+        JoinHashMap {
+            map: RawTable::with_capacity(capacity),
+            next: vec![0; capacity],
+        }
     }
 }
 
