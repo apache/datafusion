@@ -33,7 +33,7 @@
     <script src="../_static/sphinx_highlight.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="datafusion-cli" href="cli.html" />
+    <link rel="next" title="Command line SQL console" href="cli.html" />
     <link rel="prev" title="Introduction" href="introduction.html" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="docsearch:language" content="en">
@@ -110,11 +110,7 @@
  </li>
  <li class="toctree-l1">
   <a class="reference internal" href="cli.html">
-   <code class="docutils literal notranslate">
-    <span class="pre">
-     datafusion-cli
-    </span>
-   </code>
+   Command line SQL console
   </a>
  </li>
  <li class="toctree-l1">
@@ -396,10 +392,11 @@
 <section id="example-usage">
 <h1>Example Usage<a class="headerlink" href="#example-usage" title="Permalink to this heading">¶</a></h1>
 <p>In this example some simple processing is performed on the <a class="reference download internal" download="" href="../_downloads/9f6fbc67bd5c63cb1fd7ba4efdf82d7a/example.csv"><span class="xref download myst"><code class="docutils literal notranslate"><span class="pre">example.csv</span></code></span></a> file.</p>
+<p>Even <a class="reference internal" href="#../../../datafusion-examples"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">more</span> <span class="pre">code</span> <span class="pre">examples</span></code></span></a> attached to the project</p>
 <section id="update-cargo-toml">
 <h2>Update <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code><a class="headerlink" href="#update-cargo-toml" title="Permalink to this heading">¶</a></h2>
 <p>Add the following to your <code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code> file:</p>
-<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;22&quot;</span>
+<div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;26&quot;</span>
 <span class="n">tokio</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;1.0&quot;</span>
 </pre></div>
 </div>
@@ -467,7 +464,7 @@ exported by DataFusion, for example:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span>::<span class="n">arrow</span>::<span class="n">datatypes</span>::<span class="n">Schema</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>For example, <a class="reference external" href="https://crates.io/crates/datafusion/25.0.0/dependencies">DataFusion <code class="docutils literal notranslate"><span class="pre">25.0.0</span></code> dependencies</a> require <code class="docutils literal notranslate"><span class="pre">arrow</span></code>
+<p>For example, [DataFusion <code class="docutils literal notranslate"><span class="pre">25.0.0</span></code> dependencies] require <code class="docutils literal notranslate"><span class="pre">arrow</span></code>
 <code class="docutils literal notranslate"><span class="pre">39.0.0</span></code>. If instead you used <code class="docutils literal notranslate"><span class="pre">arrow</span></code> <code class="docutils literal notranslate"><span class="pre">40.0.0</span></code> in your project you may
 see errors such as:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>mismatched types [E0308] expected `Schema`, found `arrow_schema::Schema` Note: `arrow_schema::Schema` and `Schema` have similar names, but are actually distinct types Note: `arrow_schema::Schema` is defined in crate `arrow_schema` Note: `Schema` is defined in crate `arrow_schema` Note: perhaps two different versions of crate `arrow_schema` are being used? Note: associated function defined here
@@ -606,7 +603,7 @@ with <code class="docutils literal notranslate"><span class="pre">native</span><
     <a class='right-next' id="next-link" href="cli.html" title="next page">
     <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title"><code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code></p>
+        <p class="prev-next-title">Command line SQL console</p>
     </div>
     <i class="fas fa-angle-right"></i>
     </a>
