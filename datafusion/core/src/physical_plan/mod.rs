@@ -88,9 +88,6 @@ impl Stream for EmptyRecordBatchStream {
     }
 }
 
-/// Physical planner interface
-pub use self::planner::PhysicalPlanner;
-
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
 /// Each `ExecutionPlan` is partition-aware and is responsible for
@@ -686,7 +683,6 @@ pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
-pub mod planner;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
