@@ -573,7 +573,7 @@ pub fn update_hash(
         } else {
             hash_map.0.insert(
                 *hash_value,
-                // store the value + 1 as 0 value reserved for end of list 
+                // store the value + 1 as 0 value reserved for end of list
                 (*hash_value, (row + offset + 1) as u64),
                 |(hash, _)| *hash,
             );
