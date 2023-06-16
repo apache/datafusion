@@ -314,7 +314,8 @@ impl RowAccumulator for AvgRowAccumulator {
         if !selected_row_idx.is_empty() {
             accessor.add_u64(self.state_index, selected_row_idx.len() as u64);
             let array_dt = array.data_type();
-            dispatch_all_supported_data_types! { impl_avg_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, accessor, self}
+            let state_idx = self.state_index + 1;
+            dispatch_all_sum_supported_data_types_with_default_value! { impl_sum_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, accessor, state_idx}
         }
 
         Ok(())

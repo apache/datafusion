@@ -214,6 +214,28 @@ macro_rules! dispatch_all_supported_data_types_pairs {
     };
 }
 
+#[macro_export]
+macro_rules! dispatch_all_sum_supported_data_types_with_default_value {
+    ($macro:ident $(, $x:ident)*) => {
+        $macro! {
+                [$($x),*],
+                { Int8, Int8Array, 0 },
+                { Int16, Int16Array, 0 },
+                { Int32, Int32Array, 0 },
+                { Int64, Int64Array, 0 },
+                { UInt8, UInt8Array, 0 },
+                { UInt16, UInt16Array, 0 },
+                { UInt32, UInt32Array, 0 },
+                { UInt64, UInt64Array, 0 },
+                { Float32, Float32Array, 0.0 },
+                { Float64, Float64Array, 0.0 },
+                { Decimal128, Decimal128Array, 0 }
+        }
+    };
+}
+
+pub use dispatch_all_sum_supported_data_types_with_default_value;
+
 pub use dispatch_all_supported_data_types_pairs;
 
 #[macro_export]
@@ -320,31 +342,33 @@ macro_rules! impl_row_accumulator_update_row_idx_dispatch {
 
 pub use impl_row_accumulator_update_row_idx_dispatch;
 
-/// Generate AvgRowAccumulator update row indices dispatch logic
+/// Generate AvgRowAccumulator/SumRowAccumulator update row indices dispatch logic
 #[macro_export]
-macro_rules! impl_avg_row_accumulator_update_row_idx_dispatch {
+macro_rules! impl_sum_row_accumulator_update_row_idx_dispatch {
     (
-        [$array_dt:ident, $array:ident, $selected_row_idx:ident, $accessor:ident, $self:ident], $({ $i1t:ident, $i1:ident}),*
+        [$array_dt:ident, $array:ident, $selected_row_idx:ident, $accessor:ident, $state_index:ident], $({ $i1t:ident, $i1:ident, $i1d:expr}),*
     ) => {
         match ($array_dt) {
             $(
                 $i1t! { datatype_match_pattern } => {
                         let typed_array = downcast_value!($array, $i1);
+                        let mut delta = $i1d;
                         for row_index in $selected_row_idx {
                             let value = typed_array.value_at(row_index);
-                            value.add_to_row($self.state_index + 1, $accessor);
+                            delta += value;
                         }
+                        delta.add_to_row($state_index, $accessor);
                 }
             )*
             _ => return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {} in AvgRowAccumulator",
+                        "Unsupported data type {} in AvgRowAccumulator/SumRowAccumulator",
                         $array_dt
                     )))
         }
     };
 }
 
-pub use impl_avg_row_accumulator_update_row_idx_dispatch;
+pub use impl_sum_row_accumulator_update_row_idx_dispatch;
 
 /// The type match pattern of the type macro. e.g., 'DataType::Decimal { .. }'.
 #[macro_export]

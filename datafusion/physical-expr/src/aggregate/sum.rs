@@ -348,7 +348,8 @@ impl RowAccumulator for SumRowAccumulator {
         let selected_row_idx = apply_filter_on_rows(filter, array, row_indices);
         if !selected_row_idx.is_empty() {
             let array_dt = array.data_type();
-            dispatch_all_supported_data_types! { impl_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, add_to_row, accessor, self}
+            let state_idx = self.index;
+            dispatch_all_sum_supported_data_types_with_default_value! { impl_sum_row_accumulator_update_row_idx_dispatch, array_dt, array, selected_row_idx, accessor, state_idx}
         }
 
         Ok(())

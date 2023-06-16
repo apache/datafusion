@@ -110,7 +110,7 @@ pub fn apply_filter_on_rows(
     array: &ArrayRef,
     row_indices: &[usize],
 ) -> Vec<usize> {
-    let mut selected_row_idx = vec![];
+    let mut selected_row_idx = Vec::with_capacity(row_indices.len());
     for row_index in row_indices {
         if !array.is_null(*row_index) {
             selected_row_idx.push(*row_index);

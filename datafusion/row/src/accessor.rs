@@ -381,7 +381,7 @@ impl<'a> RowAccessor<'a> {
     fn_bit_and_or_xor_idx!(i64, bitxor);
 }
 
-pub trait RowAccumulatorNativeType: Debug + Send + Sync {
+pub trait RowAccumulatorNativeType: Debug + Send + Sync + Copy + Default {
     fn add_to_row(self, row_idx: usize, row: &mut RowAccessor);
 
     fn min_to_row(self, row_idx: usize, row: &mut RowAccessor);
@@ -396,9 +396,8 @@ pub trait RowAccumulatorNativeType: Debug + Send + Sync {
 }
 
 impl RowAccumulatorNativeType for bool {
-    fn add_to_row(self, row_idx: usize, row: &mut RowAccessor) {
-        //TODO add test
-        row.set_bool(row_idx, self)
+    fn add_to_row(self, _row_idx: usize, _row: &mut RowAccessor) {
+        unimplemented!()
     }
 
     #[inline(always)]

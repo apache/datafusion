@@ -837,10 +837,10 @@ impl GroupedHashAggregateStream {
                 RowAccessor::new_from_layout(self.row_aggr_layout.clone());
             state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
             for idx in &group_state.indices {
-                let value = col_to_value(agg_input_array1, filter_array1, *idx);
-                accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
-                let value = col_to_value(agg_input_array2, filter_array2, *idx);
-                accumulator2.update_value::<T2::Item>(value, &mut state_accessor);
+                let value1 = col_to_value(agg_input_array1, filter_array1, *idx);
+                let value2 = col_to_value(agg_input_array2, filter_array2, *idx);
+                accumulator1.update_value::<T1::Item>(value1, &mut state_accessor);
+                accumulator2.update_value::<T2::Item>(value2, &mut state_accessor);
             }
             // clear the group indices in this group
             group_state.indices.clear();
