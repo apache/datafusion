@@ -568,8 +568,7 @@ pub fn update_hash(
             let prev_index = *index;
             *index = (row + offset) as u64;
             // update chained Vec
-            hash_map.1[*index as usize] = prev_index;
-
+            hash_map.1[(*index - 1) as usize] = prev_index;
         } else {
             hash_map.0.insert(
                 *hash_value,
@@ -735,9 +734,9 @@ pub fn build_equal_condition_join_indices(
             .0
             .get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
-            let mut i = *index;
+            let mut i = *index - 1;
             loop {
-                let offset_build_index = i as usize - offset_value - 1;
+                let offset_build_index = i as usize - offset_value;
                 // Check hash collisions
                 if equal_rows(
                     offset_build_index,
@@ -749,11 +748,11 @@ pub fn build_equal_condition_join_indices(
                     build_indices.append(offset_build_index as u64);
                     probe_indices.append(row as u32);
                 }
-                if build_hashmap.1[i as usize] != 0 {
-                    i = build_hashmap.1[i as usize];
-                } else {
+                if build_hashmap.1[i as usize] == 0 {
+                    // end of list
                     break;
                 }
+                i = build_hashmap.1[i as usize] - 1;
             }
         }
     }
@@ -831,7 +830,7 @@ macro_rules! equal_rows_elem_with_string_dict {
 /// Left and right row have equal values
 /// If more data types are supported here, please also add the data types in can_hash function
 /// to generate hash join logical plan.
-fn equal_rows(
+pub fn equal_rows(
     left: usize,
     right: usize,
     left_arrays: &[ArrayRef],
@@ -2620,7 +2619,7 @@ mod tests {
         hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
         hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
 
-        let next = vec![0, 2, 0];
+        let next = vec![2, 0];
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
