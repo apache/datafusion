@@ -22,7 +22,7 @@ use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
-use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Value};
+use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::HashSet;
 
@@ -163,40 +163,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Convert a SQL interval expression to a DataFusion logical plan
     /// expression
-    ///
-    /// Waiting for this issue to be resolved:
-    /// `<https://github.com/sqlparser-rs/sqlparser-rs/issues/869>`
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn sql_interval_to_expr(
         &self,
-        value: SQLExpr,
+        interval: Interval,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-        leading_field: Option<DateTimeField>,
-        leading_precision: Option<u64>,
-        last_field: Option<DateTimeField>,
-        fractional_seconds_precision: Option<u64>,
     ) -> Result<Expr> {
-        if leading_precision.is_some() {
+        if interval.leading_precision.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with leading_precision {leading_precision:?}"
+                "Unsupported Interval Expression with leading_precision {:?}",
+                interval.leading_precision,
             )));
         }
 
-        if last_field.is_some() {
+        if interval.last_field.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with last_field {last_field:?}"
+                "Unsupported Interval Expression with last_field {:?}",
+                interval.last_field,
             )));
         }
 
-        if fractional_seconds_precision.is_some() {
+        if interval.fractional_seconds_precision.is_some() {
             return Err(DataFusionError::NotImplemented(format!(
-                "Unsupported Interval Expression with fractional_seconds_precision {fractional_seconds_precision:?}"
+                "Unsupported Interval Expression with fractional_seconds_precision {:?}",
+                interval.fractional_seconds_precision,
             )));
         }
 
         // Only handle string exprs for now
-        let value = match value {
+        let value = match *interval.value {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
             ) => s,
@@ -226,25 +221,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         )));
                     }
                 };
-                match (leading_field, left.as_ref(), right.as_ref()) {
+                match (interval.leading_field, left.as_ref(), right.as_ref()) {
                     (_, _, SQLExpr::Value(_)) => {
                         let left_expr = self.sql_interval_to_expr(
-                            *left,
+                            Interval {
+                                value: left,
+                                leading_field: interval.leading_field,
+                                leading_precision: None,
+                                last_field: None,
+                                fractional_seconds_precision: None,
+                            },
                             schema,
                             planner_context,
-                            leading_field,
-                            None,
-                            None,
-                            None,
                         )?;
                         let right_expr = self.sql_interval_to_expr(
-                            *right,
+                            Interval {
+                                value: right,
+                                leading_field: interval.leading_field,
+                                leading_precision: None,
+                                last_field: None,
+                                fractional_seconds_precision: None,
+                            },
                             schema,
                             planner_context,
-                            leading_field,
-                            None,
-                            None,
-                            None,
                         )?;
                         return Ok(Expr::BinaryExpr(BinaryExpr::new(
                             Box::new(left_expr),
@@ -259,13 +258,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // is not a value.
                     (None, _, _) => {
                         let left_expr = self.sql_interval_to_expr(
-                            *left,
+                            Interval {
+                                value: left,
+                                leading_field: None,
+                                leading_precision: None,
+                                last_field: None,
+                                fractional_seconds_precision: None,
+                            },
                             schema,
                             planner_context,
-                            None,
-                            None,
-                            None,
-                            None,
                         )?;
                         let right_expr = self.sql_expr_to_logical_expr(
                             *right,
@@ -301,7 +302,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             // leading_field really means the unit if specified
             // for example, "month" in  `INTERVAL '5' month`
-            match leading_field.as_ref() {
+            match interval.leading_field.as_ref() {
                 Some(leading_field) => {
                     format!("{value} {leading_field}")
                 }

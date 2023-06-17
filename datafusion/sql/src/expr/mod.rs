@@ -161,20 +161,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-            SQLExpr::Interval(Interval {
-                value,
-                leading_field,
-                leading_precision,
-                last_field,
-                fractional_seconds_precision,
-            })=> self.sql_interval_to_expr(
-                *value,
+            SQLExpr::Interval(interval)=> self.sql_interval_to_expr(
+                interval,
                 schema,
                 planner_context,
-                leading_field,
-                leading_precision,
-                last_field,
-                fractional_seconds_precision,
             ),
             SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
 
