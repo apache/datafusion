@@ -1018,15 +1018,36 @@ impl LogicalPlan {
                             }
 
                             if !full_filter.is_empty() {
-                                write!(f, ", full_filters={full_filter:?}")?;
+                                write!(
+                                    f,
+                                    ", full_filters={}",
+                                    full_filter
+                                        .iter()
+                                        .map(|e| format!("{e}"))
+                                        .collect::<Vec<String>>()
+                                        .join(", ")
+                                )?;
                             };
                             if !partial_filter.is_empty() {
-                                write!(f, ", partial_filters={partial_filter:?}")?;
+                                write!(
+                                    f,
+                                    ", partial_filters={}",
+                                    partial_filter
+                                        .iter()
+                                        .map(|e| format!("{e}"))
+                                        .collect::<Vec<String>>()
+                                        .join(", ")
+                                )?;
                             }
                             if !unsupported_filters.is_empty() {
                                 write!(
                                     f,
-                                    ", unsupported_filters={unsupported_filters:?}"
+                                    ", unsupported_filters={}",
+                                    unsupported_filters
+                                        .iter()
+                                        .map(|e| format!("{e}"))
+                                        .collect::<Vec<String>>()
+                                        .join(", ")
                                 )?;
                             }
                         }
@@ -1043,7 +1064,7 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{expr_item:?}")?;
+                            write!(f, "{expr_item}")?;
                         }
                         Ok(())
                     }
@@ -1056,11 +1077,19 @@ impl LogicalPlan {
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
-                    }) => write!(f, "Filter: {expr:?}"),
+                    }) => write!(f, "Filter: {expr}"),
                     LogicalPlan::Window(Window {
                         ref window_expr, ..
                     }) => {
-                        write!(f, "WindowAggr: windowExpr=[{window_expr:?}]")
+                        write!(
+                            f,
+                            "WindowAggr: windowExpr=[{}]",
+                            window_expr
+                                .iter()
+                                .map(|e| format!("{e}"))
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )
                     }
                     LogicalPlan::Aggregate(Aggregate {
                         ref group_expr,
@@ -1068,7 +1097,17 @@ impl LogicalPlan {
                         ..
                     }) => write!(
                         f,
-                        "Aggregate: groupBy=[{group_expr:?}], aggr=[{aggr_expr:?}]"
+                        "Aggregate: groupBy=[[{}]], aggr=[[{}]]",
+                        group_expr
+                            .iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", "),
+                        aggr_expr
+                            .iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
                     ),
                     LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;
@@ -1076,7 +1115,7 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{expr_item:?}")?;
+                            write!(f, "{expr_item}")?;
                         }
                         if let Some(a) = fetch {
                             write!(f, ", fetch={a}")?;
