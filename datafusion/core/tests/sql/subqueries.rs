@@ -331,10 +331,10 @@ async fn non_aggregated_correlated_scalar_subquery_with_single_row() -> Result<(
     let plan = dataframe.into_optimized_plan()?;
 
     let expected = vec![
-        "Projection: t1.t1_id, __scalar_sq_5.a AS t2_int [t1_id:UInt32;N, t2_int:Int64;N]",
-        "  Left Join: CAST(t1.t1_int AS Int64) = __scalar_sq_5.a [t1_id:UInt32;N, t1_int:UInt32;N, a:Int64;N]",
+        "Projection: t1.t1_id, __scalar_sq_1.a AS t2_int [t1_id:UInt32;N, t2_int:Int64;N]",
+        "  Left Join: CAST(t1.t1_int AS Int64) = __scalar_sq_1.a [t1_id:UInt32;N, t1_int:UInt32;N, a:Int64;N]",
         "    TableScan: t1 projection=[t1_id, t1_int] [t1_id:UInt32;N, t1_int:UInt32;N]",
-        "    SubqueryAlias: __scalar_sq_5 [a:Int64]",
+        "    SubqueryAlias: __scalar_sq_1 [a:Int64]",
         "      Projection: Int64(1) AS a [a:Int64]",
         "        EmptyRelation []",
     ];
