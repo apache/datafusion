@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use arrow::{
@@ -35,7 +36,7 @@ use arrow::compute::kernels::comparison::{
 };
 
 // Like expression
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct LikeExpr {
     negated: bool,
     case_insensitive: bool,
@@ -185,6 +186,11 @@ impl PhysicalExpr for LikeExpr {
     /// Return the boundaries of this binary expression's result.
     fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         context.with_boundaries(None)
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

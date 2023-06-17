@@ -2351,7 +2351,7 @@ GRC [80.0, 30.0] 110
 TUR [100.0, 75.0] 175
 
 # test_ordering_sensitive_aggregation7
-# Lexicographical ordering requirement can be given as 
+# Lexicographical ordering requirement can be given as
 # argument to the aggregate functions
 query TT
 EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC, s.amount DESC) AS amounts,

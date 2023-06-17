@@ -22,6 +22,7 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Represents Sort operation for a column in a RecordBatch
@@ -36,6 +37,15 @@ pub struct PhysicalSortExpr {
 impl PartialEq for PhysicalSortExpr {
     fn eq(&self, other: &PhysicalSortExpr) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
+    }
+}
+
+impl Eq for PhysicalSortExpr {}
+
+impl Hash for PhysicalSortExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.options.hash(state);
     }
 }
 

@@ -70,11 +70,7 @@ impl BuiltInWindowFunctionExpr for CumeDist {
 pub(crate) struct CumeDistEvaluator;
 
 impl PartitionEvaluator for CumeDistEvaluator {
-    fn include_rank(&self) -> bool {
-        true
-    }
-
-    fn evaluate_with_rank(
+    fn evaluate_all_with_rank(
         &self,
         num_rows: usize,
         ranks_in_partition: &[Range<usize>],
@@ -94,6 +90,10 @@ impl PartitionEvaluator for CumeDistEvaluator {
         );
         Ok(Arc::new(result))
     }
+
+    fn include_rank(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -109,7 +109,7 @@ mod tests {
     ) -> Result<()> {
         let result = expr
             .create_evaluator()?
-            .evaluate_with_rank(num_rows, &ranks)?;
+            .evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);

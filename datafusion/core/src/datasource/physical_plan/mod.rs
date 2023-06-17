@@ -140,7 +140,7 @@ pub struct FileScanConfig {
     ///
     /// Each file must have a schema of `file_schema` or a subset. If
     /// a particular file has a subset, the missing columns are
-    /// padded with with NULLs.
+    /// padded with NULLs.
     ///
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
@@ -312,27 +312,19 @@ struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
 impl<'a> Display for FileGroupsDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let n_group = self.0.len();
-        let groups = if n_group == 1 { "group" } else { "groups" };
-        write!(f, "{{{n_group} {groups}: [")?;
+        let n_groups = self.0.len();
+        let groups = if n_groups == 1 { "group" } else { "groups" };
+        write!(f, "{{{n_groups} {groups}: [")?;
         // To avoid showing too many partitions
         let max_groups = 5;
-        for (idx, group) in self.0.iter().take(max_groups).enumerate() {
-            if idx > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}", FileGroupDisplay(group))?;
-        }
-        // Remaining elements are showed as `...` (to indicate there is more)
-        if n_group > max_groups {
-            write!(f, ", ...")?;
-        }
-        write!(f, "]}}")?;
-        Ok(())
+        fmt_up_to_n_elements(self.0, max_groups, f, |group, f| {
+            write!(f, "{}", FileGroupDisplay(group))
+        })?;
+        write!(f, "]}}")
     }
 }
 
-/// A wrapper to customize partitioned file display
+/// A wrapper to customize partitioned group of files display
 ///
 /// Prints in the format:
 /// ```text
@@ -343,20 +335,42 @@ pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
 impl<'a> Display for FileGroupDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let group = self.0;
         write!(f, "[")?;
-        for (idx, pf) in group.iter().enumerate() {
-            if idx > 0 {
-                write!(f, ", ")?;
-            }
+        // To avoid showing too many files
+        let max_files = 5;
+        fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
             write!(f, "{}", pf.object_meta.location.as_ref())?;
             if let Some(range) = pf.range.as_ref() {
                 write!(f, ":{}..{}", range.start, range.end)?;
             }
-        }
-        write!(f, "]")?;
-        Ok(())
+            Ok(())
+        })?;
+        write!(f, "]")
     }
+}
+
+/// helper to format an array of up to N elements
+fn fmt_up_to_n_elements<E, F>(
+    elements: &[E],
+    n: usize,
+    f: &mut Formatter,
+    format_element: F,
+) -> FmtResult
+where
+    F: Fn(&E, &mut Formatter) -> FmtResult,
+{
+    let len = elements.len();
+    for (idx, element) in elements.iter().take(n).enumerate() {
+        if idx > 0 {
+            write!(f, ", ")?;
+        }
+        format_element(element, f)?;
+    }
+    // Remaining elements are showed as `...` (to indicate there is more)
+    if len > n {
+        write!(f, ", ...")?;
+    }
+    Ok(())
 }
 
 /// A wrapper to customize partitioned file display
@@ -1299,10 +1313,41 @@ mod tests {
     }
 
     #[test]
+    fn file_groups_display_too_many() {
+        let files = [
+            vec![partitioned_file("foo"), partitioned_file("bar")],
+            vec![partitioned_file("baz")],
+            vec![partitioned_file("qux")],
+            vec![partitioned_file("quux")],
+            vec![partitioned_file("quuux")],
+            vec![partitioned_file("quuuux")],
+            vec![],
+        ];
+
+        let expected = "{7 groups: [[foo, bar], [baz], [qux], [quux], [quuux], ...]}";
+        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    #[test]
     fn file_group_display_many() {
         let files = vec![partitioned_file("foo"), partitioned_file("bar")];
 
         let expected = "[foo, bar]";
+        assert_eq!(&FileGroupDisplay(&files).to_string(), expected);
+    }
+
+    #[test]
+    fn file_group_display_too_many() {
+        let files = vec![
+            partitioned_file("foo"),
+            partitioned_file("bar"),
+            partitioned_file("baz"),
+            partitioned_file("qux"),
+            partitioned_file("quux"),
+            partitioned_file("quuux"),
+        ];
+
+        let expected = "[foo, bar, baz, qux, quux, ...]";
         assert_eq!(&FileGroupDisplay(&files).to_string(), expected);
     }
 

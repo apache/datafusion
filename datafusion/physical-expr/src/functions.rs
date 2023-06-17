@@ -45,7 +45,7 @@ use arrow::{
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
-    function, BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
+    BuiltinScalarFunction, ColumnarValue, ScalarFunctionImplementation,
 };
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ pub fn create_physical_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = function::return_type(fun, &input_expr_types)?;
+    let data_type = fun.return_type(&input_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation
@@ -385,7 +385,9 @@ pub fn create_physical_fun(
         }
 
         // array functions
-        BuiltinScalarFunction::ArrayAppend => Arc::new(array_expressions::array_append),
+        BuiltinScalarFunction::ArrayAppend => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_append)(args))
+        }
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
@@ -402,14 +404,16 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayPositions => {
             Arc::new(array_expressions::array_positions)
         }
-        BuiltinScalarFunction::ArrayPrepend => Arc::new(array_expressions::array_prepend),
+        BuiltinScalarFunction::ArrayPrepend => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_prepend)(args))
+        }
         BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
         BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
         BuiltinScalarFunction::ArrayToString => {
             Arc::new(array_expressions::array_to_string)
         }
         BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
-        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
         BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
 
         // string functions
@@ -816,7 +820,6 @@ mod tests {
     use super::*;
     use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
-    use crate::from_slice::FromSlice;
     use arrow::{
         array::{
             Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
@@ -844,7 +847,7 @@ mod tests {
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
 
             let expr =
                 create_physical_expr_with_type_coercion(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
@@ -2821,7 +2824,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let execution_props = ExecutionProps::new();
 
-        let col_value: ArrayRef = Arc::new(StringArray::from_slice(["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
         let pattern = lit(r".*-(\d*)");
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr_with_type_coercion(
@@ -2862,7 +2865,7 @@ mod tests {
 
         let col_value = lit("aaa-555");
         let pattern = lit(r".*-(\d*)");
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice([1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
         let expr = create_physical_expr_with_type_coercion(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
@@ -2927,7 +2930,7 @@ mod tests {
         execution_props: &ExecutionProps,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let type_coerced_phy_exprs =
-            coerce(input_phy_exprs, input_schema, &function::signature(fun)).unwrap();
+            coerce(input_phy_exprs, input_schema, &fun.signature()).unwrap();
         create_physical_expr(fun, &type_coerced_phy_exprs, input_schema, execution_props)
     }
 

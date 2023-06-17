@@ -19,7 +19,7 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, NthValueKind, NthValueState};
+use crate::window::window_expr::{NthValueKind, NthValueState};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
@@ -122,14 +122,6 @@ impl BuiltInWindowFunctionExpr for NthValue {
         Ok(Box::new(NthValueEvaluator { state }))
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
-    fn uses_window_frame(&self) -> bool {
-        true
-    }
-
     fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         let reversed_kind = match self.kind {
             NthValueKind::First => NthValueKind::Last,
@@ -152,11 +144,6 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn state(&self) -> Result<BuiltinWindowState> {
-        // If we do not use state we just return Default
-        Ok(BuiltinWindowState::NthValue(self.state.clone()))
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
@@ -169,46 +156,76 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        if let BuiltinWindowState::NthValue(nth_value_state) = state {
-            self.state = nth_value_state.clone()
+    /// When the window frame has a fixed beginning (e.g UNBOUNDED
+    /// PRECEDING), for some functions such as FIRST_VALUE, LAST_VALUE and
+    /// NTH_VALUE we can memoize result.  Once result is calculated it
+    /// will always stay same. Hence, we do not need to keep past data
+    /// as we process the entire dataset. This feature enables us to
+    /// prune rows from table. The default implementation does nothing
+    fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
+        let out = &state.out_col;
+        let size = out.len();
+        let (is_prunable, is_last) = match self.state.kind {
+            NthValueKind::First => {
+                let n_range =
+                    state.window_frame_range.end - state.window_frame_range.start;
+                (n_range > 0 && size > 0, false)
+            }
+            NthValueKind::Last => (true, true),
+            NthValueKind::Nth(n) => {
+                let n_range =
+                    state.window_frame_range.end - state.window_frame_range.start;
+                (n_range >= (n as usize) && size >= (n as usize), false)
+            }
+        };
+        if is_prunable {
+            if self.state.finalized_result.is_none() && !is_last {
+                let result = ScalarValue::try_from_array(out, size - 1)?;
+                self.state.finalized_result = Some(result);
+            }
+            state.window_frame_range.start =
+                state.window_frame_range.end.saturating_sub(1);
         }
         Ok(())
     }
 
-    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
-        if let Some(ref result) = self.state.finalized_result {
-            Ok(result.clone())
-        } else {
-            self.evaluate_inside_range(values, &self.state.range)
-        }
-    }
-
-    fn evaluate_inside_range(
-        &self,
+    fn evaluate(
+        &mut self,
         values: &[ArrayRef],
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
-        // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
-        let arr = &values[0];
-        let n_range = range.end - range.start;
-        if n_range == 0 {
-            // We produce None if the window is empty.
-            return ScalarValue::try_from(arr.data_type());
-        }
-        match self.state.kind {
-            NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
-            NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
-            NthValueKind::Nth(n) => {
-                // We are certain that n > 0.
-                let index = (n as usize) - 1;
-                if index >= n_range {
-                    ScalarValue::try_from(arr.data_type())
-                } else {
-                    ScalarValue::try_from_array(arr, range.start + index)
+        if let Some(ref result) = self.state.finalized_result {
+            Ok(result.clone())
+        } else {
+            // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
+            let arr = &values[0];
+            let n_range = range.end - range.start;
+            if n_range == 0 {
+                // We produce None if the window is empty.
+                return ScalarValue::try_from(arr.data_type());
+            }
+            match self.state.kind {
+                NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
+                NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
+                NthValueKind::Nth(n) => {
+                    // We are certain that n > 0.
+                    let index = (n as usize) - 1;
+                    if index >= n_range {
+                        ScalarValue::try_from(arr.data_type())
+                    } else {
+                        ScalarValue::try_from_array(arr, range.start + index)
+                    }
                 }
             }
         }
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        true
     }
 }
 
@@ -233,11 +250,11 @@ mod tests {
                 end: i + 1,
             })
         }
-        let evaluator = expr.create_evaluator()?;
+        let mut evaluator = expr.create_evaluator()?;
         let values = expr.evaluate_args(&batch)?;
         let result = ranges
             .iter()
-            .map(|range| evaluator.evaluate_inside_range(&values, range))
+            .map(|range| evaluator.evaluate(&values, range))
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = as_int32_array(&result)?;
@@ -252,7 +269,7 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
         );
-        test_i32_result(first_value, Int32Array::from_iter_values(vec![1; 8]))?;
+        test_i32_result(first_value, Int32Array::from(vec![1; 8]))?;
         Ok(())
     }
 
@@ -287,7 +304,7 @@ mod tests {
             DataType::Int32,
             1,
         )?;
-        test_i32_result(nth_value, Int32Array::from_iter_values(vec![1; 8]))?;
+        test_i32_result(nth_value, Int32Array::from(vec![1; 8]))?;
         Ok(())
     }
 

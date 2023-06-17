@@ -21,7 +21,7 @@
 
 use std::fmt;
 
-use crate::logical_expr::{StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::display::{StringifiedPlan, ToStringifiedPlan};
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
