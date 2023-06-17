@@ -28,6 +28,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use datafusion_common::AliasGenerator;
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
@@ -1985,8 +1986,8 @@ impl OptimizerConfig for SessionState {
         self.execution_props.query_execution_start_time
     }
 
-    fn alias_generator(&self) -> AliasGenerator {
-        self.execution_props.alias_generator
+    fn alias_generator(&self) -> Arc<AliasGenerator> {
+        self.execution_props.alias_generator.clone()
     }
 
     fn options(&self) -> &ConfigOptions {

@@ -1221,7 +1221,7 @@ mod tests {
     };
     use chrono::{DateTime, TimeZone, Utc};
     use datafusion_common::{
-        assert_contains, cast::as_int32_array, AliasGenerator, DFField, ToDFSchema
+        assert_contains, cast::as_int32_array, AliasGenerator, DFField, ToDFSchema,
     };
     use datafusion_expr::*;
     use datafusion_physical_expr::{
