@@ -761,7 +761,14 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Box::new(self), name.into())
+        match self {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
+            _ => Expr::Alias(Box::new(self), name.into()),
+        }
     }
 
     /// Remove an alias from an expression if one exists.

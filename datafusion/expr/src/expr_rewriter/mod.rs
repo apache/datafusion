@@ -276,17 +276,7 @@ fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
         return Ok(expr);
     }
 
-    Ok(match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let expr = add_alias_if_changed(original_name, *expr)?;
-            Expr::Sort(Sort::new(Box::new(expr), asc, nulls_first))
-        }
-        expr => expr.alias(original_name),
-    })
+    Ok(expr.alias(original_name))
 }
 
 #[cfg(test)]
