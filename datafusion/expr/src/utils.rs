@@ -1570,13 +1570,13 @@ mod tests {
         // 6. col + grouping_set
         let sets =
             enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
-            let result = format!(
-                "[{}]",
-                sets.iter()
-                    .map(|e| format!("{e}"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            );
+        let result = format!(
+            "[{}]",
+            sets.iter()
+                .map(|e| format!("{e}"))
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3))]",
