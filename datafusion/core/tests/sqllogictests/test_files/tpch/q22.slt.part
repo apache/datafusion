@@ -63,10 +63,10 @@ Sort: custsale.cntrycode ASC NULLS LAST
 --------Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
 ----------Inner Join:  Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __scalar_sq_11.AVG(customer.c_acctbal)
 ------------Projection: customer.c_phone, customer.c_acctbal
---------------LeftAnti Join: customer.c_custkey = __correlated_sq_13.o_custkey
+--------------LeftAnti Join: customer.c_custkey = __correlated_sq_1.o_custkey
 ----------------Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
 ------------------TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]
-----------------SubqueryAlias: __correlated_sq_13
+----------------SubqueryAlias: __correlated_sq_1
 ------------------TableScan: orders projection=[o_custkey]
 ------------SubqueryAlias: __scalar_sq_11
 --------------Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
