@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod alias;
 pub mod cast;
 mod column;
 pub mod config;
@@ -34,6 +35,7 @@ pub mod test_util;
 pub mod tree_node;
 pub mod utils;
 
+pub use alias::AliasGenerator;
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{

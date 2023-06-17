@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::alias::AliasGenerator;
 use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, replace_qualified_name, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::AliasGenerator;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::expr::{Exists, InSubquery};
@@ -36,9 +36,7 @@ use std::sync::Arc;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
 #[derive(Default)]
-pub struct DecorrelatePredicateSubquery {
-    alias: AliasGenerator,
-}
+pub struct DecorrelatePredicateSubquery {}
 
 impl DecorrelatePredicateSubquery {
     #[allow(missing_docs)]
@@ -115,7 +113,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
-                    if let Some(plan) = build_join(&subquery, &cur_input, &self.alias)? {
+                    if let Some(plan) = build_join(&subquery, &cur_input, config.alias_generator())? {
                         cur_input = plan;
                     } else {
                         // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to the Filter
@@ -198,7 +196,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
 fn build_join(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
-    alias: &AliasGenerator,
+    alias: Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
     let where_in_expr_opt = &query_info.where_in_expr;
     let in_predicate_opt = where_in_expr_opt

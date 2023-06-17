@@ -1220,7 +1220,9 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
+    use datafusion_common::{
+        assert_contains, cast::as_int32_array, AliasGenerator, DFField, ToDFSchema
+    };
     use datafusion_expr::*;
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
@@ -1315,6 +1317,7 @@ mod tests {
     ) {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            alias_generator: Arc::new(AliasGenerator::new()),
             var_providers: None,
         };
 

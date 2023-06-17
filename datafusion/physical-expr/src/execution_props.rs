@@ -17,6 +17,7 @@
 
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion_common::AliasGenerator;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -34,6 +35,8 @@ use std::sync::Arc;
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
     pub query_execution_start_time: DateTime<Utc>,
+    /// Alias generator used by subquery optimizer rules
+    pub alias_generator: Arc<AliasGenerator>,
     /// Providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
 }
@@ -51,13 +54,16 @@ impl ExecutionProps {
             // Set this to a fixed sentinel to make it obvious if this is
             // not being updated / propagated correctly
             query_execution_start_time: Utc.timestamp_nanos(0),
+            alias_generator: Arc::new(AliasGenerator::new()),
             var_providers: None,
         }
     }
 
-    /// Marks the execution of query started timestamp
+    /// Marks the execution of query started timestamp.
+    /// This also instantiates a new alias generator.
     pub fn start_execution(&mut self) -> &Self {
         self.query_execution_start_time = Utc::now();
+        self.alias_generator = Arc::new(AliasGenerator::new());
         &*self
     }
 
