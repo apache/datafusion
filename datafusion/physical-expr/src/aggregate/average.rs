@@ -134,10 +134,6 @@ impl AggregateExpr for Avg {
         is_row_accumulator_support_dtype(&self.sum_data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -262,6 +258,9 @@ impl Accumulator for AvgAccumulator {
                 "Sum should be f64 or decimal128 on average".to_string(),
             )),
         }
+    }
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

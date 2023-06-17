@@ -33,8 +33,9 @@ use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
     WindowFrame,
 };
-use datafusion_physical_expr::window::{
-    BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
+use datafusion_physical_expr::{
+    window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
+    AggregateExpr,
 };
 use std::borrow::Borrow;
 use std::convert::TryInto;
@@ -68,21 +69,12 @@ pub fn create_window_expr(
         WindowFunction::AggregateFunction(fun) => {
             let aggregate =
                 aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
-            if !window_frame.start_bound.is_unbounded() {
-                Arc::new(SlidingAggregateWindowExpr::new(
-                    aggregate,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                ))
-            } else {
-                Arc::new(PlainAggregateWindowExpr::new(
-                    aggregate,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                ))
-            }
+            window_expr_from_aggregate_expr(
+                partition_by,
+                order_by,
+                window_frame,
+                aggregate,
+            )
         }
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
@@ -90,13 +82,44 @@ pub fn create_window_expr(
             order_by,
             window_frame,
         )),
-        WindowFunction::AggregateUDF(fun) => Arc::new(PlainAggregateWindowExpr::new(
-            udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
+        WindowFunction::AggregateUDF(fun) => {
+            let aggregate =
+                udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?;
+            window_expr_from_aggregate_expr(
+                partition_by,
+                order_by,
+                window_frame,
+                aggregate,
+            )
+        }
+    })
+}
+
+/// Creates an appropriate [`WindowExpr`] based on the window frame and
+fn window_expr_from_aggregate_expr(
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    order_by: &[PhysicalSortExpr],
+    window_frame: Arc<WindowFrame>,
+    aggregate: Arc<dyn AggregateExpr>,
+) -> Arc<dyn WindowExpr> {
+    // Is there a potentially unlimited sized window frame?
+    let unbounded_window = window_frame.start_bound.is_unbounded();
+
+    if !unbounded_window {
+        Arc::new(SlidingAggregateWindowExpr::new(
+            aggregate,
             partition_by,
             order_by,
             window_frame,
-        )),
-    })
+        ))
+    } else {
+        Arc::new(PlainAggregateWindowExpr::new(
+            aggregate,
+            partition_by,
+            order_by,
+            window_frame,
+        ))
+    }
 }
 
 fn get_scalar_value_from_args(

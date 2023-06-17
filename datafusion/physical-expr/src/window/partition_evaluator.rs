@@ -69,22 +69,32 @@ use std::ops::Range;
 ///
 /// # Stateless `PartitionEvaluator`
 ///
-/// In this case, [`Self::evaluate`], [`Self::evaluate_with_rank`] or
-/// [`Self::evaluate_inside_range`] is called with values for the
+/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_all_with_rank`] is called with values for the
 /// entire partition.
 ///
 /// # Stateful `PartitionEvaluator`
 ///
-/// In this case, [`Self::evaluate_stateful`] is called to calculate
+/// In this case, [`Self::evaluate`] is called to calculate
 /// the results of the window function incrementally for each new
 /// batch.
 ///
 /// For example, when computing `ROW_NUMBER` incrementally,
-/// [`Self::evaluate_stateful`] will be called multiple times with
+/// [`Self::evaluate`] will be called multiple times with
 /// different batches. For all batches after the first, the output
 /// `row_number` must start from last `row_number` produced for the
 /// previous batch. The previous row number is saved and restored as
 /// the state.
+///
+/// When implementing a new `PartitionEvaluator`,
+/// `uses_window_frame` and `supports_bounded_execution` flags determine which evaluation method will be called
+/// during runtime. Implement corresponding evaluator according to table below.
+///
+/// |uses_window_frame|supports_bounded_execution|function_to_implement|
+/// |---|---|----|
+/// |false|false|`evaluate_all` (if we were to implement `PERCENT_RANK` it would end up in this quadrant, we cannot produce any result without seeing whole data)|
+/// |false|true|`evaluate` (optionally can also implement `evaluate_all` for more optimized implementation. However, there will be default implementation that is suboptimal) . If we were to implement `ROW_NUMBER` it will end up in this quadrant. Example `OddRowNumber` showcases this use case|
+/// |true|false|`evaluate` (I think as long as `uses_window_frame` is `true`. There is no way for `supports_bounded_execution` to be false). I couldn't come up with any example for this quadrant |
+/// |true|true|`evaluate`. If we were to implement `FIRST_VALUE`, it would end up in this quadrant|.
 ///
 /// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
 /// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
@@ -120,35 +130,98 @@ pub trait PartitionEvaluator: Debug + Send {
         Ok(())
     }
 
-    /// Gets the range where the window function result is calculated.
-    ///
-    /// `idx`: is the index of last row for which result is calculated.
-    /// `n_rows`: is the number of rows of the input record batch (Used during bounds check)
-    fn get_range(&self, _idx: usize, _n_rows: usize) -> Result<Range<usize>> {
-        Err(DataFusionError::NotImplemented(
-            "get_range is not implemented for this window function".to_string(),
-        ))
+    /// If `uses_window_frame` flag is `false`. This method is used to calculate required range for the window function
+    /// Generally there is no required range, hence by default this returns smallest range(current row). e.g seeing current row
+    /// is enough to calculate window result (such as row_number, rank, etc)
+    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
+        if self.uses_window_frame() {
+            Err(DataFusionError::Execution(
+                "Range should be calculated from window frame".to_string(),
+            ))
+        } else {
+            Ok(Range {
+                start: idx,
+                end: idx + 1,
+            })
+        }
     }
 
-    /// Called for window functions that *do not use* values from the
-    /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
-    /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`).
-    fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
+    /// Evaluate a window function on an entire input partition.
+    ///
+    /// This function is called once per input *partition* for window
+    /// functions that *do not use* values from the window frame,
+    /// such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`,
+    /// `CUME_DIST`, `LEAD`, `LAG`).
+    ///
+    /// It produces the result of all rows in a single pass. It
+    /// expects to receive the entire partition as the `value` and
+    /// must produce an output column with one output row for every
+    /// input row.
+    ///
+    /// `num_rows` is requied to correctly compute the output in case
+    /// `values.len() == 0`
+    ///
+    /// Using this function is an optimization: certain window
+    /// functions are not affected by the window frame definition, and
+    /// thus using `evaluate`, DataFusion can skip the (costly) window
+    /// frame boundary calculation.
+    ///
+    /// For example, the `LAG` built in window function does not use
+    /// the values of its window frame (it can be computed in one shot
+    /// on the entire partition with `Self::evaluate_all` regardless of the
+    /// window defined in the `OVER` clause)
+    ///
+    /// ```sql
+    /// lag(x, 1) OVER (ORDER BY z ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
+    ///
+    /// However, `avg()` computes the average in the window and thus
+    /// does use its window frame
+    ///
+    /// ```sql
+    /// avg(x) OVER (PARTITION BY y ORDER BY z ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
+    fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+        // When window frame boundaries are not used and evaluator supports bounded execution
+        // We can calculate evaluate result by repeatedly calling `self.evaluate` `num_rows` times
+        // If user wants to implement more efficient version, this method should be overwritten
+        // Default implementation may behave suboptimally (For instance `NumRowEvaluator` overwrites it)
+        if !self.uses_window_frame() && self.supports_bounded_execution() {
+            let res = (0..num_rows)
+                .map(|idx| self.evaluate(values, &self.get_range(idx, num_rows)?))
+                .collect::<Result<Vec<_>>>()?;
+            ScalarValue::iter_to_array(res.into_iter())
+        } else {
+            Err(DataFusionError::NotImplemented(
+                "evaluate_all is not implemented by default".into(),
+            ))
+        }
+    }
+
+    /// Evaluate window function on a range of rows in an input
+    /// partition.x
+    ///
+    /// Only used for stateful evaluation.
+    ///
+    /// This is the simplest and most general function to implement
+    /// but also the least performant as it creates output one row at
+    /// a time. It is typically much faster to implement stateful
+    /// evaluation using one of the other specialized methods on this
+    /// trait.
+    ///
+    /// Returns a [`ScalarValue`] that is the value of the window
+    /// function within the rangefor the entire partition
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate is not implemented by default".into(),
         ))
     }
 
-    /// Evaluate window function result inside given range.
-    ///
-    /// Only used for stateful evaluation
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_stateful is not implemented by default".into(),
-        ))
-    }
-
-    /// [`PartitionEvaluator::evaluate_with_rank`] is called for window
+    /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
     ///
@@ -175,7 +248,7 @@ pub trait PartitionEvaluator: Debug + Send {
     ///   (3,4),
     /// ]
     /// ```
-    fn evaluate_with_rank(
+    fn evaluate_all_with_rank(
         &self,
         _num_rows: usize,
         _ranks_in_partition: &[Range<usize>],
@@ -185,18 +258,28 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// Called for window functions that use values from window frame,
-    /// such as `FIRST_VALUE`, `LAST_VALUE`, `NTH_VALUE` and produce a
-    /// single value for every row in the partition.
+    /// Can the window function be incrementally computed using
+    /// bounded memory?
     ///
-    /// Returns a [`ScalarValue`] that is the value of the window function for the entire partition
-    fn evaluate_inside_range(
-        &self,
-        _values: &[ArrayRef],
-        _range: &Range<usize>,
-    ) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_inside_range is not implemented by default".into(),
-        ))
+    /// If this function returns true, implement [`PartitionEvaluator::evaluate`]
+    fn supports_bounded_execution(&self) -> bool {
+        false
+    }
+
+    /// Does the window function use the values from the window frame,
+    /// if one is specified?
+    ///
+    /// If this function returns true, implement [`PartitionEvaluator::evaluate_all`].
+    ///
+    /// See details and examples on [`PartitionEvaluator::evaluate_all`].
+    fn uses_window_frame(&self) -> bool {
+        false
+    }
+
+    /// Can this function be evaluated with (only) rank
+    ///
+    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_all_with_rank`]
+    fn include_rank(&self) -> bool {
+        false
     }
 }
