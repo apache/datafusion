@@ -46,6 +46,47 @@ use datafusion_common::Result;
 // The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
 // The chain can be followed until the value "0" has been reached, meaning the end of the list.
 // Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
+// See the example below:
+// Insert (1,1)
+// map:
+// ---------
+// | 1 | 2 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 0 | 0 |
+// ---------------------
+// Insert (2,2)
+// map:
+// ---------
+// | 1 | 2 |
+// | 2 | 3 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 0 | 0 |
+// ---------------------
+// Insert (1,3)
+// map:
+// ---------
+// | 1 | 4 |
+// | 2 | 3 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 1 maps to 4,2 (which means indices values 3,1)
+// ---------------------
+// Insert (1,4)
+// map:
+// ---------
+// | 1 | 5 |
+// | 2 | 3 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
+// ---------------------
+
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
 pub struct JoinHashMap {
