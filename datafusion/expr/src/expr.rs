@@ -27,7 +27,9 @@ use crate::window_frame;
 use crate::window_function;
 use crate::Operator;
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    plan_err, Column, DFField, DataFusionError, Result, ScalarValue,
+};
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
@@ -185,6 +187,7 @@ pub enum Expr {
 pub struct Alias {
     pub expr: Box<Expr>,
     pub name: String,
+    field: Option<DFField>,
 }
 
 impl Alias {
@@ -192,7 +195,20 @@ impl Alias {
         Self {
             expr: Box::new(expr),
             name: name.into(),
+            field: None,
         }
+    }
+
+    pub fn new_with_field(expr: Expr, name: impl Into<String>, field: DFField) -> Self {
+        Self {
+            expr: Box::new(expr),
+            name: name.into(),
+            field: Some(field),
+        }
+    }
+
+    pub fn field(&self) -> &Option<DFField> {
+        &self.field
     }
 }
 
@@ -807,6 +823,30 @@ impl Expr {
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
             _ => Expr::Alias(Alias::new(self, name.into())),
         }
+    }
+
+    /// Return `self AS name` alias expression from other expr
+    pub fn alias_expr(self, old_expr: &Expr) -> Result<Expr> {
+        let name = &self.name_for_alias()?;
+        let old_name = &old_expr.name_for_alias()?;
+
+        Ok(match old_expr {
+            Expr::Alias(alias) if alias.field().is_some() => {
+                self.unalias().alias_with_field(alias.field().clone().unwrap())
+            }
+            _ => {
+                if old_name != name {
+                    self.alias(old_name)
+                } else {
+                    self
+                }
+            }
+        })
+    }
+
+    /// Return `self AS name` alias expression with a field
+    pub fn alias_with_field(self, field: DFField) -> Expr {
+        Expr::Alias(Alias::new_with_field(self, field.qualified_name(), field))
     }
 
     /// Remove an alias from an expression if one exists.

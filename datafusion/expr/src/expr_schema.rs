@@ -279,6 +279,9 @@ impl ExprSchemable for Expr {
     /// placed in an output field **named** col("c1 + c2")
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
         match self {
+            Expr::Alias(alias) if alias.field().is_some() => {
+                Ok(alias.field().as_ref().unwrap().clone())
+            }
             Expr::Column(c) => Ok(DFField::new(
                 c.relation.clone(),
                 &c.name,
