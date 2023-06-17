@@ -974,10 +974,10 @@ impl fmt::Display for Expr {
                 }
             }
             Expr::ScalarFunction(func) => {
-                fmt_function(f, &func.fun.to_string(), false, &func.args, false)
+                fmt_function(f, &func.fun.to_string(), false, &func.args, true)
             }
             Expr::ScalarUDF(ScalarUDF { fun, args }) => {
-                fmt_function(f, &fun.name, false, args, false)
+                fmt_function(f, &fun.name, false, args, true)
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -986,12 +986,28 @@ impl fmt::Display for Expr {
                 order_by,
                 window_frame,
             }) => {
-                fmt_function(f, &fun.to_string(), false, args, false)?;
+                fmt_function(f, &fun.to_string(), false, args, true)?;
                 if !partition_by.is_empty() {
-                    write!(f, " PARTITION BY {partition_by:?}")?;
+                    write!(
+                        f,
+                        " PARTITION BY [{}]",
+                        partition_by
+                            .iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )?;
                 }
                 if !order_by.is_empty() {
-                    write!(f, " ORDER BY {order_by:?}")?;
+                    write!(
+                        f,
+                        " ORDER BY [{}]",
+                        order_by
+                            .iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )?;
                 }
                 write!(
                     f,
@@ -1013,7 +1029,14 @@ impl fmt::Display for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {ob:?}")?;
+                    write!(
+                        f,
+                        " ORDER BY [{}]",
+                        ob.iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )?;
                 }
                 Ok(())
             }
@@ -1024,12 +1047,19 @@ impl fmt::Display for Expr {
                 order_by,
                 ..
             }) => {
-                fmt_function(f, &fun.name, false, args, false)?;
+                fmt_function(f, &fun.name, false, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {ob:?}")?;
+                    write!(
+                        f,
+                        " ORDER BY [{}]",
+                        ob.iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )?;
                 }
                 Ok(())
             }
@@ -1099,9 +1129,23 @@ impl fmt::Display for Expr {
                 negated,
             }) => {
                 if *negated {
-                    write!(f, "{expr} NOT IN ({list:?})")
+                    write!(
+                        f,
+                        "{expr} NOT IN ([{}])",
+                        list.iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
                 } else {
-                    write!(f, "{expr} IN ({list:?})")
+                    write!(
+                        f,
+                        "{expr} IN ([{}])",
+                        list.iter()
+                            .map(|e| format!("{e}"))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
                 }
             }
             Expr::Wildcard => write!(f, "*"),
@@ -1356,10 +1400,24 @@ fn create_name(e: &Expr) -> Result<String> {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
             if !partition_by.is_empty() {
-                parts.push(format!("PARTITION BY {partition_by:?}"));
+                parts.push(format!(
+                    "PARTITION BY [{}]",
+                    partition_by
+                        .iter()
+                        .map(|e| format!("{e}"))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ));
             }
             if !order_by.is_empty() {
-                parts.push(format!("ORDER BY {order_by:?}"));
+                parts.push(format!(
+                    "ORDER BY [{}]",
+                    order_by
+                        .iter()
+                        .map(|e| format!("{e}"))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ));
             }
             parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
@@ -1376,7 +1434,14 @@ fn create_name(e: &Expr) -> Result<String> {
                 name = format!("{name} FILTER (WHERE {fe})");
             };
             if let Some(order_by) = order_by {
-                name = format!("{name} ORDER BY {order_by:?}");
+                name = format!(
+                    "{name} ORDER BY [{}]",
+                    order_by
+                        .iter()
+                        .map(|e| format!("{e}"))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
             };
             Ok(name)
         }
@@ -1395,7 +1460,13 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" FILTER (WHERE {fe})");
             }
             if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ({ob:?})");
+                info += &format!(
+                    " ORDER BY ([{}])",
+                    ob.iter()
+                        .map(|e| format!("{e}"))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
             }
             Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }

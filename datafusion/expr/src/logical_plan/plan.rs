@@ -1020,7 +1020,7 @@ impl LogicalPlan {
                             if !full_filter.is_empty() {
                                 write!(
                                     f,
-                                    ", full_filters={}",
+                                    ", full_filters=[{}]",
                                     full_filter
                                         .iter()
                                         .map(|e| format!("{e}"))
@@ -1031,7 +1031,7 @@ impl LogicalPlan {
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
-                                    ", partial_filters={}",
+                                    ", partial_filters=[{}]",
                                     partial_filter
                                         .iter()
                                         .map(|e| format!("{e}"))
@@ -1042,7 +1042,7 @@ impl LogicalPlan {
                             if !unsupported_filters.is_empty() {
                                 write!(
                                     f,
-                                    ", unsupported_filters={}",
+                                    ", unsupported_filters=[{}]",
                                     unsupported_filters
                                         .iter()
                                         .map(|e| format!("{e}"))
@@ -1083,7 +1083,7 @@ impl LogicalPlan {
                     }) => {
                         write!(
                             f,
-                            "WindowAggr: windowExpr=[{}]",
+                            "WindowAggr: windowExpr=[[{}]]",
                             window_expr
                                 .iter()
                                 .map(|e| format!("{e}"))
@@ -1169,7 +1169,7 @@ impl LogicalPlan {
                         }
                         Partitioning::Hash(expr, n) => {
                             let hash_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{e:?}")).collect();
+                                expr.iter().map(|e| format!("{e}")).collect();
                             write!(
                                 f,
                                 "Repartition: Hash({}) partition_count={}",
@@ -1179,7 +1179,7 @@ impl LogicalPlan {
                         }
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{e:?}")).collect();
+                                expr.iter().map(|e| format!("{e}")).collect();
                             write!(
                                 f,
                                 "Repartition: DistributeBy({})",
