@@ -1220,9 +1220,8 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::{
-        assert_contains, cast::as_int32_array, AliasGenerator, DFField, ToDFSchema,
-    };
+    use datafusion_common::alias::AliasGenerator;
+    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::*;
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,

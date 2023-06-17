@@ -19,10 +19,10 @@ use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, replace_qualified_name};
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
-use datafusion_common::alias::AliasGenerator;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -68,8 +68,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let (subqueries, mut rewrite_expr) =
-                    self.extract_subquery_exprs(&filter.predicate, config.alias_generator())?;
+                let (subqueries, mut rewrite_expr) = self.extract_subquery_exprs(
+                    &filter.predicate,
+                    config.alias_generator(),
+                )?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
