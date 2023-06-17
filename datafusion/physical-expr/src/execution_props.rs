@@ -17,7 +17,7 @@
 
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion_common::AliasGenerator;
+use datafusion_common::alias::AliasGenerator;
 use std::collections::HashMap;
 use std::sync::Arc;
 

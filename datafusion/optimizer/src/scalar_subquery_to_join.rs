@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::alias::AliasGenerator;
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, replace_qualified_name};
@@ -23,6 +22,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
     RewriteRecursion, Transformed, TreeNode, TreeNodeRewriter,
 };
+use datafusion_common::alias::AliasGenerator;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -32,9 +32,7 @@ use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
-pub struct ScalarSubqueryToJoin {
-    alias: Arc<AliasGenerator>,
-}
+pub struct ScalarSubqueryToJoin {}
 
 impl ScalarSubqueryToJoin {
     #[allow(missing_docs)]
@@ -66,12 +64,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let (subqueries, mut rewrite_expr) =
-                    self.extract_subquery_exprs(&filter.predicate, self.alias.clone())?;
+                    self.extract_subquery_exprs(&filter.predicate, config.alias_generator())?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
@@ -117,7 +115,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 let mut subquery_to_expr_map = HashMap::new();
                 for expr in projection.expr.iter() {
                     let (subqueries, rewrite_exprs) =
-                        self.extract_subquery_exprs(expr, self.alias.clone())?;
+                        self.extract_subquery_exprs(expr, config.alias_generator())?;
                     for (subquery, _) in &subqueries {
                         subquery_to_expr_map.insert(subquery.clone(), expr.clone());
                     }
