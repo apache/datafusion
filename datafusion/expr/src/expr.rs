@@ -79,7 +79,7 @@ use std::sync::Arc;
 ///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -181,7 +181,7 @@ pub enum Expr {
 }
 
 /// Binary expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct BinaryExpr {
     /// Left-hand side of the expression
     pub left: Box<Expr>,
@@ -258,7 +258,7 @@ impl Case {
 }
 
 /// LIKE expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Like {
     pub negated: bool,
     pub expr: Box<Expr>,
@@ -284,7 +284,7 @@ impl Like {
 }
 
 /// BETWEEN expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Between {
     /// The value to compare
     pub expr: Box<Expr>,
@@ -309,7 +309,7 @@ impl Between {
 }
 
 /// ScalarFunction expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarFunction {
     /// The function
     pub fun: built_in_function::BuiltinScalarFunction,
@@ -325,7 +325,7 @@ impl ScalarFunction {
 }
 
 /// ScalarUDF expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScalarUDF {
     /// The function
     pub fun: Arc<crate::ScalarUDF>,
@@ -341,7 +341,7 @@ impl ScalarUDF {
 }
 
 /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct GetIndexedField {
     /// the expression to take the field from
     pub expr: Box<Expr>,
@@ -357,7 +357,7 @@ impl GetIndexedField {
 }
 
 /// Cast expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Cast {
     /// The expression being cast
     pub expr: Box<Expr>,
@@ -373,7 +373,7 @@ impl Cast {
 }
 
 /// TryCast Expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TryCast {
     /// The expression being cast
     pub expr: Box<Expr>,
@@ -389,7 +389,7 @@ impl TryCast {
 }
 
 /// SORT expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Sort {
     /// The expression to sort on
     pub expr: Box<Expr>,
@@ -411,7 +411,7 @@ impl Sort {
 }
 
 /// Aggregate function
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateFunction {
     /// Name of the function
     pub fun: aggregate_function::AggregateFunction,
@@ -444,7 +444,7 @@ impl AggregateFunction {
 }
 
 /// Window function
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WindowFunction {
     /// Name of the function
     pub fun: window_function::WindowFunction,
@@ -478,7 +478,7 @@ impl WindowFunction {
 }
 
 // Exists expression.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Exists {
     /// subquery that will produce a single column of data
     pub subquery: Subquery,
@@ -493,7 +493,7 @@ impl Exists {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct AggregateUDF {
     /// The function
     pub fun: Arc<udaf::AggregateUDF>,
@@ -523,7 +523,7 @@ impl AggregateUDF {
 }
 
 /// InList expression
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct InList {
     /// The expression to compare
     pub expr: Box<Expr>,
@@ -545,7 +545,7 @@ impl InList {
 }
 
 /// IN subquery
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct InSubquery {
     /// The expression to compare
     pub expr: Box<Expr>,
@@ -567,7 +567,7 @@ impl InSubquery {
 }
 
 /// Placeholder
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Placeholder {
     /// The identifier of the parameter (e.g, $1 or $foo)
     pub id: String,
@@ -587,7 +587,7 @@ impl Placeholder {
 /// for Postgres definition.
 /// See <https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html>
 /// for Apache Spark definition.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GroupingSet {
     /// Rollup grouping sets
     Rollup(Vec<Expr>),
@@ -901,14 +901,6 @@ impl Expr {
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-/// Format expressions for display as part of a logical plan. In many cases, this will produce
-/// similar output to `Expr.name()` except that column names will be prefixed with '#'.
-impl fmt::Debug for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{expr:?} AS {alias}"),
