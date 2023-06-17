@@ -22,7 +22,7 @@ use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::{lit, Expr, Operator};
 use log::debug;
-use sqlparser::ast::{BinaryOperator, DateTimeField, Expr as SQLExpr, Interval, Value};
+use sqlparser::ast::{BinaryOperator, Expr as SQLExpr, Interval, Value};
 use sqlparser::parser::ParserError::ParserError;
 use std::collections::HashSet;
 
@@ -289,7 +289,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported interval argument. Expected string literal, got: {value:?}"
+                    "Unsupported interval argument. Expected string literal, got: {:?}",
+                    interval.value,
                 )));
             }
         };

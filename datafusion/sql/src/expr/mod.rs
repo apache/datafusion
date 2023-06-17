@@ -36,7 +36,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, Interval, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
