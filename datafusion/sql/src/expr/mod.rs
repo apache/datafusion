@@ -36,7 +36,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, Interval, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -169,13 +169,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             })=> self.sql_interval_to_expr(
                 false,
-                *value,
+                interval,
                 schema,
                 planner_context,
-                leading_field,
-                leading_precision,
-                last_field,
-                fractional_seconds_precision,
             ),
             SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
 
