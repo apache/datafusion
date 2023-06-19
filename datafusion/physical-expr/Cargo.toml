@@ -47,6 +47,7 @@ arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
+bigdecimal = "0.3.0"
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4.23", default-features = false }
@@ -67,7 +68,6 @@ regex = { version = "1.8", optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "^1.2", features = ["v4"] }
-bigdecimal = "0.3.0"
 
 [dev-dependencies]
 criterion = "0.5"
