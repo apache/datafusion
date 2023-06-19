@@ -355,6 +355,24 @@ SELECT median(c12) FROM aggregate_test_100
 ----
 0.551390054439
 
+# csv_query_percentile_cont_1
+query I
+SELECT percentile_cont(c2, 0.23) FROM aggregate_test_100
+----
+2
+
+# csv_query_percentile_cont_2
+query I
+SELECT percentile_cont(c6, 0.9) FROM aggregate_test_100
+----
+7384349873015760243
+
+# csv_query_percentile_cont_3
+query R
+SELECT percentile_cont(c12, 0.42) FROM aggregate_test_100
+----
+0.405942413398
+
 # median_i8
 query I
 SELECT median(col_i8) FROM median_table
@@ -421,6 +439,72 @@ SELECT median(col_f64_nan) FROM median_table
 ----
 NaN
 
+# percentile_cont_i8
+query I
+SELECT percentile_cont(col_i8, 0.11) FROM median_table
+----
+-128
+
+# percentile_cont_i16
+query I
+SELECT percentile_cont(col_i16, 0.22) FROM median_table
+----
+-32768
+
+# percentile_cont_i32
+query I
+SELECT percentile_cont(col_i32, 0.33) FROM median_table
+----
+-2147483648
+
+# percentile_cont_i64
+query I
+SELECT percentile_cont(col_i64, 0.44) FROM median_table
+----
+-5165088340638674408
+
+# percentile_cont_u8
+query I
+SELECT percentile_cont(col_u8, 0.55) FROM median_table
+----
+55
+
+# percentile_cont_u16
+query I
+SELECT percentile_cont(col_u16, 0.66) FROM median_table
+----
+66
+
+# percentile_cont_u32
+query I
+SELECT percentile_cont(col_u32, 0.77) FROM median_table
+----
+3307124840
+
+# percentile_cont_u64
+query I
+SELECT percentile_cont(col_u64, 0.88) FROM median_table
+----
+16233134784864405433
+
+# percentile_cont_f32
+query R
+SELECT percentile_cont(col_f32, 0.9) FROM median_table
+----
+4.29
+
+# percentile_cont_f64
+query R
+SELECT percentile_cont(col_f64, 0.96) FROM median_table
+----
+4.356
+
+# percentile_cont_f64_nan
+query R
+SELECT percentile_cont(col_f64_nan, 0.29) FROM median_table
+----
+NaN
+
 # approx_median_f64_nan
 query R
 SELECT approx_median(col_f64_nan) FROM median_table
@@ -442,6 +526,12 @@ select host, median(usage) from cpu group by host;
 ----
 host0 90.1
 host1 90.3
+
+query TRR rowsort
+select host, percentile_cont(usage, 0.25), percentile_cont(usage, 0.75) from cpu group by host;
+----
+host0 90.1 90.1
+host1 90.25 90.35
 
 statement ok
 drop table cpu;
@@ -465,6 +555,11 @@ query R
 select median(usage) from cpu;
 ----
 90.2
+
+query RR
+select percentile_cont(usage, 0.25), percentile_cont(usage, 0.75) from cpu;
+----
+90.125 90.35
 
 statement ok
 drop table cpu;
