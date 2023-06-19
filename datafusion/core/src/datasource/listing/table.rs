@@ -42,7 +42,7 @@ use crate::datasource::{
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
-    TableProvider, TableType,
+    schema_eq_ignore_nullable, TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
@@ -776,7 +776,7 @@ impl TableProvider for ListingTable {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
-        if !input.schema().eq(&self.schema()) {
+        if !schema_eq_ignore_nullable(input.schema(), self.schema()) {
             return Err(DataFusionError::Plan(
                 // Return an error if schema of the input query does not match with the table schema.
                 "Inserting query must have the same schema with the table.".to_string(),
@@ -816,7 +816,7 @@ impl TableProvider for ListingTable {
         let config = FileSinkConfig {
             object_store_url: self.table_paths()[0].object_store(),
             file_groups,
-            output_schema: input.schema(),
+            output_schema: self.schema(),
             table_partition_cols: self.options.table_partition_cols.clone(),
             writer_mode: crate::datasource::file_format::FileWriterMode::Append,
         };

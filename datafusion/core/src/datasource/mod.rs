@@ -43,12 +43,13 @@ use self::listing::PartitionedFile;
 pub use self::memory::MemTable;
 pub use self::provider::TableProvider;
 pub use self::view::ViewTable;
-use crate::arrow::datatypes::{Schema, SchemaRef};
+use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::error::Result;
 pub use crate::logical_expr::TableType;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use futures::StreamExt;
+use std::sync::Arc;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
@@ -198,4 +199,25 @@ fn get_col_stats(
             }
         })
         .collect()
+}
+
+fn schema_eq_ignore_nullable(
+    left: impl AsRef<Schema>,
+    right: impl AsRef<Schema>,
+) -> bool {
+    let erase_nullable = |raw: &Schema| {
+        let fields = raw
+            .fields()
+            .iter()
+            .map(|f| {
+                if f.is_nullable() {
+                    f.clone()
+                } else {
+                    Arc::new(f.as_ref().clone().with_nullable(true))
+                }
+            })
+            .collect::<Fields>();
+        Schema::new_with_metadata(fields, raw.metadata().clone())
+    };
+    erase_nullable(left.as_ref()) == erase_nullable(right.as_ref())
 }

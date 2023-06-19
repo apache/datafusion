@@ -40,6 +40,8 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
+use super::schema_eq_ignore_nullable;
+
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
 
@@ -189,13 +191,13 @@ impl TableProvider for MemTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !input.schema().eq(&self.schema) {
+        if !schema_eq_ignore_nullable(input.schema(), &self.schema) {
             return Err(DataFusionError::Plan(
                 "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink)))
+        Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
     }
 }
 

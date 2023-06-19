@@ -238,6 +238,7 @@ impl FileFormat for CsvFormat {
         _state: &SessionState,
         conf: FileSinkConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let sink_schema = conf.output_schema().clone();
         let sink = Arc::new(CsvSink::new(
             conf,
             self.has_header,
@@ -245,7 +246,7 @@ impl FileFormat for CsvFormat {
             self.file_compression_type.clone(),
         ));
 
-        Ok(Arc::new(InsertExec::new(input, sink)) as _)
+        Ok(Arc::new(InsertExec::new(input, sink, sink_schema)) as _)
     }
 }
 

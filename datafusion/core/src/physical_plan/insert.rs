@@ -67,25 +67,32 @@ pub trait DataSink: Display + Debug + Send + Sync {
 pub struct InsertExec {
     /// Input plan that produces the record batches to be written.
     input: Arc<dyn ExecutionPlan>,
-    /// Sink to whic to write
+    /// Sink to which to write
     sink: Arc<dyn DataSink>,
-    /// Schema describing the structure of the data.
-    schema: SchemaRef,
+    /// Schema of the sink for validating the input data
+    sink_schema: SchemaRef,
+    /// Schema describing the structure of the output data.
+    count_schema: SchemaRef,
 }
 
 impl fmt::Debug for InsertExec {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "InsertExec schema: {:?}", self.schema)
+        write!(f, "InsertExec schema: {:?}", self.count_schema)
     }
 }
 
 impl InsertExec {
     /// Create a plan to write to `sink`
-    pub fn new(input: Arc<dyn ExecutionPlan>, sink: Arc<dyn DataSink>) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        sink: Arc<dyn DataSink>,
+        sink_schema: SchemaRef,
+    ) -> Self {
         Self {
             input,
             sink,
-            schema: make_count_schema(),
+            sink_schema,
+            count_schema: make_count_schema(),
         }
     }
 }
@@ -98,7 +105,7 @@ impl ExecutionPlan for InsertExec {
 
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.count_schema.clone()
     }
 
     fn output_partitioning(&self) -> Partitioning {
@@ -141,7 +148,8 @@ impl ExecutionPlan for InsertExec {
         Ok(Arc::new(Self {
             input: children[0].clone(),
             sink: self.sink.clone(),
-            schema: self.schema.clone(),
+            sink_schema: self.sink_schema.clone(),
+            count_schema: self.count_schema.clone(),
         }))
     }
 
@@ -167,8 +175,15 @@ impl ExecutionPlan for InsertExec {
             )));
         }
 
-        let data = self.input.execute(0, context.clone())?;
-        let schema = self.schema.clone();
+        let sink_schema = self.sink_schema.clone();
+        let data = Box::pin(RecordBatchStreamAdapter::new(
+            self.sink_schema.clone(),
+            self.input
+                .execute(0, context.clone())?
+                .map(move |batch| check_batch(batch?, &sink_schema)),
+        ));
+
+        let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();
 
         let stream = futures::stream::once(async move {
@@ -176,7 +191,10 @@ impl ExecutionPlan for InsertExec {
         })
         .boxed();
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            count_schema,
+            stream,
+        )))
     }
 
     fn fmt_as(
@@ -218,4 +236,26 @@ fn make_count_schema() -> SchemaRef {
         DataType::UInt64,
         false,
     )]))
+}
+
+fn check_batch(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch> {
+    if batch.num_columns() != schema.fields().len() {
+        return Err(DataFusionError::Execution(format!(
+            "Invalid batch column count {} expected {}",
+            batch.num_columns(),
+            schema.fields().len()
+        )));
+    }
+
+    // Check NOT NULL constraints
+    for (i, field) in schema.fields().iter().enumerate() {
+        if !field.is_nullable() && batch.column(i).null_count() > 0 {
+            return Err(DataFusionError::Execution(format!(
+                "Invalid batch column at '{}' has null but schema specifies non-nullable",
+                i
+            )));
+        }
+    }
+
+    Ok(batch)
 }
