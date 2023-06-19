@@ -2135,7 +2135,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Execution error: variable [\"@\"] has no type information"
+            "Error during planning: variable [\"@\"] has no type information"
         );
         Ok(())
     }
