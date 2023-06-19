@@ -45,7 +45,6 @@ use datafusion_common::cast::{
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use libc::truncate;
 use std::sync::Arc;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
@@ -283,7 +282,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
-            let mut nano = (f)(*v)?;
+            let nano = (f)(*v)?;
             match granularity.as_str() {
                 "minute" => {
                     // trunc to minute
