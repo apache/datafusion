@@ -512,7 +512,8 @@ async fn collect_left_input(
     // 16 bytes per `(u64, u64)`
     // + 1 byte for each bucket
     // + fixed size of JoinHashMap (RawTable + Vec)
-    let estimated_hastable_size = 16 * estimated_buckets + estimated_buckets + size_of::<JoinHashMap>();
+    let estimated_hastable_size =
+        16 * estimated_buckets + estimated_buckets + size_of::<JoinHashMap>();
 
     reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
