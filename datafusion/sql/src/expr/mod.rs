@@ -162,6 +162,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
             SQLExpr::Interval(interval)=> self.sql_interval_to_expr(
+                false,
                 interval,
                 schema,
                 planner_context,
