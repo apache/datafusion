@@ -170,8 +170,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     let new_expr = expr_to_rewrite_expr_map.get(expr).unwrap();
                     let new_expr_name = new_expr.display_name()?;
                     if new_expr_name != old_expr_name {
-                        proj_exprs
-                            .push(Expr::Alias(Box::new(new_expr.clone()), old_expr_name))
+                        proj_exprs.push(new_expr.clone().alias(old_expr_name))
                     } else {
                         proj_exprs.push(new_expr.clone());
                     }
