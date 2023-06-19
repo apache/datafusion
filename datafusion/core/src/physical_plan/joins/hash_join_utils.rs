@@ -36,24 +36,88 @@ use crate::physical_plan::joins::utils::{JoinFilter, JoinSide};
 use datafusion_common::Result;
 
 // Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
-//
-// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
-// to put the indices in a certain bucket.
 // By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
 // we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
 // E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 // As the key is a hash value, we need to check possible hash collisions in the probe stage
 // During this stage it might be the case that a row is contained the same hashmap value,
 // but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collision check and move away from using a hashbrown HashMap
+// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
+// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
+// The chain can be followed until the value "0" has been reached, meaning the end of the list.
+// Also see chapter 5.3 of [Balancing vectorized query execution with bandwidth-optimized storage](https://dare.uva.nl/search?identifier=5ccbb60a-38b8-4eeb-858a-e7735dd37487)
+// See the example below:
+// Insert (1,1)
+// map:
+// ---------
+// | 1 | 2 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 0 | 0 |
+// ---------------------
+// Insert (2,2)
+// map:
+// ---------
+// | 1 | 2 |
+// | 2 | 3 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 0 | 0 |
+// ---------------------
+// Insert (1,3)
+// map:
+// ---------
+// | 1 | 4 |
+// | 2 | 3 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 2 | 0 |  <--- hash value 1 maps to 4,2 (which means indices values 3,1)
+// ---------------------
+// Insert (1,4)
+// map:
+// ---------
+// | 1 | 5 |
+// | 2 | 3 |
+// ---------
+// next:
+// ---------------------
+// | 0 | 0 | 0 | 2 | 4 | <--- hash value 1 maps to 5,4,2 (which means indices values 4,3,1)
+// ---------------------
+
+// TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
-pub struct JoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
+pub struct JoinHashMap {
+    // Stores hash value to first index
+    pub map: RawTable<(u64, u64)>,
+    // Stores indices in chained list data structure
+    pub next: Vec<u64>,
+}
+
+/// SymmetricJoinHashMap is similar to JoinHashMap, except that it stores the indices inline, allowing it to mutate
+/// and shrink the indices.
+pub struct SymmetricJoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl JoinHashMap {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        JoinHashMap {
+            map: RawTable::with_capacity(capacity),
+            next: vec![0; capacity],
+        }
+    }
+}
+
+impl SymmetricJoinHashMap {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self(RawTable::with_capacity(capacity))
+    }
+
     /// In this implementation, the scale_factor variable determines how conservative the shrinking strategy is.
     /// The value of scale_factor is set to 4, which means the capacity will be reduced by 25%
     /// when necessary. You can adjust the scale_factor value to achieve the desired
-    /// ,balance between memory usage and performance.
+    /// balance between memory usage and performance.
     //
     // If you increase the scale_factor, the capacity will shrink less aggressively,
     // leading to potentially higher memory usage but fewer resizes.
@@ -628,7 +692,7 @@ pub mod tests {
     #[test]
     fn test_shrink_if_necessary() {
         let scale_factor = 4;
-        let mut join_hash_map = JoinHashMap(RawTable::with_capacity(100));
+        let mut join_hash_map = SymmetricJoinHashMap::with_capacity(100);
         let data_size = 2000;
         let deleted_part = 3 * data_size / 4;
         // Add elements to the JoinHashMap
