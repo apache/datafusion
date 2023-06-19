@@ -41,10 +41,15 @@ use arrow::array::{
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_array::builder::{UInt32BufferBuilder, UInt64BufferBuilder};
+use arrow_array::{UInt32Array, UInt64Array};
+use datafusion_physical_expr::hash_utils::create_hashes;
+use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{select, BoxStream};
 use futures::{Stream, StreamExt};
-use hashbrown::{raw::RawTable, HashSet};
+use hashbrown::HashSet;
 use parking_lot::Mutex;
+use smallvec::smallvec;
 
 use datafusion_common::{utils::bisect, ScalarValue};
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -52,12 +57,10 @@ use datafusion_physical_expr::intervals::{ExprIntervalGraph, Interval, IntervalB
 
 use crate::physical_plan::common::SharedMemoryReservation;
 use crate::physical_plan::joins::hash_join_utils::convert_sort_expr_with_filter_schema;
-use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
 use crate::physical_plan::{
     expressions::Column,
     expressions::PhysicalSortExpr,
     joins::{
-        hash_join::{build_join_indices, update_hash},
         hash_join_utils::{build_filter_input_order, SortedFilterExpr},
         utils::{
             build_batch_from_indices, build_join_schema, check_join_is_valid,
@@ -72,6 +75,10 @@ use crate::physical_plan::{
 use datafusion_common::JoinType;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
+
+use super::hash_join::equal_rows;
+use super::hash_join_utils::SymmetricJoinHashMap;
+use super::utils::apply_join_filter_to_indices;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 
@@ -681,7 +688,7 @@ impl Stream for SymmetricHashJoinStream {
 
 fn prune_hash_values(
     prune_length: usize,
-    hashmap: &mut JoinHashMap,
+    hashmap: &mut SymmetricJoinHashMap,
     row_hash_values: &mut VecDeque<u64>,
     offset: u64,
 ) -> Result<()> {
@@ -1043,7 +1050,7 @@ struct OneSideHashJoiner {
     /// Columns from the side
     on: Vec<Column>,
     /// Hashmap
-    hashmap: JoinHashMap,
+    hashmap: SymmetricJoinHashMap,
     /// To optimize hash deleting in case of pruning, we hold them in memory
     row_hash_values: VecDeque<u64>,
     /// Reuse the hashes buffer
@@ -1076,13 +1083,46 @@ impl OneSideHashJoiner {
             build_side,
             input_buffer: RecordBatch::new_empty(schema),
             on,
-            hashmap: JoinHashMap(RawTable::with_capacity(0)),
+            hashmap: SymmetricJoinHashMap::with_capacity(0),
             row_hash_values: VecDeque::new(),
             hashes_buffer: vec![],
             visited_rows: HashSet::new(),
             offset: 0,
             deleted_offset: 0,
         }
+    }
+
+    pub fn update_hash(
+        on: &[Column],
+        batch: &RecordBatch,
+        hash_map: &mut SymmetricJoinHashMap,
+        offset: usize,
+        random_state: &RandomState,
+        hashes_buffer: &mut Vec<u64>,
+    ) -> Result<()> {
+        // evaluate the keys
+        let keys_values = on
+            .iter()
+            .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        // calculate the hash values
+        let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+        // insert hashes to key of the hashmap
+        for (row, hash_value) in hash_values.iter().enumerate() {
+            let item = hash_map
+                .0
+                .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
+            if let Some((_, indices)) = item {
+                indices.push((row + offset) as u64);
+            } else {
+                hash_map.0.insert(
+                    *hash_value,
+                    (*hash_value, smallvec![(row + offset) as u64]),
+                    |(hash, _)| *hash,
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Updates the internal state of the [OneSideHashJoiner] with the incoming batch.
@@ -1106,7 +1146,7 @@ impl OneSideHashJoiner {
         self.hashes_buffer.resize(batch.num_rows(), 0);
         // Get allocation_info before adding the item
         // Update the hashmap with the join key values and hashes of the incoming batch:
-        update_hash(
+        Self::update_hash(
             &self.on,
             batch,
             &mut self.hashmap,
@@ -1117,6 +1157,144 @@ impl OneSideHashJoiner {
         // Add the hashes buffer to the hash value deque:
         self.row_hash_values.extend(self.hashes_buffer.iter());
         Ok(())
+    }
+
+    /// Gets build and probe indices which satisfy the on condition (including
+    /// the equality condition and the join filter) in the join.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_join_indices(
+        probe_batch: &RecordBatch,
+        build_hashmap: &SymmetricJoinHashMap,
+        build_input_buffer: &RecordBatch,
+        on_build: &[Column],
+        on_probe: &[Column],
+        filter: Option<&JoinFilter>,
+        random_state: &RandomState,
+        null_equals_null: bool,
+        hashes_buffer: &mut Vec<u64>,
+        offset: Option<usize>,
+        build_side: JoinSide,
+    ) -> Result<(UInt64Array, UInt32Array)> {
+        // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
+        let (build_indices, probe_indices) = Self::build_equal_condition_join_indices(
+            build_hashmap,
+            build_input_buffer,
+            probe_batch,
+            on_build,
+            on_probe,
+            random_state,
+            null_equals_null,
+            hashes_buffer,
+            offset,
+        )?;
+        if let Some(filter) = filter {
+            // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
+            apply_join_filter_to_indices(
+                build_input_buffer,
+                probe_batch,
+                build_indices,
+                probe_indices,
+                filter,
+                build_side,
+            )
+        } else {
+            Ok((build_indices, probe_indices))
+        }
+    }
+
+    // Returns build/probe indices satisfying the equality condition.
+    // On LEFT.b1 = RIGHT.b2
+    // LEFT Table:
+    //  a1  b1  c1
+    //  1   1   10
+    //  3   3   30
+    //  5   5   50
+    //  7   7   70
+    //  9   8   90
+    //  11  8   110
+    // 13   10  130
+    // RIGHT Table:
+    //  a2   b2  c2
+    //  2    2   20
+    //  4    4   40
+    //  6    6   60
+    //  8    8   80
+    // 10   10  100
+    // 12   10  120
+    // The result is
+    // "+----+----+-----+----+----+-----+",
+    // "| a1 | b1 | c1  | a2 | b2 | c2  |",
+    // "+----+----+-----+----+----+-----+",
+    // "| 11 | 8  | 110 | 8  | 8  | 80  |",
+    // "| 13 | 10 | 130 | 10 | 10 | 100 |",
+    // "| 13 | 10 | 130 | 12 | 10 | 120 |",
+    // "| 9  | 8  | 90  | 8  | 8  | 80  |",
+    // "+----+----+-----+----+----+-----+"
+    // And the result of build and probe indices are:
+    // Build indices:  5, 6, 6, 4
+    // Probe indices: 3, 4, 5, 3
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_equal_condition_join_indices(
+        build_hashmap: &SymmetricJoinHashMap,
+        build_input_buffer: &RecordBatch,
+        probe_batch: &RecordBatch,
+        build_on: &[Column],
+        probe_on: &[Column],
+        random_state: &RandomState,
+        null_equals_null: bool,
+        hashes_buffer: &mut Vec<u64>,
+        offset: Option<usize>,
+    ) -> Result<(UInt64Array, UInt32Array)> {
+        let keys_values = probe_on
+            .iter()
+            .map(|c| Ok(c.evaluate(probe_batch)?.into_array(probe_batch.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        let build_join_values = build_on
+            .iter()
+            .map(|c| {
+                Ok(c.evaluate(build_input_buffer)?
+                    .into_array(build_input_buffer.num_rows()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        hashes_buffer.clear();
+        hashes_buffer.resize(probe_batch.num_rows(), 0);
+        let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+        // Using a buffer builder to avoid slower normal builder
+        let mut build_indices = UInt64BufferBuilder::new(0);
+        let mut probe_indices = UInt32BufferBuilder::new(0);
+        let offset_value = offset.unwrap_or(0);
+        // Visit all of the probe rows
+        for (row, hash_value) in hash_values.iter().enumerate() {
+            // Get the hash and find it in the build index
+            // For every item on the build and probe we check if it matches
+            // This possibly contains rows with hash collisions,
+            // So we have to check here whether rows are equal or not
+            if let Some((_, indices)) = build_hashmap
+                .0
+                .get(*hash_value, |(hash, _)| *hash_value == *hash)
+            {
+                for &i in indices {
+                    // Check hash collisions
+                    let offset_build_index = i as usize - offset_value;
+                    // Check hash collisions
+                    if equal_rows(
+                        offset_build_index,
+                        row,
+                        &build_join_values,
+                        &keys_values,
+                        null_equals_null,
+                    )? {
+                        build_indices.append(offset_build_index as u64);
+                        probe_indices.append(row as u32);
+                    }
+                }
+            }
+        }
+
+        Ok((
+            PrimitiveArray::new(build_indices.finish().into(), None),
+            PrimitiveArray::new(probe_indices.finish().into(), None),
+        ))
     }
 
     /// This method performs a join between the build side input buffer and the probe side batch.
@@ -1155,7 +1333,7 @@ impl OneSideHashJoiner {
         if self.input_buffer.num_rows() == 0 || probe_batch.num_rows() == 0 {
             return Ok(None);
         }
-        let (build_indices, probe_indices) = build_join_indices(
+        let (build_indices, probe_indices) = Self::build_join_indices(
             probe_batch,
             &self.hashmap,
             &self.input_buffer,
