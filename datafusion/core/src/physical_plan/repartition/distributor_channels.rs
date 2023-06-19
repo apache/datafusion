@@ -48,6 +48,7 @@ use std::{
 use parking_lot::Mutex;
 
 /// Create `n` empty channels.
+/// Channel ids start from `id_offset`
 fn channels_helper<T>(
     n: usize,
     id_offset: usize,
@@ -93,7 +94,9 @@ pub fn channels<T>(
 
 type PartitionAwareSenders<T> = Vec<Vec<DistributionSender<T>>>;
 type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
-/// Create `n` empty channels.
+/// Create `n_out` empty channels per `n_in` inputs.
+/// By this way, each distinct partition will communicate with dedicated channel (single producer - single consumer)
+/// (Enables us to keep track of from which partition input comes from)
 pub fn channels_partition_aware<T>(
     n_out: usize,
     n_in: usize,

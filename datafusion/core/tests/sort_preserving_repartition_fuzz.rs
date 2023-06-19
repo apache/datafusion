@@ -102,27 +102,18 @@ mod sp_repartition_fuzz_tests {
         let hash_exprs = vec![col("c", &schema).unwrap()];
 
         let intermediate = match (is_first_roundrobin, is_first_sort_preserving) {
-            (true, true) => sort_preserving_repartition_exec_round_robin(
-                sort_keys.clone(),
-                running_source,
-            ),
+            (true, true) => sort_preserving_repartition_exec_round_robin(running_source),
             (true, false) => repartition_exec_round_robin(running_source),
-            (false, true) => sort_preserving_repartition_exec_hash(
-                sort_keys.clone(),
-                running_source,
-                hash_exprs.clone(),
-            ),
+            (false, true) => {
+                sort_preserving_repartition_exec_hash(running_source, hash_exprs.clone())
+            }
             (false, false) => repartition_exec_hash(running_source, hash_exprs.clone()),
         };
 
         let intermediate = if is_second_roundrobin {
-            sort_preserving_repartition_exec_round_robin(sort_keys.clone(), intermediate)
+            sort_preserving_repartition_exec_round_robin(intermediate)
         } else {
-            sort_preserving_repartition_exec_hash(
-                sort_keys.clone(),
-                intermediate,
-                hash_exprs.clone(),
-            )
+            sort_preserving_repartition_exec_hash(intermediate, hash_exprs.clone())
         };
 
         let final_plan = sort_preserving_merge_exec(sort_keys.clone(), intermediate);
@@ -145,12 +136,10 @@ mod sp_repartition_fuzz_tests {
     }
 
     fn sort_preserving_repartition_exec_round_robin(
-        sort_expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
             SortPreservingRepartitionExec::try_new(
-                sort_expr,
                 input,
                 Partitioning::RoundRobinBatch(2),
             )
@@ -167,13 +156,11 @@ mod sp_repartition_fuzz_tests {
     }
 
     fn sort_preserving_repartition_exec_hash(
-        sort_expr: Vec<PhysicalSortExpr>,
         input: Arc<dyn ExecutionPlan>,
         hash_expr: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
             SortPreservingRepartitionExec::try_new(
-                sort_expr,
                 input,
                 Partitioning::Hash(hash_expr, 2),
             )

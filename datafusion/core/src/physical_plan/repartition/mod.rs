@@ -396,19 +396,18 @@ impl ExecutionPlan for RepartitionExec {
 
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-                let input_task: JoinHandle<Result<()>> =
-                    tokio::spawn(Self::pull_from_input(
-                        self.input.clone(),
-                        i,
-                        txs.clone(),
-                        self.partitioning.clone(),
-                        r_metrics,
-                        context.clone(),
-                    ));
+                let input_task: JoinHandle<Result<()>> = tokio::spawn(pull_from_input(
+                    self.input.clone(),
+                    i,
+                    txs.clone(),
+                    self.partitioning.clone(),
+                    r_metrics,
+                    context.clone(),
+                ));
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
-                let join_handle = tokio::spawn(Self::wait_for_task(
+                let join_handle = tokio::spawn(wait_for_task(
                     AbortOnDropSingle::new(input_task),
                     txs.into_iter()
                         .map(|(partition, (tx, _reservation))| (partition, tx))
@@ -483,135 +482,6 @@ impl RepartitionExec {
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
-
-    /// Pulls data from the specified input plan, feeding it to the
-    /// output partitions based on the desired partitioning
-    ///
-    /// i is the input partition index
-    ///
-    /// txs hold the output sending channels for each output partition
-    async fn pull_from_input(
-        input: Arc<dyn ExecutionPlan>,
-        i: usize,
-        mut txs: HashMap<
-            usize,
-            (DistributionSender<MaybeBatch>, SharedMemoryReservation),
-        >,
-        partitioning: Partitioning,
-        r_metrics: RepartitionMetrics,
-        context: Arc<TaskContext>,
-    ) -> Result<()> {
-        let mut partitioner =
-            BatchPartitioner::try_new(partitioning, r_metrics.repart_time.clone())?;
-
-        // execute the child operator
-        let timer = r_metrics.fetch_time.timer();
-        let mut stream = input.execute(i, context)?;
-        timer.done();
-
-        // While there are still outputs to send to, keep
-        // pulling inputs
-        let mut batches_until_yield = partitioner.num_partitions();
-        while !txs.is_empty() {
-            // fetch the next batch
-            let timer = r_metrics.fetch_time.timer();
-            let result = stream.next().await;
-            timer.done();
-
-            // Input is done
-            let batch = match result {
-                Some(result) => result?,
-                None => break,
-            };
-
-            for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
-                let size = batch.get_array_memory_size();
-
-                let timer = r_metrics.send_time.timer();
-                // if there is still a receiver, send to it
-                if let Some((tx, reservation)) = txs.get_mut(&partition) {
-                    reservation.lock().try_grow(size)?;
-
-                    if tx.send(Some(Ok(batch))).await.is_err() {
-                        // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                        reservation.lock().shrink(size);
-                        txs.remove(&partition);
-                    }
-                }
-                timer.done();
-            }
-
-            // If the input stream is endless, we may spin forever and
-            // never yield back to tokio.  See
-            // https://github.com/apache/arrow-datafusion/issues/5278.
-            //
-            // However, yielding on every batch causes a bottleneck
-            // when running with multiple cores. See
-            // https://github.com/apache/arrow-datafusion/issues/6290
-            //
-            // Thus, heuristically yield after producing num_partition
-            // batches
-            //
-            // In round robin this is ideal as each input will get a
-            // new batch. In hash partitioning it may yield too often
-            // on uneven distributions even if some partition can not
-            // make progress, but parallelism is going to be limited
-            // in that case anyways
-            if batches_until_yield == 0 {
-                tokio::task::yield_now().await;
-                batches_until_yield = partitioner.num_partitions();
-            } else {
-                batches_until_yield -= 1;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Waits for `input_task` which is consuming one of the inputs to
-    /// complete. Upon each successful completion, sends a `None` to
-    /// each of the output tx channels to signal one of the inputs is
-    /// complete. Upon error, propagates the errors to all output tx
-    /// channels.
-    async fn wait_for_task(
-        input_task: AbortOnDropSingle<Result<()>>,
-        txs: HashMap<usize, DistributionSender<Option<Result<RecordBatch>>>>,
-    ) {
-        // wait for completion, and propagate error
-        // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
-        match input_task.await {
-            // Error in joining task
-            Err(e) => {
-                let e = Arc::new(e);
-
-                for (_, tx) in txs {
-                    let err = Err(DataFusionError::Context(
-                        "Join Error".to_string(),
-                        Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
-                    ));
-                    tx.send(Some(err)).await.ok();
-                }
-            }
-            // Error from running input task
-            Ok(Err(e)) => {
-                let e = Arc::new(e);
-
-                for (_, tx) in txs {
-                    // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(e.clone())));
-                    tx.send(Some(err)).await.ok();
-                }
-            }
-            // Input task completed successfully
-            Ok(Ok(())) => {
-                // notify each output partition that this input partition has no more data
-                for (_, tx) in txs {
-                    tx.send(None).await.ok();
-                }
-            }
-        }
-    }
 }
 
 struct RepartitionStream {
@@ -679,6 +549,132 @@ impl RecordBatchStream for RepartitionStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+/// Pulls data from the specified input plan, feeding it to the
+/// output partitions based on the desired partitioning
+///
+/// i is the input partition index
+///
+/// txs hold the output sending channels for each output partition
+async fn pull_from_input(
+    input: Arc<dyn ExecutionPlan>,
+    i: usize,
+    mut txs: HashMap<usize, (DistributionSender<MaybeBatch>, SharedMemoryReservation)>,
+    partitioning: Partitioning,
+    r_metrics: RepartitionMetrics,
+    context: Arc<TaskContext>,
+) -> Result<()> {
+    let mut partitioner =
+        BatchPartitioner::try_new(partitioning, r_metrics.repart_time.clone())?;
+
+    // execute the child operator
+    let timer = r_metrics.fetch_time.timer();
+    let mut stream = input.execute(i, context)?;
+    timer.done();
+
+    // While there are still outputs to send to, keep
+    // pulling inputs
+    let mut batches_until_yield = partitioner.num_partitions();
+    while !txs.is_empty() {
+        // fetch the next batch
+        let timer = r_metrics.fetch_time.timer();
+        let result = stream.next().await;
+        timer.done();
+
+        // Input is done
+        let batch = match result {
+            Some(result) => result?,
+            None => break,
+        };
+
+        for res in partitioner.partition_iter(batch)? {
+            let (partition, batch) = res?;
+            let size = batch.get_array_memory_size();
+
+            let timer = r_metrics.send_time.timer();
+            // if there is still a receiver, send to it
+            if let Some((tx, reservation)) = txs.get_mut(&partition) {
+                reservation.lock().try_grow(size)?;
+
+                if tx.send(Some(Ok(batch))).await.is_err() {
+                    // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                    reservation.lock().shrink(size);
+                    txs.remove(&partition);
+                }
+            }
+            timer.done();
+        }
+
+        // If the input stream is endless, we may spin forever and
+        // never yield back to tokio.  See
+        // https://github.com/apache/arrow-datafusion/issues/5278.
+        //
+        // However, yielding on every batch causes a bottleneck
+        // when running with multiple cores. See
+        // https://github.com/apache/arrow-datafusion/issues/6290
+        //
+        // Thus, heuristically yield after producing num_partition
+        // batches
+        //
+        // In round robin this is ideal as each input will get a
+        // new batch. In hash partitioning it may yield too often
+        // on uneven distributions even if some partition can not
+        // make progress, but parallelism is going to be limited
+        // in that case anyways
+        if batches_until_yield == 0 {
+            tokio::task::yield_now().await;
+            batches_until_yield = partitioner.num_partitions();
+        } else {
+            batches_until_yield -= 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Waits for `input_task` which is consuming one of the inputs to
+/// complete. Upon each successful completion, sends a `None` to
+/// each of the output tx channels to signal one of the inputs is
+/// complete. Upon error, propagates the errors to all output tx
+/// channels.
+async fn wait_for_task(
+    input_task: AbortOnDropSingle<Result<()>>,
+    txs: HashMap<usize, DistributionSender<MaybeBatch>>,
+) {
+    // wait for completion, and propagate error
+    // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
+    match input_task.await {
+        // Error in joining task
+        Err(e) => {
+            let e = Arc::new(e);
+
+            for (_, tx) in txs {
+                let err = Err(DataFusionError::Context(
+                    "Join Error".to_string(),
+                    Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
+                ));
+                tx.send(Some(err)).await.ok();
+            }
+        }
+        // Error from running input task
+        Ok(Err(e)) => {
+            let e = Arc::new(e);
+
+            for (_, tx) in txs {
+                // wrap it because need to send error to all output partitions
+                let err = Err(DataFusionError::External(Box::new(e.clone())));
+                tx.send(Some(err)).await.ok();
+            }
+        }
+        // Input task completed successfully
+        Ok(Ok(())) => {
+            // notify each output partition that this input partition has no more data
+            for (_, tx) in txs {
+                tx.send(None).await.ok();
+            }
+        }
     }
 }
 
