@@ -724,6 +724,31 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
+
+    let mut to_check: Vec<(u64, usize)> = hash_values
+        .iter()
+        .enumerate()
+        .flat_map(|(row, hash_value)| {
+            build_hashmap
+                .map
+                .get(*hash_value, |(hash, _)| *hash_value == *hash)
+                .map(|(_, v)| (*v - 1, row))
+        })
+        .collect();
+
+    while to_check.len() > 0 {
+        // Perform column-wise (vectorized) equality check
+
+        // check next items
+        to_check = to_check
+            .iter()
+            .flat_map(|(index, row)| {
+                let next = build_hashmap.next[*index as usize];
+                (next != 0).then(|| (next - 1, *row))
+            })
+            .collect();
+    }
+
     // Visit all of the probe rows
     for (row, hash_value) in hash_values.iter().enumerate() {
         // Get the hash and find it in the build index
