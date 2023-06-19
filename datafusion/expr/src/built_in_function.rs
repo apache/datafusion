@@ -440,46 +440,44 @@ impl BuiltinScalarFunction {
         // the return type of the built in function.
         // Some built-in functions' return type depends on the incoming type.
         match self {
-            BuiltinScalarFunction::ArrayAppend => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
-            BuiltinScalarFunction::ArrayConcat => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept fixed size list as the args."
-                ))),
-            },
+            BuiltinScalarFunction::ArrayAppend => Ok(List(Arc::new(Field::new(
+                "item",
+                input_expr_types[1].clone(),
+                true,
+            )))),
+            BuiltinScalarFunction::ArrayConcat => {
+                let mut expr_type = Null;
+                for input_expr_type in input_expr_types {
+                    match input_expr_type {
+                        List(field) => {
+                            if !field.data_type().equals_datatype(&Null) {
+                                expr_type = field.data_type().clone();
+                                break;
+                            }
+                        }
+                        _ => {
+                            return Err(DataFusionError::Internal(format!(
+                                "The {self} function can only accept list as the args."
+                            )))
+                        }
+                    }
+                }
+
+                Ok(List(Arc::new(Field::new("item", expr_type, true))))
+            }
             BuiltinScalarFunction::ArrayDims => Ok(UInt8),
-            BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
+            BuiltinScalarFunction::ArrayFill => Ok(Null),
+            BuiltinScalarFunction::ArrayLength => Ok(UInt8),
+            BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
+            BuiltinScalarFunction::ArrayPosition => Ok(UInt8),
+            BuiltinScalarFunction::ArrayPositions => {
+                Ok(List(Arc::new(Field::new("item", UInt8, true))))
+            }
+            BuiltinScalarFunction::ArrayPrepend => Ok(List(Arc::new(Field::new(
                 "item",
                 input_expr_types[0].clone(),
                 true,
             )))),
-            BuiltinScalarFunction::ArrayLength => Ok(UInt8),
-            BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
-            BuiltinScalarFunction::ArrayPosition => Ok(UInt8),
-            BuiltinScalarFunction::ArrayPositions => Ok(UInt8),
-            BuiltinScalarFunction::ArrayPrepend => match &input_expr_types[1] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
             BuiltinScalarFunction::ArrayRemove => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
                     "item",
@@ -500,24 +498,21 @@ impl BuiltinScalarFunction {
                     "The {self} function can only accept list as the first argument"
                 ))),
             },
-            BuiltinScalarFunction::ArrayToString => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept list as the first argument"
-                ))),
-            },
+            BuiltinScalarFunction::ArrayToString => Ok(Utf8),
             BuiltinScalarFunction::Cardinality => Ok(UInt64),
             BuiltinScalarFunction::MakeArray => match input_expr_types.len() {
                 0 => Ok(List(Arc::new(Field::new("item", Null, true)))),
-                _ => Ok(List(Arc::new(Field::new(
-                    "item",
-                    input_expr_types[0].clone(),
-                    true,
-                )))),
+                _ => {
+                    let mut expr_type = Null;
+                    for input_expr_type in input_expr_types {
+                        if !input_expr_type.equals_datatype(&Null) {
+                            expr_type = input_expr_type.clone();
+                            break;
+                        }
+                    }
+
+                    Ok(List(Arc::new(Field::new("item", expr_type, true))))
+                }
             },
             BuiltinScalarFunction::TrimArray => match &input_expr_types[0] {
                 List(field) => Ok(List(Arc::new(Field::new(
