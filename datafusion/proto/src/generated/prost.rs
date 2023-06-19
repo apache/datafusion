@@ -2470,6 +2470,7 @@ pub enum AggregateFunction {
     /// we append "_AGG" to obey name scoping rules.
     FirstValueAgg = 24,
     LastValueAgg = 25,
+    PercentileCont = 26,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2506,6 +2507,7 @@ impl AggregateFunction {
             AggregateFunction::BoolOr => "BOOL_OR",
             AggregateFunction::FirstValueAgg => "FIRST_VALUE_AGG",
             AggregateFunction::LastValueAgg => "LAST_VALUE_AGG",
+            AggregateFunction::PercentileCont => "PERCENTILE_CONT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2539,6 +2541,7 @@ impl AggregateFunction {
             "BOOL_OR" => Some(Self::BoolOr),
             "FIRST_VALUE_AGG" => Some(Self::FirstValueAgg),
             "LAST_VALUE_AGG" => Some(Self::LastValueAgg),
+            "PERCENTILE_CONT" => Some(Self::PercentileCont),
             _ => None,
         }
     }

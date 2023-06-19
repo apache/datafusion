@@ -465,6 +465,7 @@ impl serde::Serialize for AggregateFunction {
             Self::BoolOr => "BOOL_OR",
             Self::FirstValueAgg => "FIRST_VALUE_AGG",
             Self::LastValueAgg => "LAST_VALUE_AGG",
+            Self::PercentileCont => "PERCENTILE_CONT",
         };
         serializer.serialize_str(variant)
     }
@@ -502,6 +503,7 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
             "BOOL_OR",
             "FIRST_VALUE_AGG",
             "LAST_VALUE_AGG",
+            "PERCENTILE_CONT",
         ];
 
         struct GeneratedVisitor;
@@ -570,6 +572,7 @@ impl<'de> serde::Deserialize<'de> for AggregateFunction {
                     "BOOL_OR" => Ok(AggregateFunction::BoolOr),
                     "FIRST_VALUE_AGG" => Ok(AggregateFunction::FirstValueAgg),
                     "LAST_VALUE_AGG" => Ok(AggregateFunction::LastValueAgg),
+                    "PERCENTILE_CONT" => Ok(AggregateFunction::PercentileCont),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
