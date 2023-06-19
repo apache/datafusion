@@ -322,15 +322,15 @@ where c_acctbal < (
 logical_plan
 Sort: customer.c_custkey ASC NULLS LAST
 --Projection: customer.c_custkey
-----Inner Join: customer.c_custkey = __scalar_sq_10.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_10.SUM(orders.o_totalprice)
+----Inner Join: customer.c_custkey = __scalar_sq_1.o_custkey Filter: CAST(customer.c_acctbal AS Decimal128(25, 2)) < __scalar_sq_1.SUM(orders.o_totalprice)
 ------TableScan: customer projection=[c_custkey, c_acctbal]
-------SubqueryAlias: __scalar_sq_10
+------SubqueryAlias: __scalar_sq_1
 --------Projection: SUM(orders.o_totalprice), orders.o_custkey
 ----------Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]
 ------------Projection: orders.o_custkey, orders.o_totalprice
---------------Inner Join: orders.o_orderkey = __scalar_sq_11.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_11.price
+--------------Inner Join: orders.o_orderkey = __scalar_sq_2.l_orderkey Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __scalar_sq_2.price
 ----------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
-----------------SubqueryAlias: __scalar_sq_11
+----------------SubqueryAlias: __scalar_sq_2
 ------------------Projection: SUM(lineitem.l_extendedprice) AS price, lineitem.l_orderkey
 --------------------Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]
 ----------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice]
@@ -344,9 +344,9 @@ where o_orderstatus in (
 ----
 logical_plan
 Projection: orders.o_orderkey
---LeftSemi Join: orders.o_orderstatus = __correlated_sq_6.l_linestatus, orders.o_orderkey = __correlated_sq_6.l_orderkey
+--LeftSemi Join: orders.o_orderstatus = __correlated_sq_1.l_linestatus, orders.o_orderkey = __correlated_sq_1.l_orderkey
 ----TableScan: orders projection=[o_orderkey, o_orderstatus]
-----SubqueryAlias: __correlated_sq_6
+----SubqueryAlias: __correlated_sq_1
 ------Projection: lineitem.l_linestatus, lineitem.l_orderkey
 --------TableScan: lineitem projection=[l_orderkey, l_linestatus]
 
@@ -381,9 +381,9 @@ query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)
 ----
 logical_plan
-LeftSemi Join: t1.t1_id = __correlated_sq_10.t1_int
+LeftSemi Join: t1.t1_id = __correlated_sq_1.t1_int
 --TableScan: t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_10
+--SubqueryAlias: __correlated_sq_1
 ----Projection: t1.t1_int
 ------Filter: t1.t1_id > t1.t1_int
 --------TableScan: t1 projection=[t1_id, t1_int]
@@ -393,13 +393,13 @@ query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE t1_id IN(SELECT t2_id FROM t2 WHERE EXISTS(select * from t1 WHERE t1.t1_int > t2.t2_int))
 ----
 logical_plan
-LeftSemi Join: t1.t1_id = __correlated_sq_11.t2_id
+LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
 --TableScan: t1 projection=[t1_id, t1_name, t1_int]
---SubqueryAlias: __correlated_sq_11
+--SubqueryAlias: __correlated_sq_1
 ----Projection: t2.t2_id
-------LeftSemi Join:  Filter: __correlated_sq_12.t1_int > t2.t2_int
+------LeftSemi Join:  Filter: __correlated_sq_2.t1_int > t2.t2_int
 --------TableScan: t2 projection=[t2_id, t2_int]
---------SubqueryAlias: __correlated_sq_12
+--------SubqueryAlias: __correlated_sq_2
 ----------TableScan: t1 projection=[t1_int]
 
 #invalid_scalar_subquery
@@ -452,10 +452,10 @@ query TT
 explain SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_16.a AS t2_int
---Left Join: CAST(t1.t1_int AS Int64) = __scalar_sq_16.a
+Projection: t1.t1_id, __scalar_sq_1.a AS t2_int
+--Left Join: CAST(t1.t1_int AS Int64) = __scalar_sq_1.a
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_16
+----SubqueryAlias: __scalar_sq_1
 ------Projection: Int64(1) AS a
 --------EmptyRelation
 
@@ -520,9 +520,9 @@ query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as t2 ON(t1.t1_id = t2.t2_id ))
 ----
 logical_plan
-LeftSemi Join: t0.t0_name = __correlated_sq_19.t2_name
+LeftSemi Join: t0.t0_name = __correlated_sq_1.t2_name
 --TableScan: t0 projection=[t0_id, t0_name]
---SubqueryAlias: __correlated_sq_19
+--SubqueryAlias: __correlated_sq_1
 ----Projection: t2.t2_name
 ------Inner Join: t1.t1_id = t2.t2_id
 --------TableScan: t1 projection=[t1_id]
@@ -534,9 +534,9 @@ query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (select 1 from (SELECT * FROM t1 where t1.t1_id = t0.t0_id) as x INNER JOIN (select * from t2 where t2.t2_name = t0.t0_name) as y ON(x.t1_id = y.t2_id))
 ----
 logical_plan
-LeftSemi Join: t0.t0_id = __correlated_sq_20.t1_id, t0.t0_name = __correlated_sq_20.t2_name
+LeftSemi Join: t0.t0_id = __correlated_sq_1.t1_id, t0.t0_name = __correlated_sq_1.t2_name
 --TableScan: t0 projection=[t0_id, t0_name]
---SubqueryAlias: __correlated_sq_20
+--SubqueryAlias: __correlated_sq_1
 ----Projection: x.t1_id, y.t2_name
 ------Inner Join: x.t1_id = y.t2_id
 --------SubqueryAlias: x
@@ -574,9 +574,9 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1)
 ----
 logical_plan
-LeftSemi Join: t1.t1_id = __correlated_sq_25.t2_id
+LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
 --TableScan: t1 projection=[t1_id, t1_name]
---SubqueryAlias: __correlated_sq_25
+--SubqueryAlias: __correlated_sq_1
 ----TableScan: t2 projection=[t2_id]
 
 query IT rowsort
@@ -592,7 +592,7 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
 ----
 logical_plan
-LeftSemi Join: t1.t1_id = __correlated_sq_27.t2_id
+LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
 --TableScan: t1 projection=[t1_id, t1_name]
 --EmptyRelation
 
@@ -607,7 +607,7 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0)
 ----
 logical_plan
-LeftAnti Join: t1.t1_id = __correlated_sq_29.t2_id
+LeftAnti Join: t1.t1_id = __correlated_sq_1.t2_id
 --TableScan: t1 projection=[t1_id, t1_name]
 --EmptyRelation
 
@@ -639,9 +639,9 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 limit 10)
 ----
 logical_plan
-LeftSemi Join: t1.t1_id = __correlated_sq_33.t2_id
+LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
 --TableScan: t1 projection=[t1_id, t1_name]
---SubqueryAlias: __correlated_sq_33
+--SubqueryAlias: __correlated_sq_1
 ----Limit: skip=0, fetch=10
 ------TableScan: t2 projection=[t2_id], fetch=10
 
@@ -651,8 +651,8 @@ query TT
 explain SELECT t1_id, (SELECT t2_id FROM t2 limit 0) FROM t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_18.t2_id AS t2_id
---Left Join:
+Projection: t1.t1_id, __scalar_sq_1.t2_id AS t2_id
+--Left Join: 
 ----TableScan: t1 projection=[t1_id]
 ----EmptyRelation
 
@@ -685,8 +685,8 @@ query TT
 explain select (select count(*) from t1) as b
 ----
 logical_plan
-Projection: __scalar_sq_20.COUNT(UInt8(1)) AS b
---SubqueryAlias: __scalar_sq_20
+Projection: __scalar_sq_1.COUNT(UInt8(1)) AS b
+--SubqueryAlias: __scalar_sq_1
 ----Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]
 ------TableScan: t1 projection=[t1_id]
 
@@ -695,12 +695,12 @@ query TT
 explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
-Projection: __scalar_sq_21.COUNT(UInt8(1)) AS b, __scalar_sq_22.COUNT(Int64(1)) AS COUNT(Int64(1))
---Left Join:
-----SubqueryAlias: __scalar_sq_21
+Projection: __scalar_sq_1.COUNT(UInt8(1)) AS b, __scalar_sq_2.COUNT(Int64(1)) AS COUNT(Int64(1))
+--Left Join: 
+----SubqueryAlias: __scalar_sq_1
 ------Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]
 --------TableScan: t1 projection=[t1_id]
-----SubqueryAlias: __scalar_sq_22
+----SubqueryAlias: __scalar_sq_2
 ------Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]
 --------TableScan: t2 projection=[t2_id]
 
@@ -714,10 +714,10 @@ query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 ----
 logical_plan
-Projection: t1.t1_id, CASE WHEN __scalar_sq_25.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_25.COUNT(UInt8(1)) END AS COUNT(UInt8(1))
---Left Join: t1.t1_int = __scalar_sq_25.t2_int
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(UInt8(1)) END AS COUNT(UInt8(1))
+--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_25
+----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(UInt8(1)), t2.t2_int, __always_true
 --------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 ----------TableScan: t2 projection=[t2_int]
@@ -736,10 +736,10 @@ query TT
 explain SELECT t1_id, (SELECT count(*) FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
 ----
 logical_plan
-Projection: t1.t1_id, CASE WHEN __scalar_sq_27.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_27.COUNT(UInt8(1)) END AS cnt
---Left Join: t1.t1_int = __scalar_sq_27.t2_int
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(UInt8(1)) END AS cnt
+--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_27
+----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(UInt8(1)), t2.t2_int, __always_true
 --------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 ----------TableScan: t2 projection=[t2_int]
@@ -757,10 +757,10 @@ query TT
 explain SELECT t1_id, (SELECT count(*) as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) as cnt from t1
 ----
 logical_plan
-Projection: t1.t1_id, CASE WHEN __scalar_sq_29.__always_true IS NULL THEN Int64(0) AS _cnt ELSE __scalar_sq_29._cnt END AS cnt
---Left Join: t1.t1_int = __scalar_sq_29.t2_int
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) AS _cnt ELSE __scalar_sq_1._cnt END AS cnt
+--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_29
+----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(UInt8(1)) AS _cnt, t2.t2_int, __always_true
 --------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 ----------TableScan: t2 projection=[t2_int]
@@ -778,10 +778,10 @@ query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as _cnt FROM t2 WHERE t2.t2_int = t1.t1_int) from t1
 ----
 logical_plan
-Projection: t1.t1_id, CASE WHEN __scalar_sq_31.__always_true IS NULL THEN Int64(2) AS _cnt ELSE __scalar_sq_31._cnt END AS _cnt
---Left Join: t1.t1_int = __scalar_sq_31.t2_int
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) AS _cnt ELSE __scalar_sq_1._cnt END AS _cnt
+--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_31
+----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(UInt8(1)) + Int64(2) AS _cnt, t2.t2_int, __always_true
 --------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 ----------TableScan: t2 projection=[t2_int]
@@ -800,11 +800,11 @@ explain select t1.t1_int from t1 where (select count(*) from t2 where t1.t1_id =
 ----
 logical_plan
 Projection: t1.t1_int
---Filter: CASE WHEN __scalar_sq_33.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_33.COUNT(UInt8(1)) END < CAST(t1.t1_int AS Int64)
-----Projection: t1.t1_int, __scalar_sq_33.COUNT(UInt8(1)), __scalar_sq_33.__always_true
-------Left Join: t1.t1_id = __scalar_sq_33.t2_id
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(UInt8(1)) END < CAST(t1.t1_int AS Int64)
+----Projection: t1.t1_int, __scalar_sq_1.COUNT(UInt8(1)), __scalar_sq_1.__always_true
+------Left Join: t1.t1_id = __scalar_sq_1.t2_id
 --------TableScan: t1 projection=[t1_id, t1_int]
---------SubqueryAlias: __scalar_sq_33
+--------SubqueryAlias: __scalar_sq_1
 ----------Projection: COUNT(UInt8(1)), t2.t2_id, __always_true
 ------------Aggregate: groupBy=[[t2.t2_id, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 --------------TableScan: t2 projection=[t2_id]
@@ -822,10 +822,10 @@ query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) >1) from t1
 ----
 logical_plan
-Projection: t1.t1_id, __scalar_sq_35.cnt_plus_2 AS cnt_plus_2
---Left Join: t1.t1_int = __scalar_sq_35.t2_int
+Projection: t1.t1_id, __scalar_sq_1.cnt_plus_2 AS cnt_plus_2
+--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_35
+----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(UInt8(1)) + Int64(2) AS cnt_plus_2, t2.t2_int
 --------Filter: COUNT(UInt8(1)) > Int64(1)
 ----------Projection: t2.t2_int, COUNT(UInt8(1))
@@ -846,10 +846,10 @@ query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
 ----
 logical_plan
-Projection: t1.t1_id, CASE WHEN __scalar_sq_37.__always_true IS NULL THEN Int64(2) AS cnt_plus_2 WHEN __scalar_sq_37.COUNT(UInt8(1)) != Int64(0) THEN NULL ELSE __scalar_sq_37.cnt_plus_2 END AS cnt_plus_2
---Left Join: t1.t1_int = __scalar_sq_37.t2_int
+Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) AS cnt_plus_2 WHEN __scalar_sq_1.COUNT(UInt8(1)) != Int64(0) THEN NULL ELSE __scalar_sq_1.cnt_plus_2 END AS cnt_plus_2
+--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 ----TableScan: t1 projection=[t1_id, t1_int]
-----SubqueryAlias: __scalar_sq_37
+----SubqueryAlias: __scalar_sq_1
 ------Projection: COUNT(UInt8(1)) + Int64(2) AS cnt_plus_2, t2.t2_int, COUNT(UInt8(1)), __always_true
 --------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 ----------TableScan: t2 projection=[t2_int]
@@ -868,12 +868,12 @@ explain select t1.t1_int from t1 group by t1.t1_int having (select count(*) from
 ----
 logical_plan
 Projection: t1.t1_int
---Filter: CASE WHEN __scalar_sq_39.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_39.COUNT(UInt8(1)) END = Int64(0)
-----Projection: t1.t1_int, __scalar_sq_39.COUNT(UInt8(1)), __scalar_sq_39.__always_true
-------Left Join: t1.t1_int = __scalar_sq_39.t2_int
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.COUNT(UInt8(1)) END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_1.COUNT(UInt8(1)), __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 --------Aggregate: groupBy=[[t1.t1_int]], aggr=[[]]
 ----------TableScan: t1 projection=[t1_int]
---------SubqueryAlias: __scalar_sq_39
+--------SubqueryAlias: __scalar_sq_1
 ----------Projection: COUNT(UInt8(1)), t2.t2_int, __always_true
 ------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 --------------TableScan: t2 projection=[t2_int]
@@ -890,11 +890,11 @@ explain select t1.t1_int from t1 where (select cnt from (select count(*) as cnt,
 ----
 logical_plan
 Projection: t1.t1_int
---Filter: CASE WHEN __scalar_sq_41.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_41.cnt END = Int64(0)
-----Projection: t1.t1_int, __scalar_sq_41.cnt, __scalar_sq_41.__always_true
-------Left Join: t1.t1_int = __scalar_sq_41.t2_int
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.cnt END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_1.cnt, __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 --------TableScan: t1 projection=[t1_int]
---------SubqueryAlias: __scalar_sq_41
+--------SubqueryAlias: __scalar_sq_1
 ----------Projection: COUNT(UInt8(1)) AS cnt, t2.t2_int, __always_true
 ------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 --------------TableScan: t2 projection=[t2_int]
@@ -920,11 +920,11 @@ select t1.t1_int from t1 where (
 ----
 logical_plan
 Projection: t1.t1_int
---Filter: CASE WHEN __scalar_sq_43.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_43.COUNT(UInt8(1)) != Int64(0) THEN NULL ELSE __scalar_sq_43.cnt_plus_two END = Int64(2)
-----Projection: t1.t1_int, __scalar_sq_43.cnt_plus_two, __scalar_sq_43.COUNT(UInt8(1)), __scalar_sq_43.__always_true
-------Left Join: t1.t1_int = __scalar_sq_43.t2_int
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.COUNT(UInt8(1)) != Int64(0) THEN NULL ELSE __scalar_sq_1.cnt_plus_two END = Int64(2)
+----Projection: t1.t1_int, __scalar_sq_1.cnt_plus_two, __scalar_sq_1.COUNT(UInt8(1)), __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 --------TableScan: t1 projection=[t1_int]
---------SubqueryAlias: __scalar_sq_43
+--------SubqueryAlias: __scalar_sq_1
 ----------Projection: COUNT(UInt8(1)) + Int64(1) + Int64(1) AS cnt_plus_two, t2.t2_int, COUNT(UInt8(1)), __always_true
 ------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 --------------TableScan: t2 projection=[t2_int]
@@ -949,11 +949,11 @@ select t1.t1_int from t1 where
 ----
 logical_plan
 Projection: t1.t1_int
---Filter: CASE WHEN __scalar_sq_45.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_45.cnt END = Int64(0)
-----Projection: t1.t1_int, __scalar_sq_45.cnt, __scalar_sq_45.__always_true
-------Left Join: t1.t1_int = __scalar_sq_45.t2_int
+--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.cnt END = Int64(0)
+----Projection: t1.t1_int, __scalar_sq_1.cnt, __scalar_sq_1.__always_true
+------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 --------TableScan: t1 projection=[t1_int]
---------SubqueryAlias: __scalar_sq_45
+--------SubqueryAlias: __scalar_sq_1
 ----------Projection: CASE WHEN COUNT(UInt8(1)) = Int64(1) THEN Int64(NULL) ELSE COUNT(UInt8(1)) END AS cnt, t2.t2_int, __always_true
 ------------Aggregate: groupBy=[[t2.t2_int, Boolean(true) AS __always_true]], aggr=[[COUNT(UInt8(1))]]
 --------------TableScan: t2 projection=[t2_int]
@@ -965,8 +965,3 @@ select t1.t1_int from t1 where
 ----
 2
 4
-
-
-
-
-
