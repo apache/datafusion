@@ -53,7 +53,7 @@ order by
 logical_plan
 Sort: orders.o_totalprice DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST
 --Aggregate: groupBy=[[customer.c_name, customer.c_custkey, orders.o_orderkey, orders.o_orderdate, orders.o_totalprice]], aggr=[[SUM(lineitem.l_quantity)]]
-----LeftSemi Join: orders.o_orderkey = __correlated_sq_3.l_orderkey
+----LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 ------Projection: customer.c_custkey, customer.c_name, orders.o_orderkey, orders.o_totalprice, orders.o_orderdate, lineitem.l_quantity
 --------Inner Join: orders.o_orderkey = lineitem.l_orderkey
 ----------Projection: customer.c_custkey, customer.c_name, orders.o_orderkey, orders.o_totalprice, orders.o_orderdate
@@ -61,7 +61,7 @@ Sort: orders.o_totalprice DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST
 --------------TableScan: customer projection=[c_custkey, c_name]
 --------------TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate]
 ----------TableScan: lineitem projection=[l_orderkey, l_quantity]
-------SubqueryAlias: __correlated_sq_3
+------SubqueryAlias: __correlated_sq_1
 --------Projection: lineitem.l_orderkey
 ----------Filter: SUM(lineitem.l_quantity) > Decimal128(Some(30000),25,2)
 ------------Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_quantity)]]
