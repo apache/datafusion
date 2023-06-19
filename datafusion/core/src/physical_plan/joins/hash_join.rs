@@ -44,6 +44,7 @@ use arrow::{
 };
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use std::fmt;
+use std::mem::size_of;
 use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
@@ -508,10 +509,10 @@ async fn collect_left_input(
         )
     })? / 7)
         .next_power_of_two();
-    // 32 bytes per `(u64, SmallVec<[u64; 1]>)`
+    // 16 bytes per `(u64, u64)`
     // + 1 byte for each bucket
-    // + 16 bytes fixed
-    let estimated_hastable_size = 32 * estimated_buckets + estimated_buckets + 16;
+    // + fixed size of JoinHashMap (RawTable + Vec)
+    let estimated_hastable_size = 16 * estimated_buckets + estimated_buckets + size_of::<JoinHashMap>();
 
     reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
