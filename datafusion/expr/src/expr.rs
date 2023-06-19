@@ -898,6 +898,17 @@ impl Expr {
     }
 }
 
+#[macro_export]
+macro_rules! expr_vec_fmt {
+    ( $ARRAY:expr ) => {{
+        $ARRAY
+            .iter()
+            .map(|e| format!("{e}"))
+            .collect::<Vec<String>>()
+            .join(", ")
+    }};
+}
+
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
 /// similar output to `Expr.name()` except that column names will be prefixed with '#'.
 impl fmt::Display for Expr {
@@ -988,26 +999,10 @@ impl fmt::Display for Expr {
             }) => {
                 fmt_function(f, &fun.to_string(), false, args, true)?;
                 if !partition_by.is_empty() {
-                    write!(
-                        f,
-                        " PARTITION BY [{}]",
-                        partition_by
-                            .iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )?;
+                    write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
                 }
                 if !order_by.is_empty() {
-                    write!(
-                        f,
-                        " ORDER BY [{}]",
-                        order_by
-                            .iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )?;
+                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
                 }
                 write!(
                     f,
@@ -1029,14 +1024,7 @@ impl fmt::Display for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(
-                        f,
-                        " ORDER BY [{}]",
-                        ob.iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )?;
+                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
                 }
                 Ok(())
             }
@@ -1052,14 +1040,7 @@ impl fmt::Display for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(
-                        f,
-                        " ORDER BY [{}]",
-                        ob.iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )?;
+                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
                 }
                 Ok(())
             }
@@ -1129,23 +1110,9 @@ impl fmt::Display for Expr {
                 negated,
             }) => {
                 if *negated {
-                    write!(
-                        f,
-                        "{expr} NOT IN ([{}])",
-                        list.iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    write!(f, "{expr} NOT IN ([{}])", expr_vec_fmt!(list))
                 } else {
-                    write!(
-                        f,
-                        "{expr} IN ([{}])",
-                        list.iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
             Expr::Wildcard => write!(f, "*"),
@@ -1156,27 +1123,11 @@ impl fmt::Display for Expr {
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
-                    write!(
-                        f,
-                        "ROLLUP ({})",
-                        exprs
-                            .iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    write!(f, "ROLLUP ({})", expr_vec_fmt!(exprs))
                 }
                 GroupingSet::Cube(exprs) => {
                     // CUBE (c0, c1, c2)
-                    write!(
-                        f,
-                        "CUBE ({})",
-                        exprs
-                            .iter()
-                            .map(|e| format!("{e}"))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
+                    write!(f, "CUBE ({})", expr_vec_fmt!(exprs))
                 }
                 GroupingSet::GroupingSets(lists_of_exprs) => {
                     // GROUPING SETS ((c0), (c1, c2), (c3, c4))
@@ -1185,14 +1136,7 @@ impl fmt::Display for Expr {
                         "GROUPING SETS ({})",
                         lists_of_exprs
                             .iter()
-                            .map(|exprs| format!(
-                                "({})",
-                                exprs
-                                    .iter()
-                                    .map(|e| format!("{e}"))
-                                    .collect::<Vec<String>>()
-                                    .join(", ")
-                            ))
+                            .map(|exprs| format!("({})", expr_vec_fmt!(exprs)))
                             .collect::<Vec<String>>()
                             .join(", ")
                     )
@@ -1400,24 +1344,10 @@ fn create_name(e: &Expr) -> Result<String> {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
             if !partition_by.is_empty() {
-                parts.push(format!(
-                    "PARTITION BY [{}]",
-                    partition_by
-                        .iter()
-                        .map(|e| format!("{e}"))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                ));
+                parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
             }
             if !order_by.is_empty() {
-                parts.push(format!(
-                    "ORDER BY [{}]",
-                    order_by
-                        .iter()
-                        .map(|e| format!("{e}"))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                ));
+                parts.push(format!("ORDER BY [{}]", expr_vec_fmt!(order_by)));
             }
             parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
@@ -1434,14 +1364,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 name = format!("{name} FILTER (WHERE {fe})");
             };
             if let Some(order_by) = order_by {
-                name = format!(
-                    "{name} ORDER BY [{}]",
-                    order_by
-                        .iter()
-                        .map(|e| format!("{e}"))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                );
+                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
             };
             Ok(name)
         }
@@ -1460,13 +1383,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" FILTER (WHERE {fe})");
             }
             if let Some(ob) = order_by {
-                info += &format!(
-                    " ORDER BY ([{}])",
-                    ob.iter()
-                        .map(|e| format!("{e}"))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                );
+                info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
             }
             Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }
@@ -1550,9 +1467,8 @@ mod test {
             .otherwise(lit(ScalarValue::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
         assert_eq!(expected, expr.canonical_name());
-        // assert_eq!(expected, format!("{expr}"));
-        // assert_eq!(expected, format!("{expr:?}"));
-        // assert_eq!(expected, expr.display_name()?);
+        assert_eq!(expected, format!("{expr}"));
+        assert_eq!(expected, expr.display_name()?);
         Ok(())
     }
 
@@ -1564,8 +1480,7 @@ mod test {
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, expr.canonical_name());
-        // assert_eq!(expected_canonical, format!("{expr}"));
-        // assert_eq!(expected_canonical, format!("{expr:?}"));
+        assert_eq!(expected_canonical, format!("{expr}"));
         // note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
         assert_eq!("Float32(1.23)", expr.display_name()?);
