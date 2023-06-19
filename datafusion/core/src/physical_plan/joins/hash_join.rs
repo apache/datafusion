@@ -637,7 +637,6 @@ pub fn build_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
     build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
     // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
@@ -650,7 +649,6 @@ pub fn build_join_indices(
         random_state,
         null_equals_null,
         hashes_buffer,
-        offset,
     )?;
     if let Some(filter) = filter {
         // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
@@ -708,7 +706,6 @@ pub fn build_equal_condition_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -727,7 +724,6 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
-    let offset_value = offset.unwrap_or(0);
     // Visit all of the probe rows
     for (row, hash_value) in hash_values.iter().enumerate() {
         // Get the hash and find it in the build index
@@ -741,16 +737,15 @@ pub fn build_equal_condition_join_indices(
         {
             let mut i = *index - 1;
             loop {
-                let offset_build_index = i as usize - offset_value;
                 // Check hash collisions
                 if equal_rows(
-                    offset_build_index,
+                    i as usize,
                     row,
                     &build_join_values,
                     &keys_values,
                     null_equals_null,
                 )? {
-                    build_indices.append(offset_build_index as u64);
+                    build_indices.append(i);
                     probe_indices.append(row as u32);
                 }
                 // Follow the chain to get the next index value
@@ -1164,7 +1159,6 @@ impl HashJoinStream {
                         &self.random_state,
                         self.null_equals_null,
                         &mut hashes_buffer,
-                        None,
                         JoinSide::Left,
                     );
 
@@ -2650,7 +2644,6 @@ mod tests {
             &random_state,
             false,
             &mut vec![0; right.num_rows()],
-            None,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
