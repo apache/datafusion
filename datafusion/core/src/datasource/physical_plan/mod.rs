@@ -140,7 +140,7 @@ pub struct FileScanConfig {
     ///
     /// Each file must have a schema of `file_schema` or a subset. If
     /// a particular file has a subset, the missing columns are
-    /// padded with with NULLs.
+    /// padded with NULLs.
     ///
     /// DataFusion may attempt to read each partition of files
     /// concurrently, however files *within* a partition will be read
