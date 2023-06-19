@@ -210,6 +210,24 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
+        AggregateFunction::PercentileCont => {
+            if !is_percentile_cont_supported_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            let mut result = input_types.to_vec();
+            if can_coerce_from(&DataType::Float64, &input_types[1]) {
+                result[1] = DataType::Float64;
+            } else {
+                return Err(DataFusionError::Plan(format!(
+                    "Could not coerce the percent argument for {:?} to Float64. Was  {:?}.",
+                    agg_fun, input_types[1]
+                )));
+            }
+            Ok(result)
+        }
         AggregateFunction::ApproxPercentileCont => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
@@ -524,6 +542,15 @@ pub fn is_integer_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+    )
+}
+
+/// Return `true` if `arg_type` is of a [`DataType`] that the
+/// [`AggregateFunction::PercentileCont`] aggregation can operate on.
+pub fn is_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
+    matches!(
+        arg_type,
+        arg_type if NUMERICS.contains(arg_type)
     )
 }
 

@@ -17,13 +17,12 @@
 
 //! # Median
 
+use crate::aggregate::percentile_cont::PercentileContAccumulator;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use arrow::array::{Array, ArrayRef, UInt32Array};
-use arrow::compute::sort_to_indices;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -64,9 +63,10 @@ impl AggregateExpr for Median {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MedianAccumulator {
+        Ok(Box::new(PercentileContAccumulator {
             data_type: self.data_type.clone(),
             all_values: vec![],
+            percentile: 0.5,
         }))
     }
 
@@ -104,136 +104,6 @@ impl PartialEq<dyn Any> for Median {
     }
 }
 
-#[derive(Debug)]
-/// The median accumulator accumulates the raw input values
-/// as `ScalarValue`s
-///
-/// The intermediate state is represented as a List of those scalars
-struct MedianAccumulator {
-    data_type: DataType,
-    all_values: Vec<ScalarValue>,
-}
-
-impl Accumulator for MedianAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        let state =
-            ScalarValue::new_list(Some(self.all_values.clone()), self.data_type.clone());
-        Ok(vec![state])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        assert_eq!(values.len(), 1);
-        let array = &values[0];
-
-        assert_eq!(array.data_type(), &self.data_type);
-        self.all_values.reserve(array.len());
-        for index in 0..array.len() {
-            self.all_values
-                .push(ScalarValue::try_from_array(array, index)?);
-        }
-
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        assert_eq!(states.len(), 1);
-
-        let array = &states[0];
-        assert!(matches!(array.data_type(), DataType::List(_)));
-        for index in 0..array.len() {
-            match ScalarValue::try_from_array(array, index)? {
-                ScalarValue::List(Some(mut values), _) => {
-                    self.all_values.append(&mut values);
-                }
-                ScalarValue::List(None, _) => {} // skip empty state
-                v => {
-                    return Err(DataFusionError::Internal(format!(
-                        "unexpected state in median. Expected DataType::List, got {v:?}"
-                    )))
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn evaluate(&self) -> Result<ScalarValue> {
-        if !self.all_values.iter().any(|v| !v.is_null()) {
-            return ScalarValue::try_from(&self.data_type);
-        }
-
-        // Create an array of all the non null values and find the
-        // sorted indexes
-        let array = ScalarValue::iter_to_array(
-            self.all_values
-                .iter()
-                // ignore null values
-                .filter(|v| !v.is_null())
-                .cloned(),
-        )?;
-
-        // find the mid point
-        let len = array.len();
-        let mid = len / 2;
-
-        // only sort up to the top size/2 elements
-        let limit = Some(mid + 1);
-        let options = None;
-        let indices = sort_to_indices(&array, options, limit)?;
-
-        // pick the relevant indices in the original arrays
-        let result = if len >= 2 && len % 2 == 0 {
-            // even number of values, average the two mid points
-            let s1 = scalar_at_index(&array, &indices, mid - 1)?;
-            let s2 = scalar_at_index(&array, &indices, mid)?;
-            match s1.add(s2)? {
-                ScalarValue::Int8(Some(v)) => ScalarValue::Int8(Some(v / 2)),
-                ScalarValue::Int16(Some(v)) => ScalarValue::Int16(Some(v / 2)),
-                ScalarValue::Int32(Some(v)) => ScalarValue::Int32(Some(v / 2)),
-                ScalarValue::Int64(Some(v)) => ScalarValue::Int64(Some(v / 2)),
-                ScalarValue::UInt8(Some(v)) => ScalarValue::UInt8(Some(v / 2)),
-                ScalarValue::UInt16(Some(v)) => ScalarValue::UInt16(Some(v / 2)),
-                ScalarValue::UInt32(Some(v)) => ScalarValue::UInt32(Some(v / 2)),
-                ScalarValue::UInt64(Some(v)) => ScalarValue::UInt64(Some(v / 2)),
-                ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(v / 2.0)),
-                ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(v / 2.0)),
-                ScalarValue::Decimal128(Some(v), p, s) => {
-                    ScalarValue::Decimal128(Some(v / 2), p, s)
-                }
-                v => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported type in MedianAccumulator: {v:?}"
-                    )))
-                }
-            }
-        } else {
-            // odd number of values, pick that one
-            scalar_at_index(&array, &indices, mid)?
-        };
-
-        Ok(result)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.all_values)
-            - std::mem::size_of_val(&self.all_values)
-            + self.data_type.size()
-            - std::mem::size_of_val(&self.data_type)
-    }
-}
-
-/// Given a returns `array[indicies[indicie_index]]` as a `ScalarValue`
-fn scalar_at_index(
-    array: &dyn Array,
-    indices: &UInt32Array,
-    indicies_index: usize,
-) -> Result<ScalarValue> {
-    let array_index = indices
-        .value(indicies_index)
-        .try_into()
-        .expect("Convert uint32 to usize");
-    ScalarValue::try_from_array(array, array_index)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,7 +112,9 @@ mod tests {
     use crate::generic_test_op;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::DataFusionError;
     use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
 
     #[test]
     fn median_decimal() -> Result<()> {

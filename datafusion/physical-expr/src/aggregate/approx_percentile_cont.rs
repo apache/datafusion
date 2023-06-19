@@ -130,7 +130,7 @@ impl PartialEq for ApproxPercentileCont {
     }
 }
 
-fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
+pub(crate) fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     // Extract the desired percentile literal
     let lit = expr
         .as_any()

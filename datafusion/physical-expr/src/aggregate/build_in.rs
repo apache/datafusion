@@ -229,6 +229,14 @@ pub fn create_aggregate_expr(
                 "CORR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
+        (AggregateFunction::PercentileCont, false) => Arc::new(
+            expressions::PercentileCont::try_new(input_phy_exprs, name, rt_type)?,
+        ),
+        (AggregateFunction::PercentileCont, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "percentile_cont(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
         (AggregateFunction::ApproxPercentileCont, false) => {
             if input_phy_exprs.len() == 2 {
                 Arc::new(expressions::ApproxPercentileCont::new(

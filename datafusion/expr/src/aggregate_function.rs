@@ -61,6 +61,8 @@ pub enum AggregateFunction {
     CovariancePop,
     /// Correlation
     Correlation,
+    /// Continuous Percentile
+    PercentileCont,
     /// Approximate continuous percentile function
     ApproxPercentileCont,
     /// Approximate continuous percentile function with weight
@@ -102,6 +104,7 @@ impl AggregateFunction {
             Covariance => "COVARIANCE",
             CovariancePop => "COVARIANCE_POP",
             Correlation => "CORRELATION",
+            PercentileCont => "PERCENTILE_CONT",
             ApproxPercentileCont => "APPROX_PERCENTILE_CONT",
             ApproxPercentileContWithWeight => "APPROX_PERCENTILE_CONT_WITH_WEIGHT",
             ApproxMedian => "APPROX_MEDIAN",
@@ -152,6 +155,7 @@ impl FromStr for AggregateFunction {
             "var" => AggregateFunction::Variance,
             "var_pop" => AggregateFunction::VariancePop,
             "var_samp" => AggregateFunction::Variance,
+            "percentile_cont" => AggregateFunction::PercentileCont,
             // approximate
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "approx_median" => AggregateFunction::ApproxMedian,
@@ -214,6 +218,7 @@ pub fn return_type(
             coerced_data_types[0].clone(),
             true,
         )))),
+        AggregateFunction::PercentileCont => Ok(coerced_data_types[0].clone()),
         AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
         AggregateFunction::ApproxPercentileContWithWeight => {
             Ok(coerced_data_types[0].clone())
@@ -286,6 +291,14 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         AggregateFunction::Correlation => {
             Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
         }
+        AggregateFunction::PercentileCont => Signature::one_of(
+            // Accept any numeric value paired with a float64 percentile
+            NUMERICS
+                .iter()
+                .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
+                .collect(),
+            Volatility::Immutable,
+        ),
         AggregateFunction::ApproxPercentileCont => {
             // Accept any numeric value paired with a float64 percentile
             let with_tdigest_size = NUMERICS.iter().map(|t| {
