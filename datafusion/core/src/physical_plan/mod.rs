@@ -486,6 +486,24 @@ pub enum Partitioning {
     UnknownPartitioning(usize),
 }
 
+impl fmt::Display for Partitioning {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Partitioning::RoundRobinBatch(size) => write!(f, "RoundRobinBatch({size})"),
+            Partitioning::Hash(phy_exprs, size) => {
+                let phy_exprs_str = phy_exprs
+                    .iter()
+                    .map(|e| format!("{e}"))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "Hash([{phy_exprs_str}], {size})")
+            }
+            Partitioning::UnknownPartitioning(size) => {
+                write!(f, "UnknownPartitioning({size})")
+            }
+        }
+    }
+}
 impl Partitioning {
     /// Returns the number of partitions in this partitioning scheme
     pub fn partition_count(&self) -> usize {
