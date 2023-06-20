@@ -1174,7 +1174,7 @@ mod tests {
             let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
-            let plan = displayable(optimized.as_ref()).indent().to_string();
+            let plan = displayable(optimized.as_ref()).indent(true).to_string();
             let actual_lines = trim_plan_display(&plan);
 
             assert_eq!(
@@ -1189,7 +1189,7 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
             // Now format correctly
-            let plan = displayable($PLAN.as_ref()).indent().to_string();
+            let plan = displayable($PLAN.as_ref()).indent(true).to_string();
             let actual_lines = trim_plan_display(&plan);
 
             assert_eq!(

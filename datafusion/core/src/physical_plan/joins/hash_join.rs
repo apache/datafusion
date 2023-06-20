@@ -30,7 +30,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{
-        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
         DictionaryArray, FixedSizeBinaryArray, LargeStringArray, PrimitiveArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
@@ -43,9 +43,8 @@ use arrow::{
     util::bit_util,
 };
 use futures::{ready, Stream, StreamExt, TryStreamExt};
-use hashbrown::raw::RawTable;
-use smallvec::smallvec;
 use std::fmt;
+use std::mem::size_of;
 use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, usize, vec};
@@ -419,7 +418,7 @@ impl ExecutionPlan for HashJoinExec {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
@@ -510,15 +509,16 @@ async fn collect_left_input(
         )
     })? / 7)
         .next_power_of_two();
-    // 32 bytes per `(u64, SmallVec<[u64; 1]>)`
+    // 16 bytes per `(u64, u64)`
     // + 1 byte for each bucket
-    // + 16 bytes fixed
-    let estimated_hastable_size = 32 * estimated_buckets + estimated_buckets + 16;
+    // + fixed size of JoinHashMap (RawTable + Vec)
+    let estimated_hastable_size =
+        16 * estimated_buckets + estimated_buckets + size_of::<JoinHashMap>();
 
     reservation.try_grow(estimated_hastable_size)?;
     metrics.build_mem_used.add(estimated_hastable_size);
 
-    let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
+    let mut hashmap = JoinHashMap::with_capacity(num_rows);
     let mut hashes_buffer = Vec::new();
     let mut offset = 0;
     for batch in batches.iter() {
@@ -563,16 +563,24 @@ pub fn update_hash(
     // insert hashes to key of the hashmap
     for (row, hash_value) in hash_values.iter().enumerate() {
         let item = hash_map
-            .0
+            .map
             .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-        if let Some((_, indices)) = item {
-            indices.push((row + offset) as u64);
+        if let Some((_, index)) = item {
+            // Already exists: add index to next array
+            let prev_index = *index;
+            // Store new value inside hashmap
+            *index = (row + offset + 1) as u64;
+            // Update chained Vec at row + offset with previous value
+            hash_map.next[row + offset] = prev_index;
         } else {
-            hash_map.0.insert(
+            hash_map.map.insert(
                 *hash_value,
-                (*hash_value, smallvec![(row + offset) as u64]),
+                // store the value + 1 as 0 value reserved for end of list
+                (*hash_value, (row + offset + 1) as u64),
                 |(hash, _)| *hash,
             );
+            // chained list at (row + offset) is already initialized with 0
+            // meaning end of list
         }
     }
     Ok(())
@@ -629,7 +637,6 @@ pub fn build_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
     build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
     // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
@@ -642,7 +649,6 @@ pub fn build_join_indices(
         random_state,
         null_equals_null,
         hashes_buffer,
-        offset,
     )?;
     if let Some(filter) = filter {
         // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
@@ -700,7 +706,6 @@ pub fn build_equal_condition_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
-    offset: Option<usize>,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -719,7 +724,6 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
-    let offset_value = offset.unwrap_or(0);
     // Visit all of the probe rows
     for (row, hash_value) in hash_values.iter().enumerate() {
         // Get the hash and find it in the build index
@@ -727,39 +731,37 @@ pub fn build_equal_condition_join_indices(
         // For every item on the build and probe we check if it matches
         // This possibly contains rows with hash collisions,
         // So we have to check here whether rows are equal or not
-        if let Some((_, indices)) = build_hashmap
-            .0
+        if let Some((_, index)) = build_hashmap
+            .map
             .get(*hash_value, |(hash, _)| *hash_value == *hash)
         {
-            for &i in indices {
-                // Check hash collisions
-                let offset_build_index = i as usize - offset_value;
+            let mut i = *index - 1;
+            loop {
                 // Check hash collisions
                 if equal_rows(
-                    offset_build_index,
+                    i as usize,
                     row,
                     &build_join_values,
                     &keys_values,
                     null_equals_null,
                 )? {
-                    build_indices.append(offset_build_index as u64);
+                    build_indices.append(i);
                     probe_indices.append(row as u32);
                 }
+                // Follow the chain to get the next index value
+                let next = build_hashmap.next[i as usize];
+                if next == 0 {
+                    // end of list
+                    break;
+                }
+                i = next - 1;
             }
         }
     }
-    let build = ArrayData::builder(DataType::UInt64)
-        .len(build_indices.len())
-        .add_buffer(build_indices.finish())
-        .build()?;
-    let probe = ArrayData::builder(DataType::UInt32)
-        .len(probe_indices.len())
-        .add_buffer(probe_indices.finish())
-        .build()?;
 
     Ok((
-        PrimitiveArray::<UInt64Type>::from(build),
-        PrimitiveArray::<UInt32Type>::from(probe),
+        PrimitiveArray::new(build_indices.finish().into(), None),
+        PrimitiveArray::new(probe_indices.finish().into(), None),
     ))
 }
 
@@ -830,7 +832,7 @@ macro_rules! equal_rows_elem_with_string_dict {
 /// Left and right row have equal values
 /// If more data types are supported here, please also add the data types in can_hash function
 /// to generate hash join logical plan.
-fn equal_rows(
+pub fn equal_rows(
     left: usize,
     right: usize,
     left_arrays: &[ArrayRef],
@@ -1157,7 +1159,6 @@ impl HashJoinStream {
                         &self.random_state,
                         self.null_equals_null,
                         &mut hashes_buffer,
-                        None,
                         JoinSide::Left,
                     );
 
@@ -1258,11 +1259,11 @@ mod tests {
 
     use arrow::array::{ArrayRef, Date32Array, Int32Array, UInt32Builder, UInt64Builder};
     use arrow::datatypes::{DataType, Field, Schema};
-    use smallvec::smallvec;
 
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
+    use hashbrown::raw::RawTable;
 
     use crate::execution::context::SessionConfig;
     use crate::physical_expr::expressions::BinaryExpr;
@@ -2616,8 +2617,10 @@ mod tests {
             create_hashes(&[left.columns()[0].clone()], &random_state, hashes_buff)?;
 
         // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], smallvec![0, 1]), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], smallvec![0, 1]), |(h, _)| *h);
+        hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
+
+        let next = vec![2, 0];
 
         let right = build_table_i32(
             ("a", &vec![10, 20]),
@@ -2625,7 +2628,13 @@ mod tests {
             ("c", &vec![30, 40]),
         );
 
-        let left_data = (JoinHashMap(hashmap_left), left);
+        let left_data = (
+            JoinHashMap {
+                map: hashmap_left,
+                next,
+            },
+            left,
+        );
         let (l, r) = build_equal_condition_join_indices(
             &left_data.0,
             &left_data.1,
@@ -2635,7 +2644,6 @@ mod tests {
             &random_state,
             false,
             &mut vec![0; right.num_rows()],
-            None,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);

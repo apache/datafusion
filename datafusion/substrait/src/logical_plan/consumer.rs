@@ -52,7 +52,7 @@ use substrait::proto::{
 };
 use substrait::proto::{FunctionArgument, SortField};
 
-use datafusion::logical_expr::expr::Sort;
+use datafusion::logical_expr::expr::{InList, Sort};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -67,6 +67,8 @@ use crate::variation_const::{
 enum ScalarFunctionType {
     Builtin(BuiltinScalarFunction),
     Op(Operator),
+    // logical negation
+    Not,
 }
 
 pub fn name_to_op(name: &str) -> Result<Operator> {
@@ -109,6 +111,20 @@ fn name_to_op_or_scalar_function(name: &str) -> Result<ScalarFunctionType> {
 
     if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
         return Ok(ScalarFunctionType::Builtin(fun));
+    }
+
+    Err(DataFusionError::NotImplemented(format!(
+        "Unsupported function name: {name:?}"
+    )))
+}
+
+fn scalar_function_or_not(name: &str) -> Result<ScalarFunctionType> {
+    if let Ok(fun) = BuiltinScalarFunction::from_str(name) {
+        return Ok(ScalarFunctionType::Builtin(fun));
+    }
+
+    if name == "not" {
+        return Ok(ScalarFunctionType::Not);
     }
 
     Err(DataFusionError::NotImplemented(format!(
@@ -660,6 +676,21 @@ pub async fn from_substrait_rex(
     extensions: &HashMap<u32, &String>,
 ) -> Result<Arc<Expr>> {
     match &e.rex_type {
+        Some(RexType::SingularOrList(s)) => {
+            let substrait_expr = s.value.as_ref().unwrap();
+            let substrait_list = s.options.as_ref();
+            Ok(Arc::new(Expr::InList(InList {
+                expr: Box::new(
+                    from_substrait_rex(substrait_expr, input_schema, extensions)
+                        .await?
+                        .as_ref()
+                        .clone(),
+                ),
+                list: from_substrait_rex_vec(substrait_list, input_schema, extensions)
+                    .await?,
+                negated: false,
+            })))
+        }
         Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
             Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
                 Some(StructField(x)) => match &x.child.as_ref() {
@@ -790,6 +821,11 @@ pub async fn from_substrait_rex(
                                 ],
                             })))
                         }
+                        Ok(ScalarFunctionType::Not) => {
+                            Err(DataFusionError::NotImplemented(
+                                "Not expected function type: Not".to_string(),
+                            ))
+                        }
                         Err(e) => Err(e),
                     }
                 }
@@ -797,6 +833,54 @@ pub async fn from_substrait_rex(
                     "Invalid arguments for binary expression: {l:?} and {r:?}"
                 ))),
             },
+            // ScalarFunction or Expr::Not
+            1 => {
+                let fun = match extensions.get(&f.function_reference) {
+                    Some(fname) => scalar_function_or_not(fname),
+                    None => Err(DataFusionError::NotImplemented(format!(
+                        "Function not found: function reference = {:?}",
+                        f.function_reference
+                    ))),
+                };
+
+                match fun {
+                    Ok(ScalarFunctionType::Op(_)) => {
+                        Err(DataFusionError::NotImplemented(
+                            "Not expected function type: Op".to_string(),
+                        ))
+                    }
+                    Ok(scalar_function_type) => {
+                        match &f.arguments.first().unwrap().arg_type {
+                            Some(ArgType::Value(e)) => {
+                                let expr =
+                                    from_substrait_rex(e, input_schema, extensions)
+                                        .await?
+                                        .as_ref()
+                                        .clone();
+                                match scalar_function_type {
+                                    ScalarFunctionType::Builtin(fun) => Ok(Arc::new(
+                                        Expr::ScalarFunction(expr::ScalarFunction {
+                                            fun,
+                                            args: vec![expr],
+                                        }),
+                                    )),
+                                    ScalarFunctionType::Not => {
+                                        Ok(Arc::new(Expr::Not(Box::new(expr))))
+                                    }
+                                    _ => Err(DataFusionError::NotImplemented(
+                                        "Invalid arguments for Not expression"
+                                            .to_string(),
+                                    )),
+                                }
+                            }
+                            _ => Err(DataFusionError::NotImplemented(
+                                "Invalid arguments for Not expression".to_string(),
+                            )),
+                        }
+                    }
+                    Err(e) => Err(e),
+                }
+            }
             // ScalarFunction
             _ => {
                 let fun = match extensions.get(&f.function_reference) {

@@ -55,11 +55,7 @@ impl OptimizerRule for MergeProjection {
                                     let parent_expr = parent_projection.schema.fields()
                                         [i]
                                         .qualified_name();
-                                    if e.display_name()? == parent_expr {
-                                        Ok(e)
-                                    } else {
-                                        Ok(e.alias(parent_expr))
-                                    }
+                                    e.alias_if_changed(parent_expr)
                                 }
                                 Err(e) => Err(e),
                             })

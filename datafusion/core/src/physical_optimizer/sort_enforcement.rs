@@ -971,6 +971,7 @@ mod tests {
     use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_plan::aggregates::PhysicalGroupBy;
     use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
+    use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::joins::utils::JoinOn;
     use crate::physical_plan::joins::SortMergeJoinExec;
@@ -1024,7 +1025,7 @@ mod tests {
 
     // Util function to get string representation of a physical plan
     fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-        let formatted = displayable(plan.as_ref()).indent().to_string();
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
         actual.iter().map(|elem| elem.to_string()).collect()
     }
@@ -1400,7 +1401,7 @@ mod tests {
             let state = session_ctx.state();
 
             let physical_plan = $PLAN;
-            let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+            let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
 
             let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES
@@ -1462,8 +1463,11 @@ mod tests {
             },
         )];
         let sort = sort_exec(sort_exprs.clone(), source);
+        // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
+        let coalesce_batches = coalesce_batches_exec(sort);
 
-        let window_agg = bounded_window_exec("non_nullable_col", sort_exprs, sort);
+        let window_agg =
+            bounded_window_exec("non_nullable_col", sort_exprs, coalesce_batches);
 
         let sort_exprs = vec![sort_expr_options(
             "non_nullable_col",
@@ -1491,16 +1495,18 @@ mod tests {
             "  FilterExec: NOT non_nullable_col@1",
             "    SortExec: expr=[non_nullable_col@1 ASC NULLS LAST]",
             "      BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "        SortExec: expr=[non_nullable_col@1 DESC]",
-            "          MemoryExec: partitions=0, partition_sizes=[]",
+            "        CoalesceBatchesExec: target_batch_size=128",
+            "          SortExec: expr=[non_nullable_col@1 DESC]",
+            "            MemoryExec: partitions=0, partition_sizes=[]",
         ];
 
         let expected_optimized = vec![
             "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: CurrentRow, end_bound: Following(NULL) }]",
             "  FilterExec: NOT non_nullable_col@1",
             "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }], mode=[Sorted]",
-            "      SortExec: expr=[non_nullable_col@1 DESC]",
-            "        MemoryExec: partitions=0, partition_sizes=[]",
+            "      CoalesceBatchesExec: target_batch_size=128",
+            "        SortExec: expr=[non_nullable_col@1 DESC]",
+            "          MemoryExec: partitions=0, partition_sizes=[]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
@@ -2891,5 +2897,9 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(CoalesceBatchesExec::new(input, 128))
     }
 }
