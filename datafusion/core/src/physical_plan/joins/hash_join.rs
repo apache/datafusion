@@ -725,14 +725,14 @@ pub fn build_equal_condition_join_indices(
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
 
-    let mut to_check: Vec<(u64, usize)> = hash_values
+    let mut to_check: Vec<(usize, u64)> = hash_values
         .iter()
         .enumerate()
         .flat_map(|(row, hash_value)| {
             build_hashmap
                 .map
                 .get(*hash_value, |(hash, _)| *hash_value == *hash)
-                .map(|(_, v)| (*v - 1, row))
+                .map(|(_, v)| (row, *v - 1))
         })
         .collect();
 
@@ -742,9 +742,9 @@ pub fn build_equal_condition_join_indices(
         // check next items
         to_check = to_check
             .iter()
-            .flat_map(|(index, row)| {
+            .flat_map(|(row, index)| {
                 let next = build_hashmap.next[*index as usize];
-                (next != 0).then(|| (next - 1, *row))
+                (next != 0).then(|| (*row, next - 1))
             })
             .collect();
     }
