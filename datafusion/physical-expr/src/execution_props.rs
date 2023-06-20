@@ -21,7 +21,7 @@ use datafusion_common::alias::AliasGenerator;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Holds per-query execution properties and data (such as statment
+/// Holds per-query execution properties and data (such as statement
 /// starting timestamps).
 ///
 /// An [`ExecutionProps`] is created each time a [`LogicalPlan`] is
@@ -57,6 +57,15 @@ impl ExecutionProps {
             alias_generator: Arc::new(AliasGenerator::new()),
             var_providers: None,
         }
+    }
+
+    /// Set the query execution start time to use
+    pub fn with_query_execution_start_time(
+        mut self,
+        query_execution_start_time: DateTime<Utc>,
+    ) -> Self {
+        self.query_execution_start_time = query_execution_start_time;
+        self
     }
 
     /// Marks the execution of query started timestamp.
