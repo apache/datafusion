@@ -26,7 +26,7 @@ use arrow::array::{
     UInt8Array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{and, eq_dyn, filter, is_null, or_kleene, take};
+use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -1115,8 +1115,10 @@ pub fn equal_rows_arr(
         equal = and(&equal, &equal2)?;
     }
 
-    let left_filtered = filter(&indices_left, &equal)?;
-    let right_filtered = filter(&indices_right, &equal)?;
+    let filter_builder = FilterBuilder::new(&equal).optimize().build();
+
+    let left_filtered = filter_builder.filter(&indices_left)?;
+    let right_filtered = filter_builder.filter(&indices_right)?;
 
     Ok((
         downcast_array(left_filtered.as_ref()),
