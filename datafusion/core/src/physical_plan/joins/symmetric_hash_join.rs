@@ -462,7 +462,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
@@ -2624,7 +2624,7 @@ mod tests {
         let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
         let dataframe = ctx.sql(sql).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
                 "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
@@ -2677,7 +2677,7 @@ mod tests {
         let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
         let dataframe = ctx.sql(sql).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
                 "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",

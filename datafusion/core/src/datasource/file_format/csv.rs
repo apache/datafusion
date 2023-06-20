@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use arrow::csv::WriterBuilder;
@@ -51,7 +51,7 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::physical_plan::insert::{DataSink, InsertExec};
-use crate::physical_plan::Statistics;
+use crate::physical_plan::{DisplayAs, DisplayFormatType, Statistics};
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
 /// The default file extension of csv files
@@ -443,14 +443,19 @@ impl Debug for CsvSink {
     }
 }
 
-impl Display for CsvSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "CsvSink(writer_mode={:?}, file_groups={})",
-            self.config.writer_mode,
-            FileGroupDisplay(&self.config.file_groups),
-        )
+impl DisplayAs for CsvSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "CsvSink(writer_mode={:?}, file_groups=",
+                    self.config.writer_mode
+                )?;
+                FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                write!(f, ")")
+            }
+        }
     }
 }
 

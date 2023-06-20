@@ -1263,7 +1263,7 @@ fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "ArrowError(ParseError(\"Parsed interval field value out of range: 0 months 100000000000000000 days 0 nanos\"))",
+        "ArrowError(InvalidArgumentError(\"Unable to represent 100000000000000000 days in a signed 32-bit integer\"))",
         format!("{err:?}")
     );
 }
@@ -2738,6 +2738,30 @@ fn cte_use_same_name_multiple_times() {
         "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
     let result = logical_plan(sql).err().unwrap();
     assert_eq!(result.to_string(), expected);
+}
+
+#[test]
+fn negative_interval_plus_interval_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days';";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn complex_interval_expression_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\") + IntervalMonthDayNano(\"79228162458924105372415295488\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn negative_sum_intervals_in_projection() {
+    let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
+    let expected =
+    "Projection: (- IntervalMonthDayNano(\"36893488147419103232\") + IntervalMonthDayNano(\"92233720368547758080\") + (- IntervalMonthDayNano(\"73786976294838206464\") + IntervalMonthDayNano(\"129127208515966861312\")))\n  EmptyRelation";
+    quick_test(sql, expected);
 }
 
 #[test]

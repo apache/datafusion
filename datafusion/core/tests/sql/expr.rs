@@ -223,10 +223,11 @@ async fn test_interval_expressions() -> Result<()> {
         "interval '0.5 minute'",
         "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
     );
-    test_expression!(
-        "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
-    );
+    // https://github.com/apache/arrow-rs/issues/4424
+    // test_expression!(
+    //     "interval '.5 minute'",
+    //     "0 years 0 mons 0 days 0 hours 0 mins 30.000000000 secs"
+    // );
     test_expression!(
         "interval '5 minute'",
         "0 years 0 mons 0 days 0 hours 5 mins 0.000000000 secs"

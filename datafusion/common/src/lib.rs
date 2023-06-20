@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod alias;
 pub mod cast;
 mod column;
 pub mod config;

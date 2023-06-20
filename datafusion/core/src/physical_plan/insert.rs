@@ -19,7 +19,8 @@
 
 use super::expressions::PhysicalSortExpr;
 use super::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -31,7 +32,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use futures::StreamExt;
 use std::any::Any;
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
@@ -45,7 +46,7 @@ use datafusion_execution::TaskContext;
 /// The `Display` impl is used to format the sink for explain plan
 /// output.
 #[async_trait]
-pub trait DataSink: Display + Debug + Send + Sync {
+pub trait DataSink: DisplayAs + Debug + Send + Sync {
     // TODO add desired input ordering
     // How does this sink want its input ordered?
 
@@ -185,8 +186,9 @@ impl ExecutionPlan for InsertExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
-                write!(f, "InsertExec: sink={}", self.sink)
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "InsertExec: sink=")?;
+                self.sink.fmt_as(t, f)
             }
         }
     }

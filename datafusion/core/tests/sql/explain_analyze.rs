@@ -613,7 +613,7 @@ async fn test_physical_plan_display_indent() {
     ];
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         // normalize paths
@@ -659,7 +659,7 @@ async fn test_physical_plan_display_indent_multi_children() {
     ];
 
     let normalizer = ExplainNormalizer::new();
-    let actual = format!("{}", displayable(physical_plan.as_ref()).indent())
+    let actual = format!("{}", displayable(physical_plan.as_ref()).indent(true))
         .trim()
         .lines()
         // normalize paths
