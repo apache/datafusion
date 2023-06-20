@@ -57,7 +57,17 @@ use std::{
 
 use futures::{FutureExt, StreamExt};
 
-// create local execution context with an in-memory table
+// This example demonstrates executing an async user defined function (pow).
+// Async UDFs aren't supported at the moment. This is a workaround example.
+// In this example a user defined `QueryPlanner` (PowQueryPlanner) and an `OptimizerRule` (PowOptimizerRule) is provided to a SessionState.
+// The `QueryPlanner` registers an `ExtensionPlanner` (PowPlanner).
+// The `OptimizerRule` (PowOptimizerRule) replaces a `LogicalPlan::Projection` with a `LogicalPlan::Extension`.
+// The extension hosts a user defined node (PowNode).
+// When creating a physical plan for the extension, the node is casted to a user defined execution plan (PowExec) by the `ExtensionPlanner`.
+// On plan execution the user defined async function (pow) is called with a `RecordBatch`.
+
+// create local execution context with an in-memory table and
+// register an user defined QueryPlanner and a OptimizerRule.
 fn create_context() -> Result<SessionContext> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
@@ -89,8 +99,15 @@ fn create_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-// pow is similar to the pow function in simple_udf example
-// in this example the function is async.
+// pow is similar to the pow function in the simple_udf example
+// in this example the function is async. It's not registered directly in the SessionContext,
+// but a placeholder UDF is replaced with a custom Extension.
+// The custom Extension manages executing this function on plan execution.
+//
+// The input type depends on the placeholder UDF types.
+// The output type is not from the placeholder UDF, but returned from this function.
+//
+// Pow calculates a^b in an async context.
 async fn pow(batch: Result<RecordBatch>) -> Result<RecordBatch> {
     batch.map(|b| {
         // 1. get columns from batch and cast them
@@ -112,14 +129,13 @@ async fn pow(batch: Result<RecordBatch>) -> Result<RecordBatch> {
             })
             .collect::<Float64Array>();
 
-        // 3. Construct
+        // 3. Define a new schema and construct a new RecordBatch with the computed data
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
         RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
     })
 }
 
-/// In this example we will declare a single-type, single return type UDF that exponentiates f64, a^b
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = create_context()?;
@@ -127,17 +143,19 @@ async fn main() -> Result<()> {
     // First, declare the placeholder UDF
     let placeholder_pow = |_args: &[ArrayRef]| {
         Err(datafusion_common::DataFusionError::NotImplemented(
-            "Not suposed to be implemented".to_string(),
+            "Not supposed to be executed.".to_string(),
         ))
     };
+
     // the function above expects an `ArrayRef`, but DataFusion may pass a scalar to a UDF.
     // thus, we use `make_scalar_function` to decorare the closure so that it can handle both Arrays and Scalar values.
     let placeholder_pow = make_scalar_function(placeholder_pow);
 
     // Next:
-    // * give it a name so that it shows nicely when the plan is printed
-    // * the input type is checked
-    // * the output type doesn't matter, this UDF is a placeholder only
+    // * give it a name so that it can be recognised
+    // * the input type is checked and is important
+    // * the output type isn't used in this example, the real function provides the type via a
+    // schema
     let placeholder_pow = create_udf(
         "pow",
         vec![DataType::Float64, DataType::Float64],
@@ -164,8 +182,7 @@ struct PowQueryPlanner {}
 
 #[async_trait]
 impl QueryPlanner for PowQueryPlanner {
-    /// Given a `LogicalPlan` created from above, create an
-    /// `ExecutionPlan` suitable for execution
+    // Given a `LogicalPlan` created from above, create an `ExecutionPlan` suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -183,12 +200,12 @@ impl QueryPlanner for PowQueryPlanner {
     }
 }
 
-/// Physical planner for Pow nodes
+// Physical planner for Pow nodes
 struct PowPlanner {}
 
 #[async_trait]
 impl ExtensionPlanner for PowPlanner {
-    /// Create a physical plan for an extension node
+    // Create a physical plan for an extension node
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
@@ -264,7 +281,7 @@ fn rewrite_expr(expr: Expr, schema: DFSchemaRef, input: &LogicalPlan) -> Result<
                         expr: vec![args[0].clone()],
                     }),
                 });
-                // Expr::ScalarSubquery don't support LogicalPlan::Extension as a subquery
+                // Expr::ScalarSubquery doesn't support LogicalPlan::Extension as a subquery
                 Transformed::Yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(subplan),
                     outer_ref_columns: vec![],
@@ -367,7 +384,8 @@ impl ExecutionPlan for PowExec {
         }))
     }
 
-    /// Execute one partition and return an iterator over RecordBatch
+    // Execute one partition and return an iterator over `RecordBatch`.
+    // The iterator calls the user defined async function `pow`.
     fn execute(
         &self,
         partition: usize,
