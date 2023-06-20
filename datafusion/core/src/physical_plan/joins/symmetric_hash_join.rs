@@ -467,10 +467,16 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 write!(
                     f,
-                    "SymmetricHashJoinExec: join_type={:?}, on={:?}{}",
-                    self.join_type, self.on, display_filter
+                    "SymmetricHashJoinExec: join_type={:?}, on=[{}]{}",
+                    self.join_type, on, display_filter
                 )
             }
         }
@@ -2627,12 +2633,12 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+                "SymmetricHashJoinExec: join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
             ]
         };
@@ -2680,12 +2686,12 @@ mod tests {
         let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+                "SymmetricHashJoinExec: join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
             ]
         };
