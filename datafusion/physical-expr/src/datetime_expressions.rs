@@ -283,11 +283,16 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let nano = (f)(*v)?;
+
+            if nano.is_none(){
+                return Ok(ColumnarValue::Scalar(ScalarValue::Null))
+            }
+
             match granularity.as_str() {
                 "minute" => {
                     // trunc to minute
                     let second = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap_or_default() / 1_000_000_000 * 1_000_000_000),
+                        Some(nano.unwrap() / 1_000_000_000 * 1_000_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(second)
@@ -295,7 +300,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 "second" => {
                     // trunc to second
                     let mill = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap_or_default() / 1_000_000 * 1_000_000),
+                        Some(nano.unwrap() / 1_000_000 * 1_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(mill)
@@ -303,7 +308,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 "millisecond" => {
                     // trunc to microsecond
                     let micro = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap_or_default() / 1_000 * 1_000),
+                        Some(nano.unwrap() / 1_000 * 1_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(micro)
@@ -311,7 +316,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 _ => {
                     // trunc to nanosecond
                     let nano = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap_or_default()),
+                        Some(nano.unwrap()),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(nano)
