@@ -213,7 +213,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unsupported qualified wildcard argument: {sql:?}"
+                "Unsupported qualified wildcard argument: {sql}"
             ))),
         }
     }
