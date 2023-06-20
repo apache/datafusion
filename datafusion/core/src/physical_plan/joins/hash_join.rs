@@ -25,6 +25,7 @@ use arrow::array::{
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::{and, eq_dyn, filter, take};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
@@ -44,6 +45,7 @@ use arrow::{
     util::bit_util,
 };
 use arrow_array::cast::downcast_array;
+use arrow_schema::ArrowError;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use std::fmt;
 use std::mem::size_of;
@@ -1096,22 +1098,34 @@ pub fn equal_rows(
     err.unwrap_or(Ok(res))
 }
 
+fn eq_dyn_null(left: &dyn Array, right: &dyn Array, null_equals_null: bool) -> Result<BooleanArray, ArrowError> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Null, DataType::Null) => {
+            Ok(BooleanArray::new(BooleanBuffer::collect_bool(left.len(), |_| null_equals_null), None))
+        },
+        _ => {
+            eq_dyn(left, right)
+        }
+    }
+}
+
+
 pub fn equal_rows_arr(
     indices_left: UInt64Array,
     indices_right: UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
-    _null_equals_null: bool,
+    null_equals_null: bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let arr_left = take(left_arrays[0].as_ref(), &indices_left, None)?;
     let arr_right = take(right_arrays[0].as_ref(), &indices_right, None)?;
 
-    let mut equal = eq_dyn(arr_left.as_ref(), arr_right.as_ref())?;
+    let mut equal = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
 
     for i in 1..left_arrays.len() {
         let arr_left = take(left_arrays[i].as_ref(), &indices_left, None)?;
         let arr_right = take(right_arrays[i].as_ref(), &indices_right, None)?;
-        let equal2 = eq_dyn(arr_left.as_ref(), arr_right.as_ref())?;
+        let equal2 = eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)?;
         equal = and(&equal, &equal2)?;
     }
 
