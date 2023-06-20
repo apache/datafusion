@@ -25,6 +25,7 @@ use arrow::array::{
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+use arrow::compute::{eq_dyn, take};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -725,7 +726,7 @@ pub fn build_equal_condition_join_indices(
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
 
-    let mut to_check: Vec<(usize, u64)> = hash_values
+    let mut to_check: (Vec<usize>, Vec<u64>) = hash_values
         .iter()
         .enumerate()
         .flat_map(|(row, hash_value)| {
@@ -734,54 +735,24 @@ pub fn build_equal_condition_join_indices(
                 .get(*hash_value, |(hash, _)| *hash_value == *hash)
                 .map(|(_, v)| (row, *v - 1))
         })
-        .collect();
+        .unzip();
 
-    while to_check.len() > 0 {
+    while to_check.0.len() > 0 {
         // Perform column-wise (vectorized) equality check
+
+        let res =
+            equal_rows_arr(to_check.0, &build_join_values, &keys_values, null_equals_null)?;
 
         // check next items
         to_check = to_check
+            .0
             .iter()
+            .zip(to_check.1)
             .flat_map(|(row, index)| {
-                let next = build_hashmap.next[*index as usize];
+                let next = build_hashmap.next[index as usize];
                 (next != 0).then(|| (*row, next - 1))
             })
-            .collect();
-    }
-
-    // Visit all of the probe rows
-    for (row, hash_value) in hash_values.iter().enumerate() {
-        // Get the hash and find it in the build index
-
-        // For every item on the build and probe we check if it matches
-        // This possibly contains rows with hash collisions,
-        // So we have to check here whether rows are equal or not
-        if let Some((_, index)) = build_hashmap
-            .map
-            .get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
-            let mut i = *index - 1;
-            loop {
-                // Check hash collisions
-                if equal_rows(
-                    i as usize,
-                    row,
-                    &build_join_values,
-                    &keys_values,
-                    null_equals_null,
-                )? {
-                    build_indices.append(i);
-                    probe_indices.append(row as u32);
-                }
-                // Follow the chain to get the next index value
-                let next = build_hashmap.next[i as usize];
-                if next == 0 {
-                    // end of list
-                    break;
-                }
-                i = next - 1;
-            }
-        }
+            .unzip();
     }
 
     Ok((
@@ -1120,6 +1091,21 @@ pub fn equal_rows(
         });
 
     err.unwrap_or(Ok(res))
+}
+
+pub fn equal_rows_arr(
+    indices: Vec<u64>,
+    indices_right: Vec<usize>,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equals_null: bool,
+) -> Result<BooleanArray> {
+    let arr_left = take(left_arrays[0].as_ref(), indices.into(), None);
+    let arr_right = take(left_arrays[0].as_ref(), indices, None);
+
+    let equal = eq_dyn(left_arrays[0].as_ref(), right_arrays[0].as_ref())?;
+
+    Ok(equal)
 }
 
 impl HashJoinStream {
