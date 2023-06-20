@@ -220,7 +220,7 @@ ORDER BY 1, 2;
         "                  ProjectionExec: expr=[column1@0 as t]",
         "                    ValuesExec",
     ];
-    let formatted = displayable(plan.as_ref()).indent().to_string();
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
