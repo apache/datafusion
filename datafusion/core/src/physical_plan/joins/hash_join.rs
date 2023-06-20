@@ -1111,7 +1111,7 @@ pub fn equal_rows_arr(
     for i in 1..left_arrays.len() {
         let arr_left = take(left_arrays[i].as_ref(), &indices_left, None)?;
         let arr_right = take(right_arrays[i].as_ref(), &indices_right, None)?;
-            let equal2 = eq_dyn(left_arrays[i].as_ref(), right_arrays[i].as_ref())?;
+        let equal2 = eq_dyn(arr_left.as_ref(), arr_right.as_ref())?;
         equal = and(&equal, &equal2)?;
     }
 
