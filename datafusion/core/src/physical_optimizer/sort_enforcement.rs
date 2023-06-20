@@ -1025,7 +1025,7 @@ mod tests {
 
     // Util function to get string representation of a physical plan
     fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-        let formatted = displayable(plan.as_ref()).indent().to_string();
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
         actual.iter().map(|elem| elem.to_string()).collect()
     }
@@ -1401,7 +1401,7 @@ mod tests {
             let state = session_ctx.state();
 
             let physical_plan = $PLAN;
-            let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+            let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
             let actual: Vec<&str> = formatted.trim().lines().collect();
 
             let expected_plan_lines: Vec<&str> = $EXPECTED_PLAN_LINES

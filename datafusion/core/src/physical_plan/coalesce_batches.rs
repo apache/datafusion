@@ -147,7 +147,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "CoalesceBatchesExec: target_batch_size={}",

@@ -450,7 +450,7 @@ impl ExecutionPlan for RepartitionExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "RepartitionExec: partitioning={:?}, input_partitions={}",

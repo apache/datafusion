@@ -157,7 +157,7 @@ impl ExecutionPlan for StatisticsValidation {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "StatisticsValidation: col_count={}, row_count={:?}",

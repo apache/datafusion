@@ -170,7 +170,7 @@ impl ExecutionPlan for GlobalLimitExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "GlobalLimitExec: skip={}, fetch={}",
@@ -337,7 +337,7 @@ impl ExecutionPlan for LocalLimitExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
             }
         }

@@ -363,7 +363,7 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "SortMergeJoin: join_type={:?}, on={:?}",

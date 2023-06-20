@@ -305,7 +305,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BoundedWindowAggExec: ")?;
                 let g: Vec<String> = self
                     .window_expr

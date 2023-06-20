@@ -303,14 +303,14 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
-            displayable(physical_plan.as_ref()).indent()
+            displayable(physical_plan.as_ref()).indent(true)
         );
     }
     let result = collect(physical_plan.clone(), state.task_ctx()).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
-            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent(true)
         );
         if !result.is_empty() {
             // do not call print_batches if there are no batches as the result is confusing

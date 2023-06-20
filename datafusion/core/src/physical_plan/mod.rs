@@ -34,7 +34,7 @@ pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::OrderingEquivalenceProperties;
-pub use display::DisplayFormatType;
+pub use display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use futures::stream::{Stream, TryStreamExt};
 use std::fmt;
 use std::fmt::Debug;
@@ -312,9 +312,9 @@ pub fn with_new_children_if_necessary(
 ///   let dataframe = ctx.sql("SELECT a FROM example WHERE a < 5").await.unwrap();
 ///   let physical_plan = dataframe.create_physical_plan().await.unwrap();
 ///
-///   // Format using display string
+///   // Format using display string in verbose mode
 ///   let displayable_plan = displayable(physical_plan.as_ref());
-///   let plan_string = format!("{}", displayable_plan.indent());
+///   let plan_string = format!("{}", displayable_plan.indent(true));
 ///
 ///   let working_directory = std::env::current_dir().unwrap();
 ///   let normalized = Path::from_filesystem_path(working_directory).unwrap();
