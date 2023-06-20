@@ -644,7 +644,7 @@ pub fn build_join_indices(
     build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
     // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
-    let (build_indices, probe_indices) = build_equal_condition_join_indices(
+    build_equal_condition_join_indices(
         build_hashmap,
         build_input_buffer,
         probe_batch,
@@ -653,20 +653,9 @@ pub fn build_join_indices(
         random_state,
         null_equals_null,
         hashes_buffer,
-    )?;
-    if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            build_indices,
-            probe_indices,
-            filter,
-            build_side,
-        )
-    } else {
-        Ok((build_indices, probe_indices))
-    }
+        filter,
+        build_side,
+    )
 }
 
 // Returns build/probe indices satisfying the equality condition.
@@ -710,6 +699,8 @@ pub fn build_equal_condition_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
+    filter: Option<&JoinFilter>,
+    build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -756,6 +747,19 @@ pub fn build_equal_condition_join_indices(
 
     let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
     let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
+
+    let (left, right) = if let Some(filter) = filter {
+        apply_join_filter_to_indices(
+            build_input_buffer,
+            probe_batch,
+            left,
+            right,
+            filter,
+            build_side,
+        )?
+    } else {
+        (left, right)
+    };
 
     equal_rows_arr(
         left,
@@ -2697,6 +2701,8 @@ mod tests {
             &random_state,
             false,
             &mut vec![0; right.num_rows()],
+            None,
+            JoinSide::Left,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
