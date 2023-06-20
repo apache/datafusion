@@ -1097,23 +1097,25 @@ pub fn equal_rows(
 }
 
 pub fn equal_rows_arr(
-    indices: UInt64Array,
+    indices_left: UInt64Array,
     indices_right: UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     _null_equals_null: bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let arr_left = take(left_arrays[0].as_ref(), &indices, None)?;
+    let arr_left = take(left_arrays[0].as_ref(), &indices_left, None)?;
     let arr_right = take(right_arrays[0].as_ref(), &indices_right, None)?;
 
     let mut equal = eq_dyn(arr_left.as_ref(), arr_right.as_ref())?;
 
     for i in 1..left_arrays.len() {
-        let equal2 = eq_dyn(left_arrays[i].as_ref(), right_arrays[i].as_ref())?;
+        let arr_left = take(left_arrays[i].as_ref(), &indices_left, None)?;
+        let arr_right = take(right_arrays[i].as_ref(), &indices_right, None)?;
+            let equal2 = eq_dyn(left_arrays[i].as_ref(), right_arrays[i].as_ref())?;
         equal = and(&equal, &equal2)?;
     }
 
-    let left_filtered = filter(&indices, &equal)?;
+    let left_filtered = filter(&indices_left, &equal)?;
     let right_filtered = filter(&indices_right, &equal)?;
 
     Ok((
