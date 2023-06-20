@@ -1098,17 +1098,19 @@ pub fn equal_rows(
     err.unwrap_or(Ok(res))
 }
 
-fn eq_dyn_null(left: &dyn Array, right: &dyn Array, null_equals_null: bool) -> Result<BooleanArray, ArrowError> {
+fn eq_dyn_null(
+    left: &dyn Array,
+    right: &dyn Array,
+    null_equals_null: bool,
+) -> Result<BooleanArray, ArrowError> {
     match (left.data_type(), right.data_type()) {
-        (DataType::Null, DataType::Null) => {
-            Ok(BooleanArray::new(BooleanBuffer::collect_bool(left.len(), |_| null_equals_null), None))
-        },
-        _ => {
-            eq_dyn(left, right)
-        }
+        (DataType::Null, DataType::Null) => Ok(BooleanArray::new(
+            BooleanBuffer::collect_bool(left.len(), |_| null_equals_null),
+            None,
+        )),
+        _ => eq_dyn(left, right),
     }
 }
-
 
 pub fn equal_rows_arr(
     indices_left: UInt64Array,
@@ -1125,7 +1127,8 @@ pub fn equal_rows_arr(
     for i in 1..left_arrays.len() {
         let arr_left = take(left_arrays[i].as_ref(), &indices_left, None)?;
         let arr_right = take(right_arrays[i].as_ref(), &indices_right, None)?;
-        let equal2 = eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)?;
+        let equal2 =
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)?;
         equal = and(&equal, &equal2)?;
     }
 
