@@ -62,7 +62,7 @@ pub use expr::{
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
 pub use function::{
-    AccumulatorFunctionImplementation, ReturnTypeFunction, ScalarFunctionImplementation,
+    AccumulatorFactoryFunction, ReturnTypeFunction, ScalarFunctionImplementation,
     StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};

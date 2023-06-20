@@ -42,7 +42,7 @@ pub type ReturnTypeFunction =
 
 /// Factory that returns an accumulator for the given aggregate, given
 /// its return datatype.
-pub type AccumulatorFunctionImplementation =
+pub type AccumulatorFactoryFunction =
     Arc<dyn Fn(&DataType) -> Result<Box<dyn Accumulator>> + Send + Sync>;
 
 /// Factory that returns the types used by an aggregator to serialize
