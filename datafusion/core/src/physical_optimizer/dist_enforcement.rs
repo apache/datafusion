@@ -1230,8 +1230,9 @@ mod tests {
 
         for join_type in join_types {
             let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
-            let join_plan =
-                format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]");
+            let join_plan = format!(
+                "HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(a@0, b1@1)]"
+            );
 
             match join_type {
                 JoinType::Inner

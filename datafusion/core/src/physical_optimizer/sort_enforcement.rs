@@ -2381,10 +2381,12 @@ mod tests {
             ];
             let physical_plan = sort_preserving_merge_exec(sort_exprs.clone(), join);
 
-            let join_plan =
-                format!("SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]");
-            let join_plan2 =
-                format!("  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]");
+            let join_plan = format!(
+                "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
+            let join_plan2 = format!(
+                "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let expected_input = vec![
                 "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
                 join_plan2.as_str(),
@@ -2452,16 +2454,18 @@ mod tests {
             ];
             let physical_plan = sort_preserving_merge_exec(sort_exprs, join);
 
-            let join_plan =
-                format!("SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]");
+            let join_plan = format!(
+                "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let spm_plan = match join_type {
                 JoinType::RightAnti => {
                     "SortPreservingMergeExec: [col_a@0 ASC,col_b@1 ASC]"
                 }
                 _ => "SortPreservingMergeExec: [col_a@2 ASC,col_b@3 ASC]",
             };
-            let join_plan2 =
-                format!("  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]");
+            let join_plan2 = format!(
+                "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let expected_input = vec![
                 spm_plan,
                 join_plan2.as_str(),
