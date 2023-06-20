@@ -898,13 +898,9 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl<'a> Display for Wrapper<'a> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                writeln!(
-                    f,
-                    "// Begin DataFusion GraphViz Plan (see https://graphviz.org)"
-                )?;
-                writeln!(f, "digraph {{")?;
-
                 let mut visitor = GraphvizVisitor::new(f);
+
+                visitor.start_graph()?;
 
                 visitor.pre_visit_plan("LogicalPlan")?;
                 self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
@@ -915,8 +911,7 @@ impl LogicalPlan {
                 self.0.visit(&mut visitor).map_err(|_| fmt::Error)?;
                 visitor.post_visit_plan()?;
 
-                writeln!(f, "}}")?;
-                writeln!(f, "// End DataFusion GraphViz Plan")?;
+                visitor.end_graph()?;
                 Ok(())
             }
         }
@@ -1895,7 +1890,7 @@ mod tests {
                 _ => {
                     return Err(DataFusionError::NotImplemented(
                         "unknown plan type".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -1911,7 +1906,7 @@ mod tests {
                 _ => {
                     return Err(DataFusionError::NotImplemented(
                         "unknown plan type".to_string(),
-                    ))
+                    ));
                 }
             };
 
