@@ -26,7 +26,6 @@ use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
 
-use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
@@ -37,6 +36,7 @@ use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 
@@ -78,11 +78,11 @@ impl TableProviderFactory for ListingTableFactory {
                     .with_file_compression_type(file_compression_type),
             ),
             FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat),
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
-            FileType::ARROW => Arc::new(ArrowFormat::default()),
+            FileType::ARROW => Arc::new(ArrowFormat),
         };
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {

@@ -36,21 +36,8 @@ use crate::aggregate::row_accumulator::{
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
+use arrow::compute::{bool_and, bool_or};
 use datafusion_row::accessor::RowAccessor;
-
-fn bool_and(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.false_count() == 0)
-}
-
-fn bool_or(array: &BooleanArray) -> Option<bool> {
-    if array.null_count() == array.len() {
-        return None;
-    }
-    Some(array.true_count() != 0)
-}
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {

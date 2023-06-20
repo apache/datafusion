@@ -37,12 +37,9 @@ use crate::{
     expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
 };
 
-/// A window expr that takes the form of an aggregate function
-/// Aggregate Window Expressions that have the form
-/// `OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)`
-/// e.g cumulative window frames uses `PlainAggregateWindowExpr`. Where as Aggregate Window Expressions
-/// that have the form `OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)`
-/// e.g sliding window frames uses `SlidingAggregateWindowExpr`.
+/// A window expr that takes the form of an aggregate function.
+///
+/// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct PlainAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
@@ -115,7 +112,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
                 window_agg_state.get_mut(partition_row).ok_or_else(|| {
                     DataFusionError::Execution("Cannot find state".to_string())
                 })?;
-            let mut state = &mut window_state.state;
+            let state = &mut window_state.state;
             if self.window_frame.start_bound.is_unbounded() {
                 state.window_frame_range.start =
                     state.window_frame_range.end.saturating_sub(1);
@@ -158,8 +155,7 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        self.aggregate.supports_bounded_execution()
-            && !self.window_frame.end_bound.is_unbounded()
+        !self.window_frame.end_bound.is_unbounded()
     }
 }
 

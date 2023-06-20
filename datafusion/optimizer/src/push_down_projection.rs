@@ -102,11 +102,7 @@ impl OptimizerRule for PushDownProjection {
                         Ok(e) => {
                             let parent_expr =
                                 projection.schema.fields()[i].qualified_name();
-                            if e.display_name()? == parent_expr {
-                                Ok(e)
-                            } else {
-                                Ok(e.alias(parent_expr))
-                            }
+                            e.alias_if_changed(parent_expr)
                         }
                         Err(e) => Err(e),
                     })

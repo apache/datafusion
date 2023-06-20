@@ -29,11 +29,8 @@ use arrow::{
 };
 use chrono::{Datelike, Duration};
 use datafusion::{
-    datasource::{provider_as_source, TableProvider},
-    physical_plan::{
-        accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
-        ExecutionPlanVisitor,
-    },
+    datasource::{physical_plan::ParquetExec, provider_as_source, TableProvider},
+    physical_plan::{accept, metrics::MetricsSet, ExecutionPlan, ExecutionPlanVisitor},
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -46,6 +43,7 @@ mod custom_reader;
 mod filter_pushdown;
 mod page_pruning;
 mod row_group_pruning;
+mod schema_coercion;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -380,7 +378,7 @@ fn make_decimal_batch(v: Vec<i128>, precision: u8, scale: i8) -> RecordBatch {
         true,
     )]));
     let array = Arc::new(
-        Decimal128Array::from_iter_values(v)
+        Decimal128Array::from(v)
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     ) as ArrayRef;

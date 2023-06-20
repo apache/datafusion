@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use datafusion::from_slice::FromSlice;
 use std::ops::Add;
 
 #[tokio::test]
@@ -509,7 +508,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from_slice([10, 20, 30, 40, 50, 60])),
+            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
         ],
     )?;
     ctx.register_batch("t1", data).unwrap();
@@ -566,7 +565,6 @@ async fn timestamp_sub_interval_days() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/3327
 async fn timestamp_add_interval_months() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -577,7 +575,7 @@ async fn timestamp_add_interval_months() -> Result<()> {
     let res1 = actual[0][0].as_str();
     let res2 = actual[0][1].as_str();
 
-    let format = "%Y-%m-%d %H:%M:%S%.6f";
+    let format = "%Y-%m-%dT%H:%M:%S%.6fZ";
     let t1_naive = chrono::NaiveDateTime::parse_from_str(res1, format).unwrap();
     let t2_naive = chrono::NaiveDateTime::parse_from_str(res2, format).unwrap();
 
@@ -714,7 +712,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+--------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"minute\"),to_timestamp_seconds(Int64(61)))) |",
         "+--------------------------------------------------------------------------+",
-        "| Timestamp(Second, None)                                                  |",
+        "| Timestamp(Nanosecond, None)                                              |",
         "+--------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -725,7 +723,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+-------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"second\"),to_timestamp_millis(Int64(61)))) |",
         "+-------------------------------------------------------------------------+",
-        "| Timestamp(Millisecond, None)                                            |",
+        "| Timestamp(Nanosecond, None)                                             |",
         "+-------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -736,7 +734,7 @@ async fn test_arrow_typeof() -> Result<()> {
         "+------------------------------------------------------------------------------+",
         "| arrow_typeof(date_trunc(Utf8(\"millisecond\"),to_timestamp_micros(Int64(61)))) |",
         "+------------------------------------------------------------------------------+",
-        "| Timestamp(Microsecond, None)                                                 |",
+        "| Timestamp(Nanosecond, None)                                                  |",
         "+------------------------------------------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);

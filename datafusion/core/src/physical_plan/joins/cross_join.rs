@@ -32,9 +32,9 @@ use crate::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 

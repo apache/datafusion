@@ -17,7 +17,7 @@
 
 //! listing_schema contains a SchemaProvider that scans ObjectStores for tables automatically
 use crate::catalog::schema::SchemaProvider;
-use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 use async_trait::async_trait;

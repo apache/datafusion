@@ -36,12 +36,10 @@ use crate::{
     expressions::PhysicalSortExpr, reverse_order_bys, AggregateExpr, PhysicalExpr,
 };
 
-/// A window expr that takes the form of an aggregate function
-/// Aggregate Window Expressions that have the form
-/// `OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)`
-/// e.g cumulative window frames uses `PlainAggregateWindowExpr`. Where as Aggregate Window Expressions
-/// that have the form `OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)`
-/// e.g sliding window frames uses `SlidingAggregateWindowExpr`.
+/// A window expr that takes the form of an aggregate function that
+/// can be incrementally computed over sliding windows.
+///
+/// See comments on [`WindowExpr`] for more details.
 #[derive(Debug)]
 pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
@@ -72,10 +70,11 @@ impl SlidingAggregateWindowExpr {
     }
 }
 
-/// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
-/// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
-/// results for peers) and concatenate the results.
-
+/// Incrementally update window function using the fact that batch is
+/// pre-sorted given the sort columns and then per partition point.
+///
+/// Evaluates the peer group (e.g. `SUM` or `MAX` gives the same results
+/// for peers) and concatenate the results.
 impl WindowExpr for SlidingAggregateWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -140,8 +139,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
-        self.aggregate.supports_bounded_execution()
-            && !self.window_frame.end_bound.is_unbounded()
+        !self.window_frame.end_bound.is_unbounded()
     }
 }
 

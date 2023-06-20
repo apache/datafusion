@@ -759,9 +759,38 @@ impl Expr {
         Expr::ILike(Like::new(true, Box::new(self), Box::new(other), None))
     }
 
+    /// Return the name to use for the specific Expr, recursing into
+    /// `Expr::Sort` as appropriate
+    pub fn name_for_alias(&self) -> Result<String> {
+        match self {
+            // call Expr::display_name() on a Expr::Sort will throw an error
+            Expr::Sort(Sort { expr, .. }) => expr.name_for_alias(),
+            expr => expr.display_name(),
+        }
+    }
+
+    /// Ensure `expr` has the name as `original_name` by adding an
+    /// alias if necessary.
+    pub fn alias_if_changed(self, original_name: String) -> Result<Expr> {
+        let new_name = self.name_for_alias()?;
+
+        if new_name == original_name {
+            return Ok(self);
+        }
+
+        Ok(self.alias(original_name))
+    }
+
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Box::new(self), name.into())
+        match self {
+            Expr::Sort(Sort {
+                expr,
+                asc,
+                nulls_first,
+            }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
+            _ => Expr::Alias(Box::new(self), name.into()),
+        }
     }
 
     /// Remove an alias from an expression if one exists.
@@ -992,7 +1021,7 @@ impl fmt::Debug for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {:?}", ob)?;
+                    write!(f, " ORDER BY {ob:?}")?;
                 }
                 Ok(())
             }
@@ -1008,7 +1037,7 @@ impl fmt::Debug for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY {:?}", ob)?;
+                    write!(f, " ORDER BY {ob:?}")?;
                 }
                 Ok(())
             }
@@ -1374,7 +1403,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" FILTER (WHERE {fe})");
             }
             if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ({:?})", ob);
+                info += &format!(" ORDER BY ({ob:?})");
             }
             Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }

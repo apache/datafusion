@@ -49,8 +49,10 @@ pub enum TypeSignature {
     /// arbitrary number of arguments with arbitrary types
     VariadicAny,
     /// fixed number of arguments of an arbitrary but equal type out of a list of valid types
-    // A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
-    // A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
+    ///
+    /// # Examples
+    /// 1. A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
+    /// 2. A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
     Uniform(usize, Vec<DataType>),
     /// exact number of arguments of an exact type
     Exact(Vec<DataType>),
@@ -58,6 +60,48 @@ pub enum TypeSignature {
     Any(usize),
     /// One of a list of signatures
     OneOf(Vec<TypeSignature>),
+}
+
+impl TypeSignature {
+    pub(crate) fn to_string_repr(&self) -> Vec<String> {
+        match self {
+            TypeSignature::Variadic(types) => {
+                vec![format!("{}, ..", Self::join_types(types, "/"))]
+            }
+            TypeSignature::Uniform(arg_count, valid_types) => {
+                vec![std::iter::repeat(Self::join_types(valid_types, "/"))
+                    .take(*arg_count)
+                    .collect::<Vec<String>>()
+                    .join(", ")]
+            }
+            TypeSignature::Exact(types) => {
+                vec![Self::join_types(types, ", ")]
+            }
+            TypeSignature::Any(arg_count) => {
+                vec![std::iter::repeat("Any")
+                    .take(*arg_count)
+                    .collect::<Vec<&str>>()
+                    .join(", ")]
+            }
+            TypeSignature::VariadicEqual => vec!["T, .., T".to_string()],
+            TypeSignature::VariadicAny => vec!["Any, .., Any".to_string()],
+            TypeSignature::OneOf(sigs) => {
+                sigs.iter().flat_map(|s| s.to_string_repr()).collect()
+            }
+        }
+    }
+
+    /// Helper function to join types with specified delimiter.
+    pub(crate) fn join_types<T: std::fmt::Display>(
+        types: &[T],
+        delimiter: &str,
+    ) -> String {
+        types
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<String>>()
+            .join(delimiter)
+    }
 }
 
 /// The signature of a function defines the supported argument types

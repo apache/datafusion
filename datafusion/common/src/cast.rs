@@ -30,7 +30,7 @@ use arrow::{
         IntervalYearMonthArray, LargeListArray, ListArray, MapArray, NullArray,
         OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt32Array, UInt64Array, UnionArray,
+        TimestampSecondArray, UInt32Array, UInt64Array, UInt8Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
@@ -43,6 +43,11 @@ pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array> {
 // Downcast ArrayRef to StructArray
 pub fn as_struct_array(array: &dyn Array) -> Result<&StructArray> {
     Ok(downcast_value!(array, StructArray))
+}
+
+// Downcast ArrayRef to UInt8Array
+pub fn as_uint8_array(array: &dyn Array) -> Result<&UInt8Array> {
+    Ok(downcast_value!(array, UInt8Array))
 }
 
 // Downcast ArrayRef to Int32Array

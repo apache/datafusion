@@ -22,9 +22,9 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-pub use crate::common::{ColumnStatistics, Statistics};
-use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
+use datafusion_common::Result;
+pub use datafusion_common::{ColumnStatistics, Statistics};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -87,9 +87,6 @@ impl Stream for EmptyRecordBatchStream {
         Poll::Ready(None)
     }
 }
-
-/// Physical planner interface
-pub use self::planner::PhysicalPlanner;
 
 /// `ExecutionPlan` represent nodes in the DataFusion Physical Plan.
 ///
@@ -588,26 +585,10 @@ pub fn ordering_equivalence_properties_helper(
         // Return an empty OrderingEquivalenceProperties:
         return oep;
     };
-    let first_column = first_ordering
-        .iter()
-        .map(|e| TryFrom::try_from(e.clone()))
-        .collect::<Result<Vec<_>>>();
-    let checked_column_first = if let Ok(first) = first_column {
-        first
-    } else {
-        // Return an empty OrderingEquivalenceProperties:
-        return oep;
-    };
     // First entry among eq_orderings is the head, skip it:
     for ordering in eq_orderings.iter().skip(1) {
-        let column = ordering
-            .iter()
-            .map(|e| TryFrom::try_from(e.clone()))
-            .collect::<Result<Vec<_>>>();
-        if let Ok(column) = column {
-            if !column.is_empty() {
-                oep.add_equal_conditions((&checked_column_first, &column))
-            }
+        if !ordering.is_empty() {
+            oep.add_equal_conditions((first_ordering, ordering))
         }
     }
     oep
@@ -696,14 +677,12 @@ pub mod common;
 pub mod display;
 pub mod empty;
 pub mod explain;
-pub mod file_format;
 pub mod filter;
 pub mod insert;
 pub mod joins;
 pub mod limit;
 pub mod memory;
 pub mod metrics;
-pub mod planner;
 pub mod projection;
 pub mod repartition;
 pub mod sorts;
@@ -720,9 +699,7 @@ use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_execution::TaskContext;
-pub use datafusion_physical_expr::{
-    expressions, functions, hash_utils, type_coercion, udf,
-};
+pub use datafusion_physical_expr::{expressions, functions, hash_utils, udf};
 
 #[cfg(test)]
 mod tests {
