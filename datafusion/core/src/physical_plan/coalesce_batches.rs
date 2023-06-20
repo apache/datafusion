@@ -107,6 +107,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_ordering()
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
