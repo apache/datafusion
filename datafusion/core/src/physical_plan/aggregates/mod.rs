@@ -436,9 +436,7 @@ fn calc_required_input_ordering(
     aggregator_reqs: LexOrderingReq,
     aggregator_reverse_reqs: Option<LexOrderingReq>,
     aggregation_ordering: &mut Option<AggregationOrdering>,
-    // In partial mode we need to propagate ordering so that subsequent stages
-    // (Final, FinalPartitioned) can know ordering for its input table.
-    is_partial_mode: bool,
+    mode: &AggregateMode,
 ) -> Result<Option<LexOrderingReq>> {
     let mut required_input_ordering = vec![];
     // Boolean shows that whether `required_input_ordering` stored comes from
@@ -484,7 +482,8 @@ fn calc_required_input_ordering(
                 }
                 // In partial mode, append output ordering with required ordering of the aggregator
                 // In multi partitions, this enables us to reduce partitions correctly.
-                if ordering.iter().all(|item| req.expr.ne(&item.expr)) && is_partial_mode
+                if ordering.iter().all(|item| req.expr.ne(&item.expr))
+                    && matches!(mode, AggregateMode::Partial)
                 {
                     ordering.push(req.into());
                 }
@@ -494,7 +493,9 @@ fn calc_required_input_ordering(
             // In partial mode, append output ordering with required ordering of the aggregator
             // (In this case there is no output ordering, hence output ordering is required ordering of the aggregator)
             // In multi partitions, this enables us to reduce partitions correctly.
-            if is_partial_mode && !aggregator_requirement.is_empty() {
+            if matches!(mode, AggregateMode::Partial)
+                && !aggregator_requirement.is_empty()
+            {
                 *aggregation_ordering = Some(AggregationOrdering {
                     mode: GroupByOrderMode::Linear,
                     order_indices: vec![],
@@ -632,7 +633,7 @@ impl AggregateExec {
             aggregator_reqs,
             aggregator_reverse_reqs,
             &mut aggregation_ordering,
-            matches!(mode, AggregateMode::Partial),
+            &mode,
         )?;
 
         Ok(AggregateExec {

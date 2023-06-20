@@ -324,7 +324,8 @@ impl CustomOrdering {
         current: &[ScalarValue],
         target: &[ScalarValue],
     ) -> Result<Ordering> {
-        Ok(compare_rows(current, target, &self.sort_options)?.reverse())
+        // Calculate ordering according to `sort_options`
+        compare_rows(current, target, &self.sort_options)
     }
 }
 
@@ -357,6 +358,8 @@ impl<'a> Ord for CustomElement<'a> {
         // Compares according to custom ordering
         self.custom_ordering
             .ordering(&self.ordering, &other.ordering)
+            // Convert max heap to min heap
+            .map(|ordering| ordering.reverse())
             .unwrap()
     }
 }
