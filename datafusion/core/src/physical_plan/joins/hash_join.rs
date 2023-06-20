@@ -689,7 +689,7 @@ pub fn build_equal_condition_join_indices(
     // Using a buffer builder to avoid slower normal builder
     let mut build_indices = UInt64BufferBuilder::new(0);
     let mut probe_indices = UInt32BufferBuilder::new(0);
-
+    // Visit all of the probe rows
     for (row, hash_value) in hash_values.iter().enumerate() {
         // Get the hash and find it in the build index
 
