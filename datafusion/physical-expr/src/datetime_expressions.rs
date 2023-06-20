@@ -284,8 +284,8 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let nano = (f)(*v)?;
 
-            if nano.is_none(){
-                return Ok(ColumnarValue::Scalar(ScalarValue::Null))
+            if nano.is_none() {
+                return Ok(ColumnarValue::Scalar(ScalarValue::Null));
             }
 
             match granularity.as_str() {
