@@ -1466,7 +1466,8 @@ mod tests {
         // Add dummy layer propagating Sort above, to test whether sort can be removed from multi layer before
         let coalesce_batches = coalesce_batches_exec(sort);
 
-        let window_agg = bounded_window_exec("non_nullable_col", sort_exprs, coalesce_batches);
+        let window_agg =
+            bounded_window_exec("non_nullable_col", sort_exprs, coalesce_batches);
 
         let sort_exprs = vec![sort_expr_options(
             "non_nullable_col",
