@@ -628,36 +628,6 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-/// Gets build and probe indices which satisfy the on condition (including
-/// the equality condition and the join filter) in the join.
-#[allow(clippy::too_many_arguments)]
-pub fn build_join_indices(
-    probe_batch: &RecordBatch,
-    build_hashmap: &JoinHashMap,
-    build_input_buffer: &RecordBatch,
-    on_build: &[Column],
-    on_probe: &[Column],
-    filter: Option<&JoinFilter>,
-    random_state: &RandomState,
-    null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
-    build_equal_condition_join_indices(
-        build_hashmap,
-        build_input_buffer,
-        probe_batch,
-        on_build,
-        on_probe,
-        random_state,
-        null_equals_null,
-        hashes_buffer,
-        filter,
-        build_side,
-    )
-}
-
 // Returns build/probe indices satisfying the equality condition.
 // On LEFT.b1 = RIGHT.b2
 // LEFT Table:
@@ -1206,16 +1176,16 @@ impl HashJoinStream {
                     let timer = self.join_metrics.join_time.timer();
 
                     // get the matched two indices for the on condition
-                    let left_right_indices = build_join_indices(
-                        &batch,
+                    let left_right_indices = build_equal_condition_join_indices(
                         &left_data.0,
                         &left_data.1,
+                        &batch,
                         &self.on_left,
                         &self.on_right,
-                        self.filter.as_ref(),
                         &self.random_state,
                         self.null_equals_null,
                         &mut hashes_buffer,
+                        self.filter.as_ref(),
                         JoinSide::Left,
                     );
 
