@@ -126,7 +126,6 @@ impl AggregateExpr for Max {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-
     fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
         Ok(MaxRowAccumulator::new(start_index, self.data_type.clone()).into())
     }
