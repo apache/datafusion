@@ -100,14 +100,6 @@ impl BuiltInWindowFunctionExpr for Rank {
         &self.name
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        matches!(self.rank_type, RankType::Basic | RankType::Dense)
-    }
-
-    fn include_rank(&self) -> bool {
-        true
-    }
-
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             state: RankState::default(),
@@ -123,12 +115,6 @@ pub(crate) struct RankEvaluator {
 }
 
 impl PartitionEvaluator for RankEvaluator {
-    fn get_range(&self, idx: usize, _n_rows: usize) -> Result<Range<usize>> {
-        let start = idx;
-        let end = idx + 1;
-        Ok(Range { start, end })
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
@@ -157,7 +143,11 @@ impl PartitionEvaluator for RankEvaluator {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(
                 self.state.last_rank_boundary as u64 + 1,
@@ -169,7 +159,7 @@ impl PartitionEvaluator for RankEvaluator {
         }
     }
 
-    fn evaluate_with_rank(
+    fn evaluate_all_with_rank(
         &self,
         num_rows: usize,
         ranks_in_partition: &[Range<usize>],
@@ -215,6 +205,14 @@ impl PartitionEvaluator for RankEvaluator {
         };
         Ok(result)
     }
+
+    fn supports_bounded_execution(&self) -> bool {
+        matches!(self.rank_type, RankType::Basic | RankType::Dense)
+    }
+
+    fn include_rank(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -238,7 +236,7 @@ mod tests {
     ) -> Result<()> {
         let result = expr
             .create_evaluator()?
-            .evaluate_with_rank(num_rows, &ranks)?;
+            .evaluate_all_with_rank(num_rows, &ranks)?;
         let result = as_float64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);
@@ -250,7 +248,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let result = expr.create_evaluator()?.evaluate_with_rank(8, &ranks)?;
+        let result = expr.create_evaluator()?.evaluate_all_with_rank(8, &ranks)?;
         let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, *result);

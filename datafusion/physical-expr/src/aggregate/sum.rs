@@ -133,10 +133,6 @@ impl AggregateExpr for Sum {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
         Ok(SumRowAccumulator::new(start_index, self.data_type.clone()).into())
     }
@@ -307,6 +303,10 @@ impl Accumulator for SumAccumulator {
         } else {
             Ok(self.sum.clone())
         }
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

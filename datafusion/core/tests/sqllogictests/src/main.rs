@@ -33,7 +33,6 @@ use crate::engines::postgres::Postgres;
 
 mod engines;
 mod setup;
-mod utils;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -263,10 +262,6 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
 
     let file_name = relative_path.file_name().unwrap().to_str().unwrap();
     match file_name {
-        "aggregate.slt" => {
-            info!("Registering aggregate tables");
-            setup::register_aggregate_tables(test_ctx.session_ctx()).await;
-        }
         "scalar.slt" => {
             info!("Registering scalar tables");
             setup::register_scalar_tables(test_ctx.session_ctx()).await;
@@ -286,11 +281,7 @@ async fn context_for_test_file(relative_path: &Path) -> Option<TestContext> {
             }
         }
         "joins.slt" => {
-            info!("Registering timestamps tables");
-            setup::register_timestamps_table(test_ctx.session_ctx()).await;
-            setup::register_hashjoin_datatype_table(test_ctx.session_ctx()).await;
-            setup::register_left_semi_anti_join_table(test_ctx.session_ctx()).await;
-            setup::register_right_semi_anti_join_table(test_ctx.session_ctx()).await;
+            info!("Registering partition table tables");
 
             let mut test_ctx = test_ctx;
             setup::register_partition_table(&mut test_ctx).await;

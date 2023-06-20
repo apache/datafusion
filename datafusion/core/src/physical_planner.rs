@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical query planner
+//! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
-use super::analyze::AnalyzeExec;
-use super::unnest::UnnestExec;
-use super::{
-    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
-    values::ValuesExec, windows,
-};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -40,6 +34,7 @@ use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
@@ -50,8 +45,13 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
+use crate::physical_plan::{
+    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
+    values::ValuesExec, windows,
 };
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
@@ -67,11 +67,10 @@ use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
     GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
-use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
-use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -1933,8 +1932,9 @@ mod tests {
     use crate::datasource::MemTable;
     use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
+        expressions, DisplayFormatType, Partitioning, Statistics,
     };
+    use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};

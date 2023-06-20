@@ -134,9 +134,6 @@ impl AggregateExpr for Count {
         true
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
 
     fn create_row_accumulator(&self, start_index: usize) -> Result<RowAccumulatorItem> {
         Ok(CountRowAccumulator::new(start_index).into())
@@ -210,6 +207,10 @@ impl Accumulator for CountAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.count)))
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

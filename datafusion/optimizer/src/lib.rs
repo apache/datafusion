@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod alias;
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
+pub mod decorrelate;
 pub mod decorrelate_predicate_subquery;
 pub mod eliminate_cross_join;
 pub mod eliminate_duplicated_expr;
