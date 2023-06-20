@@ -26,7 +26,7 @@ use arrow::array::{
     UInt8Array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{and, eq_dyn, filter, take};
+use arrow::compute::{and, eq_dyn, filter, is_null, or, take};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -1098,6 +1098,7 @@ pub fn equal_rows(
     err.unwrap_or(Ok(res))
 }
 
+// version of eq_dyn supporting equality on null arrays
 fn eq_dyn_null(
     left: &dyn Array,
     right: &dyn Array,
@@ -1108,6 +1109,14 @@ fn eq_dyn_null(
             BooleanBuffer::collect_bool(left.len(), |_| null_equals_null),
             None,
         )),
+        _ if null_equals_null => {
+            let eq: BooleanArray = eq_dyn(left, right)?;
+
+            let left_is_null = is_null(left)?;
+            let right_is_null = is_null(right)?;
+
+            or(&eq, &and(&left_is_null, &right_is_null)?)
+        }
         _ => eq_dyn(left, right),
     }
 }
