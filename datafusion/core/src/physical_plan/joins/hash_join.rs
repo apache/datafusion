@@ -719,6 +719,7 @@ pub fn build_equal_condition_join_indices(
     let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
 
     let (left, right) = if let Some(filter) = filter {
+        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
         apply_join_filter_to_indices(
             build_input_buffer,
             probe_batch,
