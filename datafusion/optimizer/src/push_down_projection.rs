@@ -19,6 +19,7 @@
 //! loaded into memory
 
 use crate::eliminate_project::can_eliminate;
+use crate::merge_projection::merge_projection;
 use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -91,28 +92,7 @@ impl OptimizerRule for PushDownProjection {
 
         let new_plan = match child_plan {
             LogicalPlan::Projection(child_projection) => {
-                // merge projection
-                let replace_map = collect_projection_expr(child_projection);
-                let new_exprs = projection
-                    .expr
-                    .iter()
-                    .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
-                    .enumerate()
-                    .map(|(i, e)| match e {
-                        Ok(e) => {
-                            let parent_expr =
-                                projection.schema.fields()[i].qualified_name();
-                            e.alias_if_changed(parent_expr)
-                        }
-                        Err(e) => Err(e),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let new_plan = LogicalPlan::Projection(Projection::try_new_with_schema(
-                    new_exprs,
-                    child_projection.input.clone(),
-                    projection.schema.clone(),
-                )?);
-
+                let new_plan = merge_projection(projection, child_projection)?;
                 self.try_optimize(&new_plan, _config)?.unwrap_or(new_plan)
             }
             LogicalPlan::Join(join) => {
