@@ -39,14 +39,14 @@ logical_plan
 Projection: CAST(SUM(lineitem.l_extendedprice) AS Float64) / Float64(7) AS avg_yearly
 --Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice)]]
 ----Projection: lineitem.l_extendedprice
-------Inner Join: part.p_partkey = __scalar_sq_5.l_partkey Filter: CAST(lineitem.l_quantity AS Decimal128(30, 15)) < __scalar_sq_5.Float64(0.2) * AVG(lineitem.l_quantity)
+------Inner Join: part.p_partkey = __scalar_sq_1.l_partkey Filter: CAST(lineitem.l_quantity AS Decimal128(30, 15)) < __scalar_sq_1.Float64(0.2) * AVG(lineitem.l_quantity)
 --------Projection: lineitem.l_quantity, lineitem.l_extendedprice, part.p_partkey
 ----------Inner Join: lineitem.l_partkey = part.p_partkey
 ------------TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
 ------------Projection: part.p_partkey
 --------------Filter: part.p_brand = Utf8("Brand#23") AND part.p_container = Utf8("MED BOX")
 ----------------TableScan: part projection=[p_partkey, p_brand, p_container], partial_filters=[part.p_brand = Utf8("Brand#23"), part.p_container = Utf8("MED BOX")]
---------SubqueryAlias: __scalar_sq_5
+--------SubqueryAlias: __scalar_sq_1
 ----------Projection: CAST(Float64(0.2) * CAST(AVG(lineitem.l_quantity) AS Float64) AS Decimal128(30, 15)), lineitem.l_partkey
 ------------Aggregate: groupBy=[[lineitem.l_partkey]], aggr=[[AVG(lineitem.l_quantity)]]
 --------------TableScan: lineitem projection=[l_partkey, l_quantity]

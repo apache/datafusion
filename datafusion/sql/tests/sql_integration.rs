@@ -2741,6 +2741,30 @@ fn cte_use_same_name_multiple_times() {
 }
 
 #[test]
+fn negative_interval_plus_interval_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days';";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn complex_interval_expression_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\") + IntervalMonthDayNano(\"79228162458924105372415295488\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn negative_sum_intervals_in_projection() {
+    let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
+    let expected =
+    "Projection: (- IntervalMonthDayNano(\"36893488147419103232\") + IntervalMonthDayNano(\"92233720368547758080\") + (- IntervalMonthDayNano(\"73786976294838206464\") + IntervalMonthDayNano(\"129127208515966861312\")))\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn date_plus_interval_in_projection() {
     let sql = "select t_date32 + interval '5 days' FROM test";
     let expected =

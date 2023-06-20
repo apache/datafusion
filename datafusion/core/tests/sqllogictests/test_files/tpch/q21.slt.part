@@ -62,8 +62,8 @@ Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
 --Projection: supplier.s_name, COUNT(UInt8(1)) AS numwait
 ----Aggregate: groupBy=[[supplier.s_name]], aggr=[[COUNT(UInt8(1))]]
 ------Projection: supplier.s_name
---------LeftAnti Join: l1.l_orderkey = __correlated_sq_10.l_orderkey Filter: __correlated_sq_10.l_suppkey != l1.l_suppkey
-----------LeftSemi Join: l1.l_orderkey = __correlated_sq_9.l_orderkey Filter: __correlated_sq_9.l_suppkey != l1.l_suppkey
+--------LeftAnti Join: l1.l_orderkey = __correlated_sq_2.l_orderkey Filter: __correlated_sq_2.l_suppkey != l1.l_suppkey
+----------LeftSemi Join: l1.l_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_suppkey != l1.l_suppkey
 ------------Projection: supplier.s_name, l1.l_orderkey, l1.l_suppkey
 --------------Inner Join: supplier.s_nationkey = nation.n_nationkey
 ----------------Projection: supplier.s_name, supplier.s_nationkey, l1.l_orderkey, l1.l_suppkey
@@ -81,10 +81,10 @@ Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
 ----------------Projection: nation.n_nationkey
 ------------------Filter: nation.n_name = Utf8("SAUDI ARABIA")
 --------------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8("SAUDI ARABIA")]
-------------SubqueryAlias: __correlated_sq_9
+------------SubqueryAlias: __correlated_sq_1
 --------------SubqueryAlias: l2
 ----------------TableScan: lineitem projection=[l_orderkey, l_suppkey]
-----------SubqueryAlias: __correlated_sq_10
+----------SubqueryAlias: __correlated_sq_2
 ------------SubqueryAlias: l3
 --------------Projection: lineitem.l_orderkey, lineitem.l_suppkey
 ----------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
