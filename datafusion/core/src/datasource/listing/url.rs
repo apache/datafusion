@@ -28,7 +28,7 @@ use url::Url;
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ListingTableUrl {
     /// A URL that identifies a file or directory to list files from
     url: Url,
