@@ -86,7 +86,7 @@ use crate::physical_planner::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::{OwnedTableReference, SchemaReference};
+use datafusion_common::{DFField, DFSchema, OwnedTableReference, SchemaReference};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -473,12 +473,6 @@ impl SessionContext {
             primary_key,
         } = cmd;
 
-        if !primary_key.is_empty() {
-            Err(DataFusionError::Execution(
-                "Primary keys on MemoryTables are not currently supported!".to_string(),
-            ))?;
-        }
-
         let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
         let input = self.state().optimize(&input)?;
         let table = self.table(&name).await;
@@ -500,7 +494,31 @@ impl SessionContext {
                 "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
             )),
             (_, _, Err(_)) => {
-                let schema = Arc::new(input.schema().as_ref().into());
+                let df_schema = input.schema();
+                let mut new_fields = df_schema.fields().to_vec();
+                // Update metadata of PRIMARY_KEY fields.
+                for dffield in new_fields.iter_mut() {
+                    if primary_key
+                        .iter()
+                        .any(|item| item.flat_name() == dffield.qualified_name())
+                    {
+                        let field = dffield.field();
+                        let mut metadata = field.metadata().clone();
+                        metadata.insert("primary_key".to_string(), "true".to_string());
+                        let updated_field =
+                            field.as_ref().clone().with_metadata(metadata);
+                        let qualifier = dffield.qualifier().cloned();
+                        *dffield = if let Some(qualifier) = qualifier {
+                            DFField::from_qualified(qualifier, updated_field)
+                        } else {
+                            DFField::from_field(updated_field)
+                        };
+                    }
+                }
+                let metadata = df_schema.metadata().clone();
+                let updated_schema = DFSchema::new_with_metadata(new_fields, metadata)?;
+
+                let schema = Arc::new(updated_schema.into());
                 let physical = DataFrame::new(self.state(), input);
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;

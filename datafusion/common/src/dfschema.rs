@@ -650,6 +650,14 @@ impl DFField {
         }
     }
 
+    /// Create a qualified field from an existing Arrow field
+    pub fn from_field(field: impl Into<FieldRef>) -> Self {
+        Self {
+            qualifier: None,
+            field: field.into(),
+        }
+    }
+
     /// Returns an immutable reference to the `DFField`'s unqualified name
     pub fn name(&self) -> &String {
         self.field.name()

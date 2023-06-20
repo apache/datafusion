@@ -428,9 +428,46 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input: LogicalPlan,
         select_exprs: &[Expr],
         having_expr_opt: Option<&Expr>,
-        group_by_exprs: Vec<Expr>,
+        mut group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
+        println!("group_by_exprs:{:?}", group_by_exprs);
+        println!("select_exprs:{:?}", select_exprs);
+        println!("input_schema:{:?}", input.schema());
+        let field_names = input
+            .schema()
+            .fields()
+            .iter()
+            .map(|elem| elem.qualified_name())
+            .collect::<Vec<_>>();
+        println!("field_names:{:?}", field_names);
+        // TODO: Add primary key check
+        let group_by_contains_primary = group_by_exprs.iter().any(|expr| {
+            let res = input.schema().fields();
+            res.iter().any(|item| {
+                let expr_name = format!("{:?}", expr);
+                println!("expr name:{:?}", expr_name);
+                println!("item.qualified_name():{:?}", item.qualified_name());
+                println!("item.field().metadata(){:?}", item.field().metadata());
+                let is_primary_key = item
+                    .field()
+                    .metadata()
+                    .get("primary_key")
+                    .map(|val| val == "true")
+                    .unwrap_or(false);
+                item.qualified_name() == expr_name && is_primary_key
+            })
+        });
+        if group_by_contains_primary {
+            for expr in select_exprs {
+                if !group_by_exprs.contains(expr)
+                    && field_names.contains(&format!("{:?}", expr))
+                {
+                    group_by_exprs.push(expr.clone());
+                }
+            }
+        }
+        println!("group_by_exprs:{:?}", group_by_exprs);
         // create the aggregate plan
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
