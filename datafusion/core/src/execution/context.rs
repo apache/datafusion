@@ -28,6 +28,7 @@ use crate::{
     optimizer::optimizer::Optimizer,
     physical_optimizer::optimizer::{PhysicalOptimizer, PhysicalOptimizerRule},
 };
+use datafusion_common::alias::AliasGenerator;
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
@@ -77,11 +78,11 @@ use sqlparser::dialect::dialect_from_str;
 use crate::config::ConfigOptions;
 use crate::datasource::physical_plan::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::PhysicalPlanner;
+use crate::physical_planner::DefaultPhysicalPlanner;
+use crate::physical_planner::PhysicalPlanner;
 use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -1985,6 +1986,10 @@ impl OptimizerConfig for SessionState {
         self.execution_props.query_execution_start_time
     }
 
+    fn alias_generator(&self) -> Arc<AliasGenerator> {
+        self.execution_props.alias_generator.clone()
+    }
+
     fn options(&self) -> &ConfigOptions {
         self.config_options()
     }
@@ -2135,7 +2140,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Execution error: variable [\"@\"] has no type information"
+            "Error during planning: variable [\"@\"] has no type information"
         );
         Ok(())
     }

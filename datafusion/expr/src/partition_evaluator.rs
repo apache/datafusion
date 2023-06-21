@@ -17,12 +17,13 @@
 
 //! Partition evaluation module
 
-use crate::window::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt::Debug;
 use std::ops::Range;
+
+use crate::window_state::WindowAggState;
 
 /// Partition evaluator for Window Functions
 ///
@@ -30,7 +31,7 @@ use std::ops::Range;
 ///
 /// An implementation of this trait is created and used for each
 /// partition defined by an `OVER` clause and is instantiated by
-/// [`BuiltInWindowFunctionExpr::create_evaluator`]
+/// the DataFusion runtime.
 ///
 /// For example, evaluating `window_func(val) OVER (PARTITION BY col)`
 /// on the following data:
@@ -65,11 +66,12 @@ use std::ops::Range;
 /// ```
 ///
 /// Different methods on this trait will be called depending on the
-/// capabilities described by [`BuiltInWindowFunctionExpr`]:
+/// capabilities described by [`Self::supports_bounded_execution`],
+/// [`Self::uses_window_frame`], and [`Self::include_rank`],
 ///
 /// # Stateless `PartitionEvaluator`
 ///
-/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_with_rank_all`] is called with values for the
+/// In this case, either [`Self::evaluate_all`] or [`Self::evaluate_all_with_rank`] is called with values for the
 /// entire partition.
 ///
 /// # Stateful `PartitionEvaluator`
@@ -85,11 +87,10 @@ use std::ops::Range;
 /// previous batch. The previous row number is saved and restored as
 /// the state.
 ///
-/// [`BuiltInWindowFunctionExpr`]: crate::window::BuiltInWindowFunctionExpr
-/// [`BuiltInWindowFunctionExpr::create_evaluator`]: crate::window::BuiltInWindowFunctionExpr::create_evaluator
 /// When implementing a new `PartitionEvaluator`,
 /// `uses_window_frame` and `supports_bounded_execution` flags determine which evaluation method will be called
 /// during runtime. Implement corresponding evaluator according to table below.
+///
 /// |uses_window_frame|supports_bounded_execution|function_to_implement|
 /// |---|---|----|
 /// |false|false|`evaluate_all` (if we were to implement `PERCENT_RANK` it would end up in this quadrant, we cannot produce any result without seeing whole data)|
@@ -144,11 +145,41 @@ pub trait PartitionEvaluator: Debug + Send {
         }
     }
 
-    /// Called for window functions that *do not use* values from the
-    /// the window frame, such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`,
-    /// `PERCENT_RANK`, `CUME_DIST`, `LEAD`, `LAG`). It produces result
-    /// of all rows in a single pass. It expects to receive whole table data
-    /// as a single batch.
+    /// Evaluate a window function on an entire input partition.
+    ///
+    /// This function is called once per input *partition* for window
+    /// functions that *do not use* values from the window frame,
+    /// such as `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `PERCENT_RANK`,
+    /// `CUME_DIST`, `LEAD`, `LAG`).
+    ///
+    /// It produces the result of all rows in a single pass. It
+    /// expects to receive the entire partition as the `value` and
+    /// must produce an output column with one output row for every
+    /// input row.
+    ///
+    /// `num_rows` is requied to correctly compute the output in case
+    /// `values.len() == 0`
+    ///
+    /// Using this function is an optimization: certain window
+    /// functions are not affected by the window frame definition, and
+    /// thus using `evaluate`, DataFusion can skip the (costly) window
+    /// frame boundary calculation.
+    ///
+    /// For example, the `LAG` built in window function does not use
+    /// the values of its window frame (it can be computed in one shot
+    /// on the entire partition with `Self::evaluate_all` regardless of the
+    /// window defined in the `OVER` clause)
+    ///
+    /// ```sql
+    /// lag(x, 1) OVER (ORDER BY z ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
+    ///
+    /// However, `avg()` computes the average in the window and thus
+    /// does use its window frame
+    ///
+    /// ```sql
+    /// avg(x) OVER (PARTITION BY y ORDER BY z ROWS BETWEEN 2 PRECEDING AND 3 FOLLOWING)
+    /// ```
     fn evaluate_all(&mut self, values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         // When window frame boundaries are not used and evaluator supports bounded execution
         // We can calculate evaluate result by repeatedly calling `self.evaluate` `num_rows` times
@@ -166,9 +197,19 @@ pub trait PartitionEvaluator: Debug + Send {
         }
     }
 
-    /// Evaluate window function result inside given range.
+    /// Evaluate window function on a range of rows in an input
+    /// partition.x
     ///
-    /// Only used for stateful evaluation
+    /// Only used for stateful evaluation.
+    ///
+    /// This is the simplest and most general function to implement
+    /// but also the least performant as it creates output one row at
+    /// a time. It is typically much faster to implement stateful
+    /// evaluation using one of the other specialized methods on this
+    /// trait.
+    ///
+    /// Returns a [`ScalarValue`] that is the value of the window
+    /// function within the rangefor the entire partition
     fn evaluate(
         &mut self,
         _values: &[ArrayRef],
@@ -179,7 +220,7 @@ pub trait PartitionEvaluator: Debug + Send {
         ))
     }
 
-    /// [`PartitionEvaluator::evaluate_with_rank_all`] is called for window
+    /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
     ///
@@ -206,7 +247,7 @@ pub trait PartitionEvaluator: Debug + Send {
     ///   (3,4),
     /// ]
     /// ```
-    fn evaluate_with_rank_all(
+    fn evaluate_all_with_rank(
         &self,
         _num_rows: usize,
         _ranks_in_partition: &[Range<usize>],
@@ -224,16 +265,19 @@ pub trait PartitionEvaluator: Debug + Send {
         false
     }
 
-    /// Does the window function use the values from its window frame?
+    /// Does the window function use the values from the window frame,
+    /// if one is specified?
     ///
-    /// If this function returns true, implement [`PartitionEvaluator::evaluate`]
+    /// If this function returns true, implement [`PartitionEvaluator::evaluate_all`].
+    ///
+    /// See details and examples on [`PartitionEvaluator::evaluate_all`].
     fn uses_window_frame(&self) -> bool {
         false
     }
 
     /// Can this function be evaluated with (only) rank
     ///
-    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_with_rank_all`]
+    /// If `include_rank` is true, implement [`PartitionEvaluator::evaluate_all_with_rank`]
     fn include_rank(&self) -> bool {
         false
     }

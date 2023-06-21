@@ -59,7 +59,7 @@ pub fn create_arrow_cast(mut args: Vec<Expr>, schema: &DFSchema) -> Result<Expr>
     let arg1 = args.pop().unwrap();
     let arg0 = args.pop().unwrap();
 
-    // arg1 must be a stirng
+    // arg1 must be a string
     let data_type_string = if let Expr::Literal(ScalarValue::Utf8(Some(v))) = arg1 {
         v
     } else {

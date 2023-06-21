@@ -21,13 +21,10 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::window::window_expr::WindowFn;
-use crate::window::{
-    PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
-};
+use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::SortOptions;
@@ -35,6 +32,8 @@ use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::window_state::WindowAggState;
+use datafusion_expr::window_state::WindowFrameContext;
 use datafusion_expr::WindowFrame;
 
 /// A window expr that takes the form of a [`BuiltInWindowFunctionExpr`].
@@ -122,7 +121,7 @@ impl WindowExpr for BuiltInWindowExpr {
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
-            evaluator.evaluate_with_rank_all(num_rows, &sort_partition_points)
+            evaluator.evaluate_all_with_rank(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
             evaluator.evaluate_all(&values, num_rows)

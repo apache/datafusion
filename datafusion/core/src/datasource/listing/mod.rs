@@ -50,7 +50,6 @@ pub struct FileRange {
 
 #[derive(Debug, Clone)]
 /// A single file or part of a file that should be read, along with its schema, statistics
-/// A single file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)

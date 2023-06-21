@@ -154,7 +154,7 @@ impl ExecutionPlan for EmptyExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "EmptyExec: produce_one_row={}", self.produce_one_row)
             }
         }

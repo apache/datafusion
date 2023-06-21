@@ -18,6 +18,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A utility struct that can be used to generate unique aliases when optimizing queries
+#[derive(Debug)]
 pub struct AliasGenerator {
     next_id: AtomicUsize,
 }

@@ -271,10 +271,10 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "SortPreservingRepartitionExec: partitioning={:?}, input_partitions={}",
+                    "RepartitionExec: partitioning={:?}, input_partitions={}",
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
                 )

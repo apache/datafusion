@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod alias;
 pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate;

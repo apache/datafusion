@@ -632,7 +632,7 @@ mod tests {
                 .optimize(Arc::new($PLAN), &ConfigOptions::new())
                 .unwrap();
 
-            let plan = displayable(optimized.as_ref()).indent().to_string();
+            let plan = displayable(optimized.as_ref()).indent(true).to_string();
             let actual_lines = plan.split("\n").collect::<Vec<&str>>();
 
             assert_eq!(
