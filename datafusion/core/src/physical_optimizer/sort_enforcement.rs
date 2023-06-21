@@ -428,7 +428,7 @@ fn parallelize_sorts(
             coalesce_onwards: vec![None],
         }));
     } else if is_coalesce_partitions(&plan) {
-        // There is an unnecessary `CoalescePartitionExec` in the plan.
+        // There is an unnecessary `CoalescePartitionsExec` in the plan.
         let mut prev_layer = plan.clone();
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
         let new_plan = plan.with_new_children(vec![prev_layer])?;
