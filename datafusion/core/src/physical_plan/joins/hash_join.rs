@@ -25,6 +25,8 @@ use arrow::array::{
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::{and, eq_dyn, is_null, or_kleene, take, FilterBuilder};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -42,6 +44,8 @@ use arrow::{
     },
     util::bit_util,
 };
+use arrow_array::cast::downcast_array;
+use arrow_schema::ArrowError;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use std::fmt;
 use std::mem::size_of;
@@ -624,47 +628,6 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-/// Gets build and probe indices which satisfy the on condition (including
-/// the equality condition and the join filter) in the join.
-#[allow(clippy::too_many_arguments)]
-pub fn build_join_indices(
-    probe_batch: &RecordBatch,
-    build_hashmap: &JoinHashMap,
-    build_input_buffer: &RecordBatch,
-    on_build: &[Column],
-    on_probe: &[Column],
-    filter: Option<&JoinFilter>,
-    random_state: &RandomState,
-    null_equals_null: bool,
-    hashes_buffer: &mut Vec<u64>,
-    build_side: JoinSide,
-) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices that satisfy the equality condition, like `left.a1 = right.a2`
-    let (build_indices, probe_indices) = build_equal_condition_join_indices(
-        build_hashmap,
-        build_input_buffer,
-        probe_batch,
-        on_build,
-        on_probe,
-        random_state,
-        null_equals_null,
-        hashes_buffer,
-    )?;
-    if let Some(filter) = filter {
-        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            build_input_buffer,
-            probe_batch,
-            build_indices,
-            probe_indices,
-            filter,
-            build_side,
-        )
-    } else {
-        Ok((build_indices, probe_indices))
-    }
-}
-
 // Returns build/probe indices satisfying the equality condition.
 // On LEFT.b1 = RIGHT.b2
 // LEFT Table:
@@ -706,6 +669,8 @@ pub fn build_equal_condition_join_indices(
     random_state: &RandomState,
     null_equals_null: bool,
     hashes_buffer: &mut Vec<u64>,
+    filter: Option<&JoinFilter>,
+    build_side: JoinSide,
 ) -> Result<(UInt64Array, UInt32Array)> {
     let keys_values = probe_on
         .iter()
@@ -737,17 +702,8 @@ pub fn build_equal_condition_join_indices(
         {
             let mut i = *index - 1;
             loop {
-                // Check hash collisions
-                if equal_rows(
-                    i as usize,
-                    row,
-                    &build_join_values,
-                    &keys_values,
-                    null_equals_null,
-                )? {
-                    build_indices.append(i);
-                    probe_indices.append(row as u32);
-                }
+                build_indices.append(i);
+                probe_indices.append(row as u32);
                 // Follow the chain to get the next index value
                 let next = build_hashmap.next[i as usize];
                 if next == 0 {
@@ -759,10 +715,30 @@ pub fn build_equal_condition_join_indices(
         }
     }
 
-    Ok((
-        PrimitiveArray::new(build_indices.finish().into(), None),
-        PrimitiveArray::new(probe_indices.finish().into(), None),
-    ))
+    let left: UInt64Array = PrimitiveArray::new(build_indices.finish().into(), None);
+    let right: UInt32Array = PrimitiveArray::new(probe_indices.finish().into(), None);
+
+    let (left, right) = if let Some(filter) = filter {
+        // Filter the indices which satisfy the non-equal join condition, like `left.b1 = 10`
+        apply_join_filter_to_indices(
+            build_input_buffer,
+            probe_batch,
+            left,
+            right,
+            filter,
+            build_side,
+        )?
+    } else {
+        (left, right)
+    };
+
+    equal_rows_arr(
+        &left,
+        &right,
+        &build_join_values,
+        &keys_values,
+        null_equals_null,
+    )
 }
 
 macro_rules! equal_rows_elem {
@@ -1097,6 +1073,71 @@ pub fn equal_rows(
     err.unwrap_or(Ok(res))
 }
 
+// version of eq_dyn supporting equality on null arrays
+fn eq_dyn_null(
+    left: &dyn Array,
+    right: &dyn Array,
+    null_equals_null: bool,
+) -> Result<BooleanArray, ArrowError> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Null, DataType::Null) => Ok(BooleanArray::new(
+            BooleanBuffer::collect_bool(left.len(), |_| null_equals_null),
+            None,
+        )),
+        _ if null_equals_null => {
+            let eq: BooleanArray = eq_dyn(left, right)?;
+
+            let left_is_null = is_null(left)?;
+            let right_is_null = is_null(right)?;
+
+            or_kleene(&and(&left_is_null, &right_is_null)?, &eq)
+        }
+        _ => eq_dyn(left, right),
+    }
+}
+
+pub fn equal_rows_arr(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equals_null: bool,
+) -> Result<(UInt64Array, UInt32Array)> {
+    let mut iter = left_arrays.iter().zip(right_arrays.iter());
+
+    let (first_left, first_right) = iter.next().ok_or_else(|| {
+        DataFusionError::Internal(
+            "At least one array should be provided for both left and right".to_string(),
+        )
+    })?;
+
+    let arr_left = take(first_left.as_ref(), indices_left, None)?;
+    let arr_right = take(first_right.as_ref(), indices_right, None)?;
+
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+
+    // Use map and try_fold to iterate over the remaining pairs of arrays.
+    // In each iteration, take is used on the pair of arrays and their equality is determined.
+    // The results are then folded (combined) using the and function to get a final equality result.
+    equal = iter
+        .map(|(left, right)| {
+            let arr_left = take(left.as_ref(), indices_left, None)?;
+            let arr_right = take(right.as_ref(), indices_right, None)?;
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
+        })
+        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
+
+    let filter_builder = FilterBuilder::new(&equal).optimize().build();
+
+    let left_filtered = filter_builder.filter(indices_left)?;
+    let right_filtered = filter_builder.filter(indices_right)?;
+
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
 impl HashJoinStream {
     /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
@@ -1149,16 +1190,16 @@ impl HashJoinStream {
                     let timer = self.join_metrics.join_time.timer();
 
                     // get the matched two indices for the on condition
-                    let left_right_indices = build_join_indices(
-                        &batch,
+                    let left_right_indices = build_equal_condition_join_indices(
                         &left_data.0,
                         &left_data.1,
+                        &batch,
                         &self.on_left,
                         &self.on_right,
-                        self.filter.as_ref(),
                         &self.random_state,
                         self.null_equals_null,
                         &mut hashes_buffer,
+                        self.filter.as_ref(),
                         JoinSide::Left,
                     );
 
@@ -1184,8 +1225,8 @@ impl HashJoinStream {
                                 &self.schema,
                                 &left_data.1,
                                 &batch,
-                                left_side,
-                                right_side,
+                                &left_side,
+                                &right_side,
                                 &self.column_indices,
                                 JoinSide::Left,
                             );
@@ -1216,8 +1257,8 @@ impl HashJoinStream {
                             &self.schema,
                             &left_data.1,
                             &empty_right_batch,
-                            left_side,
-                            right_side,
+                            &left_side,
+                            &right_side,
                             &self.column_indices,
                             JoinSide::Left,
                         );
@@ -2644,6 +2685,8 @@ mod tests {
             &random_state,
             false,
             &mut vec![0; right.num_rows()],
+            None,
+            JoinSide::Left,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);
