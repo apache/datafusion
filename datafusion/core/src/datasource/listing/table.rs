@@ -641,12 +641,12 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Expected single column references in output_ordering, got {expr:?}")
+                            format!("Expected single column references in output_ordering, got {expr}")
                         ))
                     }
                 } else {
                     Err(DataFusionError::Plan(
-                        format!("Expected Expr::Sort in output_ordering, but got {expr:?}")
+                        format!("Expected Expr::Sort in output_ordering, but got {expr}")
                     ))
                 }
             })

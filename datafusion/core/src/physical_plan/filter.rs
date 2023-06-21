@@ -163,7 +163,7 @@ impl ExecutionPlan for FilterExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "FilterExec: {}", self.predicate)
             }
         }

@@ -1271,7 +1271,7 @@ fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "ArrowError(ParseError(\"Parsed interval field value out of range: 0 months 100000000000000000 days 0 nanos\"))",
+        "ArrowError(InvalidArgumentError(\"Unable to represent 100000000000000000 days in a signed 32-bit integer\"))",
         format!("{err:?}")
     );
 }

@@ -814,9 +814,9 @@ mod test {
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
         let col_not_null = ident("col2");
-        assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
+        assert_eq!(format!("{}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
-            format!("{:?}", col_not_null.is_not_null()),
+            format!("{}", col_not_null.is_not_null()),
             "col2 IS NOT NULL"
         );
     }

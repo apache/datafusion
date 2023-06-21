@@ -283,6 +283,14 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let nano = (f)(*v)?;
+
+            if nano.is_none() {
+                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                    None,
+                    tz_opt.clone(),
+                )));
+            }
+
             match granularity.as_str() {
                 "minute" => {
                     // trunc to minute

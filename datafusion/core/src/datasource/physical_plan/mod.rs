@@ -44,12 +44,15 @@ pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub(crate) use json::plan_to_json;
 pub use json::{JsonOpener, NdJsonExec};
 
-use crate::datasource::file_format::FileWriterMode;
 use crate::datasource::{
     listing::{FileRange, PartitionedFile},
     object_store::ObjectStoreUrl,
 };
 use crate::physical_plan::ExecutionPlan;
+use crate::{
+    datasource::file_format::FileWriterMode,
+    physical_plan::{DisplayAs, DisplayFormatType},
+};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -269,15 +272,16 @@ impl Debug for FileScanConfig {
 
         write!(f, "statistics={:?}, ", self.statistics)?;
 
-        Display::fmt(self, f)
+        DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)
     }
 }
 
-impl Display for FileScanConfig {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+impl DisplayAs for FileScanConfig {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         let (schema, _, orderings) = self.project();
 
-        write!(f, "file_groups={}", FileGroupsDisplay(&self.file_groups))?;
+        write!(f, "file_groups=")?;
+        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
 
         if !schema.fields().is_empty() {
             write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
@@ -310,16 +314,25 @@ impl Display for FileScanConfig {
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
-impl<'a> Display for FileGroupsDisplay<'a> {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+impl<'a> DisplayAs for FileGroupsDisplay<'a> {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         let n_groups = self.0.len();
         let groups = if n_groups == 1 { "group" } else { "groups" };
         write!(f, "{{{n_groups} {groups}: [")?;
-        // To avoid showing too many partitions
-        let max_groups = 5;
-        fmt_up_to_n_elements(self.0, max_groups, f, |group, f| {
-            write!(f, "{}", FileGroupDisplay(group))
-        })?;
+        match t {
+            DisplayFormatType::Default => {
+                // To avoid showing too many partitions
+                let max_groups = 5;
+                fmt_up_to_n_elements(self.0, max_groups, f, |group, f| {
+                    FileGroupDisplay(group).fmt_as(t, f)
+                })?;
+            }
+            DisplayFormatType::Verbose => {
+                fmt_elements_split_by_commas(self.0.iter(), f, |group, f| {
+                    FileGroupDisplay(group).fmt_as(t, f)
+                })?
+            }
+        }
         write!(f, "]}}")
     }
 }
@@ -333,18 +346,31 @@ impl<'a> Display for FileGroupsDisplay<'a> {
 #[derive(Debug)]
 pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
-impl<'a> Display for FileGroupDisplay<'a> {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+impl<'a> DisplayAs for FileGroupDisplay<'a> {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         write!(f, "[")?;
-        // To avoid showing too many files
-        let max_files = 5;
-        fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
-            write!(f, "{}", pf.object_meta.location.as_ref())?;
-            if let Some(range) = pf.range.as_ref() {
-                write!(f, ":{}..{}", range.start, range.end)?;
+        match t {
+            DisplayFormatType::Default => {
+                // To avoid showing too many files
+                let max_files = 5;
+                fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
+                    write!(f, "{}", pf.object_meta.location.as_ref())?;
+                    if let Some(range) = pf.range.as_ref() {
+                        write!(f, ":{}..{}", range.start, range.end)?;
+                    }
+                    Ok(())
+                })?
             }
-            Ok(())
-        })?;
+            DisplayFormatType::Verbose => {
+                fmt_elements_split_by_commas(self.0.iter(), f, |pf, f| {
+                    write!(f, "{}", pf.object_meta.location.as_ref())?;
+                    if let Some(range) = pf.range.as_ref() {
+                        write!(f, ":{}..{}", range.start, range.end)?;
+                    }
+                    Ok(())
+                })?
+            }
+        }
         write!(f, "]")
     }
 }
@@ -360,15 +386,31 @@ where
     F: Fn(&E, &mut Formatter) -> FmtResult,
 {
     let len = elements.len();
-    for (idx, element) in elements.iter().take(n).enumerate() {
+    fmt_elements_split_by_commas(elements.iter().take(n), f, |element, f| {
+        format_element(element, f)
+    })?;
+    // Remaining elements are showed as `...` (to indicate there is more)
+    if len > n {
+        write!(f, ", ...")?;
+    }
+    Ok(())
+}
+
+/// helper formatting array elements with a comma and a space between them
+fn fmt_elements_split_by_commas<E, I, F>(
+    iter: I,
+    f: &mut Formatter,
+    format_element: F,
+) -> FmtResult
+where
+    I: Iterator<Item = E>,
+    F: Fn(E, &mut Formatter) -> FmtResult,
+{
+    for (idx, element) in iter.enumerate() {
         if idx > 0 {
             write!(f, ", ")?;
         }
         format_element(element, f)?;
-    }
-    // Remaining elements are showed as `...` (to indicate there is more)
-    if len > n {
-        write!(f, ", ...")?;
     }
     Ok(())
 }
@@ -888,6 +930,7 @@ mod tests {
     };
     use chrono::Utc;
 
+    use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
     use crate::{
         test::{build_table_i32, columns},
         test_util::aggr_test_schema,
@@ -1289,7 +1332,7 @@ mod tests {
     #[test]
     fn file_groups_display_empty() {
         let expected = "{0 groups: []}";
-        assert_eq!(&FileGroupsDisplay(&[]).to_string(), expected);
+        assert_eq!(DefaultDisplay(FileGroupsDisplay(&[])).to_string(), expected);
     }
 
     #[test]
@@ -1297,11 +1340,14 @@ mod tests {
         let files = [vec![partitioned_file("foo"), partitioned_file("bar")]];
 
         let expected = "{1 group: [[foo, bar]]}";
-        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+        assert_eq!(
+            DefaultDisplay(FileGroupsDisplay(&files)).to_string(),
+            expected
+        );
     }
 
     #[test]
-    fn file_groups_display_many() {
+    fn file_groups_display_many_default() {
         let files = [
             vec![partitioned_file("foo"), partitioned_file("bar")],
             vec![partitioned_file("baz")],
@@ -1309,11 +1355,29 @@ mod tests {
         ];
 
         let expected = "{3 groups: [[foo, bar], [baz], []]}";
-        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+        assert_eq!(
+            DefaultDisplay(FileGroupsDisplay(&files)).to_string(),
+            expected
+        );
     }
 
     #[test]
-    fn file_groups_display_too_many() {
+    fn file_groups_display_many_verbose() {
+        let files = [
+            vec![partitioned_file("foo"), partitioned_file("bar")],
+            vec![partitioned_file("baz")],
+            vec![],
+        ];
+
+        let expected = "{3 groups: [[foo, bar], [baz], []]}";
+        assert_eq!(
+            VerboseDisplay(FileGroupsDisplay(&files)).to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn file_groups_display_too_many_default() {
         let files = [
             vec![partitioned_file("foo"), partitioned_file("bar")],
             vec![partitioned_file("baz")],
@@ -1325,19 +1389,45 @@ mod tests {
         ];
 
         let expected = "{7 groups: [[foo, bar], [baz], [qux], [quux], [quuux], ...]}";
-        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+        assert_eq!(
+            DefaultDisplay(FileGroupsDisplay(&files)).to_string(),
+            expected
+        );
     }
 
     #[test]
-    fn file_group_display_many() {
+    fn file_groups_display_too_many_verbose() {
+        let files = [
+            vec![partitioned_file("foo"), partitioned_file("bar")],
+            vec![partitioned_file("baz")],
+            vec![partitioned_file("qux")],
+            vec![partitioned_file("quux")],
+            vec![partitioned_file("quuux")],
+            vec![partitioned_file("quuuux")],
+            vec![],
+        ];
+
+        let expected =
+            "{7 groups: [[foo, bar], [baz], [qux], [quux], [quuux], [quuuux], []]}";
+        assert_eq!(
+            VerboseDisplay(FileGroupsDisplay(&files)).to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn file_group_display_many_default() {
         let files = vec![partitioned_file("foo"), partitioned_file("bar")];
 
         let expected = "[foo, bar]";
-        assert_eq!(&FileGroupDisplay(&files).to_string(), expected);
+        assert_eq!(
+            DefaultDisplay(FileGroupDisplay(&files)).to_string(),
+            expected
+        );
     }
 
     #[test]
-    fn file_group_display_too_many() {
+    fn file_group_display_too_many_default() {
         let files = vec![
             partitioned_file("foo"),
             partitioned_file("bar"),
@@ -1348,7 +1438,28 @@ mod tests {
         ];
 
         let expected = "[foo, bar, baz, qux, quux, ...]";
-        assert_eq!(&FileGroupDisplay(&files).to_string(), expected);
+        assert_eq!(
+            DefaultDisplay(FileGroupDisplay(&files)).to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn file_group_display_too_many_verbose() {
+        let files = vec![
+            partitioned_file("foo"),
+            partitioned_file("bar"),
+            partitioned_file("baz"),
+            partitioned_file("qux"),
+            partitioned_file("quux"),
+            partitioned_file("quuux"),
+        ];
+
+        let expected = "[foo, bar, baz, qux, quux, quuux]";
+        assert_eq!(
+            VerboseDisplay(FileGroupDisplay(&files)).to_string(),
+            expected
+        );
     }
 
     /// create a PartitionedFile for testing
