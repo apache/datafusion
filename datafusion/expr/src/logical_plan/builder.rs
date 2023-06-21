@@ -24,7 +24,7 @@ use crate::expr_rewriter::{
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
-use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
+use crate::{and, binary_expr, DmlStatement, Operator, WindowFunction, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,

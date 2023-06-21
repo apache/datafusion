@@ -257,11 +257,21 @@ impl ExprSchemable for Expr {
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),
-            _ => Ok(DFField::new_unqualified(
-                &self.display_name()?,
-                self.get_type(input_schema)?,
-                self.nullable(input_schema)?,
-            )),
+            _ => {
+                if let Expr::WindowFunction(WindowFunction { fun, args, .. }) = self {
+                    println!("{:?}", format!("{}({})", fun, args[0]));
+                    return Ok(DFField::new_unqualified(
+                        &format!("{}({})", fun, args[0]),
+                        self.get_type(input_schema)?,
+                        self.nullable(input_schema)?,
+                    ));
+                };
+                Ok(DFField::new_unqualified(
+                    &self.display_name()?,
+                    self.get_type(input_schema)?,
+                    self.nullable(input_schema)?,
+                ))
+            }
         }
     }
 

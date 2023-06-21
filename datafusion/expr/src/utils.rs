@@ -1156,7 +1156,18 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
             let field = plan.schema().field_from_column(col)?;
             Ok(Expr::Column(field.qualified_column()))
         }
-        _ => Ok(Expr::Column(Column::from_name(expr.display_name()?))),
+        _ => {
+            if let Some(field_name) = plan
+                .schema()
+                .field_names()
+                .iter()
+                .find(|&f| expr.canonical_name().starts_with(f))
+            {
+                println!("NEW COLUMN NAME {:?}", field_name.to_string());
+                return Ok(Expr::Column(Column::from_name(field_name.to_string())));
+            }
+            Ok(Expr::Column(Column::from_name(expr.display_name()?)))
+        }
     }
 }
 
