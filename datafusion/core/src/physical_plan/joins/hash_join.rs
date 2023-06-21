@@ -427,10 +427,16 @@ impl ExecutionPlan for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on={:?}{}",
-                    self.mode, self.join_type, self.on, display_filter
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}",
+                    self.mode, self.join_type, on, display_filter
                 )
             }
         }
