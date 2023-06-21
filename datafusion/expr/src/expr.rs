@@ -1354,22 +1354,9 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarUDF(ScalarUDF { fun, args }) => {
             create_function_name(&fun.name, false, args)
         }
-        Expr::WindowFunction(WindowFunction {
-            fun,
-            args,
-            window_frame,
-            partition_by,
-            order_by,
-        }) => {
-            let mut parts: Vec<String> =
+        Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
+            let parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
-            if !partition_by.is_empty() {
-                parts.push(format!("PARTITION BY {partition_by:?}"));
-            }
-            if !order_by.is_empty() {
-                parts.push(format!("ORDER BY {order_by:?}"));
-            }
-            parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
         }
         Expr::AggregateFunction(AggregateFunction {

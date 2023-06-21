@@ -302,12 +302,7 @@ impl DFSchema {
     ) -> Result<&DFField> {
         let idx = self
             .index_of_column_by_name(Some(qualifier), name)?
-            .ok_or_else(|| {
-                println!("ERROR: {:?}", self);
-                println!("ERROR: {:?}", qualifier);
-                println!("ERROR: {:?}", name);
-                field_not_found(Some(qualifier.to_string()), name, self)
-            })?;
+            .ok_or_else(|| field_not_found(Some(qualifier.to_string()), name, self))?;
 
         Ok(self.field(idx))
     }
