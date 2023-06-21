@@ -2024,7 +2024,7 @@ Inner Join:  Filter: join_t1.t1_id > join_t2.t2_id
 ----Filter: join_t2.t2_int > UInt32(1)
 ------TableScan: join_t2 projection=[t2_id, t2_int]
 physical_plan
-NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: Column { name: "t1_id", index: 0 }, op: Gt, right: Column { name: "t2_id", index: 1 } }
+NestedLoopJoinExec: join_type=Inner, filter=t1_id@0 > t2_id@1
 --CoalesceBatchesExec: target_batch_size=4096
 ----FilterExec: t1_id@0 > 10
 ------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -2064,7 +2064,7 @@ Right Join:  Filter: join_t1.t1_id < join_t2.t2_id
 ----Filter: join_t2.t2_id > UInt32(11)
 ------TableScan: join_t2 projection=[t2_id]
 physical_plan
-NestedLoopJoinExec: join_type=Right, filter=BinaryExpr { left: Column { name: "t1_id", index: 0 }, op: Lt, right: Column { name: "t2_id", index: 1 } }
+NestedLoopJoinExec: join_type=Right, filter=t1_id@0 < t2_id@1
 --CoalescePartitionsExec
 ----CoalesceBatchesExec: target_batch_size=4096
 ------FilterExec: t1_id@0 > 22
