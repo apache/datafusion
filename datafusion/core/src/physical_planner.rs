@@ -122,13 +122,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{e:?} ");
+                let _ = write!(name, "{e} ");
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {w:?} THEN {t:?} ");
+                let _ = write!(name, "WHEN {w} THEN {t} ");
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {e:?} ");
+                let _ = write!(name, "ELSE {e} ");
             }
             name += "END";
             Ok(name)
