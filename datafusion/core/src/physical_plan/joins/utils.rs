@@ -784,8 +784,8 @@ pub(crate) fn apply_join_filter_to_indices(
         filter.schema(),
         build_input_buffer,
         probe_batch,
-        build_indices.clone(),
-        probe_indices.clone(),
+        &build_indices,
+        &probe_indices,
         filter.column_indices(),
         build_side,
     )?;
@@ -809,8 +809,8 @@ pub(crate) fn build_batch_from_indices(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: UInt64Array,
-    probe_indices: UInt32Array,
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
 ) -> Result<RecordBatch> {

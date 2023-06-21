@@ -482,8 +482,8 @@ impl NestedLoopJoinStream {
                             &self.schema,
                             left_data,
                             &empty_right_batch,
-                            left_side,
-                            right_side,
+                            &left_side,
+                            &right_side,
                             &self.column_indices,
                             JoinSide::Left,
                         );
@@ -611,8 +611,8 @@ fn join_left_and_right_batch(
                 schema,
                 left_batch,
                 right_batch,
-                left_side,
-                right_side,
+                &left_side,
+                &right_side,
                 column_indices,
                 JoinSide::Left,
             )

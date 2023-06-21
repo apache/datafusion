@@ -733,8 +733,8 @@ pub fn build_equal_condition_join_indices(
     };
 
     equal_rows_arr(
-        left,
-        right,
+        &left,
+        &right,
         &build_join_values,
         &keys_values,
         null_equals_null,
@@ -1097,8 +1097,8 @@ fn eq_dyn_null(
 }
 
 pub fn equal_rows_arr(
-    indices_left: UInt64Array,
-    indices_right: UInt32Array,
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
     left_arrays: &[ArrayRef],
     right_arrays: &[ArrayRef],
     null_equals_null: bool,
@@ -1225,8 +1225,8 @@ impl HashJoinStream {
                                 &self.schema,
                                 &left_data.1,
                                 &batch,
-                                left_side,
-                                right_side,
+                                &left_side,
+                                &right_side,
                                 &self.column_indices,
                                 JoinSide::Left,
                             );
@@ -1257,8 +1257,8 @@ impl HashJoinStream {
                             &self.schema,
                             &left_data.1,
                             &empty_right_batch,
-                            left_side,
-                            right_side,
+                            &left_side,
+                            &right_side,
                             &self.column_indices,
                             JoinSide::Left,
                         );
