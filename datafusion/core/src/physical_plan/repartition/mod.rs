@@ -453,7 +453,7 @@ impl ExecutionPlan for RepartitionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "RepartitionExec: partitioning={:?}, input_partitions={}",
+                    "RepartitionExec: partitioning={}, input_partitions={}",
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
                 )

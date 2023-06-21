@@ -275,12 +275,12 @@ mod test {
         type N = Expr;
 
         fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
-            self.v.push(format!("Previsited {expr:?}"));
+            self.v.push(format!("Previsited {expr}"));
             Ok(RewriteRecursion::Continue)
         }
 
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            self.v.push(format!("Mutated {expr:?}"));
+            self.v.push(format!("Mutated {expr}"));
             Ok(expr)
         }
     }
