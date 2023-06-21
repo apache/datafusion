@@ -19,7 +19,6 @@
 
 use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::expressions::Column;
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::NumRowsState;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::{PhysicalExpr, PhysicalSortExpr};
@@ -27,6 +26,7 @@ use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::SortOptions;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;

@@ -41,6 +41,7 @@ use arrow::{
     datatypes::{Schema, SchemaBuilder, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::raw::RawTable;
@@ -62,8 +63,7 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_physical_expr::window::{
-    PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
-    WindowAggState, WindowState,
+    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingEquivalenceProperties, PhysicalExpr,

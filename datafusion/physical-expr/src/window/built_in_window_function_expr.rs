@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::partition_evaluator::PartitionEvaluator;
 use crate::equivalence::OrderingEquivalenceBuilder;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::sync::Arc;
 
