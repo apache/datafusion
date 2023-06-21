@@ -48,7 +48,6 @@ use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
 
 pub(crate) mod distributor_channels;
 pub mod sort_preserving_repartition;
@@ -396,7 +395,7 @@ impl ExecutionPlan for RepartitionExec {
 
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-                let input_task: JoinHandle<Result<()>> = tokio::spawn(pull_from_input(
+                let input_task = tokio::spawn(pull_from_input(
                     self.input.clone(),
                     i,
                     txs.clone(),
@@ -702,6 +701,7 @@ mod tests {
     use datafusion_execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use futures::FutureExt;
     use std::collections::HashSet;
+    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {

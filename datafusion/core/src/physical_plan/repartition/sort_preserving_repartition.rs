@@ -15,26 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The repartition operator maps N input partitions to M output partitions based on a
-//! partitioning scheme. If its input is ordered, ordering is preserved during repartitioning
+//! This file implements an order-preserving repartitioning operator
+//! mapping N input partitions to M output partitions.
 
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
-
-use crate::physical_plan::repartition::distributor_channels::{
-    partition_aware_channels, DistributionReceiver, DistributionSender,
-};
-use crate::physical_plan::{
-    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
-    RecordBatchStream, Statistics,
-};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::memory_pool::MemoryConsumer;
-use log::trace;
 
 use super::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use super::SendableRecordBatchStream;
@@ -43,22 +30,37 @@ use crate::physical_plan::common::{
     transpose, AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation,
 };
 use crate::physical_plan::metrics::BaselineMetrics;
+use crate::physical_plan::repartition::distributor_channels::{
+    partition_aware_channels, DistributionReceiver, DistributionSender,
+};
 use crate::physical_plan::repartition::{
     pull_from_input, wait_for_task, MaybeBatch, RepartitionMetrics,
 };
 use crate::physical_plan::sorts::streaming_merge;
+use crate::physical_plan::{
+    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    RecordBatchStream, Statistics,
+};
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalSortExpr;
+
 use futures::{FutureExt, Stream};
 use hashbrown::HashMap;
+use log::trace;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
 
+/// Inner state of [`SortPreservingRepartitionExec`].
 #[derive(Debug)]
-struct RepartitionExecState {
+struct SortPreservingRepartitionExecState {
     /// Channels for sending batches from input partitions to output partitions.
     /// Key is the partition number.
     channels: HashMap<
@@ -75,7 +77,7 @@ struct RepartitionExecState {
 }
 
 /// The repartition operator maps N input partitions to M output partitions based on a
-/// partitioning scheme. If input is ordered, output is also ordered
+/// partitioning scheme. Any input ordering is preserved.
 #[derive(Debug)]
 pub struct SortPreservingRepartitionExec {
     /// Input execution plan
@@ -85,7 +87,7 @@ pub struct SortPreservingRepartitionExec {
     partitioning: Partitioning,
 
     /// Inner state that is initialized when the first output stream is created.
-    state: Arc<Mutex<RepartitionExecState>>,
+    state: Arc<Mutex<SortPreservingRepartitionExecState>>,
 
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -139,8 +141,8 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
         self.partitioning.clone()
     }
 
-    // Ordering is preserved
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        // Indicate that input ordering is preserved:
         self.input().output_ordering()
     }
 
@@ -234,8 +236,7 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
             .remove(&partition)
             .expect("partition not used yet");
 
-        // receiver size (`rx.len()`) and `num_input_partitions` are same
-        // Streams from all of the input partitions is stored in the `input_streams`
+        // Store streams from all the input partitions:
         let input_streams = rx
             .into_iter()
             .map(|receiver| {
@@ -247,18 +248,18 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
                 }) as SendableRecordBatchStream
             })
             .collect::<Vec<_>>();
-        // Get existing ordering. `streaming_merge` preserves existing ordering.
+        // Note that receiver size (`rx.len()`) and `num_input_partitions` are same.
+
+        // Get existing ordering:
         let sort_exprs = self.input.output_ordering().unwrap_or(&[]);
-        // Merge streams (while preserving ordering) coming from input partitions to this partition.
-        let stream = streaming_merge(
+        // Merge streams (while preserving ordering) coming from input partitions to this partition:
+        streaming_merge(
             input_streams,
             self.schema(),
             sort_exprs,
             BaselineMetrics::new(&self.metrics, partition),
             context.session_config().batch_size(),
-        )?;
-
-        Ok(stream)
+        )
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -274,7 +275,7 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "RepartitionExec: partitioning={:?}, input_partitions={}",
+                    "SortPreservingRepartitionExec: partitioning={:?}, input_partitions={}",
                     self.partitioning,
                     self.input.output_partitioning().partition_count()
                 )
@@ -288,7 +289,7 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
 }
 
 impl SortPreservingRepartitionExec {
-    /// Create a new `SortPreservingRepartitionExec`
+    /// Create a new `SortPreservingRepartitionExec`.
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
@@ -296,7 +297,7 @@ impl SortPreservingRepartitionExec {
         Ok(SortPreservingRepartitionExec {
             input,
             partitioning,
-            state: Arc::new(Mutex::new(RepartitionExecState {
+            state: Arc::new(Mutex::new(SortPreservingRepartitionExecState {
                 channels: HashMap::new(),
                 abort_helper: Arc::new(AbortOnDropMany::<()>(vec![])),
             })),
@@ -305,8 +306,8 @@ impl SortPreservingRepartitionExec {
     }
 }
 
-/// This struct converts receiver to stream.
-/// Receiver receives data on single producer single consumer channel
+/// This struct converts a receiver to a stream.
+/// Receiver receives data on an SPSC channel.
 struct PerPartitionStream {
     /// Schema wrapped by Arc
     schema: SchemaRef,

@@ -70,15 +70,15 @@ mod sp_repartition_fuzz_tests {
 
     /// Check whether physical plan below
     ///     "SortPreservingMergeExec: [a@0 ASC,b@1 ASC,c@2 ASC]",
-    ///     "  SPRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
-    ///     "    SPRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
+    ///     "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
+    ///     "    SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
     ///     "      MemoryExec: partitions=1, partition_sizes=[75]",
     /// and / or
     ///     "SortPreservingMergeExec: [a@0 ASC,b@1 ASC,c@2 ASC]",
-    ///     "  SPRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
+    ///     "  SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
     ///     "    RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
     ///     "      MemoryExec: partitions=1, partition_sizes=[75]",
-    /// preserves ordering. Input fed to the plan above should be same with the output of the plan
+    /// preserves ordering. Input fed to the plan above should be same with the output of the plan.
     async fn run_sort_preserving_repartition_test(
         input1: Vec<RecordBatch>,
         is_first_roundrobin: bool,

@@ -85,9 +85,10 @@ pub fn channels<T>(
 
 type PartitionAwareSenders<T> = Vec<Vec<DistributionSender<T>>>;
 type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
-/// Create `n_out` empty channels per `n_in` inputs.
-/// By this way, each distinct partition will communicate with dedicated channel (single producer - single consumer)
-/// (Enables us to keep track of from which partition input comes from)
+
+/// Create `n_out` empty channels for each of the `n_in` inputs.
+/// This way, each distinct partition will communicate via a dedicated channel.
+/// This SPSC structure enables us to track which partition input data comes from.
 pub fn partition_aware_channels<T>(
     n_in: usize,
     n_out: usize,
