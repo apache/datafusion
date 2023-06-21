@@ -1025,10 +1025,17 @@ impl DefaultPhysicalPlanner {
                                         ))
                                 )
                                 .unzip();
+                            let left_primary_keys = get_updated_primary_keys(left_df_schema, &left_field_indices);
+                            let right_primary_keys = get_updated_primary_keys(right_df_schema, &right_field_indices);
+                            // offset indices of right
+                            let right_primary_keys = right_primary_keys.iter().map(|item| item + left_field_indices.len());
+                            let mut primary_keys = vec![];
+                            primary_keys.extend(left_primary_keys);
+                            primary_keys.extend(right_primary_keys);
 
                             // Construct intermediate schemas used for filtering data and
                             // convert logical expression to physical according to filter schema
-                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?;
+                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new(), primary_keys)?;
                             let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
                             let filter_expr = create_physical_expr(
                                 expr,
@@ -1297,6 +1304,17 @@ impl DefaultPhysicalPlanner {
             ))
         }
     }
+}
+
+fn get_updated_primary_keys(df_schema: &DFSchema, field_indices: &[usize]) -> Vec<usize>{
+    let mut primary_keys = vec![];
+    let existing_primary_keys = df_schema.primary_keys();
+    for (idx, field_idx) in field_indices.iter().enumerate(){
+        if existing_primary_keys.contains(field_idx){
+            primary_keys.push(idx);
+        }
+    }
+    primary_keys
 }
 
 /// Expand and align a GROUPING SET expression.
@@ -2453,6 +2471,7 @@ mod tests {
                     DFSchema::new_with_metadata(
                         vec![DFField::new_unqualified("a", DataType::Int32, false)],
                         HashMap::new(),
+                        vec![],
                     )
                     .unwrap(),
                 ),

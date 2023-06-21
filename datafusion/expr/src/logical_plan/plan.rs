@@ -1246,6 +1246,7 @@ impl Projection {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
+            input.schema().primary_keys().to_vec(),
         )?);
         Self::try_new_with_schema(expr, input, schema)
     }
@@ -1309,8 +1310,9 @@ impl SubqueryAlias {
     ) -> Result<Self> {
         let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
+        let primary_keys = plan.schema().primary_keys().to_vec();
         let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema, primary_keys)?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
             alias,
@@ -1570,6 +1572,7 @@ impl Aggregate {
         let schema = DFSchema::new_with_metadata(
             exprlist_to_fields(all_expr, &input)?,
             input.schema().metadata().clone(),
+            input.schema().primary_keys().to_vec(),
         )?;
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }

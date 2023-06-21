@@ -19,7 +19,7 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFField, DFSchema, Result};
 use datafusion_expr::{
     col,
     expr::AggregateFunction,
@@ -157,9 +157,13 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         .iter()
                         .map(|expr| expr.to_field(input.schema()))
                         .collect::<Result<Vec<_>>>()?;
+
+                    let primary_keys = get_updated_primary_keys(input.schema(), &inner_fields);
+
                     let inner_schema = DFSchema::new_with_metadata(
                         inner_fields,
                         input.schema().metadata().clone(),
+                        primary_keys
                     )?;
                     let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                         input.clone(),
@@ -167,13 +171,17 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         Vec::new(),
                     )?);
 
+                    let outer_fields = outer_group_exprs
+                        .iter()
+                        .chain(new_aggr_exprs.iter())
+                        .map(|expr| expr.to_field(&inner_schema))
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let primary_keys = get_updated_primary_keys(&inner_schema, &outer_fields);
                     let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
-                        outer_group_exprs
-                            .iter()
-                            .chain(new_aggr_exprs.iter())
-                            .map(|expr| expr.to_field(&inner_schema))
-                            .collect::<Result<Vec<_>>>()?,
+                        outer_fields,
                         input.schema().metadata().clone(),
+                        primary_keys,
                     )?);
 
                     // so the aggregates are displayed in the same way even after the rewrite
@@ -223,6 +231,18 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
     }
+}
+
+fn get_updated_primary_keys(old_schema: &DFSchema, new_fields: &[DFField]) -> Vec<usize>{
+    let old_primary_keys = old_schema.primary_keys();
+    let fields = old_schema.fields();
+    let mut primary_keys = vec![];
+    for pk in old_primary_keys{
+        if let Some(idx) = new_fields.iter().position(|item | item == &fields[*pk]){
+            primary_keys.push(idx);
+        }
+    }
+    primary_keys
 }
 
 #[cfg(test)]

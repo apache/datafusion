@@ -74,6 +74,7 @@ fn analyze_internal(
     external_schema: &DFSchema,
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
+    println!("external_schema: {:?}", external_schema);
     // optimize child plans first
     let new_inputs = plan
         .inputs()
@@ -85,8 +86,9 @@ fn analyze_internal(
     let mut schema = merge_schema(new_inputs.iter().collect());
 
     if let LogicalPlan::TableScan(ts) = plan {
+        // arrow schema doesn't support primary_key. We do not know primary_key of ts.source if any.
         let source_schema =
-            DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+            DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema(), vec![])?;
         schema.merge(&source_schema);
     }
 

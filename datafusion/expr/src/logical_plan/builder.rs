@@ -187,7 +187,7 @@ impl LogicalPlanBuilder {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
         let schema =
-            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
+            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new(), vec![])?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -276,10 +276,11 @@ impl LogicalPlanBuilder {
                         })
                         .collect(),
                     schema.metadata().clone(),
+                    vec![],
                 )
             })
             .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
+                DFSchema::try_from_qualified_schema(table_name.clone(), &schema, vec![])
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
@@ -829,11 +830,12 @@ impl LogicalPlanBuilder {
         let mut window_fields: Vec<DFField> = self.plan.schema().fields().clone();
         window_fields.extend_from_slice(&exprlist_to_fields(all_expr, &self.plan)?);
         let metadata = self.plan.schema().metadata().clone();
+        let primary_keys = self.plan.schema().primary_keys().to_vec();
 
         Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan),
             window_expr,
-            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
+            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata, primary_keys)?),
         })))
     }
 
@@ -1048,7 +1050,6 @@ pub fn build_join_schema(
 
     let right_fields = right.fields();
     let left_fields = left.fields();
-
     let fields: Vec<DFField> = match join_type {
         JoinType::Inner => {
             // left then right
@@ -1092,9 +1093,42 @@ pub fn build_join_schema(
         }
     };
 
+    let right_primary_keys = right.primary_keys().iter().map(|idx| idx+left_fields.len()).collect::<Vec<_>>();
+    let left_primary_keys = left.primary_keys();
+    let primary_keys: Vec<usize> = match join_type {
+        JoinType::Inner => {
+            // left then right
+            left_primary_keys
+                .iter()
+                .chain(right_primary_keys.iter())
+                .cloned()
+                .collect()
+        }
+        JoinType::Left => {
+            // left then right, right set to nullable in case of not matched scenario
+            left_primary_keys.to_vec()
+        }
+        JoinType::Right => {
+            // left then right, left set to nullable in case of not matched scenario
+            right_primary_keys.to_vec()
+        }
+        JoinType::Full => {
+            // left then right, all set to nullable in case of not matched scenario
+            vec![]
+        }
+        JoinType::LeftSemi | JoinType::LeftAnti => {
+            // Only use the left side for the schema
+            left_primary_keys.to_vec()
+        }
+        JoinType::RightSemi | JoinType::RightAnti => {
+            // Only use the right side for the schema
+            right_primary_keys.to_vec()
+        }
+    };
+
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
+    DFSchema::new_with_metadata(fields, metadata, primary_keys)
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1246,6 +1280,7 @@ pub fn project(
     let input_schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
+        plan.schema().primary_keys().to_vec(),
     )?;
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
@@ -1412,6 +1447,7 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
     let schema = Arc::new(DFSchema::new_with_metadata(
         fields,
         input_schema.metadata().clone(),
+        input_schema.primary_keys().to_vec()
     )?);
 
     Ok(LogicalPlan::Unnest(Unnest {

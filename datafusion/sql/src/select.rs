@@ -434,6 +434,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         println!("group_by_exprs:{:?}", group_by_exprs);
         println!("select_exprs:{:?}", select_exprs);
         println!("input_schema:{:?}", input.schema());
+        println!("aggregate primary keys:{:?}", input.schema().primary_keys());
+        let primary_keys = input.schema().primary_keys();
+        let input_fields = input.schema().fields();
+        let input_primary_key_fields = primary_keys.iter().map(|idx| &input_fields[*idx]).collect::<Vec<_>>();
         let field_names = input
             .schema()
             .fields()
@@ -443,19 +447,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         println!("field_names:{:?}", field_names);
         // TODO: Add primary key check
         let group_by_contains_primary = group_by_exprs.iter().any(|expr| {
-            let res = input.schema().fields();
-            res.iter().any(|item| {
+            input_primary_key_fields.iter().any(|item| {
                 let expr_name = format!("{:?}", expr);
                 println!("expr name:{:?}", expr_name);
                 println!("item.qualified_name():{:?}", item.qualified_name());
                 println!("item.field().metadata(){:?}", item.field().metadata());
-                let is_primary_key = item
-                    .field()
-                    .metadata()
-                    .get("primary_key")
-                    .map(|val| val == "true")
-                    .unwrap_or(false);
-                item.qualified_name() == expr_name && is_primary_key
+                item.qualified_name() == expr_name
             })
         });
         if group_by_contains_primary {

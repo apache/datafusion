@@ -261,7 +261,7 @@ fn rewrite_schema(schema: &DFSchema) -> DFSchemaRef {
         })
         .collect::<Vec<DFField>>();
     DFSchemaRef::new(
-        DFSchema::new_with_metadata(new_fields, schema.metadata().clone()).unwrap(),
+        DFSchema::new_with_metadata(new_fields, schema.metadata().clone(), schema.primary_keys().to_vec()).unwrap(),
     )
 }
 

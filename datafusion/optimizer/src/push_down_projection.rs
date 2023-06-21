@@ -227,6 +227,8 @@ impl OptimizerRule for PushDownProjection {
                 let schema = DFSchema::new_with_metadata(
                     exprlist_to_fields(&projection_column_exprs, child_plan)?,
                     union.schema.metadata().clone(),
+                    // Union doesn't preserve primary key
+                    vec![],
                 )?;
                 let new_union = LogicalPlan::Union(Union {
                     inputs,

@@ -447,7 +447,7 @@ pub fn expand_qualified_wildcard(
         )));
     }
     let qualified_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone(), schema.primary_keys().to_vec())?;
     let excluded_columns = if let Some(WildcardAdditionalOptions {
         opt_exclude,
         opt_except,
@@ -1014,6 +1014,7 @@ pub fn from_plan(
             let schema = Arc::new(DFSchema::new_with_metadata(
                 fields,
                 input.schema().metadata().clone(),
+                input.schema().primary_keys().to_vec(),
             )?);
 
             Ok(LogicalPlan::Unnest(Unnest {

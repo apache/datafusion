@@ -40,6 +40,7 @@ pub struct DFSchema {
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
+    primary_keys: Vec<usize>,
 }
 
 impl DFSchema {
@@ -48,20 +49,23 @@ impl DFSchema {
         Self {
             fields: vec![],
             metadata: HashMap::new(),
+            primary_keys: vec![],
         }
     }
 
     #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
     /// Create a new `DFSchema`
     pub fn new(fields: Vec<DFField>) -> Result<Self> {
-        Self::new_with_metadata(fields, HashMap::new())
+        Self::new_with_metadata(fields, HashMap::new(), vec![])
     }
 
     /// Create a new `DFSchema`
     pub fn new_with_metadata(
         fields: Vec<DFField>,
         metadata: HashMap<String, String>,
+        primary_keys: Vec<usize>,
     ) -> Result<Self> {
+        println!("new_with_metadata is called, primary_keys: {:?}", primary_keys);
         let mut qualified_names = HashSet::new();
         let mut unqualified_names = HashSet::new();
 
@@ -97,13 +101,14 @@ impl DFSchema {
                 ));
             }
         }
-        Ok(Self { fields, metadata })
+        Ok(Self { fields, metadata, primary_keys })
     }
 
     /// Create a `DFSchema` from an Arrow schema and a given qualifier
     pub fn try_from_qualified_schema<'a>(
         qualifier: impl Into<TableReference<'a>>,
         schema: &Schema,
+        primary_keys: Vec<usize>,
     ) -> Result<Self> {
         let qualifier = qualifier.into();
         Self::new_with_metadata(
@@ -113,6 +118,7 @@ impl DFSchema {
                 .map(|f| DFField::from_qualified(qualifier.clone(), f.clone()))
                 .collect(),
             schema.metadata().clone(),
+            primary_keys,
         )
     }
 
@@ -123,7 +129,10 @@ impl DFSchema {
         let mut metadata = self.metadata.clone();
         fields.extend_from_slice(schema.fields().as_slice());
         metadata.extend(schema.metadata.clone());
-        Self::new_with_metadata(fields, metadata)
+        let mut primary_keys = self.primary_keys.clone();
+        let other_primary_keys = schema.primary_keys.iter().map(|idx| idx + self.fields.len()).collect::<Vec<_>>();
+        primary_keys.extend(other_primary_keys);
+        Self::new_with_metadata(fields, metadata, primary_keys)
     }
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
@@ -475,6 +484,11 @@ impl DFSchema {
     pub fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
     }
+
+    /// Get primary keys
+    pub fn primary_keys(&self) -> &[usize] {
+        &self.primary_keys
+    }
 }
 
 impl From<DFSchema> for Schema {
@@ -504,6 +518,7 @@ impl TryFrom<Schema> for DFSchema {
                 .map(|f| DFField::from(f.clone()))
                 .collect(),
             schema.metadata().clone(),
+            vec![],
         )
     }
 }
@@ -555,7 +570,7 @@ impl ToDFSchema for SchemaRef {
 
 impl ToDFSchema for Vec<DFField> {
     fn to_dfschema(self) -> Result<DFSchema> {
-        DFSchema::new_with_metadata(self, HashMap::new())
+        DFSchema::new_with_metadata(self, HashMap::new(), vec![])
     }
 }
 

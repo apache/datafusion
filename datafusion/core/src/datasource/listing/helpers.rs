@@ -266,6 +266,7 @@ async fn prune_partitions(
             .map(|(n, d)| DFField::new_unqualified(n, d.clone(), true))
             .collect(),
         Default::default(),
+        Default::default(),
     )?;
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)?;
