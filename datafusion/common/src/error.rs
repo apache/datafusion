@@ -90,6 +90,7 @@ pub enum DataFusionError {
     Substrait(String),
 }
 
+/// Wraps an existing error with [`DataFusionError::Context`]
 #[macro_export]
 macro_rules! context {
     ($desc:expr, $err:expr) => {
@@ -97,17 +98,99 @@ macro_rules! context {
     };
 }
 
+/// Creates an [`Result::Err`] with [`DataFusionError::Plan`]
+///
+/// # Example
+/// ```
+/// # use datafusion_common::{DataFusionError, Result, plan_err};
+/// let res: Result<()> = plan_err!("Invalid query");
+/// assert_eq!(
+///   res.unwrap_err().to_string(),
+///   "Error during planning: Invalid query"
+/// );
+/// ```
 #[macro_export]
 macro_rules! plan_err {
     ($desc:expr) => {
-        Err(datafusion_common::DataFusionError::Plan(format!(
-            "{} at {}:{}",
-            $desc,
-            file!(),
-            line!()
-        )))
+        Err(datafusion_common::DataFusionError::Plan($desc.into()))
     };
 }
+
+/// Creates an [`Result::Err`] with [`DataFusionError::Execution`]
+///
+/// # Example
+/// ```
+/// # use datafusion_common::{DataFusionError, Result, execution_err};
+/// let res: Result<()> = execution_err!("Invalid type");
+/// assert_eq!(
+///   res.unwrap_err().to_string(),
+///   "Execution error: Invalid type"
+/// );
+/// ```
+#[macro_export]
+macro_rules! execution_err {
+    ($desc:expr) => {
+        Err(datafusion_common::DataFusionError::Execution($desc.into()))
+    };
+}
+
+/// Creates an [`Result::Err`] with [`DataFusionError::Internal`]
+///
+/// # Example
+/// ```
+/// # use datafusion_common::{DataFusionError, Result, internal_err};
+/// let res: Result<()> = internal_err!("Unexpected state");
+/// assert_eq!(
+///   res.unwrap_err().to_string(),
+///   "Internal error: Unexpected state. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+/// );
+/// ```
+#[macro_export]
+macro_rules! internal_err {
+    ($desc:expr) => {
+        Err(datafusion_common::DataFusionError::Internal($desc.into()))
+    };
+}
+
+/// Creates an [`Result::Err`] with [`DataFusionError::NotImplemented`]
+///
+/// # Example
+/// ```
+/// # use datafusion_common::{DataFusionError, Result, nyi_err};
+/// let res: Result<()> = nyi_err!("Foo not supported");
+/// assert_eq!(
+///   res.unwrap_err().to_string(),
+///   "This feature is not implemented: Foo not supported"
+/// );
+/// ```
+#[macro_export]
+macro_rules! nyi_err {
+    ($desc:expr) => {
+        Err(datafusion_common::DataFusionError::NotImplemented($desc.into()))
+    };
+}
+
+/// Unwrap an `Option` if possible. Otherwise return an
+/// [`DataFusionError::Internal`].
+///
+/// In normal usage of DataFusion the unwrap should always succeed.
+///
+/// Example: `let values = unwrap_or_internal_err!(values)`
+/// ```
+#[macro_export]
+macro_rules! unwrap_or_internal_err {
+    ($Value: ident) => {
+        $Value.ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "{} should not be None at {}:{}",
+                stringify!($Value),
+                file!(),
+                line!()
+            ))
+        })?
+    };
+}
+
 
 /// Schema-related errors
 #[derive(Debug)]
@@ -507,27 +590,4 @@ mod test {
         assert_eq!(e.to_string(), exp.to_string(),);
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
-}
-
-#[macro_export]
-macro_rules! internal_err {
-    ($($arg:tt)*) => {
-        Err(DataFusionError::Internal(format!($($arg)*)))
-    };
-}
-
-/// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
-/// In normal usage of DataFusion the unwrap should always succeed.
-///
-/// Example: `let values = unwrap_or_internal_err!(values)`
-#[macro_export]
-macro_rules! unwrap_or_internal_err {
-    ($Value: ident) => {
-        $Value.ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "{} should not be None",
-                stringify!($Value)
-            ))
-        })?
-    };
 }
