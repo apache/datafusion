@@ -290,6 +290,31 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
     count
 }
 
+/// formats the Iterator of Display'ble items as a comma separated
+/// list
+///
+/// TODO an example:
+/// ```
+/// let data = vec!["foo", "bar"];
+/// fmt_iterator(DDD);
+/// ```
+pub fn fmt_iterator<'a>(
+    iter: impl IntoIterator<Item = &'a dyn std::fmt::Display>,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    let iter = iter.into_iter();
+    let mut first = true;
+    for expr in iter {
+        if !first {
+            write!(f, ", ")?;
+        } else {
+            first = false;
+        }
+        write!(f, "{expr}")?;
+    }
+    Ok(())
+}
+
 /// An extension trait for smart pointers. Provides an interface to get a
 /// raw pointer to the data (with metadata stripped away).
 ///

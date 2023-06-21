@@ -34,14 +34,14 @@ use crate::utils::expr_list_eq_strict_order;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::fmt_iterator;
 use datafusion_common::Result;
-use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
 use std::any::Any;
-use std::fmt::Debug;
 use std::fmt::{self, Formatter};
+use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -103,7 +103,9 @@ impl ScalarFunctionExpr {
 
 impl fmt::Display for ScalarFunctionExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}({})", self.name, expr_vec_fmt!(self.args))
+        write!(f, "{}(", self.name)?;
+        fmt_iterator(self.args.iter().map(|v| v as &dyn Display), f)?;
+        write!(f, ")")
     }
 }
 

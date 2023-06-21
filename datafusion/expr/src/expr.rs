@@ -27,6 +27,7 @@ use crate::window_frame;
 use crate::window_function;
 use crate::Operator;
 use arrow::datatypes::DataType;
+use datafusion_common::utils::fmt_iterator;
 use datafusion_common::{plan_err, Column, DataFusionError, Result, ScalarValue};
 use std::collections::HashSet;
 use std::fmt;
@@ -900,24 +901,16 @@ impl Expr {
 
 /// Returns a struct that can display the `Vec` of [`Expr`]s as a
 /// comma separated display list, without allocating
-pub(crate) fn expr_vec_fmt<'a>(v: &'a [Expr]) -> CommaListExprFormatter<'a> {
+pub fn expr_vec_fmt<'a>(v: &'a [Expr]) -> CommaListExprFormatter<'a> {
     CommaListExprFormatter(v)
 }
 
-pub(crate) struct CommaListExprFormatter<'a>(&'a [Expr]);
+/// See [`expr_vec_fmt`]
+pub struct CommaListExprFormatter<'a>(&'a [Expr]);
 
 impl<'a> Display for CommaListExprFormatter<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut first = true;
-        for expr in self.0.iter() {
-            if !first {
-                write!(f, ", ")?;
-            } else {
-                first = false;
-            }
-            write!(f, "{expr}")?;
-        }
-        Ok(())
+        fmt_iterator(self.0.iter().map(|e| e as &dyn Display), f)
     }
 }
 
@@ -927,20 +920,12 @@ pub(crate) fn expr_vec_ref_fmt<'a>(v: &'a [&'a Expr]) -> CommaListExprRefFormatt
     CommaListExprRefFormatter(v)
 }
 
+/// See [`expr_vec_ref_fmt`]
 pub(crate) struct CommaListExprRefFormatter<'a>(&'a [&'a Expr]);
 
 impl<'a> Display for CommaListExprRefFormatter<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut first = true;
-        for expr in self.0.iter() {
-            if !first {
-                write!(f, ", ")?;
-            } else {
-                first = false;
-            }
-            write!(f, "{expr}")?;
-        }
-        Ok(())
+        fmt_iterator(self.0.iter().map(|e| e as &dyn Display), f)
     }
 }
 

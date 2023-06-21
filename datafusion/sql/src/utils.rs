@@ -22,12 +22,11 @@ use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateUDF, Between, BinaryExpr, Case, GetIndexedField,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, ScalarUDF,
-    WindowFunction,
+    expr_vec_fmt, AggregateFunction, AggregateUDF, Between, BinaryExpr, Case,
+    GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
+    ScalarUDF, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
-use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
@@ -125,7 +124,7 @@ fn check_column_satisfies_expr(
             "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
-            expr_vec_fmt!(columns)
+            expr_vec_fmt(columns)
         )));
     }
     Ok(())
