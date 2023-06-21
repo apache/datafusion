@@ -1103,18 +1103,29 @@ pub fn equal_rows_arr(
     right_arrays: &[ArrayRef],
     null_equals_null: bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let arr_left = take(left_arrays[0].as_ref(), &indices_left, None)?;
-    let arr_right = take(right_arrays[0].as_ref(), &indices_right, None)?;
+    let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
-    let mut equal = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+    let (first_left, first_right) = iter.next().ok_or_else(|| {
+        DataFusionError::Internal(
+            "At least one array should be provided for both left and right".to_string(),
+        )
+    })?;
 
-    for i in 1..left_arrays.len() {
-        let arr_left = take(left_arrays[i].as_ref(), &indices_left, None)?;
-        let arr_right = take(right_arrays[i].as_ref(), &indices_right, None)?;
-        let equal2 =
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)?;
-        equal = and(&equal, &equal2)?;
-    }
+    let arr_left = take(first_left.as_ref(), &indices_left, None)?;
+    let arr_right = take(first_right.as_ref(), &indices_right, None)?;
+
+    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
+
+    // Use map and try_fold to iterate over the remaining pairs of arrays.
+    // In each iteration, take is used on the pair of arrays and their equality is determined.
+    // The results are then folded (combined) using the and function to get a final equality result.
+    equal = iter
+        .map(|(left, right)| {
+            let arr_left = take(left.as_ref(), &indices_left, None)?;
+            let arr_right = take(right.as_ref(), &indices_right, None)?;
+            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
+        })
+        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
 
     let filter_builder = FilterBuilder::new(&equal).optimize().build();
 
