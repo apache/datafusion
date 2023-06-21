@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Repartition optimizer that replaces `SortExec`s and their suitable `RepartitionExec` children with `SortPreservingRepartitionExec`s.
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::DataPtr;
@@ -26,11 +27,11 @@ use crate::physical_plan::repartition::SortPreservingRepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::ExecutionPlan;
 
-use super::PhysicalOptimizerRule;
 use super::utils::is_repartition;
+use super::PhysicalOptimizerRule;
 
-use std::sync::Arc;
 use crate::physical_optimizer::utils::is_sort;
+use std::sync::Arc;
 
 #[derive(Default)]
 /// ReplaceRepartitionExecs optimizer rule searches for `SortExec`s and their `RepartitionExec`
@@ -60,20 +61,28 @@ pub struct ReplaceRepartitionExecs {}
 
 impl ReplaceRepartitionExecs {
     #[allow(missing_docs)]
-    pub fn new() -> Self { Self {} }
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 
 /// Checks if repartition should be replaced.
 /// Takes parameters as one original `SortExec`, one `RepartitionExec` to compare,
 /// and a changed version of `SortExec`s input to be able to detect if the ordering will be preserved after the change
-fn is_repartition_matches_with_output_ordering(sort_exec: &SortExec, repartition_exec: &RepartitionExec) -> bool {
+fn is_repartition_matches_with_output_ordering(
+    sort_exec: &SortExec,
+    repartition_exec: &RepartitionExec,
+) -> bool {
     // Compare both repartition parent & input orderings with `SortExec`s
-    let orderings_matched = sort_exec.output_ordering() == repartition_exec.input().output_ordering();
-    return orderings_matched && !repartition_exec.maintains_input_order()[0];
+    let orderings_matched =
+        sort_exec.output_ordering() == repartition_exec.input().output_ordering();
+    orderings_matched && !repartition_exec.maintains_input_order()[0]
 }
 
 /// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
-fn sort_preserving_repartition(repartition: &RepartitionExec) -> Arc<SortPreservingRepartitionExec> {
+fn sort_preserving_repartition(
+    repartition: &RepartitionExec,
+) -> Arc<SortPreservingRepartitionExec> {
     Arc::new(
         SortPreservingRepartitionExec::try_new(
             repartition.input().clone(),
@@ -94,11 +103,11 @@ fn do_sort_children_maintain_input_ordering(plan: &Arc<dyn ExecutionPlan>) -> bo
     if plan.children().is_empty() || is_sort(plan) {
         return true;
     }
-    if !is_repartition(&plan) && does_plan_maintains_input_order(plan) {
+    if !is_repartition(plan) && does_plan_maintains_input_order(plan) {
         return false;
     }
 
-    for child in plan.children() {
+    if let Some(child) = plan.children().into_iter().next() {
         if is_sort(&child) {
             return true;
         }
@@ -108,7 +117,7 @@ fn do_sort_children_maintain_input_ordering(plan: &Arc<dyn ExecutionPlan>) -> bo
         return do_sort_children_maintain_input_ordering(&child);
     }
 
-    return true;
+    true
 }
 
 impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
@@ -134,10 +143,14 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
 
             // Transform `SortExec`s children to modify any related `RepartitionExec`s
             let new_sort = plan.clone().transform_up(&|child| {
-                if let Some(repartition) = child.as_any().downcast_ref::<RepartitionExec>() {
-                    if is_repartition_matches_with_output_ordering(sort_exec, repartition) {
+                if let Some(repartition) =
+                    child.as_any().downcast_ref::<RepartitionExec>()
+                {
+                    if is_repartition_matches_with_output_ordering(sort_exec, repartition)
+                    {
                         return Ok(Transformed::Yes(
-                            sort_preserving_repartition(repartition).with_new_children(repartition.children())?,
+                            sort_preserving_repartition(repartition)
+                                .with_new_children(repartition.children())?,
                         ));
                     }
                     return Ok(Transformed::No(child));
@@ -154,7 +167,7 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
                 // Remove the SortExec since we've manipulated at least a child
 
                 // The plan is `SortExec` here, so it's guaranteed that it has only one child
-                Ok(Transformed::Yes((&new_sort.children()[0]).clone()))
+                Ok(Transformed::Yes((new_sort.children()[0]).clone()))
             }
         })
     }
@@ -189,7 +202,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{Result, Statistics};
     use datafusion_execution::object_store::ObjectStoreUrl;
-    use datafusion_expr::{Operator, JoinType};
+    use datafusion_expr::{JoinType, Operator};
     use datafusion_physical_expr::expressions::{self, col, Column};
     use datafusion_physical_expr::PhysicalSortExpr;
 
@@ -240,7 +253,8 @@ mod tests {
         let repartition = repartition_exec_hash(repartition_exec_round_robin(source));
         let sort = sort_exec(vec![sort_expr("a", &schema)], repartition);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -267,7 +281,8 @@ mod tests {
         let repartition = repartition_exec_round_robin(source);
         let sort = sort_exec(vec![sort_expr("a", &schema)], repartition);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -295,7 +310,8 @@ mod tests {
         let repartition_hash = repartition_exec_hash(filter);
         let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -327,7 +343,8 @@ mod tests {
         let coalesce_batches_exec: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
         let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -356,13 +373,14 @@ mod tests {
         let sort_exprs = vec![sort_expr("a", &schema)];
         let source = csv_exec_sorted(&schema, sort_exprs, false);
         let repartition_rr = repartition_exec_round_robin(source);
-        let coalesce_batches_exec_1: Arc<dyn ExecutionPlan> = coalesce_batches_exec(repartition_rr);
+        let coalesce_batches_exec_1 = coalesce_batches_exec(repartition_rr);
         let repartition_hash = repartition_exec_hash(coalesce_batches_exec_1);
         let filter = filter_exec(repartition_hash, &schema);
-        let coalesce_batches_exec_2: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
+        let coalesce_batches_exec_2 = coalesce_batches_exec(filter);
         let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_batches_exec_2);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -397,7 +415,8 @@ mod tests {
         let filter = filter_exec(repartition_hash, &schema);
         let coalesce_batches_exec: Arc<dyn ExecutionPlan> = coalesce_batches_exec(filter);
 
-        let physical_plan: Arc<dyn ExecutionPlan> = coalesce_partitions_exec(coalesce_batches_exec);
+        let physical_plan: Arc<dyn ExecutionPlan> =
+            coalesce_partitions_exec(coalesce_batches_exec);
 
         let expected_input = vec![
             "CoalescePartitionsExec",
@@ -428,10 +447,11 @@ mod tests {
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let filter = filter_exec(repartition_hash, &schema);
         let coalesce_batches = coalesce_batches_exec(filter);
-        let repartition_hash_2: Arc<dyn ExecutionPlan> = repartition_exec_hash(coalesce_batches);
+        let repartition_hash_2 = repartition_exec_hash(coalesce_batches);
         let sort = sort_exec(vec![sort_expr("a", &schema)], repartition_hash_2);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -465,7 +485,8 @@ mod tests {
         let repartition_hash = repartition_exec_hash(repartition_rr);
         let sort = sort_exec(vec![sort_expr_default("c", &schema)], repartition_hash);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr_default("c", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr_default("c", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [c@2 ASC]",
@@ -495,7 +516,8 @@ mod tests {
         let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
         let sort = sort_exec(vec![sort_expr("a", &schema)], coalesce_partitions);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
 
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -531,7 +553,8 @@ mod tests {
         let filter = filter_exec(repartition_hash2, &schema);
         let sort2 = sort_exec(vec![sort_expr_default("c", &schema)], filter);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr_default("c", &schema)], sort2);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr_default("c", &schema)], sort2);
 
         let expected_input = [
             "SortPreservingMergeExec: [c@2 ASC]",
@@ -569,18 +592,22 @@ mod tests {
         let left_source = csv_exec_sorted(&schema, left_sort_exprs, false);
         let left_repartition_rr = repartition_exec_round_robin(left_source);
         let left_repartition_hash = repartition_exec_hash(left_repartition_rr);
-        let left_coalesce_partitions = Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
+        let left_coalesce_partitions =
+            Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
 
         let right_sort_exprs = vec![sort_expr("a", &schema)];
         let right_source = csv_exec_sorted(&schema, right_sort_exprs, false);
         let right_repartition_rr = repartition_exec_round_robin(right_source);
         let right_repartition_hash = repartition_exec_hash(right_repartition_rr);
-        let right_coalesce_partitions = Arc::new(CoalesceBatchesExec::new(right_repartition_hash, 4096));
+        let right_coalesce_partitions =
+            Arc::new(CoalesceBatchesExec::new(right_repartition_hash, 4096));
 
-        let hash_join_exec = hash_join_exec(left_coalesce_partitions, right_coalesce_partitions);
+        let hash_join_exec =
+            hash_join_exec(left_coalesce_partitions, right_coalesce_partitions);
         let sort = sort_exec(vec![sort_expr_default("a", &schema)], hash_join_exec);
 
-        let physical_plan = sort_preserving_merge_exec(vec![sort_expr_default("a", &schema)], sort);
+        let physical_plan =
+            sort_preserving_merge_exec(vec![sort_expr_default("a", &schema)], sort);
 
         let expected_input = [
             "SortPreservingMergeExec: [a@0 ASC]",
@@ -617,8 +644,10 @@ mod tests {
     // Start test helpers
 
     fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
-        let mut sort_opts = SortOptions::default();
-        sort_opts.nulls_first = false;
+        let sort_opts = SortOptions {
+            nulls_first: false,
+            descending: false,
+        };
         sort_expr_options(name, schema, sort_opts)
     }
 
@@ -677,11 +706,12 @@ mod tests {
         schema: &SchemaRef,
     ) -> Arc<dyn ExecutionPlan> {
         let predicate = expressions::binary(
-                col("c", schema).unwrap(),
-                Operator::Gt,
-                expressions::lit(3i32),
-                schema,
-        ).unwrap();
+            col("c", schema).unwrap(),
+            Operator::Gt,
+            expressions::lit(3i32),
+            schema,
+        )
+        .unwrap();
         Arc::new(FilterExec::try_new(predicate, input).unwrap())
     }
 
@@ -693,19 +723,22 @@ mod tests {
         Arc::new(CoalescePartitionsExec::new(input))
     }
 
-    fn hash_join_exec(left: Arc<dyn ExecutionPlan>, right: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        Arc::new(HashJoinExec::try_new(
-            left,
-            right,
-            vec![(
-                Column::new("c", 1),
-                Column::new("c", 1),
-            )],
-            None,
-            &JoinType::Inner,
-            PartitionMode::Partitioned,
-            false,
-        ).unwrap())
+    fn hash_join_exec(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            HashJoinExec::try_new(
+                left,
+                right,
+                vec![(Column::new("c", 1), Column::new("c", 1))],
+                None,
+                &JoinType::Inner,
+                PartitionMode::Partitioned,
+                false,
+            )
+            .unwrap(),
+        )
     }
 
     fn create_test_schema() -> Result<SchemaRef> {

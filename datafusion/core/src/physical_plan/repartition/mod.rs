@@ -1216,6 +1216,7 @@ mod tests {
 }
 
 #[derive(Debug)]
+#[allow(missing_docs)]
 pub struct SortPreservingRepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
