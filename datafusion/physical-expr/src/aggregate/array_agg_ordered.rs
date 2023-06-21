@@ -182,18 +182,21 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         }
         // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
-        // 2nd entry is the history of lexicographical ordered values
-        // that array agg result is inserted. It is similar to ARRAY_AGG result.
-        // However, values inside are ordering expression results
+        // 2nd entry stores values received for ordering requirement columns, for each aggregation value inside ARRAY_AGG list.
+        // For each `ScalarValue` inside ARRAY_AGG list, we will receive a `Vec<ScalarValue>` that stores
+        // values received from its ordering requirement expression. (This information is necessary for during merging).
         let agg_orderings = &states[1];
         if agg_orderings.as_any().is::<ListArray>() {
+            // Stores ARRAY_AGG results coming from each partition
             let mut partition_values = vec![];
+            // Stores ordering requirement expression results coming from each partition
             let mut partition_ordering_values = vec![];
             for index in 0..agg_orderings.len() {
                 let ordering = ScalarValue::try_from_array(agg_orderings, index)?;
+                // Ordering requirement expression values for each entry in the ARRAY_AGG list
                 let other_ordering_values =
                     self.convert_array_agg_to_orderings(ordering)?;
-                // First entry in the state is Array_agg result
+                // ARRAY_AGG result. (It is a `ScalarValue::List` under the hood, it stores `Vec<ScalarValue>`)
                 let array_agg_res = ScalarValue::try_from_array(array_agg_values, index)?;
                 if let ScalarValue::List(Some(other_values), _) = array_agg_res {
                     partition_values.push(other_values);
@@ -310,14 +313,36 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 }
 
+/// This is a wrapper struct to be able to correctly merge ARRAY_AGG
+/// data from multiple partitions using `BinaryHeap`.
+/// When used inside `BinaryHeap` this struct returns smallest `CustomElement`,
+/// where smallest is determined by `ordering` values (`Vec<ScalarValue>`)
+/// according to `sort_options`
 #[derive(Debug, PartialEq, Eq)]
-struct CustomOrdering {
-    sort_options: Vec<SortOptions>,
+struct CustomElement<'a> {
+    // Stores from which partition entry is received
+    branch_idx: usize,
+    // values to be merged
+    value: ScalarValue,
+    // according to `ordering` values, comparisons will be done.
+    ordering: Vec<ScalarValue>,
+    // `sort_options` defines, desired ordering by the user
+    sort_options: &'a [SortOptions],
 }
 
-impl CustomOrdering {
-    fn new(sort_options: Vec<SortOptions>) -> Self {
-        Self { sort_options }
+impl<'a> CustomElement<'a> {
+    fn new(
+        branch_idx: usize,
+        value: ScalarValue,
+        ordering: Vec<ScalarValue>,
+        sort_options: &'a [SortOptions],
+    ) -> Self {
+        Self {
+            branch_idx,
+            value,
+            ordering,
+            sort_options,
+        }
     }
 
     fn ordering(
@@ -326,41 +351,22 @@ impl CustomOrdering {
         target: &[ScalarValue],
     ) -> Result<Ordering> {
         // Calculate ordering according to `sort_options`
-        compare_rows(current, target, &self.sort_options)
+        compare_rows(current, target, self.sort_options)
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct CustomElement<'a> {
-    branch_idx: usize,
-    value: ScalarValue,
-    ordering: Vec<ScalarValue>,
-    custom_ordering: &'a CustomOrdering,
-}
-
-impl<'a> CustomElement<'a> {
-    fn new(
-        branch_idx: usize,
-        value: ScalarValue,
-        ordering: Vec<ScalarValue>,
-        comparator: &'a CustomOrdering,
-    ) -> Self {
-        Self {
-            branch_idx,
-            value,
-            ordering,
-            custom_ordering: comparator,
-        }
-    }
-}
-
+// Overwrite ordering implementation such that
+// - `self.ordering` values are used for comparison,
+// - When used inside `BinaryHeap` it is a min-heap.
 impl<'a> Ord for CustomElement<'a> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Compares according to custom ordering
-        self.custom_ordering
-            .ordering(&self.ordering, &other.ordering)
+        self.ordering(&self.ordering, &other.ordering)
             // Convert max heap to min heap
             .map(|ordering| ordering.reverse())
+            // This function return error, when `self.ordering` and `other.ordering`
+            // have different types (such as one is `ScalarValue::Int64`, other is `ScalarValue::Float32`)
+            // Here this case won't happen, because data from each partition will have same type
             .unwrap()
     }
 }
@@ -371,23 +377,30 @@ impl<'a> PartialOrd for CustomElement<'a> {
     }
 }
 
-// As an example
-// values can be [
-//      [1,2,3,4,5],
-//      [1,2,3,4],
-//      [1,2,3,4,5,6],
-// ]
-// In this case we will be merging three arrays (doesn't have to be same size)
-// and produce a merged array with size 15 (sum of 5+4+6)
-// Merging will be done according to ordering at `ordering_values` vector.
-// As an example `ordering_values` can be [
-//      [(1, a),(2, b),(3, b),(4, a),(5,b)],
-//      [(1, a),(2, b),(3, b),(4, a),],
-//      [(1, b),(2, c),(3, d),(4, e),(5, a),(6, b)],
-// ]
-// For each ScalarValue in the `values` we have a corresponding `Vec<ScalarValue>` (like timestamp of it)
-// for the example above `sort_options` will have size two, that defines ordering requirement of the merge
-// Inner `Vec<ScalarValue>`s of the `ordering_values` will be compared according `sort_options` (Their sizes should match)
+/// This functions merges `values` array (`&[Vec<ScalarValue>]`) into single array `Vec<ScalarValue>`
+/// Merging done according to ordering values stored inside `ordering_values` (`&[Vec<Vec<ScalarValue>>]`)
+/// Inner `Vec<ScalarValue>` in the `ordering_values` can be thought as ordering information for the
+/// each `ScalarValue` in the `values` array.
+/// Desired ordering specified by `sort_options` argument (Should have same size with inner `Vec<ScalarValue>`
+/// of the `ordering_values` array).
+///
+/// As an example
+/// values can be \[
+///      \[1, 2, 3, 4, 5\],
+///      \[1, 2, 3, 4\],
+///      \[1, 2, 3, 4, 5, 6\],
+/// \]
+/// In this case we will be merging three arrays (doesn't have to be same size)
+/// and produce a merged array with size 15 (sum of 5+4+6)
+/// Merging will be done according to ordering at `ordering_values` vector.
+/// As an example `ordering_values` can be [
+///      \[(1, a), (2, b), (3, b), (4, a), (5, b) \],
+///      \[(1, a), (2, b), (3, b), (4, a) \],
+///      \[(1, b), (2, c), (3, d), (4, e), (5, a), (6, b) \],
+/// ]
+/// For each ScalarValue in the `values` we have a corresponding `Vec<ScalarValue>` (like timestamp of it)
+/// for the example above `sort_options` will have size two, that defines ordering requirement of the merge.
+/// Inner `Vec<ScalarValue>`s of the `ordering_values` will be compared according `sort_options` (Their sizes should match)
 fn merge_ordered_arrays(
     // We will merge values into single `Vec<ScalarValue>`.
     values: &[Vec<ScalarValue>],
@@ -420,8 +433,6 @@ fn merge_ordered_arrays(
         .map(|idx| values[idx].len())
         .collect::<Vec<_>>();
     let mut merged_values = vec![];
-    // Create custom ordering according to `sort_options` to decide insertion order of right and left arrays
-    let custom_ordering = CustomOrdering::new(sort_options.to_vec());
     // Continue iterating the loop until consuming data of all branches.
     loop {
         let min_elem = if let Some(min_elem) = heap.pop() {
@@ -444,7 +455,7 @@ fn merge_ordered_arrays(
                     branch_index,
                     values[branch_index][*idx].clone(),
                     ordering[*idx].to_vec(),
-                    &custom_ordering,
+                    sort_options,
                 );
                 heap.push(elem);
             }
@@ -468,8 +479,7 @@ fn merge_ordered_arrays(
             // If there is an available entry
             let value = values[branch_idx][row_idx].clone();
             let ordering_row = ordering_values[branch_idx][row_idx].to_vec();
-            let elem =
-                CustomElement::new(branch_idx, value, ordering_row, &custom_ordering);
+            let elem = CustomElement::new(branch_idx, value, ordering_row, sort_options);
             heap.push(elem);
         }
     }
