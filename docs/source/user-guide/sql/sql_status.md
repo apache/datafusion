@@ -64,6 +64,16 @@
   - [x] Partitioning and ordering: (`OVER(PARTITION BY <..> ORDER BY <..>)`)
   - [x] Custom Window (`ORDER BY time ROWS BETWEEN 2 PRECEDING AND 0 FOLLOWING)`)
   - [x] User Defined Window and Aggregate Functions
+- [x] Catalogs
+  - [x] Schemas (`CREATE / DROP SCHEMA`)
+  - [x] Tables (`CREATE / DROP TABLE`, `CREATE TABLE AS SELECT`)
+- [ ] Data Insert
+  - [x] `INSERT INTO`
+  - [ ] `COPY .. INTO ..`
+  - [x] CSV
+  - [ ] JSON
+  - [ ] Parquet
+  - [ ] Avro
 
 ## Runtime
 
