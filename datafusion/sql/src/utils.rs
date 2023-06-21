@@ -122,7 +122,7 @@ fn check_column_satisfies_expr(
 ) -> Result<()> {
     if !columns.contains(expr) {
         return Err(DataFusionError::Plan(format!(
-            "{}: Expression {:?} could not be resolved from available columns: {}",
+            "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
             expr_vec_fmt!(columns)
