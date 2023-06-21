@@ -108,15 +108,16 @@ pub(crate) fn ordering_fields(
     ordering_req: &[PhysicalSortExpr],
     data_types: &[DataType],
 ) -> Vec<Field> {
-    let mut fields = vec![];
-    for (expr, dtype) in ordering_req.iter().zip(data_types.iter()) {
-        let field = Field::new(
-            expr.to_string().as_str(),
-            dtype.clone(),
-            // Multi partitions may be empty hence field should be nullable.
-            true,
-        );
-        fields.push(field);
-    }
-    fields
+    ordering_req
+        .iter()
+        .zip(data_types.iter())
+        .map(|(expr, dtype)| {
+            Field::new(
+                expr.to_string().as_str(),
+                dtype.clone(),
+                // Multi partitions may be empty hence field should be nullable.
+                true,
+            )
+        })
+        .collect()
 }

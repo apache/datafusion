@@ -25,8 +25,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow_array::{Array, ListArray};
 use arrow_schema::{Fields, SortOptions};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use itertools::izip;
 use std::any::Any;
@@ -35,30 +34,30 @@ use std::collections::BinaryHeap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-/// ARRAY_AGG aggregate expression, where ordering requirement is given
+/// Expression for a ARRAY_AGG(ORDER BY) aggregation.
 #[derive(Debug)]
 pub struct OrderSensitiveArrayAgg {
     name: String,
     input_data_type: DataType,
-    ob_data_types: Vec<DataType>,
+    order_by_data_types: Vec<DataType>,
     expr: Arc<dyn PhysicalExpr>,
     ordering_req: LexOrdering,
 }
 
 impl OrderSensitiveArrayAgg {
-    /// Create a new ArrayAgg aggregate function
+    /// Create a new `OrderSensitiveArrayAgg` aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         input_data_type: DataType,
-        ob_data_types: Vec<DataType>,
+        order_by_data_types: Vec<DataType>,
         ordering_req: LexOrdering,
     ) -> Self {
         Self {
             name: name.into(),
             expr,
             input_data_type,
-            ob_data_types,
+            order_by_data_types,
             ordering_req,
         }
     }
@@ -80,7 +79,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(OrderSensitiveArrayAggAccumulator::try_new(
             &self.input_data_type,
-            &self.ob_data_types,
+            &self.order_by_data_types,
             self.ordering_req.clone(),
         )?))
     }
@@ -91,7 +90,7 @@ impl AggregateExpr for OrderSensitiveArrayAgg {
             Field::new("item", self.input_data_type.clone(), true),
             false,
         )];
-        let orderings = ordering_fields(&self.ordering_req, &self.ob_data_types);
+        let orderings = ordering_fields(&self.ordering_req, &self.order_by_data_types);
         fields.push(Field::new_list(
             format_state_name(&self.name, "array_agg_orderings"),
             Field::new(
@@ -129,7 +128,7 @@ impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {
             .map(|x| {
                 self.name == x.name
                     && self.input_data_type == x.input_data_type
-                    && self.ob_data_types == x.ob_data_types
+                    && self.order_by_data_types == x.order_by_data_types
                     && self.expr.eq(&x.expr)
             })
             .unwrap_or(false)
@@ -145,7 +144,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
 }
 
 impl OrderSensitiveArrayAggAccumulator {
-    /// new array_agg accumulator based on given item data type
+    /// Create a new order-sensitive ARRAY_AGG accumulator based on the given
+    /// item data type.
     pub fn try_new(
         datatype: &DataType,
         ordering_dtypes: &[DataType],
@@ -180,7 +180,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        // First entry in the state is Array_agg result
+        // First entry in the state is the aggregation result.
         let array_agg_values = &states[0];
         // 2nd entry is the history of lexicographical ordered values
         // that array agg result is inserted. It is similar to ARRAY_AGG result.
@@ -200,7 +200,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                     partition_ordering_values.push(other_ordering_values);
                 } else {
                     return Err(DataFusionError::Internal(
-                        "array_agg state must be list!".into(),
+                        "ARRAY_AGG state must be list!".into(),
                     ));
                 }
             }
@@ -209,35 +209,34 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                 .iter()
                 .map(|sort_expr| sort_expr.options)
                 .collect::<Vec<_>>();
-            let merged_values = merge_ordered_arrays(
+            self.values = merge_ordered_arrays(
                 &partition_values,
                 &partition_ordering_values,
                 &sort_options,
             )?;
-            self.values = merged_values;
         } else {
             return Err(DataFusionError::Execution(
-                "Expects to receive list array".to_string(),
+                "Expects to receive a list array".to_string(),
             ));
         }
         Ok(())
     }
 
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut res = vec![self.evaluate()?];
-        res.push(self.evaluate_orderings()?);
+        let mut result = vec![self.evaluate()?];
+        result.push(self.evaluate_orderings()?);
         let last_ordering = if let Some(ordering) = self.ordering_values.last() {
             ordering.clone()
         } else {
-            // In case of ordering is empty, construct ordering as NULL
+            // In case ordering is empty, construct ordering as NULL:
             self.datatypes
                 .iter()
                 .skip(1)
                 .map(ScalarValue::try_from)
                 .collect::<Result<Vec<_>>>()?
         };
-        res.extend(last_ordering);
-        Ok(res)
+        result.extend(last_ordering);
+        Ok(result)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -256,13 +255,13 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         total +=
             std::mem::size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
-            total = total + ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
+            total += ScalarValue::size_of_vec(row) - std::mem::size_of_val(row);
         }
 
         // Add size of the `self.datatypes`
         total += std::mem::size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
-            total = total + dtype.size() - std::mem::size_of_val(dtype);
+            total += dtype.size() - std::mem::size_of_val(dtype);
         }
 
         // Add size of the `self.ordering_req`
@@ -297,13 +296,15 @@ impl OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let mut orderings = vec![];
         let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
         let struct_field = Fields::from(fields.clone());
-        for ordering in &self.ordering_values {
-            let res = ScalarValue::Struct(Some(ordering.clone()), struct_field.clone());
-            orderings.push(res);
-        }
+        let orderings = self
+            .ordering_values
+            .iter()
+            .map(|ordering| {
+                ScalarValue::Struct(Some(ordering.clone()), struct_field.clone())
+            })
+            .collect();
         let struct_type = DataType::Struct(Fields::from(fields));
         Ok(ScalarValue::new_list(Some(orderings), struct_type))
     }

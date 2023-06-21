@@ -480,19 +480,18 @@ fn calc_required_input_ordering(
                 if requirement.iter().all(|item| req.expr.ne(&item.expr)) {
                     requirement.push(req.clone());
                 }
-                // In partial mode, append output ordering with required ordering of the aggregator
-                // In multi partitions, this enables us to reduce partitions correctly.
-                if ordering.iter().all(|item| req.expr.ne(&item.expr))
-                    && matches!(mode, AggregateMode::Partial)
+                // In partial mode, append required ordering of the aggregator to the output ordering.
+                // In case of multiple partitions, this enables us to reduce partitions correctly.
+                if matches!(mode, AggregateMode::Partial)
+                    && ordering.iter().all(|item| req.expr.ne(&item.expr))
                 {
                     ordering.push(req.into());
                 }
             }
             required_input_ordering = requirement;
         } else {
-            // In partial mode, append output ordering with required ordering of the aggregator
-            // (In this case there is no output ordering, hence output ordering is required ordering of the aggregator)
-            // In multi partitions, this enables us to reduce partitions correctly.
+            // If there was no pre-existing output ordering, the output ordering is simply the required
+            // ordering of the aggregator in partial mode.
             if matches!(mode, AggregateMode::Partial)
                 && !aggregator_requirement.is_empty()
             {
@@ -506,14 +505,17 @@ fn calc_required_input_ordering(
             }
             required_input_ordering = aggregator_requirement;
         }
-        // keep track of from which direction required_input_ordering is constructed
+        // Keep track of the direction from which required_input_ordering is constructed:
         reverse_req = is_reverse;
-        // If all of the order-sensitive aggregate functions are reversible (such as all of the order-sensitive aggregators are
-        // either FIRST_VALUE or LAST_VALUE). We can run aggregate expressions both in the direction of naive required ordering
-        // (e.g finest requirement that satisfy each aggregate function requirement) and in its reversed (opposite) direction.
-        // We analyze these two possibilities, and use the version that satisfies existing ordering (This saves us adding
-        // unnecessary SortExec to the final plan). If none of the versions satisfy existing ordering, we use naive required ordering.
-        // In short, if running aggregators in reverse order, helps us to remove a `SortExec`, we do so. Otherwise, we use aggregators as is.
+        // If all the order-sensitive aggregate functions are reversible (e.g. all the
+        // order-sensitive aggregators are either FIRST_VALUE or LAST_VALUE), then we can
+        // run aggregate expressions either in the given required ordering, (i.e. finest
+        // requirement that satisfies every aggregate function requirement) or its reverse
+        // (opposite) direction. We analyze these two possibilities, and use the version that
+        // satisfies existing ordering. This enables us to avoid an extra sort step in the final
+        // plan. If neither version satisfies the existing ordering, we use the given ordering
+        // requirement. In short, if running aggregators in reverse order help us to avoid a
+        // sorting step, we do so. Otherwise, we use the aggregators as is.
         let existing_ordering = input.output_ordering().unwrap_or(&[]);
         if ordering_satisfy_requirement_concrete(
             existing_ordering,
@@ -524,8 +526,9 @@ fn calc_required_input_ordering(
             break;
         }
     }
-    // If `required_input_ordering` is constructed using reverse requirement, we should reverse
-    // each `aggr_expr` to be able to correctly calculate their result in reverse order.
+    // If `required_input_ordering` is constructed using the reverse requirement, we
+    // should reverse each `aggr_expr` in order to correctly calculate their results
+    // in reverse order.
     if reverse_req {
         aggr_exprs
             .iter_mut()
@@ -536,7 +539,7 @@ fn calc_required_input_ordering(
                         *aggr_expr = reverse;
                         *ob_expr = ob_expr.as_ref().map(|obs| reverse_order_bys(obs));
                     } else {
-                        return Err(DataFusionError::Execution(
+                        return Err(DataFusionError::Plan(
                             "Aggregate expression should have a reverse expression"
                                 .to_string(),
                         ));
@@ -608,10 +611,9 @@ impl AggregateExec {
             .iter()
             .all(|expr| !is_order_sensitive(expr) || expr.reverse_expr().is_some())
         {
-            let reverse_agg_requirement = requirement.map(|reqs| {
+            aggregator_reverse_reqs = requirement.map(|reqs| {
                 PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(&reqs).iter())
             });
-            aggregator_reverse_reqs = reverse_agg_requirement;
         }
 
         // construct a map from the input columns to the output columns of the Aggregation
@@ -1016,7 +1018,7 @@ fn aggregate_expressions(
                 } else {
                     None
                 };
-                let mut res = agg
+                let mut result = agg
                     .expressions()
                     .into_iter()
                     .map(|expr| {
@@ -1025,19 +1027,19 @@ fn aggregate_expressions(
                         })
                     })
                     .collect::<Vec<_>>();
-                // In partial mode, append ordering_requirements to the expressions results
-                // Ordering_requirement columns are used by subsequent executors to satisfy required ordering
-                // for the `AggregateMode::FinalPartitioned`, `AggregateMode::Final` modes.
+                // In partial mode, append ordering requirements to expressions' results.
+                // Ordering requirements are used by subsequent executors to satisfy the required
+                // ordering for `AggregateMode::FinalPartitioned`/`AggregateMode::Final` modes.
                 if matches!(mode, AggregateMode::Partial) {
                     if let Some(ordering_req) = agg.order_bys() {
                         let ordering_exprs = ordering_req
                             .iter()
                             .map(|item| item.expr.clone())
                             .collect::<Vec<_>>();
-                        res.extend(ordering_exprs);
+                        result.extend(ordering_exprs);
                     }
                 }
-                res
+                result
             })
             .collect()),
         // in this mode, we build the merge expressions of the aggregation

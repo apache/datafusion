@@ -121,17 +121,15 @@ pub fn create_aggregate_expr(
             ))
         }
         (AggregateFunction::ArrayAgg, false) => {
+            let expr = input_phy_exprs[0].clone();
+            let data_type = input_phy_types[0].clone();
             if ordering_req.is_empty() {
-                Arc::new(expressions::ArrayAgg::new(
-                    input_phy_exprs[0].clone(),
-                    name,
-                    input_phy_types[0].clone(),
-                ))
+                Arc::new(expressions::ArrayAgg::new(expr, name, data_type))
             } else {
                 Arc::new(expressions::OrderSensitiveArrayAgg::new(
-                    input_phy_exprs[0].clone(),
+                    expr,
                     name,
-                    input_phy_types[0].clone(),
+                    data_type,
                     ordering_types,
                     ordering_req.to_vec(),
                 ))
