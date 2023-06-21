@@ -1111,8 +1111,8 @@ pub fn equal_rows_arr(
         )
     })?;
 
-    let arr_left = take(first_left.as_ref(), &indices_left, None)?;
-    let arr_right = take(first_right.as_ref(), &indices_right, None)?;
+    let arr_left = take(first_left.as_ref(), indices_left, None)?;
+    let arr_right = take(first_right.as_ref(), indices_right, None)?;
 
     let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equals_null)?;
 
@@ -1121,16 +1121,16 @@ pub fn equal_rows_arr(
     // The results are then folded (combined) using the and function to get a final equality result.
     equal = iter
         .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), &indices_left, None)?;
-            let arr_right = take(right.as_ref(), &indices_right, None)?;
+            let arr_left = take(left.as_ref(), indices_left, None)?;
+            let arr_right = take(right.as_ref(), indices_right, None)?;
             eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equals_null)
         })
         .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
 
     let filter_builder = FilterBuilder::new(&equal).optimize().build();
 
-    let left_filtered = filter_builder.filter(&indices_left)?;
-    let right_filtered = filter_builder.filter(&indices_right)?;
+    let left_filtered = filter_builder.filter(indices_left)?;
+    let right_filtered = filter_builder.filter(indices_right)?;
 
     Ok((
         downcast_array(left_filtered.as_ref()),
