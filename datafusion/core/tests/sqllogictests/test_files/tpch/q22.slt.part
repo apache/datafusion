@@ -82,7 +82,7 @@ SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
 ----------RepartitionExec: partitioning=Hash([cntrycode@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[cntrycode@0 as cntrycode], aggr=[COUNT(UInt8(1)), SUM(custsale.c_acctbal)]
 --------------ProjectionExec: expr=[substr(c_phone@0, 1, 2) as cntrycode, c_acctbal@1 as c_acctbal]
-----------------NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: CastExpr { expr: Column { name: "c_acctbal", index: 0 }, cast_type: Decimal128(19, 6), cast_options: CastOptions { safe: false, format_options: FormatOptions { safe: true, null: "", date_format: None, datetime_format: None, timestamp_format: None, timestamp_tz_format: None, time_format: None } } }, op: Gt, right: Column { name: "AVG(customer.c_acctbal)", index: 1 } }
+----------------NestedLoopJoinExec: join_type=Inner, filter=CAST(c_acctbal@0 AS Decimal128(19, 6)) > AVG(customer.c_acctbal)@1
 ------------------ProjectionExec: expr=[c_phone@1 as c_phone, c_acctbal@2 as c_acctbal]
 --------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(c_custkey@0, o_custkey@0)]

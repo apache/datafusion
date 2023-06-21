@@ -78,7 +78,7 @@ GlobalLimitExec: skip=0, fetch=10
 --SortPreservingMergeExec: [value@1 DESC]
 ----SortExec: fetch=10, expr=[value@1 DESC]
 ------ProjectionExec: expr=[ps_partkey@0 as ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@1 as value]
---------NestedLoopJoinExec: join_type=Inner, filter=BinaryExpr { left: CastExpr { expr: Column { name: "SUM(partsupp.ps_supplycost * partsupp.ps_availqty)", index: 0 }, cast_type: Decimal128(38, 15), cast_options: CastOptions { safe: false, format_options: FormatOptions { safe: true, null: "", date_format: None, datetime_format: None, timestamp_format: None, timestamp_tz_format: None, time_format: None } } }, op: Gt, right: Column { name: "SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)", index: 1 } }
+--------NestedLoopJoinExec: join_type=Inner, filter=CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty)@0 AS Decimal128(38, 15)) > SUM(partsupp.ps_supplycost * partsupp.ps_availqty) * Float64(0.0001)@1
 ----------AggregateExec: mode=FinalPartitioned, gby=[ps_partkey@0 as ps_partkey], aggr=[SUM(partsupp.ps_supplycost * partsupp.ps_availqty)]
 ------------CoalesceBatchesExec: target_batch_size=8192
 --------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
