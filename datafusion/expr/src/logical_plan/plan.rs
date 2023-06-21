@@ -17,9 +17,8 @@
 
 //! Logical plan types
 
-use crate::expr::{Exists, InSubquery, Placeholder};
+use crate::expr::{expr_vec_fmt, expr_vec_ref_fmt, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
-use crate::expr_vec_fmt;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -1003,7 +1002,7 @@ impl LogicalPlan {
                                 source.supports_filters_pushdown(&filters)
                             {
                                 filters.iter().zip(results.iter()).for_each(
-                                    |(x, res)| match res {
+                                    |(&x, res)| match res {
                                         TableProviderFilterPushDown::Exact => {
                                             full_filter.push(x)
                                         }
@@ -1021,21 +1020,21 @@ impl LogicalPlan {
                                 write!(
                                     f,
                                     ", full_filters=[{}]",
-                                    expr_vec_fmt!(full_filter)
+                                    expr_vec_ref_fmt(&full_filter)
                                 )?;
                             };
                             if !partial_filter.is_empty() {
                                 write!(
                                     f,
                                     ", partial_filters=[{}]",
-                                    expr_vec_fmt!(partial_filter)
+                                    expr_vec_ref_fmt(&partial_filter)
                                 )?;
                             }
                             if !unsupported_filters.is_empty() {
                                 write!(
                                     f,
                                     ", unsupported_filters=[{}]",
-                                    expr_vec_fmt!(unsupported_filters)
+                                    expr_vec_ref_fmt(&unsupported_filters)
                                 )?;
                             }
                         }
@@ -1072,7 +1071,7 @@ impl LogicalPlan {
                         write!(
                             f,
                             "WindowAggr: windowExpr=[[{}]]",
-                            expr_vec_fmt!(window_expr)
+                            expr_vec_fmt(window_expr)
                         )
                     }
                     LogicalPlan::Aggregate(Aggregate {
@@ -1082,8 +1081,8 @@ impl LogicalPlan {
                     }) => write!(
                         f,
                         "Aggregate: groupBy=[[{}]], aggr=[[{}]]",
-                        expr_vec_fmt!(group_expr),
-                        expr_vec_fmt!(aggr_expr)
+                        expr_vec_fmt(group_expr),
+                        expr_vec_fmt(aggr_expr)
                     ),
                     LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;

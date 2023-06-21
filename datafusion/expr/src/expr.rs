@@ -898,15 +898,50 @@ impl Expr {
     }
 }
 
-#[macro_export]
-macro_rules! expr_vec_fmt {
-    ( $ARRAY:expr ) => {{
-        $ARRAY
-            .iter()
-            .map(|e| format!("{e}"))
-            .collect::<Vec<String>>()
-            .join(", ")
-    }};
+/// Returns a struct that can display the `Vec` of [`Expr`]s as a
+/// comma separated display list, without allocating
+pub(crate) fn expr_vec_fmt<'a>(v: &'a [Expr]) -> CommaListExprFormatter<'a> {
+    CommaListExprFormatter(v)
+}
+
+pub(crate) struct CommaListExprFormatter<'a>(&'a [Expr]);
+
+impl<'a> Display for CommaListExprFormatter<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for expr in self.0.iter() {
+            if !first {
+                write!(f, ", ")?;
+            } else {
+                first = false;
+            }
+            write!(f, "{expr}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Returns a struct that can display the `Vec` of [`&Expr`]s as a
+/// comma separated display list, without allocating
+pub(crate) fn expr_vec_ref_fmt<'a>(v: &'a [&'a Expr]) -> CommaListExprRefFormatter<'a> {
+    CommaListExprRefFormatter(v)
+}
+
+pub(crate) struct CommaListExprRefFormatter<'a>(&'a [&'a Expr]);
+
+impl<'a> Display for CommaListExprRefFormatter<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for expr in self.0.iter() {
+            if !first {
+                write!(f, ", ")?;
+            } else {
+                first = false;
+            }
+            write!(f, "{expr}")?;
+        }
+        Ok(())
+    }
 }
 
 /// Format expressions for display as part of a logical plan. In many cases, this will produce
@@ -999,10 +1034,10 @@ impl fmt::Display for Expr {
             }) => {
                 fmt_function(f, &fun.to_string(), false, args, true)?;
                 if !partition_by.is_empty() {
-                    write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                    write!(f, " PARTITION BY [{}]", expr_vec_fmt(partition_by))?;
                 }
                 if !order_by.is_empty() {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                    write!(f, " ORDER BY [{}]", expr_vec_fmt(order_by))?;
                 }
                 write!(
                     f,
@@ -1024,7 +1059,7 @@ impl fmt::Display for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
+                    write!(f, " ORDER BY [{}]", expr_vec_fmt(ob))?;
                 }
                 Ok(())
             }
@@ -1040,7 +1075,7 @@ impl fmt::Display for Expr {
                     write!(f, " FILTER (WHERE {fe})")?;
                 }
                 if let Some(ob) = order_by {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
+                    write!(f, " ORDER BY [{}]", expr_vec_fmt(ob))?;
                 }
                 Ok(())
             }
@@ -1110,9 +1145,9 @@ impl fmt::Display for Expr {
                 negated,
             }) => {
                 if *negated {
-                    write!(f, "{expr} NOT IN ([{}])", expr_vec_fmt!(list))
+                    write!(f, "{expr} NOT IN ([{}])", expr_vec_fmt(list))
                 } else {
-                    write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
+                    write!(f, "{expr} IN ([{}])", expr_vec_fmt(list))
                 }
             }
             Expr::Wildcard => write!(f, "*"),
@@ -1123,11 +1158,11 @@ impl fmt::Display for Expr {
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
-                    write!(f, "ROLLUP ({})", expr_vec_fmt!(exprs))
+                    write!(f, "ROLLUP ({})", expr_vec_fmt(exprs))
                 }
                 GroupingSet::Cube(exprs) => {
                     // CUBE (c0, c1, c2)
-                    write!(f, "CUBE ({})", expr_vec_fmt!(exprs))
+                    write!(f, "CUBE ({})", expr_vec_fmt(exprs))
                 }
                 GroupingSet::GroupingSets(lists_of_exprs) => {
                     // GROUPING SETS ((c0), (c1, c2), (c3, c4))
@@ -1136,7 +1171,7 @@ impl fmt::Display for Expr {
                         "GROUPING SETS ({})",
                         lists_of_exprs
                             .iter()
-                            .map(|exprs| format!("({})", expr_vec_fmt!(exprs)))
+                            .map(|exprs| format!("({})", expr_vec_fmt(exprs)))
                             .collect::<Vec<String>>()
                             .join(", ")
                     )
@@ -1344,10 +1379,10 @@ fn create_name(e: &Expr) -> Result<String> {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
             if !partition_by.is_empty() {
-                parts.push(format!("PARTITION BY [{}]", expr_vec_fmt!(partition_by)));
+                parts.push(format!("PARTITION BY [{}]", expr_vec_fmt(partition_by)));
             }
             if !order_by.is_empty() {
-                parts.push(format!("ORDER BY [{}]", expr_vec_fmt!(order_by)));
+                parts.push(format!("ORDER BY [{}]", expr_vec_fmt(order_by)));
             }
             parts.push(format!("{window_frame}"));
             Ok(parts.join(" "))
@@ -1364,7 +1399,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 name = format!("{name} FILTER (WHERE {fe})");
             };
             if let Some(order_by) = order_by {
-                name = format!("{name} ORDER BY [{}]", expr_vec_fmt!(order_by));
+                name = format!("{name} ORDER BY [{}]", expr_vec_fmt(order_by));
             };
             Ok(name)
         }
@@ -1383,7 +1418,7 @@ fn create_name(e: &Expr) -> Result<String> {
                 info += &format!(" FILTER (WHERE {fe})");
             }
             if let Some(ob) = order_by {
-                info += &format!(" ORDER BY ([{}])", expr_vec_fmt!(ob));
+                info += &format!(" ORDER BY ([{}])", expr_vec_fmt(ob));
             }
             Ok(format!("{}({}){}", fun.name, names.join(","), info))
         }
