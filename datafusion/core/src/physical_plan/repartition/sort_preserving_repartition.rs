@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use crate::physical_plan::repartition::distributor_channels::{
-    channels_partition_aware, DistributionReceiver, DistributionSender,
+    partition_aware_channels, DistributionReceiver, DistributionSender,
 };
 use crate::physical_plan::{
     DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
@@ -40,7 +40,7 @@ use super::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use super::SendableRecordBatchStream;
 
 use crate::physical_plan::common::{
-    AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation,
+    transpose, AbortOnDropMany, AbortOnDropSingle, SharedMemoryReservation,
 };
 use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::repartition::{
@@ -173,7 +173,10 @@ impl ExecutionPlan for SortPreservingRepartitionExec {
             // note we use a custom channel that ensures there is always data for each receiver
             // but limits the amount of buffering if required.
             let (txs, rxs) =
-                channels_partition_aware(num_output_partitions, num_input_partitions);
+                partition_aware_channels(num_input_partitions, num_output_partitions);
+            // Take transpose of senders and receivers. `state.channels` keeps track of entries per output partition
+            let txs = transpose(txs);
+            let rxs = transpose(rxs);
             for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
                 let reservation = Arc::new(Mutex::new(
                     MemoryConsumer::new(format!(

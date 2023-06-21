@@ -24,9 +24,8 @@ mod sp_repartition_fuzz_tests {
     use datafusion::physical_plan::repartition::sort_preserving_repartition::SortPreservingRepartitionExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-    use datafusion::physical_plan::{collect, displayable, ExecutionPlan, Partitioning};
+    use datafusion::physical_plan::{collect, ExecutionPlan, Partitioning};
     use datafusion::prelude::SessionContext;
-    use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -74,6 +73,11 @@ mod sp_repartition_fuzz_tests {
     ///     "  SPRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
     ///     "    SPRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
     ///     "      MemoryExec: partitions=1, partition_sizes=[75]",
+    /// and / or
+    ///     "SortPreservingMergeExec: [a@0 ASC,b@1 ASC,c@2 ASC]",
+    ///     "  SPRepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=2", (Partitioning can be roundrobin also)
+    ///     "    RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 2), input_partitions=1", (Partitioning can be roundrobin also)
+    ///     "      MemoryExec: partitions=1, partition_sizes=[75]",
     /// preserves ordering. Input fed to the plan above should be same with the output of the plan
     async fn run_sort_preserving_repartition_test(
         input1: Vec<RecordBatch>,
@@ -118,21 +122,11 @@ mod sp_repartition_fuzz_tests {
 
         let final_plan = sort_preserving_merge_exec(sort_keys.clone(), intermediate);
 
-        println!("--------------PLAN--------------");
-        print_plan(&final_plan).unwrap();
-
         let task_ctx = ctx.task_ctx();
 
         let collected_running = collect(final_plan, task_ctx.clone()).await.unwrap();
         let concat_res = concat_batches(&schema, &collected_running).unwrap();
         assert_eq!(concat_res, concat_input_record);
-    }
-
-    fn print_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
-        let formatted = displayable(plan.as_ref()).indent().to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-        println!("{:#?}", actual);
-        Ok(())
     }
 
     fn sort_preserving_repartition_exec_round_robin(

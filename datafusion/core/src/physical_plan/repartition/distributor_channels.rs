@@ -48,12 +48,10 @@ use std::{
 use parking_lot::Mutex;
 
 /// Create `n` empty channels.
-/// Channel ids start from `id_offset`
-fn channels_helper<T>(
+pub fn channels<T>(
     n: usize,
-    id_offset: usize,
 ) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
-    let channels = (id_offset..id_offset + n)
+    let channels = (0..n)
         .map(|id| {
             Arc::new(Mutex::new(Channel {
                 data: VecDeque::default(),
@@ -85,40 +83,16 @@ fn channels_helper<T>(
     (senders, receivers)
 }
 
-/// Create `n` empty channels.
-pub fn channels<T>(
-    n: usize,
-) -> (Vec<DistributionSender<T>>, Vec<DistributionReceiver<T>>) {
-    channels_helper(n, 0)
-}
-
 type PartitionAwareSenders<T> = Vec<Vec<DistributionSender<T>>>;
 type PartitionAwareReceivers<T> = Vec<Vec<DistributionReceiver<T>>>;
 /// Create `n_out` empty channels per `n_in` inputs.
 /// By this way, each distinct partition will communicate with dedicated channel (single producer - single consumer)
 /// (Enables us to keep track of from which partition input comes from)
-pub fn channels_partition_aware<T>(
-    n_out: usize,
+pub fn partition_aware_channels<T>(
     n_in: usize,
+    n_out: usize,
 ) -> (PartitionAwareSenders<T>, PartitionAwareReceivers<T>) {
-    let mut senders = vec![];
-    let mut receivers = vec![];
-    for _i in 0..n_out {
-        senders.push(vec![]);
-        receivers.push(vec![]);
-    }
-    for in_idx in 0..n_in {
-        let (senders_inner, receivers_inner) = channels_helper(n_out, n_out * in_idx);
-        for (idx, (sender, receiver)) in senders_inner
-            .into_iter()
-            .zip(receivers_inner.into_iter())
-            .enumerate()
-        {
-            senders[idx].push(sender);
-            receivers[idx].push(receiver);
-        }
-    }
-    (senders, receivers)
+    (0..n_in).map(|_| channels(n_out)).unzip()
 }
 
 /// Erroring during [send](DistributionSender::send).
