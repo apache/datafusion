@@ -1369,8 +1369,8 @@ impl OneSideHashJoiner {
                 schema,
                 &self.input_buffer,
                 probe_batch,
-                build_indices,
-                probe_indices,
+                &build_indices,
+                &probe_indices,
                 column_indices,
                 self.build_side,
             )
@@ -1421,8 +1421,8 @@ impl OneSideHashJoiner {
                 output_schema.as_ref(),
                 &self.input_buffer,
                 &empty_probe_batch,
-                build_indices,
-                probe_indices,
+                &build_indices,
+                &probe_indices,
                 column_indices,
                 self.build_side,
             )

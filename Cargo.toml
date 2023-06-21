@@ -45,7 +45,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.64"
 
 [workspace.dependencies]
-arrow = { version = "42.0.0", features = ["prettyprint"] }
+arrow = { version = "42.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 arrow-flight = { version = "42.0.0", features = ["flight-sql-experimental"] }
 arrow-buffer = { version = "42.0.0", default-features = false }
 arrow-schema = { version = "42.0.0", default-features = false }
