@@ -258,7 +258,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             )));
         }
     };
-    // `with_x(0)` are infalible because `0` are always a valid
+    // `with_x(0)` are infallible because `0` are always a valid
     Ok(value.unwrap().timestamp_nanos())
 }
 
@@ -284,18 +284,11 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let nano = (f)(*v)?;
 
-            if nano.is_none() {
-                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                    None,
-                    tz_opt.clone(),
-                )));
-            }
-
             match granularity.as_str() {
                 "minute" => {
                     // trunc to minute
                     let second = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap() / 1_000_000_000 * 1_000_000_000),
+                        nano.map(|nano| nano / 1_000_000_000 * 1_000_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(second)
@@ -303,7 +296,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 "second" => {
                     // trunc to second
                     let mill = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap() / 1_000_000 * 1_000_000),
+                        nano.map(|nano| nano / 1_000_000 * 1_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(mill)
@@ -311,17 +304,14 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 "millisecond" => {
                     // trunc to microsecond
                     let micro = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap() / 1_000 * 1_000),
+                        nano.map(|nano| nano / 1_000 * 1_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(micro)
                 }
                 _ => {
                     // trunc to nanosecond
-                    let nano = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap()),
-                        tz_opt.clone(),
-                    );
+                    let nano = ScalarValue::TimestampNanosecond(nano, tz_opt.clone());
                     ColumnarValue::Scalar(nano)
                 }
             }
