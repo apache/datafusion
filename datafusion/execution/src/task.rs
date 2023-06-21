@@ -138,7 +138,7 @@ impl FunctionRegistry for TaskContext {
         let result = self.scalar_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            DataFusionError::Plan(format!(
                 "There is no UDF named \"{name}\" in the TaskContext"
             ))
         })
@@ -148,7 +148,7 @@ impl FunctionRegistry for TaskContext {
         let result = self.aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            DataFusionError::Plan(format!(
                 "There is no UDAF named \"{name}\" in the TaskContext"
             ))
         })

@@ -495,7 +495,7 @@ impl LogicalPlan {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
                 if prepare_lp.data_types.len() != param_values.len() {
-                    return Err(DataFusionError::Internal(format!(
+                    return Err(DataFusionError::Plan(format!(
                         "Expected {} parameters, got {}",
                         prepare_lp.data_types.len(),
                         param_values.len()
@@ -506,7 +506,7 @@ impl LogicalPlan {
                 let iter = prepare_lp.data_types.iter().zip(param_values.iter());
                 for (i, (param_type, value)) in iter.enumerate() {
                     if *param_type != value.get_datatype() {
-                        return Err(DataFusionError::Internal(format!(
+                        return Err(DataFusionError::Plan(format!(
                             "Expected parameter of type {:?}, got {:?} at index {}",
                             param_type,
                             value.get_datatype(),
