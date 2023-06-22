@@ -786,12 +786,12 @@ impl SessionContext {
             .insert(f.name.clone(), Arc::new(f));
     }
 
-    /// Registers an window UDF within this context.
+    /// Registers a window UDF within this context.
     ///
     /// Note in SQL queries, window function names are looked up using
     /// lowercase unless the query uses quotes. For example,
     ///
-    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_uwaf"`
+    /// - `SELECT MY_UDWF(x)...` will look for a window function named `"my_udwf"`
     /// - `SELECT "my_UDWF"(x)` will look for a window function named `"my_UDWF"`
     pub fn register_udwf(&self, f: WindowUDF) {
         self.state
