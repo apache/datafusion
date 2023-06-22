@@ -130,7 +130,7 @@ fn smooth_it() -> WindowUDF {
     WindowUDF {
         name: String::from("smooth_it"),
         // it will take 1 arguments -- the column to smooth
-        signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+        signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         return_type: Arc::new(return_type),
         partition_evaluator_factory: Arc::new(make_partition_evaluator),
     }
@@ -192,8 +192,6 @@ impl PartitionEvaluator for MyPartitionEvaluator {
         values: &[ArrayRef],
         range: &std::ops::Range<usize>,
     ) -> Result<ScalarValue> {
-        //println!("evaluate_inside_range(). range: {range:#?}, values: {values:#?}");
-
         // Again, the input argument is an array of floating
         // point numbers to calculate a moving average
         let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
