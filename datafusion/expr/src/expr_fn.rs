@@ -25,7 +25,7 @@ use crate::function::PartitionEvaluatorFactory;
 use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
-    logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
+    logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
@@ -779,7 +779,7 @@ pub fn create_udaf(
     input_type: DataType,
     return_type: Arc<DataType>,
     volatility: Volatility,
-    accumulator: AccumulatorFunctionImplementation,
+    accumulator: AccumulatorFactoryFunction,
     state_type: Arc<Vec<DataType>>,
 ) -> AggregateUDF {
     let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
@@ -835,9 +835,9 @@ mod test {
     fn filter_is_null_and_is_not_null() {
         let col_null = col("col1");
         let col_not_null = ident("col2");
-        assert_eq!(format!("{:?}", col_null.is_null()), "col1 IS NULL");
+        assert_eq!(format!("{}", col_null.is_null()), "col1 IS NULL");
         assert_eq!(
-            format!("{:?}", col_not_null.is_not_null()),
+            format!("{}", col_not_null.is_not_null()),
             "col2 IS NOT NULL"
         );
     }

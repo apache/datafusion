@@ -2381,10 +2381,12 @@ mod tests {
             ];
             let physical_plan = sort_preserving_merge_exec(sort_exprs.clone(), join);
 
-            let join_plan =
-                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
-            let join_plan2 =
-                format!("  SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
+            let join_plan = format!(
+                "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
+            let join_plan2 = format!(
+                "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let expected_input = vec![
                 "SortPreservingMergeExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
                 join_plan2.as_str(),
@@ -2452,16 +2454,18 @@ mod tests {
             ];
             let physical_plan = sort_preserving_merge_exec(sort_exprs, join);
 
-            let join_plan =
-                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
+            let join_plan = format!(
+                "SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let spm_plan = match join_type {
                 JoinType::RightAnti => {
                     "SortPreservingMergeExec: [col_a@0 ASC,col_b@1 ASC]"
                 }
                 _ => "SortPreservingMergeExec: [col_a@2 ASC,col_b@3 ASC]",
             };
-            let join_plan2 =
-                format!("  SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"nullable_col\", index: 0 }}, Column {{ name: \"col_a\", index: 0 }})]");
+            let join_plan2 = format!(
+                "  SortMergeJoin: join_type={join_type}, on=[(nullable_col@0, col_a@0)]"
+            );
             let expected_input = vec![
                 spm_plan,
                 join_plan2.as_str(),
@@ -2521,7 +2525,7 @@ mod tests {
 
         let expected_input = vec![
             "SortPreservingMergeExec: [col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]",
         ];
@@ -2529,7 +2533,7 @@ mod tests {
         // can not push down the sort requirements, need to add SortExec
         let expected_optimized = vec![
             "SortExec: expr=[col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    SortExec: expr=[col_a@0 ASC]",
@@ -2547,7 +2551,7 @@ mod tests {
 
         let expected_input = vec![
             "SortPreservingMergeExec: [nullable_col@0 ASC,col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b]",
         ];
@@ -2555,7 +2559,7 @@ mod tests {
         // can not push down the sort requirements, need to add SortExec
         let expected_optimized = vec![
             "SortExec: expr=[nullable_col@0 ASC,col_b@3 ASC,col_a@2 ASC]",
-            "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"nullable_col\", index: 0 }, Column { name: \"col_a\", index: 0 })]",
+            "  SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]",
             "    SortExec: expr=[nullable_col@0 ASC]",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    SortExec: expr=[col_a@0 ASC]",

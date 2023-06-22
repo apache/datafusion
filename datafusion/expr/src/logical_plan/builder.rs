@@ -1113,7 +1113,7 @@ pub(crate) fn validate_unique_names<'a>(
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
                     format!("{node_name} require unique expression names \
-                             but the expression \"{existing_expr:?}\" at position {existing_position} and \"{expr:?}\" \
+                             but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
                              at position {position} have the same name. Consider aliasing (\"AS\") one of them.",
                             )
                 ))
@@ -1315,7 +1315,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
             //  https://github.com/apache/arrow-datafusion/issues/4478
             if matches!(key, Expr::Cast(_)) || matches!(key, Expr::TryCast(_)) {
-                let alias = format!("{key:?}");
+                let alias = format!("{key}");
                 key.clone().alias(alias)
             } else {
                 key.clone()
