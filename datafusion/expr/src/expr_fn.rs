@@ -21,6 +21,8 @@ use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
     ScalarFunction, TryCast,
 };
+use crate::function::PartitionEvaluatorFactory;
+use crate::WindowUDF;
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFactoryFunction, AggregateUDF,
@@ -788,6 +790,27 @@ pub fn create_udaf(
         &return_type,
         &accumulator,
         &state_type,
+    )
+}
+
+/// Creates a new UDWF with a specific signature, state type and return type.
+///
+/// The signature and state type must match the [`PartitionEvaluator`]'s implementation`.
+///
+/// [`PartitionEvaluator`]: crate::PartitionEvaluator
+pub fn create_udwf(
+    name: &str,
+    input_type: DataType,
+    return_type: Arc<DataType>,
+    volatility: Volatility,
+    partition_evaluator_factory: PartitionEvaluatorFactory,
+) -> WindowUDF {
+    let return_type: ReturnTypeFunction = Arc::new(move |_| Ok(return_type.clone()));
+    WindowUDF::new(
+        name,
+        &Signature::exact(vec![input_type], volatility),
+        &return_type,
+        &partition_evaluator_factory,
     )
 }
 
