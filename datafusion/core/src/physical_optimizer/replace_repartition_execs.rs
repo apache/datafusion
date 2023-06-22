@@ -18,7 +18,6 @@
 //! Repartition optimizer that replaces `SortExec`s and their suitable `RepartitionExec` children with `SortPreservingRepartitionExec`s.
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::utils::DataPtr;
 
 use crate::error::Result;
 
@@ -30,7 +29,9 @@ use crate::physical_plan::ExecutionPlan;
 use super::utils::is_repartition;
 use super::PhysicalOptimizerRule;
 
-use crate::physical_optimizer::utils::is_sort;
+use datafusion_physical_expr::utils::ordering_satisfy;
+use itertools::enumerate;
+
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -71,12 +72,15 @@ impl ReplaceRepartitionExecs {
 /// and a changed version of `SortExec`s input to be able to detect if the ordering will be preserved after the change
 fn is_repartition_matches_with_output_ordering(
     sort_exec: &SortExec,
-    repartition_exec: &RepartitionExec,
+    repartition: &RepartitionExec,
 ) -> bool {
-    // Compare both repartition parent & input orderings with `SortExec`s
-    let orderings_matched =
-        sort_exec.output_ordering() == repartition_exec.input().output_ordering();
-    orderings_matched && !repartition_exec.maintains_input_order()[0]
+    let orderings_matched = ordering_satisfy(
+        sort_exec.output_ordering(),
+        repartition.input().output_ordering(),
+        || repartition.equivalence_properties(),
+        || repartition.ordering_equivalence_properties(),
+    );
+    orderings_matched && !repartition.maintains_input_order()[0]
 }
 
 /// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
@@ -93,31 +97,39 @@ fn sort_preserving_repartition(
 }
 
 fn does_plan_maintains_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    return plan.maintains_input_order().iter().any(|flag| !*flag);
+    return plan.maintains_input_order().iter().all(|flag| *flag);
 }
 
 /// Check the children nodes between two `SortExec`s if they all maintain the input ordering
 /// if all of the related children maintain, then it is a possibility to replace `RepartitionExec`s
-fn do_sort_children_maintain_input_ordering(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    // If we are at the leave or another sort expression is the child then we can assume that ordering is preserved
-    if plan.children().is_empty() || is_sort(plan) {
-        return true;
-    }
-    if !is_repartition(plan) && does_plan_maintains_input_order(plan) {
-        return false;
-    }
-
-    if let Some(child) = plan.children().into_iter().next() {
-        if is_sort(&child) {
-            return true;
-        }
-        if !is_repartition(&child) && does_plan_maintains_input_order(&child) {
-            return false;
-        }
-        return do_sort_children_maintain_input_ordering(&child);
+fn replace_sort_children_if_needed(
+    sort_exec: &SortExec,
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    if plan.children().is_empty() {
+        return plan.clone();
     }
 
-    true
+    let mut children = plan.children();
+    for (i, child) in enumerate(plan.children()) {
+        if !is_repartition(&child) && !does_plan_maintains_input_order(&child) {
+            break;
+        }
+
+        if let Some(repartition) = child.as_any().downcast_ref::<RepartitionExec>() {
+            if is_repartition_matches_with_output_ordering(sort_exec, repartition) {
+                let spr = sort_preserving_repartition(repartition)
+                    .with_new_children(repartition.children());
+                // Change the current RepartitionExec with SortPreservingRepartitionExec and dive into its children
+                children[i] = replace_sort_children_if_needed(sort_exec, &spr.unwrap());
+                continue;
+            }
+        }
+
+        children[i] = replace_sort_children_if_needed(sort_exec, &child);
+    }
+
+    plan.clone().with_new_children(children).unwrap()
 }
 
 impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
@@ -127,47 +139,28 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(&|plan| {
-            // Clone it before any transformations to be able to check later for change
-            let original_plan = plan.clone();
+            if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
+                let changed_plan = replace_sort_children_if_needed(sort_exec, &plan);
+                let changed_sort_exec =
+                    changed_plan.as_any().downcast_ref::<SortExec>().unwrap();
 
-            let sort_exec = plan.as_any().downcast_ref::<SortExec>();
-            // We don't have anything to do until we get to the `SortExec` parent
-            if sort_exec.is_none() {
-                return Ok(Transformed::No(plan));
-            }
+                // Check if any child is changed, if changed remove the `SortExec`
+                if ordering_satisfy(
+                    sort_exec.input().output_ordering(),
+                    changed_sort_exec.input().output_ordering(),
+                    || changed_sort_exec.input().equivalence_properties(),
+                    || changed_sort_exec.ordering_equivalence_properties(),
+                ) {
+                    Ok(Transformed::No(plan.clone()))
+                } else {
+                    // Remove the `SortExec` since we've manipulated at least a child
 
-            let sort_exec = sort_exec.unwrap();
-            if !do_sort_children_maintain_input_ordering(sort_exec.input()) {
-                return Ok(Transformed::No(plan));
-            }
-
-            // Transform `SortExec`s children to modify any related `RepartitionExec`s
-            let new_sort = plan.clone().transform_up(&|child| {
-                if let Some(repartition) =
-                    child.as_any().downcast_ref::<RepartitionExec>()
-                {
-                    if is_repartition_matches_with_output_ordering(sort_exec, repartition)
-                    {
-                        return Ok(Transformed::Yes(
-                            sort_preserving_repartition(repartition)
-                                .with_new_children(repartition.children())?,
-                        ));
-                    }
-                    return Ok(Transformed::No(child));
+                    // The plan is `SortExec` here, so it's guaranteed that it has only one child
+                    Ok(Transformed::Yes((changed_sort_exec.children()[0]).clone()))
                 }
-
-                Ok(Transformed::No(child))
-            })?;
-
-            // Check if any child is changed, if changed remove the `SortExec`
-            let is_same = Arc::data_ptr_eq(&new_sort, &original_plan);
-            if is_same {
-                Ok(Transformed::No(plan))
             } else {
-                // Remove the SortExec since we've manipulated at least a child
-
-                // The plan is `SortExec` here, so it's guaranteed that it has only one child
-                Ok(Transformed::Yes((new_sort.children()[0]).clone()))
+                // We don't have anything to do until we get to the `SortExec` parent
+                Ok(Transformed::No(plan))
             }
         })
     }
@@ -274,27 +267,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_keep_necessary_sort() -> Result<()> {
+    async fn test_with_inter_children_change_only() -> Result<()> {
         let schema = create_test_schema()?;
-        let sort_exprs = vec![sort_expr("a", &schema)];
+        let sort_exprs = vec![sort_expr_default("a", &schema)];
         let source = csv_exec_sorted(&schema, sort_exprs, false);
-        let repartition = repartition_exec_round_robin(source);
-        let sort = sort_exec(vec![sort_expr("a", &schema)], repartition);
+        let repartition_rr = repartition_exec_round_robin(source);
+        let repartition_hash = repartition_exec_hash(repartition_rr);
+        let coalesce_partitions = coalesce_partitions_exec(repartition_hash);
+        let sort = sort_exec(vec![sort_expr_default("a", &schema)], coalesce_partitions);
+        let repartition_rr2 = repartition_exec_round_robin(sort);
+        let repartition_hash2 = repartition_exec_hash(repartition_rr2);
+        let filter = filter_exec(repartition_hash2, &schema);
+        let sort2 = sort_exec(vec![sort_expr_default("a", &schema)], filter);
 
         let physical_plan =
-            sort_preserving_merge_exec(vec![sort_expr("a", &schema)], sort);
+            sort_preserving_merge_exec(vec![sort_expr_default("a", &schema)], sort2);
 
-        let expected_input = vec![
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+        let expected_input = [
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  SortExec: expr=[a@0 ASC]",
+            "    FilterExec: c@2 > 3",
+            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          SortExec: expr=[a@0 ASC]",
+            "            CoalescePartitionsExec",
+            "              RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
-        let expected_optimized = vec![
-            "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
-            "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
+
+        let expected_optimized = [
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "  FilterExec: c@2 > 3",
+            "    SortPreservingRepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        SortExec: expr=[a@0 ASC]",
+            "          CoalescePartitionsExec",
+            "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan);
         Ok(())
