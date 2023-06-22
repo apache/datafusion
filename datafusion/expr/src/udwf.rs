@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// Logical representation of a user-defined window function (UDWF)
-/// A UDAF is different from a UDF in that it is stateful across batches.
+/// A UDWF is different from a UDF in that it is stateful across batches.
 ///
 /// See the documetnation on [`PartitionEvaluator`] for more details
 ///

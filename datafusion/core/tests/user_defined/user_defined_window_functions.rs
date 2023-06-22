@@ -99,7 +99,7 @@ async fn test_udwf() {
         expected,
         &execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap()
     );
-    // evaluated on three distinct batches
+    // evaluated on two distinct batches
     assert_eq!(test_state.evaluate_all_called(), 2);
 }
 
