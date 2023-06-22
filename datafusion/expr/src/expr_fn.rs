@@ -795,7 +795,7 @@ pub fn create_udaf(
 
 /// Creates a new UDWF with a specific signature, state type and return type.
 ///
-/// The signature and state type must match the ]`PartitionEvaluator`]'s implementation`.
+/// The signature and state type must match the [`PartitionEvaluator`]'s implementation`.
 pub fn create_udwf(
     name: &str,
     input_type: DataType,
