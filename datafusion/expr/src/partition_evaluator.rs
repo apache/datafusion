@@ -160,10 +160,11 @@ pub trait PartitionEvaluator: Debug + Send {
     /// `num_rows` is requied to correctly compute the output in case
     /// `values.len() == 0`
     ///
-    /// Using this function is an optimization: certain window
-    /// functions are not affected by the window frame definition, and
-    /// thus using `evaluate`, DataFusion can skip the (costly) window
-    /// frame boundary calculation.
+    /// Implementing this function is an optimization: certain window
+    /// functions are not affected by the window frame definition or
+    /// the query doesn't have a frame, and `evaluate` skips the
+    /// (costly) window frame boundary calculation and the overhead of
+    /// calling `evaluate` for each output row.
     ///
     /// For example, the `LAG` built in window function does not use
     /// the values of its window frame (it can be computed in one shot
@@ -200,8 +201,6 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Evaluate window function on a range of rows in an input
     /// partition.x
     ///
-    /// Only used for stateful evaluation.
-    ///
     /// This is the simplest and most general function to implement
     /// but also the least performant as it creates output one row at
     /// a time. It is typically much faster to implement stateful
@@ -209,7 +208,7 @@ pub trait PartitionEvaluator: Debug + Send {
     /// trait.
     ///
     /// Returns a [`ScalarValue`] that is the value of the window
-    /// function within the rangefor the entire partition
+    /// function within `range` for the entire partition
     fn evaluate(
         &mut self,
         _values: &[ArrayRef],
@@ -260,7 +259,8 @@ pub trait PartitionEvaluator: Debug + Send {
     /// Can the window function be incrementally computed using
     /// bounded memory?
     ///
-    /// If this function returns true, implement [`PartitionEvaluator::evaluate`]
+    /// If this function returns true, implement [`PartitionEvaluator::evaluate`] and
+    /// [`PartitionEvaluator::update_state`].
     fn supports_bounded_execution(&self) -> bool {
         false
     }
