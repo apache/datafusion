@@ -28,12 +28,12 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
-use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::{common, SendableRecordBatchStream};
@@ -88,26 +88,35 @@ impl MemTable {
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
-        let tasks = (0..partition_count)
-            .map(|part_i| {
-                let task = state.task_ctx();
-                let exec = exec.clone();
-                let task = tokio::spawn(async move {
-                    let stream = exec.execute(part_i, task)?;
-                    common::collect(stream).await
-                });
+        let mut join_set = JoinSet::new();
 
-                AbortOnDropSingle::new(task)
-            })
-            // this collect *is needed* so that the join below can
-            // switch between tasks
-            .collect::<Vec<_>>();
+        for part_idx in 0..partition_count {
+            let task = state.task_ctx();
+            let exec = exec.clone();
+            join_set.spawn(async move {
+                let stream = exec.execute(part_idx, task)?;
+                common::collect(stream).await
+            });
+        }
 
         let mut data: Vec<Vec<RecordBatch>> =
             Vec::with_capacity(exec.output_partitioning().partition_count());
 
-        for result in futures::future::join_all(tasks).await {
-            data.push(result.map_err(|e| DataFusionError::External(Box::new(e)))??)
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(res) => {
+                    let batches =
+                        res.map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    data.push(batches);
+                }
+                Err(e) => {
+                    if e.is_panic() {
+                        std::panic::resume_unwind(e.into_panic());
+                    } else {
+                        unreachable!();
+                    }
+                }
+            }
         }
 
         let exec = MemoryExec::try_new(&data, schema.clone(), None)?;
