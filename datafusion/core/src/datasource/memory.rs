@@ -104,11 +104,7 @@ impl MemTable {
 
         while let Some(result) = join_set.join_next().await {
             match result {
-                Ok(res) => {
-                    let batches =
-                        res.map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    data.push(batches);
-                }
+                Ok(res) => data.push(res?),
                 Err(e) => {
                     if e.is_panic() {
                         std::panic::resume_unwind(e.into_panic());
