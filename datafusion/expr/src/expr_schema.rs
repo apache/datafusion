@@ -22,7 +22,7 @@ use crate::expr::{
 };
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::get_result_type;
-use crate::{aggregate_function, window_function, LogicalPlan, Projection, Subquery};
+use crate::{LogicalPlan, Projection, Subquery};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{Column, DFField, DFSchema, DataFusionError, ExprSchema, Result};
@@ -92,14 +92,14 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                window_function::return_type(fun, &data_types)
+                fun.return_type(&data_types)
             }
             Expr::AggregateFunction(AggregateFunction { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                aggregate_function::return_type(fun, &data_types)
+                fun.return_type(&data_types)
             }
             Expr::AggregateUDF(AggregateUDF { fun, args, .. }) => {
                 let data_types = args
