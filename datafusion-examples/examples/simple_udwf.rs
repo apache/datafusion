@@ -33,7 +33,7 @@ use datafusion_expr::{
 
 // create local execution context with `cars.csv` registered as a table named `cars`
 async fn create_context() -> Result<SessionContext> {
-    // declare a new context. In spark API, this corresponds to a new spark SQLsession
+    // declare a new context. In spark API, this corresponds to a new spark SQL session
     let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
@@ -50,7 +50,7 @@ async fn create_context() -> Result<SessionContext> {
 async fn main() -> Result<()> {
     let ctx = create_context().await?;
 
-    // register the window function with DataFusion so wecan call it
+    // register the window function with DataFusion so we can call it
     ctx.register_udwf(smooth_it());
 
     // Use SQL to run the new window function
@@ -61,11 +61,11 @@ async fn main() -> Result<()> {
     // Use SQL to run the new window function:
     //
     // `PARTITION BY car`:each distinct value of car (red, and green)
-    // should be treated as a seprate partition (and will result in
+    // should be treated as a separate partition (and will result in
     // creating a new `PartitionEvaluator`)
     //
     // `ORDER BY time`: within each partition ('green' or 'red') the
-    // rows will be be orderd by the value in the `time` column
+    // rows will be be ordered by the value in the `time` column
     //
     // `evaluate_inside_range` is invoked with a window defined by the
     // SQL. In this case:
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     // this time, call the new widow function with an explicit
     // window so evaluate will be invoked with each window.
     //
-    // `ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING`: each invocation
+    // `ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING`: each invocation
     // sees at most 3 rows: the row before, the current row, and the 1
     // row afterward.
     let df = ctx.sql(
