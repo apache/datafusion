@@ -734,7 +734,7 @@ pub trait SchemaExt {
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
     ///
-    /// It works the same as [`crate::DFSchema::equivalent_names_and_types`]
+    /// It works the same as [`DFSchema::equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
 }
 
