@@ -122,13 +122,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{e:?} ");
+                let _ = write!(name, "{e} ");
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {w:?} THEN {t:?} ");
+                let _ = write!(name, "WHEN {w} THEN {t} ");
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {e:?} ");
+                let _ = write!(name, "ELSE {e} ");
             }
             name += "END";
             Ok(name)
@@ -1817,7 +1817,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
-                                .to_stringified(InitialPhysicalPlan),
+                                .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
                         match self.optimize_internal(
@@ -1826,13 +1826,15 @@ impl DefaultPhysicalPlanner {
                             |plan, optimizer| {
                                 let optimizer_name = optimizer.name().to_string();
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                                stringified_plans
-                                    .push(displayable(plan).to_stringified(plan_type));
+                                stringified_plans.push(
+                                    displayable(plan)
+                                        .to_stringified(e.verbose, plan_type),
+                                );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
-                                    .to_stringified(FinalPhysicalPlan),
+                                    .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
@@ -1875,11 +1877,11 @@ impl DefaultPhysicalPlanner {
         let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
-            displayable(plan.as_ref()).indent()
+            displayable(plan.as_ref()).indent(false)
         );
         trace!(
             "Detailed input physical plan:\n{}",
-            displayable(plan.as_ref()).indent()
+            displayable(plan.as_ref()).indent(true)
         );
 
         let mut new_plan = plan;
@@ -1905,13 +1907,13 @@ impl DefaultPhysicalPlanner {
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
-                displayable(new_plan.as_ref()).indent()
+                displayable(new_plan.as_ref()).indent(false)
             );
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
             "Optimized physical plan:\n{}\n",
-            displayable(new_plan.as_ref()).indent()
+            displayable(new_plan.as_ref()).indent(false)
         );
         trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
@@ -2422,7 +2424,7 @@ mod tests {
         } else {
             panic!(
                 "Plan was not an explain plan: {}",
-                displayable(plan.as_ref()).indent()
+                displayable(plan.as_ref()).indent(true)
             );
         }
     }
@@ -2538,7 +2540,7 @@ mod tests {
 
         fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
             match t {
-                DisplayFormatType::Default => {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "NoOpExecutionPlan")
                 }
             }

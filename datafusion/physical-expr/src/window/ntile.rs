@@ -18,13 +18,13 @@
 //! Defines physical expression for `ntile` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::Field;
 use arrow_schema::DataType;
 use datafusion_common::Result;
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::sync::Arc;
 

@@ -484,7 +484,7 @@ impl ExecutionPlan for TopKExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "TopKExec: k={}", self.k)
             }
         }

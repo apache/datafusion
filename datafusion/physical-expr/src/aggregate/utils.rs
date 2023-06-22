@@ -60,25 +60,25 @@ pub fn calculate_result_decimal_for_avg(
                     if new_value >= target_min && new_value <= target_max {
                         Ok(ScalarValue::Decimal128(Some(new_value), *p, *s))
                     } else {
-                        Err(DataFusionError::Internal(
+                        Err(DataFusionError::Execution(
                             "Arithmetic Overflow in AvgAccumulator".to_string(),
                         ))
                     }
                 } else {
                     // can't convert the lit decimal to the returned data type
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Execution(
                         "Arithmetic Overflow in AvgAccumulator".to_string(),
                     ))
                 }
             } else {
                 // can't convert the lit decimal to the returned data type
-                Err(DataFusionError::Internal(
+                Err(DataFusionError::Execution(
                     "Arithmetic Overflow in AvgAccumulator".to_string(),
                 ))
             }
         }
         other => Err(DataFusionError::Internal(format!(
-            "Error returned data type in AvgAccumulator {other:?}"
+            "Invalid target type in AvgAccumulator {other:?}"
         ))),
     }
 }

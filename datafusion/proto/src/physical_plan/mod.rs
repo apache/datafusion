@@ -1299,7 +1299,7 @@ mod roundtrip_tests {
     };
     use datafusion_common::Result;
     use datafusion_expr::{
-        Accumulator, AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction,
+        Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
         Signature, StateTypeFunction,
     };
 
@@ -1486,8 +1486,7 @@ mod roundtrip_tests {
 
         let rt_func: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(Example)));
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
         let st_func: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
 

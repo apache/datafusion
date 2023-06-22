@@ -2603,7 +2603,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------SortExec: expr=[ts@1 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=None
 ----------------SortExec: expr=[ts@1 ASC NULLS LAST]
 ------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
@@ -2641,7 +2641,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)]
 --------SortExec: expr=[ts@1 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[FIRST_VALUE(sales_global.amount), FIRST_VALUE(sales_global.amount)], ordering_mode=None
 ----------------SortExec: expr=[ts@1 ASC NULLS LAST]
 ------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
@@ -2803,7 +2803,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)]
 --------SortExec: expr=[amount@1 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount)], ordering_mode=None
 ----------------SortExec: expr=[amount@1 ASC NULLS LAST]
 ------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
@@ -2840,7 +2840,7 @@ SortPreservingMergeExec: [country@0 ASC NULLS LAST]
 ------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)]
 --------SortExec: expr=[amount@1 DESC]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "country", index: 0 }], 8), input_partitions=8
+------------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 --------------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[ARRAY_AGG(sales_global.amount), LAST_VALUE(sales_global.amount), LAST_VALUE(sales_global.amount)], ordering_mode=None
 ----------------SortExec: expr=[amount@1 DESC]
 ------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1

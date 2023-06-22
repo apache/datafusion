@@ -25,7 +25,10 @@ use crate::physical_plan::{
 use crate::protobuf;
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{create_udaf, create_udf, Expr, LogicalPlan, Volatility};
+use datafusion_expr::{
+    create_udaf, create_udf, create_udwf, AggregateUDF, Expr, LogicalPlan, Volatility,
+    WindowUDF,
+};
 use prost::{
     bytes::{Bytes, BytesMut},
     Message,
@@ -118,7 +121,7 @@ impl Serializeable for Expr {
                 )))
             }
 
-            fn udaf(&self, name: &str) -> Result<Arc<datafusion_expr::AggregateUDF>> {
+            fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
                 Ok(Arc::new(create_udaf(
                     name,
                     arrow::datatypes::DataType::Null,
@@ -126,6 +129,16 @@ impl Serializeable for Expr {
                     Volatility::Immutable,
                     Arc::new(|_| unimplemented!()),
                     Arc::new(vec![]),
+                )))
+            }
+
+            fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+                Ok(Arc::new(create_udwf(
+                    name,
+                    arrow::datatypes::DataType::Null,
+                    Arc::new(arrow::datatypes::DataType::Null),
+                    Volatility::Immutable,
+                    Arc::new(|| unimplemented!()),
                 )))
             }
         }

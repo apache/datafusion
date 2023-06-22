@@ -165,6 +165,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// expression
     pub(super) fn sql_interval_to_expr(
         &self,
+        negative: bool,
         interval: Interval,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -194,7 +195,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let value = match *interval.value {
             SQLExpr::Value(
                 Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            ) => s,
+            ) => {
+                if negative {
+                    format!("-{s}")
+                } else {
+                    s
+                }
+            }
             // Support expressions like `interval '1 month' + date/timestamp`.
             // Such expressions are parsed like this by sqlparser-rs
             //
@@ -224,6 +231,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match (interval.leading_field, left.as_ref(), right.as_ref()) {
                     (_, _, SQLExpr::Value(_)) => {
                         let left_expr = self.sql_interval_to_expr(
+                            negative,
                             Interval {
                                 value: left,
                                 leading_field: interval.leading_field,
@@ -235,6 +243,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             planner_context,
                         )?;
                         let right_expr = self.sql_interval_to_expr(
+                            false,
                             Interval {
                                 value: right,
                                 leading_field: interval.leading_field,
@@ -258,6 +267,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // is not a value.
                     (None, _, _) => {
                         let left_expr = self.sql_interval_to_expr(
+                            negative,
                             Interval {
                                 value: left,
                                 leading_field: None,
