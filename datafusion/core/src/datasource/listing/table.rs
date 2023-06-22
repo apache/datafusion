@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use datafusion_common::ToDFSchema;
+use datafusion_common::{SchemaExt, ToDFSchema};
 use datafusion_expr::expr::Sort;
 use datafusion_optimizer::utils::conjunction;
 use datafusion_physical_expr::{create_physical_expr, LexOrdering, PhysicalSortExpr};
@@ -42,7 +42,7 @@ use crate::datasource::{
     },
     get_statistics_with_limit,
     listing::ListingTableUrl,
-    schema_eq_ignore_nullable, TableProvider, TableType,
+    TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
@@ -776,7 +776,7 @@ impl TableProvider for ListingTable {
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
-        if !schema_eq_ignore_nullable(input.schema(), self.schema()) {
+        if !self.schema().equivalent_names_and_types(&input.schema()) {
             return Err(DataFusionError::Plan(
                 // Return an error if schema of the input query does not match with the table schema.
                 "Inserting query must have the same schema with the table.".to_string(),
