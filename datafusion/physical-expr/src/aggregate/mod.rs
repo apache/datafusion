@@ -88,7 +88,7 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 
     /// Order by requirements for the aggregate function
     /// By default it is `None` (there is no requirement)
-    /// Order-sensitive aggregators should implement this
+    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
     fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }

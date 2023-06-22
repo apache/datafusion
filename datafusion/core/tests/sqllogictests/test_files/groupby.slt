@@ -2583,7 +2583,7 @@ statement ok
 set datafusion.execution.target_partitions = 8;
 
 # order-sensitive FIRST_VALUE and LAST_VALUE aggregators should work in
-# multi-partitions also.
+# multi-partitions without group by also.
 query TT
 EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts ASC) AS fv2
@@ -2659,7 +2659,7 @@ GRC 30 30
 TUR 75 75
 
 # order-sensitive FIRST_VALUE and LAST_VALUE aggregators should work in
-# multi-partitions also.
+# multi-partitions without group by also.
 query TT
 EXPLAIN SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts ASC) AS fv2

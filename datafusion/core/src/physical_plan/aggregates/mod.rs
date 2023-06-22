@@ -82,7 +82,7 @@ pub enum AggregateMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupByOrderMode {
     /// None of the expressions in the GROUP BY clause have an ordering.
-    Linear,
+    None,
     /// Some of the expressions in the GROUP BY clause have an ordering.
     // For example, if the input is ordered by a, b, c and we group by b, a, d;
     // the mode will be `PartiallyOrdered` meaning a subset of group b, a, d
@@ -496,7 +496,7 @@ fn calc_required_input_ordering(
                 && !aggregator_requirement.is_empty()
             {
                 *aggregation_ordering = Some(AggregationOrdering {
-                    mode: GroupByOrderMode::Linear,
+                    mode: GroupByOrderMode::None,
                     order_indices: vec![],
                     ordering: PhysicalSortRequirement::to_sort_exprs(
                         aggregator_requirement.clone(),

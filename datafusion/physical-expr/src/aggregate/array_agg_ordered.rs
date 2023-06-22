@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines physical expressions which specify ordering requirement
+//! that can evaluated at runtime during query execution
 
 use crate::aggregate::utils::{down_cast_any_ref, ordering_fields};
 use crate::expressions::format_state_name;
@@ -35,6 +36,12 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 /// Expression for a ARRAY_AGG(ORDER BY) aggregation.
+/// When aggregation works in multiple partitions
+/// aggregations are split into multiple partitions,
+/// then their results are merged. This aggregator
+/// is a version of ARRAY_AGG that can support producing
+/// intermediate aggregation (with necessary side information)
+/// and that can merge aggregations from multiple partitions.
 #[derive(Debug)]
 pub struct OrderSensitiveArrayAgg {
     name: String,
@@ -137,9 +144,18 @@ impl PartialEq<dyn Any> for OrderSensitiveArrayAgg {
 
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
+    // `values` stores entries in the ARRAY_AGG result.
     values: Vec<ScalarValue>,
+    // `ordering_values` stores values of ordering requirement expression
+    // corresponding to each value in the ARRAY_AGG.
+    // For each `ScalarValue` inside `values`, there will be a corresponding
+    // `Vec<ScalarValue>` inside `ordering_values` which stores it ordering.
+    // This information is used during merging results of the different partitions.
+    // For detailed information how merging is done see [`merge_ordered_arrays`]
     ordering_values: Vec<Vec<ScalarValue>>,
+    // `datatypes` stores, datatype of expression inside ARRAY_AGG and ordering requirement expressions.
     datatypes: Vec<DataType>,
+    // Stores ordering requirement of the Accumulator
     ordering_req: LexOrdering,
 }
 

@@ -156,6 +156,8 @@ struct FirstValueAccumulator {
     // At the beginning, `is_set` is false, which means `first` is not seen yet.
     // Once we see the first value, we set the `is_set` flag and do not update `first` anymore.
     is_set: bool,
+    // Stores ordering values, of the aggregator requirement corresponding to first value
+    // of the aggregator. These values are used during merging of multiple partitions.
     orderings: Vec<ScalarValue>,
 }
 
