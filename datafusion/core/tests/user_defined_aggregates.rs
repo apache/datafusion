@@ -33,7 +33,7 @@ use datafusion::{
     assert_batches_eq,
     error::Result,
     logical_expr::{
-        AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
+        AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction, Signature,
         StateTypeFunction, TypeSignature, Volatility,
     },
     physical_plan::Accumulator,
@@ -296,7 +296,7 @@ impl TimeSum {
         let signature = Signature::exact(vec![timestamp_type], volatility);
 
         let captured_state = Arc::clone(&test_state);
-        let accumulator: AccumulatorFunctionImplementation =
+        let accumulator: AccumulatorFactoryFunction =
             Arc::new(move |_| Ok(Box::new(Self::new(Arc::clone(&captured_state)))));
 
         let name = "time_sum";
@@ -396,7 +396,7 @@ impl FirstSelector {
         // Possible input signatures
         let signatures = vec![TypeSignature::Exact(Self::input_datatypes())];
 
-        let accumulator: AccumulatorFunctionImplementation =
+        let accumulator: AccumulatorFactoryFunction =
             Arc::new(|_| Ok(Box::new(Self::new())));
 
         let volatility = Volatility::Immutable;
