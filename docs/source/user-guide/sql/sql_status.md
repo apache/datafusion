@@ -53,8 +53,9 @@
   - [x] `SHOW CREATE TABLE <view>`
   - [x] Basic SQL [Information Schema](./information_schema.md) (`TABLES`, `VIEWS`, `COLUMNS`)
   - [ ] Full SQL [Information Schema](./information_schema.md) support
-- [ ] Support for nested types (`ARRAY`/`LIST` and `STRUCT`)
-  - [x] Read/Write support
+- [ ] Support for nested types (`ARRAY`/`LIST` and `STRUCT`. See [#2326](https://github.com/apache/arrow-datafusion/issues/2326) for details)
+  - [x] Read support
+  - [x] Write support
   - [x] Field access (`col['field']` and [`col[1]`])
   - [x] [Array Functions](./scalar_functions.md#array-functions)
   - [ ] [Struct Functions](./scalar_functions.md#struct-functions)
