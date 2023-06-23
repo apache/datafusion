@@ -15,26 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::{
-    array::{Array, Decimal128Builder},
-    datatypes::{Field, Schema},
-    record_batch::RecordBatch,
-};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-// TODO: move this to datafusion::test_utils?
-pub fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = Decimal128Builder::with_capacity(20);
-    for i in 110000..110010 {
-        decimal_builder.append_value(i as i128);
+/// A utility struct that can be used to generate unique aliases when optimizing queries
+#[derive(Debug)]
+pub struct AliasGenerator {
+    next_id: AtomicUsize,
+}
+
+impl Default for AliasGenerator {
+    fn default() -> Self {
+        Self {
+            next_id: AtomicUsize::new(1),
+        }
     }
-    for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128);
+}
+
+impl AliasGenerator {
+    /// Create a new [`AliasGenerator`]
+    pub fn new() -> Self {
+        Self::default()
     }
-    let array = decimal_builder
-        .finish()
-        .with_precision_and_scale(10, 3)
-        .unwrap();
-    let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
-    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+
+    /// Return a unique alias with the provided prefix
+    pub fn next(&self, prefix: &str) -> String {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        format!("{prefix}_{id}")
+    }
 }

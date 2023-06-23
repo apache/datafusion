@@ -71,7 +71,7 @@ InsertExec: sink=MemoryTable (partitions=1)
 --------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: "SUM(aggregate_test_100.c4)", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: "COUNT(UInt8(1))", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 ----------SortExec: expr=[c1@0 ASC NULLS LAST,c9@2 ASC NULLS LAST]
 ------------CoalesceBatchesExec: target_batch_size=8192
---------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 8), input_partitions=8
+--------------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 ----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
@@ -131,7 +131,7 @@ InsertExec: sink=MemoryTable (partitions=1)
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: "SUM(aggregate_test_100.c4)", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: "COUNT(UInt8(1))", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 --------SortExec: expr=[c1@0 ASC NULLS LAST,c9@2 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=8192
-------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 8), input_partitions=8
+------------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 --------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
@@ -182,7 +182,7 @@ InsertExec: sink=MemoryTable (partitions=8)
 --------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: "SUM(aggregate_test_100.c4)", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: "COUNT(UInt8(1))", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 ----------SortExec: expr=[c1@0 ASC NULLS LAST,c9@2 ASC NULLS LAST]
 ------------CoalesceBatchesExec: target_batch_size=8192
---------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 8), input_partitions=8
+--------------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 ----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 ------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
 
@@ -231,6 +231,42 @@ query I
 select count(*) from table_without_values;
 ----
 100
+
+statement ok
+drop table table_without_values;
+
+
+# test insert with column names
+statement ok
+CREATE TABLE table_without_values(id BIGINT, name varchar);
+
+query IT
+insert into table_without_values(id, name) values(1, 'foo');
+----
+1
+
+query IT
+insert into table_without_values(name, id) values('bar', 2);
+----
+1
+
+statement error Schema error: Schema contains duplicate unqualified field name id
+insert into table_without_values(id, id) values(3, 3);
+
+statement error Arrow error: Cast error: Cannot cast string 'zoo' to value of Int64 type
+insert into table_without_values(name, id) values(4, 'zoo');
+
+statement error Error during planning: Column count doesn't match insert query!
+insert into table_without_values(id) values(4, 'zoo');
+
+statement error Error during planning: Inserting query must have the same schema with the table.
+insert into table_without_values(id) values(4);
+
+query IT rowsort
+select * from table_without_values;
+----
+1 foo
+2 bar
 
 statement ok
 drop table table_without_values;

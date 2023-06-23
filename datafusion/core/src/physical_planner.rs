@@ -15,14 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Physical query planner
+//! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
-use super::analyze::AnalyzeExec;
-use super::unnest::UnnestExec;
-use super::{
-    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
-    values::ValuesExec, windows,
-};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -32,12 +26,15 @@ use crate::logical_expr::{
 };
 use crate::logical_expr::{
     CrossJoin, Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType,
-    Repartition, ToStringifiedPlan, Union, UserDefinedLogicalNode,
+    Repartition, Union, UserDefinedLogicalNode,
 };
+use datafusion_common::display::ToStringifiedPlan;
+
 use crate::logical_expr::{Limit, Values};
 use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
@@ -48,8 +45,13 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::windows::{
     BoundedWindowAggExec, PartitionSearchMode, WindowAggExec,
+};
+use crate::physical_plan::{
+    aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
+    values::ValuesExec, windows,
 };
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
@@ -65,11 +67,10 @@ use datafusion_expr::expr::{
     self, AggregateFunction, AggregateUDF, Between, BinaryExpr, Cast, GetIndexedField,
     GroupingSet, InList, Like, ScalarUDF, TryCast, WindowFunction,
 };
-use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::expr_rewriter::{unalias, unnormalize_cols};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::{logical_plan, DmlStatement, StringifiedPlan, WriteOp};
 use datafusion_expr::{WindowFrame, WindowFrameBound};
-use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
@@ -121,13 +122,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{e:?} ");
+                let _ = write!(name, "{e} ");
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {w:?} THEN {t:?} ");
+                let _ = write!(name, "WHEN {w} THEN {t} ");
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {e:?} ");
+                let _ = write!(name, "ELSE {e} ");
             }
             name += "END";
             Ok(name)
@@ -1814,7 +1815,7 @@ impl DefaultPhysicalPlanner {
                     Ok(input) => {
                         stringified_plans.push(
                             displayable(input.as_ref())
-                                .to_stringified(InitialPhysicalPlan),
+                                .to_stringified(e.verbose, InitialPhysicalPlan),
                         );
 
                         match self.optimize_internal(
@@ -1823,13 +1824,15 @@ impl DefaultPhysicalPlanner {
                             |plan, optimizer| {
                                 let optimizer_name = optimizer.name().to_string();
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                                stringified_plans
-                                    .push(displayable(plan).to_stringified(plan_type));
+                                stringified_plans.push(
+                                    displayable(plan)
+                                        .to_stringified(e.verbose, plan_type),
+                                );
                             },
                         ) {
                             Ok(input) => stringified_plans.push(
                                 displayable(input.as_ref())
-                                    .to_stringified(FinalPhysicalPlan),
+                                    .to_stringified(e.verbose, FinalPhysicalPlan),
                             ),
                             Err(DataFusionError::Context(optimizer_name, e)) => {
                                 let plan_type = OptimizedPhysicalPlan { optimizer_name };
@@ -1872,11 +1875,11 @@ impl DefaultPhysicalPlanner {
         let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
-            displayable(plan.as_ref()).indent()
+            displayable(plan.as_ref()).indent(false)
         );
         trace!(
             "Detailed input physical plan:\n{}",
-            displayable(plan.as_ref()).indent()
+            displayable(plan.as_ref()).indent(true)
         );
 
         let mut new_plan = plan;
@@ -1902,13 +1905,13 @@ impl DefaultPhysicalPlanner {
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
-                displayable(new_plan.as_ref()).indent()
+                displayable(new_plan.as_ref()).indent(false)
             );
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
             "Optimized physical plan:\n{}\n",
-            displayable(new_plan.as_ref()).indent()
+            displayable(new_plan.as_ref()).indent(false)
         );
         trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
@@ -1931,8 +1934,9 @@ mod tests {
     use crate::datasource::MemTable;
     use crate::physical_plan::SendableRecordBatchStream;
     use crate::physical_plan::{
-        expressions, DisplayFormatType, Partitioning, PhysicalPlanner, Statistics,
+        expressions, DisplayFormatType, Partitioning, Statistics,
     };
+    use crate::physical_planner::PhysicalPlanner;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::scalar::ScalarValue;
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
@@ -2418,7 +2422,7 @@ mod tests {
         } else {
             panic!(
                 "Plan was not an explain plan: {}",
-                displayable(plan.as_ref()).indent()
+                displayable(plan.as_ref()).indent(true)
             );
         }
     }
@@ -2534,7 +2538,7 @@ mod tests {
 
         fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
             match t {
-                DisplayFormatType::Default => {
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "NoOpExecutionPlan")
                 }
             }

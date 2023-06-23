@@ -15,19 +15,100 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides utilities for window frame index calculations
-//! depending on the window frame mode: RANGE, ROWS, GROUPS.
+//! Structures used to hold window function state (for implementing WindowUDFs)
 
-use arrow::array::ArrayRef;
-use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::utils::{compare_rows, get_row_at_idx, search_in_slice};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
-use std::cmp::min;
-use std::collections::VecDeque;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::Arc;
+use std::{collections::VecDeque, ops::Range, sync::Arc};
+
+use arrow::{
+    array::ArrayRef,
+    compute::{concat, SortOptions},
+    datatypes::DataType,
+    record_batch::RecordBatch,
+};
+use datafusion_common::{
+    utils::{compare_rows, get_row_at_idx, search_in_slice},
+    DataFusionError, Result, ScalarValue,
+};
+
+use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+
+/// Holds the state of evaluating a window function
+#[derive(Debug)]
+pub struct WindowAggState {
+    /// The range that we calculate the window function
+    pub window_frame_range: Range<usize>,
+    pub window_frame_ctx: Option<WindowFrameContext>,
+    /// The index of the last row that its result is calculated inside the partition record batch buffer.
+    pub last_calculated_index: usize,
+    /// The offset of the deleted row number
+    pub offset_pruned_rows: usize,
+    /// Stores the results calculated by window frame
+    pub out_col: ArrayRef,
+    /// Keeps track of how many rows should be generated to be in sync with input record_batch.
+    // (For each row in the input record batch we need to generate a window result).
+    pub n_row_result_missing: usize,
+    /// flag indicating whether we have received all data for this partition
+    pub is_end: bool,
+}
+
+impl WindowAggState {
+    pub fn prune_state(&mut self, n_prune: usize) {
+        self.window_frame_range = Range {
+            start: self.window_frame_range.start - n_prune,
+            end: self.window_frame_range.end - n_prune,
+        };
+        self.last_calculated_index -= n_prune;
+        self.offset_pruned_rows += n_prune;
+
+        match self.window_frame_ctx.as_mut() {
+            // Rows have no state do nothing
+            Some(WindowFrameContext::Rows(_)) => {}
+            Some(WindowFrameContext::Range { .. }) => {}
+            Some(WindowFrameContext::Groups { state, .. }) => {
+                let mut n_group_to_del = 0;
+                for (_, end_idx) in &state.group_end_indices {
+                    if n_prune < *end_idx {
+                        break;
+                    }
+                    n_group_to_del += 1;
+                }
+                state.group_end_indices.drain(0..n_group_to_del);
+                state
+                    .group_end_indices
+                    .iter_mut()
+                    .for_each(|(_, start_idx)| *start_idx -= n_prune);
+                state.current_group_idx -= n_group_to_del;
+            }
+            None => {}
+        };
+    }
+
+    pub fn update(
+        &mut self,
+        out_col: &ArrayRef,
+        partition_batch_state: &PartitionBatchState,
+    ) -> Result<()> {
+        self.last_calculated_index += out_col.len();
+        self.out_col = concat(&[&self.out_col, &out_col])?;
+        self.n_row_result_missing =
+            partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
+        self.is_end = partition_batch_state.is_end;
+        Ok(())
+    }
+
+    pub fn new(out_type: &DataType) -> Result<Self> {
+        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
+        Ok(Self {
+            window_frame_range: Range { start: 0, end: 0 },
+            window_frame_ctx: None,
+            last_calculated_index: 0,
+            offset_pruned_rows: 0,
+            out_col: empty_out_col,
+            n_row_result_missing: 0,
+            is_end: false,
+        })
+    }
+}
 
 /// This object stores the window frame state for use in incremental calculations.
 #[derive(Debug)]
@@ -125,7 +206,7 @@ impl WindowFrameContext {
                 )))
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
-                min(idx + n as usize, length)
+                std::cmp::min(idx + n as usize, length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
@@ -150,7 +231,7 @@ impl WindowFrameContext {
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
-                min(idx + n as usize + 1, length)
+                std::cmp::min(idx + n as usize + 1, length)
             }
             // ERRONEOUS FRAMES
             WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
@@ -159,6 +240,17 @@ impl WindowFrameContext {
         };
         Ok(Range { start, end })
     }
+}
+
+/// State for each unique partition determined according to PARTITION BY column(s)
+#[derive(Debug)]
+pub struct PartitionBatchState {
+    /// The record_batch belonging to current partition
+    pub record_batch: RecordBatch,
+    /// Flag indicating whether we have received all data for this partition
+    pub is_end: bool,
+    /// Number of rows emitted for each partition
+    pub n_out_row: usize,
 }
 
 /// This structure encapsulates all the state information we require as we scan
@@ -510,7 +602,7 @@ impl WindowFrameStateGroups {
         Ok(match (SIDE, SEARCH_SIDE) {
             // Window frame start:
             (true, _) => {
-                let group_idx = min(group_idx, self.group_end_indices.len());
+                let group_idx = std::cmp::min(group_idx, self.group_end_indices.len());
                 if group_idx > 0 {
                     // Normally, start at the boundary of the previous group.
                     self.group_end_indices[group_idx - 1].1
@@ -531,7 +623,7 @@ impl WindowFrameStateGroups {
             }
             // Window frame end, FOLLOWING n
             (false, false) => {
-                let group_idx = min(
+                let group_idx = std::cmp::min(
                     self.current_group_idx + delta,
                     self.group_end_indices.len() - 1,
                 );
@@ -547,17 +639,15 @@ fn check_equality(current: &[ScalarValue], target: &[ScalarValue]) -> Result<boo
 
 #[cfg(test)]
 mod tests {
-    use crate::window::window_frame_state::WindowFrameStateGroups;
+    use super::*;
+    use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
     use arrow::array::{ArrayRef, Float64Array};
-    use arrow_schema::SortOptions;
-    use datafusion_common::from_slice::FromSlice;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
     use std::ops::Range;
     use std::sync::Arc;
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
-        let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
+        let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![
             5.0, 7.0, 8.0, 8.0, 9., 10., 10., 10., 11.,
         ]))];
         let sort_options = vec![SortOptions {

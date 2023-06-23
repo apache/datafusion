@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use datafusion::{
     arrow::util::pretty,
     catalog::{
-        catalog::{CatalogList, CatalogProvider},
         schema::SchemaProvider,
+        {CatalogList, CatalogProvider},
     },
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat, FileFormat},

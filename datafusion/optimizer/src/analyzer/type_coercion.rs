@@ -28,6 +28,7 @@ use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like, ScalarFunction,
     ScalarUDF, WindowFunction,
 };
+use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
@@ -40,14 +41,14 @@ use datafusion_expr::type_coercion::other::{
 use datafusion_expr::type_coercion::{is_datetime, is_numeric, is_utf8_or_large_utf8};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
-    aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
-    is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    aggregate_function, is_false, is_not_false, is_not_true, is_not_unknown, is_true,
+    is_unknown, type_coercion, AggregateFunction, BuiltinScalarFunction, Expr,
+    LogicalPlan, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::{merge_schema, rewrite_preserving_name};
+use crate::utils::merge_schema;
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -380,13 +381,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(expr)
             }
             Expr::ScalarFunction(ScalarFunction { fun, args }) => {
-                let nex_expr = coerce_arguments_for_signature(
+                let new_args = coerce_arguments_for_signature(
                     args.as_slice(),
                     &self.schema,
-                    &function::signature(&fun),
+                    &fun.signature(),
                 )?;
-                let expr = Expr::ScalarFunction(ScalarFunction::new(fun, nex_expr));
-                Ok(expr)
+                let new_args =
+                    coerce_arguments_for_fun(new_args.as_slice(), &self.schema, &fun)?;
+                Ok(Expr::ScalarFunction(ScalarFunction::new(fun, new_args)))
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
@@ -595,6 +597,39 @@ fn coerce_arguments_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
+fn coerce_arguments_for_fun(
+    expressions: &[Expr],
+    schema: &DFSchema,
+    fun: &BuiltinScalarFunction,
+) -> Result<Vec<Expr>> {
+    if expressions.is_empty() {
+        return Ok(vec![]);
+    }
+
+    if *fun == BuiltinScalarFunction::MakeArray {
+        // Find the final data type for the function arguments
+        let current_types = expressions
+            .iter()
+            .map(|e| e.get_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let new_type = current_types
+            .iter()
+            .skip(1)
+            .fold(current_types.first().unwrap().clone(), |acc, x| {
+                comparison_coercion(&acc, x).unwrap_or(acc)
+            });
+
+        return expressions
+            .iter()
+            .enumerate()
+            .map(|(_, expr)| cast_expr(expr, &new_type, schema))
+            .collect();
+    }
+
+    Ok(expressions.to_vec())
+}
+
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
     expr.clone().cast_to(to_type, schema)
@@ -748,10 +783,9 @@ mod test {
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
     use datafusion_expr::{
-        cast, col, concat, concat_ws, create_udaf, is_true,
-        AccumulatorFunctionImplementation, AggregateFunction, AggregateUDF, BinaryExpr,
-        BuiltinScalarFunction, Case, ColumnarValue, ExprSchemable, Filter, Operator,
-        StateTypeFunction, Subquery,
+        cast, col, concat, concat_ws, create_udaf, is_true, AccumulatorFactoryFunction,
+        AggregateFunction, AggregateUDF, BinaryExpr, BuiltinScalarFunction, Case,
+        ColumnarValue, ExprSchemable, Filter, Operator, StateTypeFunction, Subquery,
     };
     use datafusion_expr::{
         lit,
@@ -906,7 +940,7 @@ mod test {
             Arc::new(move |_| Ok(Arc::new(DataType::Float64)));
         let state_type: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::UInt64, DataType::Float64])));
-        let accumulator: AccumulatorFunctionImplementation = Arc::new(|_| {
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| {
             Ok(Box::new(AvgAccumulator::try_new(
                 &DataType::Float64,
                 &DataType::Float64,
@@ -1005,7 +1039,7 @@ mod test {
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =
-            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
+            "Projection: a IN ([CAST(Int32(1) AS Int64), CAST(Int8(4) AS Int64), Int64(8)]) AS a IN (Map { iter: Iter([Literal(Int32(1)), Literal(Int8(4)), Literal(Int64(8))]) })\
              \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)?;
 
@@ -1024,7 +1058,7 @@ mod test {
         }));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected =
-            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Int32(1), Int8(4), Int64(8)]) })\
+            "Projection: CAST(a AS Decimal128(24, 4)) IN ([CAST(Int32(1) AS Decimal128(24, 4)), CAST(Int8(4) AS Decimal128(24, 4)), CAST(Int64(8) AS Decimal128(24, 4))]) AS a IN (Map { iter: Iter([Literal(Int32(1)), Literal(Int8(4)), Literal(Int64(8))]) })\
              \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected)
     }

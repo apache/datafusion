@@ -20,7 +20,7 @@ use crate::error::Result;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
-    ordering_equivalence_properties_helper, DisplayFormatType, ExecutionPlan,
+    ordering_equivalence_properties_helper, DisplayAs, DisplayFormatType, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_execution::TaskContext;
@@ -146,11 +146,8 @@ impl ExecutionPlan for AvroExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        match t {
-            DisplayFormatType::Default => {
-                write!(f, "AvroExec: {}", self.base_config)
-            }
-        }
+        write!(f, "AvroExec: ")?;
+        self.base_config.fmt_as(t, f)
     }
 
     fn statistics(&self) -> Statistics {
@@ -165,6 +162,7 @@ impl ExecutionPlan for AvroExec {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
+    use crate::datasource::avro_to_arrow::Reader as AvroReader;
     use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
     use crate::datasource::physical_plan::FileMeta;
     use bytes::Buf;
@@ -179,11 +177,8 @@ mod private {
     }
 
     impl AvroConfig {
-        fn open<R: std::io::Read>(
-            &self,
-            reader: R,
-        ) -> Result<crate::avro_to_arrow::Reader<'static, R>> {
-            crate::avro_to_arrow::Reader::try_new(
+        fn open<R: std::io::Read>(&self, reader: R) -> Result<AvroReader<'static, R>> {
+            AvroReader::try_new(
                 reader,
                 self.schema.clone(),
                 self.batch_size,

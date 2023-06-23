@@ -18,6 +18,7 @@
 //! Column expression
 
 use std::any::Any;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::{
@@ -115,6 +116,11 @@ impl PhysicalExpr for Column {
         let col_bounds = context.column_boundaries[self.index].clone();
         Ok(context.with_boundaries(col_bounds))
     }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
+    }
 }
 
 impl PartialEq<dyn Any> for Column {
@@ -196,6 +202,11 @@ impl PhysicalExpr for UnKnownColumn {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

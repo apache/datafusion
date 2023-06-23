@@ -19,7 +19,6 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::common::{batch_byte_size, spawn_buffered, IPCWriter};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -36,6 +35,7 @@ use arrow::compute::{concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{
     human_readable_size, MemoryConsumer, MemoryReservation,
 };
@@ -150,7 +150,7 @@ impl ExternalSorter {
             //
             // The factor of 2 aims to avoid a degenerate case where the
             // memory required for `fetch` is just under the memory available,
-            // causing repeated resorting of data
+            // causing repeated re-sorting of data
             if self.reservation.size() > before / 2
                 || self.reservation.try_grow(size).is_err()
             {
@@ -625,7 +625,7 @@ impl ExecutionPlan for SortExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
                 match self.fetch {
                     Some(fetch) => {

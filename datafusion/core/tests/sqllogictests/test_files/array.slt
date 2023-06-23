@@ -49,29 +49,72 @@ select make_array(make_array(make_array(make_array(1, 2, 3), make_array(4, 5, 6)
 ----
 [[[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]]]
 
-# array_append scalar function
+# array scalar function #6
+query ? rowsort
+select make_array()
+----
+[]
+
+# array scalar function #7
+query ?? rowsort
+select make_array(make_array()), make_array(make_array(make_array()))
+----
+[[]] [[[]]]
+
+# TODO issue: https://github.com/apache/arrow-datafusion/issues/6596
+# array_append scalar function #1
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_append(make_array(), 4);
+
+# array_append scalar function #2
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_append(make_array(), make_array()), array_append(make_array(), make_array(4));
+
+# array_append scalar function #3
 query ??? rowsort
 select array_append(make_array(1, 2, 3), 4), array_append(make_array(1.0, 2.0, 3.0), 4.0), array_append(make_array('h', 'e', 'l', 'l'), 'o');
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
-# array_prepend scalar function
+# array_prepend scalar function #1
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_prepend(4, make_array());
+
+# array_prepend scalar function #2
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_prepend(make_array(), make_array()), array_prepend(make_array(4), make_array());
+
+# array_prepend scalar function #3
 query ??? rowsort
 select array_prepend(1, make_array(2, 3, 4)), array_prepend(1.0, make_array(2.0, 3.0, 4.0)), array_prepend('h', make_array('e', 'l', 'l', 'o'));
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
 # array_fill scalar function #1
-query ??? rowsort
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_fill(11, make_array(1, 2, 3)), array_fill(3, make_array(2, 3)), array_fill(2, make_array(2));
-----
-[[[11, 11, 11], [11, 11, 11]]] [[3, 3, 3], [3, 3, 3]] [2, 2]
 
 # array_fill scalar function #2
-query ?? rowsort
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_fill(1, make_array(1, 1, 1)), array_fill(2, make_array(2, 2, 2, 2, 2));
-----
-[[[1]]] [[[[[2, 2], [2, 2]], [[2, 2], [2, 2]]], [[[2, 2], [2, 2]], [[2, 2], [2, 2]]]], [[[[2, 2], [2, 2]], [[2, 2], [2, 2]]], [[[2, 2], [2, 2]], [[2, 2], [2, 2]]]]]
+
+# array_fill scalar function #3
+query error DataFusion error: SQL error: TokenizerError\("Unterminated string literal at Line: 2, Column 856"\)
+caused by
+Internal error: Optimizer rule 'simplify_expressions' failed, due to generate a different schema, original schema: DFSchema \{ fields: \[DFField \{ qualifier: None, field: Field \{ name: "array_fill\(Int64\(1\),make_array\(\)\)", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \} \}\], metadata: \{\} \}, new schema: DFSchema \{ fields: \[DFField \{ qualifier: None, field: Field \{ name: "array_fill\(Int64\(1\),make_array\(\)\)", data_type: List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \} \}\], metadata: \{\} \}\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+select array_fill(1, make_array())
 
 # array_concat scalar function #1
 query ?? rowsort
@@ -97,6 +140,18 @@ select array_concat(make_array([[1]]), make_array([[2]]));
 ----
 [[[1]], [[2]]]
 
+# array_concat scalar function #5
+query ? rowsort
+select array_concat(make_array(2, 3), make_array());
+----
+[2, 3]
+
+# array_concat scalar function #6
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_concat(make_array(), make_array(2, 3));
+
 # array_position scalar function #1
 query III
 select array_position(['h', 'e', 'l', 'l', 'o'], 'l'), array_position([1, 2, 3, 4, 5], 5), array_position([1, 1, 1], 1);
@@ -110,10 +165,10 @@ select array_position(['h', 'e', 'l', 'l', 'o'], 'l', 4), array_position([1, 2, 
 4 5 2
 
 # array_positions scalar function
-query III
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
 select array_positions(['h', 'e', 'l', 'l', 'o'], 'l'), array_positions([1, 2, 3, 4, 5], 5), array_positions([1, 1, 1], 1);
-----
-[3, 4] [5] [1, 2, 3]
 
 # array_replace scalar function
 query ???
@@ -122,16 +177,22 @@ select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
 
 # array_to_string scalar function
-query ???
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Arrow error: Cast error: Cannot cast string '1\-2\-3\-4\-5' to value of Int64 type
 select array_to_string(['h', 'e', 'l', 'l', 'o'], ','), array_to_string([1, 2, 3, 4, 5], '-'), array_to_string([1.0, 2.0, 3.0], '|');
-----
-h,e,l,l,o 1-2-3-4-5 1|2|3
 
 # array_to_string scalar function #2
-query ???
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Arrow error: Cast error: Cannot cast string '1\+2\+3\+4\+5\+6' to value of Int64 type
 select array_to_string([1, 1, 1], '1'), array_to_string([[1, 2], [3, 4], [5, 6]], '+'), array_to_string(array_fill(3, [3, 2, 2]), '/\');
-----
-11111 1+2+3+4+5+6 3/\3/\3/\3/\3/\3/\3/\3/\3/\3/\3/\3
+
+# array_to_string scalar function #3
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert Utf8 to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_to_string(make_array(), ',')
 
 # cardinality scalar function
 query III
@@ -140,22 +201,40 @@ select cardinality(make_array(1, 2, 3, 4, 5)), cardinality([1, 3, 5]), cardinali
 5 3 5
 
 # cardinality scalar function #2
-query II
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select cardinality(make_array([1, 2], [3, 4], [5, 6])), cardinality(array_fill(3, array[3, 2, 3]));
-----
-6 18
 
-# trim_array scalar function
+# cardinality scalar function #3
+query II
+select cardinality(make_array()), cardinality(make_array(make_array()))
+----
+0 0
+
+# trim_array scalar function #1
 query ???
 select trim_array(make_array(1, 2, 3, 4, 5), 2), trim_array(['h', 'e', 'l', 'l', 'o'], 3), trim_array([1.0, 2.0, 3.0], 2);
 ----
 [1, 2, 3] [h, e] [1.0]
 
 # trim_array scalar function #2
-query ??
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select trim_array([[1, 2], [3, 4], [5, 6]], 2), trim_array(array_fill(4, [3, 4, 2]), 2);
+
+# trim_array scalar function #3
+query ?
+select array_concat(trim_array(make_array(1, 2, 3), 3), make_array(4, 5), make_array());
 ----
-[[1, 2]] [[[4, 4], [4, 4], [4, 4], [4, 4]]]
+[4, 5]
+
+# trim_array scalar function #4
+query ??
+select trim_array(make_array(), 0), trim_array(make_array(), 1)
+----
+[] []
 
 # array_length scalar function
 query III rowsort
@@ -176,22 +255,34 @@ select array_length(make_array(1, 2, 3, 4, 5), 2), array_length(make_array(1, 2,
 NULL NULL 2
 
 # array_length scalar function #4
-query IIII rowsort
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_length(array_fill(3, [3, 2, 5]), 1), array_length(array_fill(3, [3, 2, 5]), 2), array_length(array_fill(3, [3, 2, 5]), 3), array_length(array_fill(3, [3, 2, 5]), 4);
+
+# array_length scalar function #5
+query III rowsort
+select array_length(make_array()), array_length(make_array(), 1), array_length(make_array(), 2)
 ----
-3 2 5 NULL
+0 0 NULL
 
 # array_dims scalar function
-query III rowsort
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
 select array_dims(make_array(1, 2, 3)), array_dims(make_array([1, 2], [3, 4])), array_dims(make_array([[[[1], [2]]]]));
-----
-[3] [2, 2] [1, 1, 1, 2, 1]
 
 # array_dims scalar function #2
-query II rowsort
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_dims(array_fill(2, [1, 2, 3])), array_dims(array_fill(3, [2, 5, 4]));
-----
-[1, 2, 3] [2, 5, 4]
+
+# array_dims scalar function #3
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
+select array_dims(make_array()), array_dims(make_array(make_array()))
 
 # array_ndims scalar function
 query III rowsort
@@ -200,7 +291,69 @@ select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4]))
 1 2 5
 
 # array_ndims scalar function #2
-query II rowsort
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
+caused by
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_ndims(array_fill(1, [1, 2, 3])), array_ndims([[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]);
+
+# array_ndims scalar function #3
+query II rowsort
+select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
-3 21
+1 2
+
+# array concatenate operator #1 (like array_concat scalar function)
+query ?? rowsort
+select make_array(1, 2, 3) || make_array(4, 5, 6) || make_array(7, 8, 9), make_array([1], [2]) || make_array([3], [4]);
+----
+[1, 2, 3, 4, 5, 6, 7, 8, 9] [[1], [2], [3], [4]]
+
+# array concatenate operator #2 (like array_append scalar function)
+query ??? rowsort
+select make_array(1, 2, 3) || 4, make_array(1.0, 2.0, 3.0) || 4.0, make_array('h', 'e', 'l', 'l') || 'o';
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# array concatenate operator #3 (like array_prepend scalar function)
+query ??? rowsort
+select 1 || make_array(2, 3, 4), 1.0 || make_array(2.0, 3.0, 4.0), 'h' || make_array('e', 'l', 'l', 'o');
+----
+[1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
+
+# make_array
+
+query ?
+select make_array(1, 2.0)
+----
+[1.0, 2.0]
+
+query ?
+select make_array(null, 1.0)
+----
+[, 1.0]
+
+query ?
+select make_array(1, 2.0, null, 3)
+----
+[1.0, 2.0, , 3.0]
+
+query ?
+select make_array(1.0, '2', null)
+----
+[1.0, 2, ]
+
+statement ok
+create table foo1 (x int, y double) as values (1, 2.0);
+
+query ?
+select make_array(x, y) from foo1;
+----
+[1.0, 2.0]
+
+statement ok
+create table foo2 (x float, y varchar) as values (1.0, '1');
+
+query ?
+select make_array(x, y) from foo2;
+----
+[1.0, 1]

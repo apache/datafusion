@@ -20,14 +20,12 @@
 use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
-use crate::{
-    error::{DataFusionError, Result},
-    physical_plan::{
-        display::DisplayableExecutionPlan, DisplayFormatType, ExecutionPlan,
-        Partitioning, Statistics,
-    },
+use crate::physical_plan::{
+    display::DisplayableExecutionPlan, DisplayFormatType, ExecutionPlan, Partitioning,
+    Statistics,
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::{DataFusionError, Result};
 use futures::StreamExt;
 
 use super::expressions::PhysicalSortExpr;
@@ -166,7 +164,7 @@ impl ExecutionPlan for AnalyzeExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AnalyzeExec verbose={}", self.verbose)
             }
         }
@@ -193,7 +191,7 @@ fn create_output_batch(
     type_builder.append_value("Plan with Metrics");
 
     let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
-        .indent()
+        .indent(verbose)
         .to_string();
     plan_builder.append_value(annotated_plan);
 
@@ -203,7 +201,7 @@ fn create_output_batch(
         type_builder.append_value("Plan with Full Metrics");
 
         let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
-            .indent()
+            .indent(verbose)
             .to_string();
         plan_builder.append_value(annotated_plan);
 
@@ -211,7 +209,7 @@ fn create_output_batch(
         plan_builder.append_value(total_rows.to_string());
 
         type_builder.append_value("Duration");
-        plan_builder.append_value(format!("{:?}", duration));
+        plan_builder.append_value(format!("{duration:?}"));
     }
 
     RecordBatch::try_new(

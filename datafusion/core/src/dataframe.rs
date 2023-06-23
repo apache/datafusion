@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataFrame API for building and executing query plans.
+//! [`DataFrame`] API for building and executing query plans.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use datafusion_common::{DataFusionError, SchemaError};
 use parquet::file::properties::WriterProperties;
 
-use datafusion_common::from_slice::FromSlice;
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{
     avg, count, is_null, max, median, min, stddev, utils::COUNT_STAR_EXPANSION,
@@ -215,6 +214,14 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
+    }
+
+    /// Apply one or more window functions ([`Expr::WindowFunction`]) to extend the schema
+    pub fn window(self, window_exprs: Vec<Expr>) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .window(window_exprs)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
     }
@@ -411,7 +418,7 @@ impl DataFrame {
         ];
 
         // first column with function names
-        let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from_slice(
+        let mut array_ref_vec: Vec<ArrayRef> = vec![Arc::new(StringArray::from(
             supported_describe_functions.clone(),
         ))];
         for field in original_schema_fields {
@@ -435,7 +442,7 @@ impl DataFrame {
                                     cast(column, &DataType::Utf8)?
                                 }
                             }
-                            _ => Arc::new(StringArray::from_slice(["null"])),
+                            _ => Arc::new(StringArray::from(vec!["null"])),
                         }
                     }
                     //Handling error when only boolean/binary column, and in other cases
@@ -446,7 +453,7 @@ impl DataFrame {
                                             or aggregate expression",
                         ) =>
                     {
-                        Arc::new(StringArray::from_slice(["null"]))
+                        Arc::new(StringArray::from(vec!["null"]))
                     }
                     Err(other_err) => {
                         panic!("{other_err}")

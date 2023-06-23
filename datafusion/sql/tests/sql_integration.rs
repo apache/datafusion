@@ -28,7 +28,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     logical_plan::{LogicalPlan, Prepare},
-    AggregateUDF, ScalarUDF, TableSource,
+    AggregateUDF, ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_sql::{
     parser::DFParser,
@@ -197,31 +197,39 @@ fn try_cast_from_aggregation() {
 }
 
 #[test]
-fn cast_to_invalid_decimal_type() {
+fn cast_to_invalid_decimal_type_precision_0() {
     // precision == 0
     {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Internal("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r##"Plan("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
             format!("{err:?}")
         );
     }
+}
+
+#[test]
+fn cast_to_invalid_decimal_type_precision_gt_38() {
     // precision > 38
     {
         let sql = "SELECT CAST(10 AS DECIMAL(39))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Internal("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r##"Plan("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
             format!("{err:?}")
         );
     }
+}
+
+#[test]
+fn cast_to_invalid_decimal_type_precision_lt_scale() {
     // precision < scale
     {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r##"Internal("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
+            r##"Plan("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
             format!("{err:?}")
         );
     }
@@ -881,7 +889,7 @@ fn select_aggregate_with_having_referencing_column_not_in_select() {
     assert_eq!(
         "Plan(\"HAVING clause references non-aggregate values: \
             Expression person.first_name could not be resolved from available columns: \
-            COUNT(UInt8(1))\")",
+            COUNT(*)\")",
         format!("{err:?}")
     );
 }
@@ -1084,8 +1092,8 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
                    GROUP BY first_name
                    HAVING MAX(age) > 100 AND COUNT(*) < 50";
     let expected = "Projection: person.first_name, MAX(person.age)\
-                        \n  Filter: MAX(person.age) > Int64(100) AND COUNT(UInt8(1)) < Int64(50)\
-                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age), COUNT(UInt8(1))]]\
+                        \n  Filter: MAX(person.age) > Int64(100) AND COUNT(*) < Int64(50)\
+                        \n    Aggregate: groupBy=[[person.first_name]], aggr=[[MAX(person.age), COUNT(*)]]\
                         \n      TableScan: person";
     quick_test(sql, expected);
 }
@@ -1263,7 +1271,7 @@ fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "ArrowError(ParseError(\"Parsed interval field value out of range: 0 months 100000000000000000 days 0 nanos\"))",
+        "ArrowError(InvalidArgumentError(\"Unable to represent 100000000000000000 days in a signed 32-bit integer\"))",
         format!("{err:?}")
     );
 }
@@ -1665,8 +1673,8 @@ fn select_group_by_columns_not_in_select() {
 #[test]
 fn select_group_by_count_star() {
     let sql = "SELECT state, COUNT(*) FROM person GROUP BY state";
-    let expected = "Projection: person.state, COUNT(UInt8(1))\
-                        \n  Aggregate: groupBy=[[person.state]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.state, COUNT(*)\
+                        \n  Aggregate: groupBy=[[person.state]], aggr=[[COUNT(*)]]\
                         \n    TableScan: person";
 
     quick_test(sql, expected);
@@ -2691,6 +2699,10 @@ impl ContextProvider for MockContextProvider {
         unimplemented!()
     }
 
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
+        None
+    }
+
     fn options(&self) -> &ConfigOptions {
         &self.options
     }
@@ -2738,6 +2750,30 @@ fn cte_use_same_name_multiple_times() {
         "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
     let result = logical_plan(sql).err().unwrap();
     assert_eq!(result.to_string(), expected);
+}
+
+#[test]
+fn negative_interval_plus_interval_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days';";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn complex_interval_expression_in_projection() {
+    let sql = "select -interval '2 days' + interval '5 days'+ (-interval '3 days' + interval '5 days');";
+    let expected =
+    "Projection: IntervalMonthDayNano(\"79228162477370849446124847104\") + IntervalMonthDayNano(\"92233720368547758080\") + IntervalMonthDayNano(\"79228162458924105372415295488\") + IntervalMonthDayNano(\"92233720368547758080\")\n  EmptyRelation";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn negative_sum_intervals_in_projection() {
+    let sql = "select -((interval '2 days' + interval '5 days') + -(interval '4 days' + interval '7 days'));";
+    let expected =
+    "Projection: (- IntervalMonthDayNano(\"36893488147419103232\") + IntervalMonthDayNano(\"92233720368547758080\") + (- IntervalMonthDayNano(\"73786976294838206464\") + IntervalMonthDayNano(\"129127208515966861312\")))\n  EmptyRelation";
+    quick_test(sql, expected);
 }
 
 #[test]
@@ -2884,8 +2920,8 @@ fn scalar_subquery_reference_outer_field() {
     let expected = "Projection: j1.j1_string, j2.j2_string\
         \n  Filter: j1.j1_id = j2.j2_id - Int64(1) AND j2.j2_id < (<subquery>)\
         \n    Subquery:\
-        \n      Projection: COUNT(UInt8(1))\
-        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n      Projection: COUNT(*)\
+        \n        Aggregate: groupBy=[[]], aggr=[[COUNT(*)]]\
         \n          Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id\
         \n            CrossJoin:\
         \n              TableScan: j1\
@@ -2983,8 +3019,8 @@ fn cte_unbalanced_number_of_columns() {
 fn aggregate_with_rollup() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -2993,8 +3029,8 @@ fn aggregate_with_rollup() {
 fn aggregate_with_rollup_with_grouping() {
     let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
         FROM person GROUP BY id, ROLLUP (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, GROUPING(person.state), GROUPING(person.age), GROUPING(person.state) + GROUPING(person.age), COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[GROUPING(person.state), GROUPING(person.age), COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3025,8 +3061,8 @@ fn rank_partition_grouping() {
 fn aggregate_with_cube() {
     let sql =
         "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3042,8 +3078,8 @@ fn round_decimal() {
 #[test]
 fn aggregate_with_grouping_sets() {
     let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-    let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+    let expected = "Projection: person.id, person.state, person.age, COUNT(*)\
+    \n  Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[COUNT(*)]]\
     \n    TableScan: person";
     quick_test(sql, expected);
 }
@@ -3589,7 +3625,7 @@ fn test_prepare_statement_to_plan_no_param() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Expected 1 parameters, got 0\")")]
+#[should_panic(expected = "value: Plan(\"Expected 1 parameters, got 0\")")]
 fn test_prepare_statement_to_plan_one_param_no_value_panic() {
     // no embedded parameter but still declare it
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
@@ -3602,7 +3638,7 @@ fn test_prepare_statement_to_plan_one_param_no_value_panic() {
 
 #[test]
 #[should_panic(
-    expected = "value: Internal(\"Expected parameter of type Int32, got Float64 at index 0\")"
+    expected = "value: Plan(\"Expected parameter of type Int32, got Float64 at index 0\")"
 )]
 fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
     // no embedded parameter but still declare it
@@ -3615,7 +3651,7 @@ fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
 }
 
 #[test]
-#[should_panic(expected = "value: Internal(\"Expected 0 parameters, got 1\")")]
+#[should_panic(expected = "value: Plan(\"Expected 0 parameters, got 1\")")]
 fn test_prepare_statement_to_plan_no_param_on_value_panic() {
     // no embedded parameter but still declare it
     let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";

@@ -25,13 +25,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::{DataFusionError, Result};
 
 use super::expressions::PhysicalSortExpr;
 use super::{
@@ -170,7 +170,7 @@ impl ExecutionPlan for GlobalLimitExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "GlobalLimitExec: skip={}, fetch={}",
@@ -337,7 +337,7 @@ impl ExecutionPlan for LocalLimitExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
             }
         }

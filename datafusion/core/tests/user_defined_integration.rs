@@ -15,30 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+/// Run all tests that are found in the `user_defined` directory
+mod user_defined;
 
-/// A utility struct that can be used to generate unique aliases when optimizing queries
-pub struct AliasGenerator {
-    next_id: AtomicUsize,
-}
-
-impl Default for AliasGenerator {
-    fn default() -> Self {
-        Self {
-            next_id: AtomicUsize::new(1),
-        }
-    }
-}
-
-impl AliasGenerator {
-    /// Create a new [`AliasGenerator`]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Return a unique alias with the provided prefix
-    pub fn next(&self, prefix: &str) -> String {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        format!("{prefix}_{id}")
-    }
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // Enable RUST_LOG logging configuration for test
+    let _ = env_logger::try_init();
 }

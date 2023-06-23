@@ -125,10 +125,6 @@ impl AggregateExpr for Max {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn supports_bounded_execution(&self) -> bool {
-        true
-    }
-
     fn create_row_accumulator(
         &self,
         start_index: usize,
@@ -699,6 +695,10 @@ impl Accumulator for SlidingMaxAccumulator {
         Ok(self.max.clone())
     }
 
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
     }
@@ -823,10 +823,6 @@ impl AggregateExpr for Min {
 
     fn row_accumulator_supported(&self) -> bool {
         is_row_accumulator_support_dtype(&self.data_type)
-    }
-
-    fn supports_bounded_execution(&self) -> bool {
-        true
     }
 
     fn create_row_accumulator(
@@ -956,6 +952,10 @@ impl Accumulator for SlidingMinAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.min.clone())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {

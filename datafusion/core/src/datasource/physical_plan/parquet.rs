@@ -21,7 +21,8 @@ use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningPredicate, FileMeta, FileScanConfig, SchemaAdapter,
+    parquet::page_filter::PagePruningPredicate, DisplayAs, FileMeta, FileScanConfig,
+    SchemaAdapter,
 };
 use crate::{
     config::ConfigOptions,
@@ -65,7 +66,7 @@ use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
 use parquet::schema::types::ColumnDescriptor;
 
 mod metrics;
-mod page_filter;
+pub mod page_filter;
 mod row_filter;
 mod row_groups;
 
@@ -418,7 +419,7 @@ impl ExecutionPlan for ParquetExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let predicate_string = self
                     .predicate
                     .as_ref()
@@ -431,11 +432,9 @@ impl ExecutionPlan for ParquetExec {
                     .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
                     .unwrap_or_default();
 
-                write!(
-                    f,
-                    "ParquetExec: {}{}{}",
-                    self.base_config, predicate_string, pruning_predicate_string,
-                )
+                write!(f, "ParquetExec: ")?;
+                self.base_config.fmt_as(t, f)?;
+                write!(f, "{}{}", predicate_string, pruning_predicate_string,)
             }
         }
     }
@@ -612,12 +611,14 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     ) -> Result<Box<dyn AsyncFileReader + Send>>;
 }
 
+/// Default parquet reader factory.
 #[derive(Debug)]
 pub struct DefaultParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
 }
 
 impl DefaultParquetFileReaderFactory {
+    /// Create a factory.
     pub fn new(store: Arc<dyn ObjectStore>) -> Self {
         Self { store }
     }
@@ -1867,7 +1868,9 @@ mod tests {
         assert!(pruning_predicate.is_some());
 
         // convert to explain plan form
-        let display = displayable(rt.parquet_exec.as_ref()).indent().to_string();
+        let display = displayable(rt.parquet_exec.as_ref())
+            .indent(true)
+            .to_string();
 
         assert_contains!(
             &display,

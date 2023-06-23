@@ -101,7 +101,7 @@ use super::metrics::ParquetFileMetrics;
 /// So we can entirely skip rows 0->199 and 250->299 as we know they
 /// can not contain rows that match the predicate.
 #[derive(Debug)]
-pub(crate) struct PagePruningPredicate {
+pub struct PagePruningPredicate {
     predicates: Vec<PruningPredicate>,
 }
 

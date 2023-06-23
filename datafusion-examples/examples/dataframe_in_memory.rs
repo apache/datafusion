@@ -21,7 +21,6 @@ use datafusion::arrow::array::{Int32Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
-use datafusion::from_slice::FromSlice;
 use datafusion::prelude::*;
 
 /// This example demonstrates how to use the DataFrame API against in-memory data.
@@ -37,8 +36,8 @@ async fn main() -> Result<()> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
         ],
     )?;
 

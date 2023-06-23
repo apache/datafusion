@@ -100,6 +100,16 @@ pub fn check_subquery_expr(
         }
         check_correlations_in_subquery(inner_plan, true)
     } else {
+        if let Expr::InSubquery(subquery) = expr {
+            // InSubquery should only return one column
+            if subquery.subquery.subquery.schema().fields().len() > 1 {
+                return Err(datafusion_common::DataFusionError::Plan(format!(
+                    "InSubquery should only return one column, but found {}: {}",
+                    subquery.subquery.subquery.schema().fields().len(),
+                    subquery.subquery.subquery.schema().field_names().join(", "),
+                )));
+            }
+        }
         match outer_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
@@ -157,7 +167,7 @@ fn check_inner_plan(
                 .collect::<Vec<_>>();
             if is_aggregate && is_scalar && !maybe_unsupport.is_empty() {
                 return Err(DataFusionError::Plan(format!(
-                    "Correlated column is not allowed in predicate: {predicate:?}"
+                    "Correlated column is not allowed in predicate: {predicate}"
                 )));
             }
             check_inner_plan(input, is_scalar, is_aggregate, can_contain_outer_ref)

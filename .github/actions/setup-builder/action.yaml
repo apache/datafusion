@@ -43,6 +43,11 @@ runs:
       # "1" means line tables only, which is useful for panic tracebacks.
       shell: bash
       run: echo "RUSTFLAGS=-C debuginfo=1" >> $GITHUB_ENV
+    - name: Disable incremental compilation
+      # Disable incremental compilation to save diskspace (the CI doesn't recompile modified files)
+      # https://github.com/apache/arrow-datafusion/issues/6676
+      shell: bash
+      run: echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - name: Enable backtraces
       shell: bash
       run: echo "RUST_BACKTRACE=1" >> $GITHUB_ENV

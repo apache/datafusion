@@ -24,6 +24,7 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_physical_expr::expressions::Column;
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -41,9 +42,8 @@ use datafusion_common::{ScalarValue, SharedResult};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
-use crate::physical_plan::expressions::Column;
+use datafusion_common::JoinType;
+use datafusion_common::{DataFusionError, Result};
 
 use crate::physical_plan::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::physical_plan::SchemaRef;
@@ -784,8 +784,8 @@ pub(crate) fn apply_join_filter_to_indices(
         filter.schema(),
         build_input_buffer,
         probe_batch,
-        build_indices.clone(),
-        probe_indices.clone(),
+        &build_indices,
+        &probe_indices,
         filter.column_indices(),
         build_side,
     )?;
@@ -809,8 +809,8 @@ pub(crate) fn build_batch_from_indices(
     schema: &Schema,
     build_input_buffer: &RecordBatch,
     probe_batch: &RecordBatch,
-    build_indices: UInt64Array,
-    probe_indices: UInt32Array,
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
 ) -> Result<RecordBatch> {
@@ -841,7 +841,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(build_indices.null_count(), build_indices.len());
                 new_null_array(array.data_type(), build_indices.len())
             } else {
-                compute::take(array.as_ref(), &build_indices, None)?
+                compute::take(array.as_ref(), build_indices, None)?
             }
         } else {
             let array = probe_batch.column(column_index.index);
@@ -849,7 +849,7 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
             } else {
-                compute::take(array.as_ref(), &probe_indices, None)?
+                compute::take(array.as_ref(), probe_indices, None)?
             }
         };
         columns.push(array);

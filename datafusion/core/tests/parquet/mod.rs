@@ -378,7 +378,7 @@ fn make_decimal_batch(v: Vec<i128>, precision: u8, scale: i8) -> RecordBatch {
         true,
     )]));
     let array = Arc::new(
-        Decimal128Array::from_iter_values(v)
+        Decimal128Array::from(v)
             .with_precision_and_scale(precision, scale)
             .unwrap(),
     ) as ArrayRef;

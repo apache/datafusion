@@ -827,7 +827,7 @@ impl ExecutionPlan for AggregateExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.groups.len() == 1 {
                     self.group_by
@@ -1182,7 +1182,6 @@ fn evaluate_group_by(
 mod tests {
     use super::*;
     use crate::execution::context::SessionConfig;
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
         get_finest_requirement, get_working_mode, AggregateExec, AggregateMode,
         PhysicalGroupBy,
@@ -1320,16 +1319,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from_slice([2, 3, 4, 4])),
-                        Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
+                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from_slice([2, 3, 3, 4])),
-                        Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
+                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),

@@ -88,7 +88,6 @@ smallvec = { version = "1.6", features = ["union"] }
 sqlparser = { version = "0.34", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
-tokio-stream = "0.1"
 tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
@@ -109,7 +108,7 @@ postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.17.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-sqllogictest = "0.13.2"
+sqllogictest = "0.14.0"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"

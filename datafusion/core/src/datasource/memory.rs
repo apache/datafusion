@@ -18,8 +18,9 @@
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
 use futures::StreamExt;
+use log::debug;
 use std::any::Any;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -35,9 +36,9 @@ use crate::logical_expr::Expr;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -55,23 +56,26 @@ pub struct MemTable {
 impl MemTable {
     /// Create a new in-memory table from the provided schema and record batches
     pub fn try_new(schema: SchemaRef, partitions: Vec<Vec<RecordBatch>>) -> Result<Self> {
-        if partitions
-            .iter()
-            .flatten()
-            .all(|batches| schema.contains(&batches.schema()))
-        {
-            Ok(Self {
-                schema,
-                batches: partitions
-                    .into_iter()
-                    .map(|e| Arc::new(RwLock::new(e)))
-                    .collect::<Vec<_>>(),
-            })
-        } else {
-            Err(DataFusionError::Plan(
-                "Mismatch between schema and batches".to_string(),
-            ))
+        for batches in partitions.iter().flatten() {
+            let batches_schema = batches.schema();
+            if !schema.contains(&batches_schema) {
+                debug!(
+                    "mem table schema does not contain batches schema. \
+                        Target_schema: {schema:?}. Batches Schema: {batches_schema:?}"
+                );
+                return Err(DataFusionError::Plan(
+                    "Mismatch between schema and batches".to_string(),
+                ));
+            }
         }
+
+        Ok(Self {
+            schema,
+            batches: partitions
+                .into_iter()
+                .map(|e| Arc::new(RwLock::new(e)))
+                .collect::<Vec<_>>(),
+        })
     }
 
     /// Create a mem table by reading from another data source
@@ -209,10 +213,14 @@ impl Debug for MemSink {
     }
 }
 
-impl Display for MemSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let partition_count = self.batches.len();
-        write!(f, "MemoryTable (partitions={partition_count})")
+impl DisplayAs for MemSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partition_count = self.batches.len();
+                write!(f, "MemoryTable (partitions={partition_count})")
+            }
+        }
     }
 }
 
@@ -256,7 +264,6 @@ impl DataSink for MemSink {
 mod tests {
     use super::*;
     use crate::datasource::provider_as_source;
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
     use arrow::array::{AsArray, Int32Array};
@@ -280,9 +287,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
                 Arc::new(Int32Array::from(vec![None, None, Some(9)])),
             ],
         )?;
@@ -317,9 +324,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )?;
 
@@ -347,9 +354,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )?;
 
@@ -390,9 +397,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema1,
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )?;
 
@@ -422,8 +429,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema1,
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([7, 5, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![7, 5, 9])),
             ],
         )?;
 
@@ -466,18 +473,18 @@ mod tests {
         let batch1 = RecordBatch::try_new(
             Arc::new(schema1),
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )?;
 
         let batch2 = RecordBatch::try_new(
             Arc::new(schema2),
             vec![
-                Arc::new(Int32Array::from_slice([1, 2, 3])),
-                Arc::new(Int32Array::from_slice([4, 5, 6])),
-                Arc::new(Int32Array::from_slice([7, 8, 9])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
             ],
         )?;
 
@@ -574,7 +581,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
         // Run the experiment and obtain the resulting data in the table
         let resulting_data_in_table =
@@ -594,7 +601,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
         // Run the experiment and obtain the resulting data in the table
         let resulting_data_in_table = experiment(
@@ -617,7 +624,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
         // Run the experiment and obtain the resulting data in the table
         let resulting_data_in_table = experiment(
@@ -643,7 +650,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )?;
         // Run the experiment and obtain the resulting data in the table
         let resulting_data_in_table = experiment(

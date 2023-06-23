@@ -16,6 +16,7 @@
 // under the License.
 
 use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
@@ -51,7 +52,7 @@ type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 ///     [WHEN ...]
 ///     [ELSE result]
 /// END
-#[derive(Debug)]
+#[derive(Debug, Hash)]
 pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -347,6 +348,11 @@ impl PhysicalExpr for CaseExpr {
                 else_expr,
             )?))
         }
+    }
+
+    fn dyn_hash(&self, state: &mut dyn Hasher) {
+        let mut s = state;
+        self.hash(&mut s);
     }
 }
 

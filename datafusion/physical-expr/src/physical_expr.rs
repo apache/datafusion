@@ -32,6 +32,7 @@ use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterato
 
 use crate::intervals::{Interval, IntervalBound};
 use std::any::Any;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -102,6 +103,44 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         Err(DataFusionError::NotImplemented(format!(
             "Not implemented for {self}"
         )))
+    }
+
+    /// Update the hash `state` with this expression requirements from
+    /// [`Hash`].
+    ///
+    /// This method is required to support hashing [`PhysicalExpr`]s.  To
+    /// implement it, typically the type implementing
+    /// [`PhysicalExpr`] implements [`Hash`] and
+    /// then the following boiler plate is used:
+    ///
+    /// # Example:
+    /// ```
+    /// // User defined expression that derives Hash
+    /// #[derive(Hash, Debug, PartialEq, Eq)]
+    /// struct MyExpr {
+    ///   val: u64
+    /// }
+    ///
+    /// // impl PhysicalExpr {
+    /// // ...
+    /// # impl MyExpr {
+    ///   // Boiler plate to call the derived Hash impl
+    ///   fn dyn_hash(&self, state: &mut dyn std::hash::Hasher) {
+    ///     use std::hash::Hash;
+    ///     let mut s = state;
+    ///     self.hash(&mut s);
+    ///   }
+    /// // }
+    /// # }
+    /// ```
+    /// Note: [`PhysicalExpr`] is not constrained by [`Hash`]
+    /// directly because it must remain object safe.
+    fn dyn_hash(&self, _state: &mut dyn Hasher);
+}
+
+impl Hash for dyn PhysicalExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dyn_hash(state);
     }
 }
 

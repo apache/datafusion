@@ -19,7 +19,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
+use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
@@ -67,15 +67,13 @@ fn subquery_filter_with_cast() -> Result<()> {
     )";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-    \n  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.__value\
-    \n    CrossJoin:\
-    \n      TableScan: test projection=[col_int32]\
-    \n      SubqueryAlias: __scalar_sq_1\
-    \n        Projection: AVG(test.col_int32) AS __value\
-    \n          Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
-    \n            Projection: test.col_int32\
-    \n              Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
-    \n                TableScan: test projection=[col_int32, col_utf8]";
+    \n  Inner Join:  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.AVG(test.col_int32)\
+    \n    TableScan: test projection=[col_int32]\
+    \n    SubqueryAlias: __scalar_sq_1\
+    \n      Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
+    \n        Projection: test.col_int32\
+    \n          Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
+    \n            TableScan: test projection=[col_int32, col_utf8]";
     assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
@@ -407,6 +405,10 @@ impl ContextProvider for MySchemaProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
     }
 
