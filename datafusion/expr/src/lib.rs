@@ -25,6 +25,8 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
+#![warn(unused_crate_dependencies)]
+
 mod accumulator;
 pub mod aggregate_function;
 pub mod array_expressions;

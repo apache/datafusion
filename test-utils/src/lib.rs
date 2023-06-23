@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![warn(unused_crate_dependencies)]
+
 //! Common functions used for testing
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int32_array;

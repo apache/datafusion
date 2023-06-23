@@ -17,6 +17,7 @@
 
 //! This module provides a SQL parser that translates SQL queries into an abstract syntax
 //! tree (AST), and a SQL query planner that creates a logical plan from the AST.
+#![warn(unused_crate_dependencies)]
 
 mod expr;
 pub mod parser;

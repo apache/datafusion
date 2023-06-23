@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![warn(
+    unused_crate_dependencies
+)]
+
 use clap::Parser;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;

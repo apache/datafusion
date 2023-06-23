@@ -16,6 +16,7 @@
 // under the License.
 
 //! DataFusion execution configuration and runtime structures
+#![warn(unused_crate_dependencies)]
 
 pub mod config;
 pub mod disk_manager;

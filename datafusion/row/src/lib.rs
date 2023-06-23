@@ -30,6 +30,7 @@
 //! merging.
 //!
 //! [this paper]: https://db.in.tum.de/~kersten/vectorization_vs_compilation.pdf
+#![warn(unused_crate_dependencies)]
 
 use arrow::array::{make_builder, ArrayBuilder, ArrayRef};
 use arrow::datatypes::Schema;

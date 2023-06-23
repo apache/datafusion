@@ -16,6 +16,7 @@
 // under the License.
 
 //! Serde code for logical plans and expressions.
+#![warn(unused_crate_dependencies)]
 
 pub mod bytes;
 pub mod common;

@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-#![warn(missing_docs, clippy::needless_borrow)]
+#![warn(missing_docs, clippy::needless_borrow, unused_crate_dependencies)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's many [use

@@ -41,7 +41,6 @@ unicode_expressions = ["datafusion-physical-expr/unicode_expressions"]
 
 [dependencies]
 arrow = { workspace = true }
-async-trait = "0.1.41"
 chrono = { version = "0.4.23", default-features = false }
 datafusion-common = { path = "../common", version = "26.0.0" }
 datafusion-expr = { path = "../expr", version = "26.0.0" }

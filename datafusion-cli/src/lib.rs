@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![warn(
+    unused_crate_dependencies
+)]
+
 #![doc = include_str!("../README.md")]
 pub const DATAFUSION_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
