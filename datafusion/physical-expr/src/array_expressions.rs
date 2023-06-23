@@ -1684,12 +1684,12 @@ mod tests {
         // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 3)) = t
         let first_array = return_array().into_array(1);
         let second_array = array_append(&[
-            ColumnarValue::Array(first_array.clone()),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
+            first_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(3)])),
         ])
         .expect("failed to initialize function array_contains");
 
-        let arr = array_contains(&[first_array.clone(), second_array.into_array(1)])
+        let arr = array_contains(&[first_array.clone(), second_array])
             .expect("failed to initialize function array_contains");
         let result = as_boolean_array(&arr);
 
@@ -1697,12 +1697,12 @@ mod tests {
 
         // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 5)) = f
         let second_array = array_append(&[
-            ColumnarValue::Array(first_array.clone()),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(5))),
+            first_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(5)])),
         ])
         .expect("failed to initialize function array_contains");
 
-        let arr = array_contains(&[first_array.clone(), second_array.into_array(1)])
+        let arr = array_contains(&[first_array.clone(), second_array])
             .expect("failed to initialize function array_contains");
         let result = as_boolean_array(&arr);
 
@@ -1714,26 +1714,22 @@ mod tests {
         // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 3)) = t
         let first_array = return_nested_array().into_array(1);
         let array = return_array().into_array(1);
-        let second_array = array_append(&[
-            ColumnarValue::Array(array.clone()),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(3))),
-        ])
-        .expect("failed to initialize function array_contains");
+        let second_array =
+            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(3)]))])
+                .expect("failed to initialize function array_contains");
 
-        let arr = array_contains(&[first_array.clone(), second_array.into_array(1)])
+        let arr = array_contains(&[first_array.clone(), second_array])
             .expect("failed to initialize function array_contains");
         let result = as_boolean_array(&arr);
 
         assert_eq!(result, &BooleanArray::from(vec![true]));
 
         // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 9)) = f
-        let second_array = array_append(&[
-            ColumnarValue::Array(array.clone()),
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(9))),
-        ])
-        .expect("failed to initialize function array_contains");
+        let second_array =
+            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(9)]))])
+                .expect("failed to initialize function array_contains");
 
-        let arr = array_contains(&[first_array.clone(), second_array.into_array(1)])
+        let arr = array_contains(&[first_array.clone(), second_array])
             .expect("failed to initialize function array_contains");
         let result = as_boolean_array(&arr);
 
