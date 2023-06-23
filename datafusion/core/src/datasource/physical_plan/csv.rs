@@ -23,7 +23,6 @@ use crate::datasource::physical_plan::file_stream::{
 };
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::physical_plan::{
@@ -46,7 +45,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
-use tokio::task::{self, JoinHandle};
+use tokio::task::JoinSet;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
@@ -331,7 +330,7 @@ pub async fn plan_to_csv(
         )));
     }
 
-    let mut tasks = vec![];
+    let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan = plan.clone();
         let filename = format!("part-{i}.csv");
@@ -340,22 +339,25 @@ pub async fn plan_to_csv(
         let mut writer = csv::Writer::new(file);
         let stream = plan.execute(i, task_ctx.clone())?;
 
-        let handle: JoinHandle<Result<()>> = task::spawn(async move {
+        join_set.spawn(async move {
             stream
                 .map(|batch| writer.write(&batch?))
-                .try_collect()
+                .try_collect::<Vec<()>>()
                 .await
                 .map_err(DataFusionError::from)
         });
-        tasks.push(AbortOnDropSingle::new(handle));
     }
 
-    futures::future::join_all(tasks)
-        .await
-        .into_iter()
-        .try_for_each(|result| {
-            result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
-        })?;
+    while let Some(result) = join_set.join_next().await {
+        if let Err(e) = result {
+            if e.is_panic() {
+                std::panic::resume_unwind(e.into_panic());
+            } else {
+                unreachable!();
+            }
+        }
+    }
+
     Ok(())
 }
 
