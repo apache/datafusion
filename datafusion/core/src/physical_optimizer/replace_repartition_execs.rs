@@ -77,8 +77,8 @@ fn is_repartition_matches_with_output_ordering(
     let orderings_matched = ordering_satisfy(
         sort_exec.output_ordering(),
         repartition.input().output_ordering(),
-        || repartition.equivalence_properties(),
-        || repartition.ordering_equivalence_properties(),
+        || repartition.input().equivalence_properties(),
+        || repartition.input().ordering_equivalence_properties(),
     );
     orderings_matched && !repartition.maintains_input_order()[0]
 }
@@ -149,7 +149,7 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
                     sort_exec.input().output_ordering(),
                     changed_sort_exec.input().output_ordering(),
                     || changed_sort_exec.input().equivalence_properties(),
-                    || changed_sort_exec.ordering_equivalence_properties(),
+                    || changed_sort_exec.input().ordering_equivalence_properties(),
                 ) {
                     Ok(Transformed::No(plan.clone()))
                 } else {
