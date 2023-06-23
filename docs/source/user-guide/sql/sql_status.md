@@ -53,8 +53,13 @@
   - [x] `SHOW CREATE TABLE <view>`
   - [x] Basic SQL [Information Schema](./information_schema.md) (`TABLES`, `VIEWS`, `COLUMNS`)
   - [ ] Full SQL [Information Schema](./information_schema.md) support
-- [x] Support for nested types (`ARRAY`/`LIST` and `STRUCT`)- see [Array Functions](./scalar_functions.md#array-functions)
-- [x] Nested types (`ARRAY`/`LIST` and `STRUCT`)- see [Array Functions](./scalar_functions.md#array-functions)
+- [ ] Support for nested types (`ARRAY`/`LIST` and `STRUCT`)
+  - [x] Read/Write support
+  - [x] Field access (`col['field']` and [`col[1]`])
+  - [x] [Array Functions](./scalar_functions.md#array-functions)
+  - [ ] [Struct Functions](./scalar_functions.md#struct-functions)
+    - [x] `struct`
+    - [ ] [Postgres JSON operators](https://github.com/apache/arrow-datafusion/issues/6631) (`->`, `->>`, etc.)
 - [x] Subqueries
 - [x] Common Table Expressions (CTE)
 - [x] Set Operations (`UNION [ALL]`, `INTERSECT [ALL]`, `EXCEPT[ALL]`)
