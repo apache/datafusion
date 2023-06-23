@@ -81,7 +81,7 @@ macro_rules! array {
 fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Internal(
+        return Err(DataFusionError::Plan(
             "Array requires at least one argument".to_string(),
         ));
     }
