@@ -275,7 +275,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 ----ProjectionExec: expr=[b@0 as b, MAX(d.a)@1 as max_a]
 ------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[MAX(d.a)]
 --------CoalesceBatchesExec: target_batch_size=8192
-----------RepartitionExec: partitioning=Hash([Column { name: "b", index: 0 }], 4), input_partitions=4
+----------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
 ------------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[MAX(d.a)]
 --------------UnionExec
 ----------------ProjectionExec: expr=[1 as a, aa as b]
@@ -362,7 +362,7 @@ SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 --------BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 ----------SortExec: expr=[b@1 ASC NULLS LAST,a@0 ASC NULLS LAST]
 ------------CoalesceBatchesExec: target_batch_size=8192
---------------RepartitionExec: partitioning=Hash([Column { name: "b", index: 1 }], 4), input_partitions=4
+--------------RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
 ----------------UnionExec
 ------------------ProjectionExec: expr=[1 as a, aa as b]
 --------------------EmptyExec: produce_one_row=true
@@ -1286,12 +1286,12 @@ ProjectionExec: expr=[SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_10
 --BoundedWindowAggExec: wdw=[COUNT(UInt8(1)): Ok(Field { name: "COUNT(UInt8(1))", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 ----SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]
 ------CoalesceBatchesExec: target_batch_size=4096
---------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+--------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ----------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, SUM(aggregate_test_100.c4) PARTITION BY [aggregate_test_100.c1, aggregate_test_100.c2] ORDER BY [aggregate_test_100.c2 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@3 as SUM(aggregate_test_100.c4)]
 ------------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: "SUM(aggregate_test_100.c4)", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }], mode=[Sorted]
 --------------SortExec: expr=[c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]
 ----------------CoalesceBatchesExec: target_batch_size=4096
-------------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }, Column { name: "c2", index: 1 }], 2), input_partitions=2
+------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=2
 --------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], has_header=true
 
@@ -1750,7 +1750,7 @@ ProjectionExec: expr=[COUNT(UInt8(1))@0 as global_count]
 ----------ProjectionExec: expr=[c1@0 as c1]
 ------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))]
 --------------CoalesceBatchesExec: target_batch_size=4096
-----------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[COUNT(UInt8(1))]
 --------------------ProjectionExec: expr=[c1@0 as c1]
 ----------------------CoalesceBatchesExec: target_batch_size=4096
@@ -1797,7 +1797,7 @@ GlobalLimitExec: skip=0, fetch=5
 ------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow }], mode=[Sorted]
 --------SortExec: expr=[c3@0 ASC NULLS LAST,c9@1 DESC]
 ----------CoalesceBatchesExec: target_batch_size=4096
-------------RepartitionExec: partitioning=Hash([Column { name: "c3", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=Hash([c3@0], 2), input_partitions=2
 --------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------ProjectionExec: expr=[c3@1 as c3, c9@2 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as SUM(aggregate_test_100.c9)]
 ------------------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: CurrentRow }], mode=[Sorted]
@@ -1839,7 +1839,7 @@ SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
 ----BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
 ------SortExec: expr=[c1@0 ASC NULLS LAST]
 --------CoalesceBatchesExec: target_batch_size=4096
-----------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
@@ -1966,7 +1966,7 @@ SortExec: expr=[c1@0 ASC NULLS LAST]
 ------BoundedWindowAggExec: wdw=[ROW_NUMBER(): Ok(Field { name: "ROW_NUMBER()", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }], mode=[Sorted]
 --------SortExec: expr=[c1@0 ASC NULLS LAST]
 ----------CoalesceBatchesExec: target_batch_size=4096
-------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 --------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 ----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
@@ -1995,7 +1995,7 @@ SortExec: expr=[c1@0 ASC NULLS LAST]
 ----------BoundedWindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: "SUM(aggregate_test_100.c9)", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(3)) }], mode=[Sorted]
 ------------SortExec: expr=[c1@0 ASC NULLS LAST,c9@1 ASC NULLS LAST]
 --------------CoalesceBatchesExec: target_batch_size=4096
-----------------RepartitionExec: partitioning=Hash([Column { name: "c1", index: 0 }], 2), input_partitions=2
+----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
 ------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 --------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
 

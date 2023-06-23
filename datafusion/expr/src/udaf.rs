@@ -19,20 +19,30 @@
 
 use crate::Expr;
 use crate::{
-    AccumulatorFunctionImplementation, ReturnTypeFunction, Signature, StateTypeFunction,
+    AccumulatorFactoryFunction, ReturnTypeFunction, Signature, StateTypeFunction,
 };
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-/// Logical representation of a user-defined aggregate function (UDAF).
+/// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
-/// A UDAF is different from a user-defined scalar function (UDF) in
-/// that it is stateful across batches. UDAFs can be used as normal
-/// aggregate functions as well as window functions (the `OVER` clause)
+/// An aggregate function combines the values from multiple input rows
+/// into a single output "aggregate" (summary) row. It is different
+/// from a scalar function because it is stateful across batches. User
+/// defined aggregate functions can be used as normal SQL aggregate
+/// functions (`GROUP BY` clause) as well as window functions (`OVER`
+/// clause).
 ///
-/// For more information, please see [the examples]
+/// `AggregateUDF` provides DataFusion the information needed to plan
+/// and call aggregate functions, including name, type information,
+/// and a factory function to create [`Accumulator`], which peform the
+/// actual aggregation.
+///
+/// For more information, please see [the examples].
 ///
 /// [the examples]: https://github.com/apache/arrow-datafusion/tree/main/datafusion-examples#single-process
+/// [aggregate function]: https://en.wikipedia.org/wiki/Aggregate_function
+/// [`Accumulator`]: crate::Accumulator
 #[derive(Clone)]
 pub struct AggregateUDF {
     /// name
@@ -42,7 +52,7 @@ pub struct AggregateUDF {
     /// Return type
     pub return_type: ReturnTypeFunction,
     /// actual implementation
-    pub accumulator: AccumulatorFunctionImplementation,
+    pub accumulator: AccumulatorFactoryFunction,
     /// the accumulator's state's description as a function of the return type
     pub state_type: StateTypeFunction,
 }
@@ -78,7 +88,7 @@ impl AggregateUDF {
         name: &str,
         signature: &Signature,
         return_type: &ReturnTypeFunction,
-        accumulator: &AccumulatorFunctionImplementation,
+        accumulator: &AccumulatorFactoryFunction,
         state_type: &StateTypeFunction,
     ) -> Self {
         Self {
@@ -90,8 +100,10 @@ impl AggregateUDF {
         }
     }
 
-    /// creates a logical expression with a call of the UDAF
-    /// This utility allows using the UDAF without requiring access to the registry.
+    /// creates an [`Expr`] that calls the aggregate function.
+    ///
+    /// This utility allows using the UDAF without requiring access to
+    /// the registry, such as with the DataFrame API.
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         Expr::AggregateUDF(crate::expr::AggregateUDF {
             fun: Arc::new(self.clone()),

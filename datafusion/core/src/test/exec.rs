@@ -231,7 +231,7 @@ impl ExecutionPlan for MockExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "MockExec")
             }
         }
@@ -358,7 +358,7 @@ impl ExecutionPlan for BarrierExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BarrierExec")
             }
         }
@@ -437,7 +437,7 @@ impl ExecutionPlan for ErrorExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ErrorExec")
             }
         }
@@ -516,7 +516,7 @@ impl ExecutionPlan for StatisticsExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "StatisticsExec: col_count={}, row_count={:?}",
@@ -611,7 +611,7 @@ impl ExecutionPlan for BlockingExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BlockingExec",)
             }
         }
@@ -749,7 +749,7 @@ impl ExecutionPlan for PanicExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PanickingExec",)
             }
         }

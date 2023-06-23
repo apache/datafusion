@@ -65,8 +65,10 @@ pub enum DataFusionError {
     NotImplemented(String),
     /// Error returned as a consequence of an error in DataFusion.
     /// This error should not happen in normal usage of DataFusion.
-    // DataFusions has internal invariants that we are unable to ask the compiler to check for us.
-    // This error is raised when one of those invariants is not verified during execution.
+    ///
+    /// DataFusions has internal invariants that the compiler is not
+    /// always able to check.  This error is raised when one of those
+    /// invariants is not verified during execution.
     Internal(String),
     /// This error happens whenever a plan is not valid. Examples include
     /// impossible casts.

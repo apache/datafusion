@@ -27,6 +27,7 @@ use datafusion_expr::expr::{
     WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
+use datafusion_expr::expr_vec_fmt;
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
@@ -121,14 +122,10 @@ fn check_column_satisfies_expr(
 ) -> Result<()> {
     if !columns.contains(expr) {
         return Err(DataFusionError::Plan(format!(
-            "{}: Expression {:?} could not be resolved from available columns: {}",
+            "{}: Expression {} could not be resolved from available columns: {}",
             message_prefix,
             expr,
-            columns
-                .iter()
-                .map(|e| format!("{e}"))
-                .collect::<Vec<String>>()
-                .join(", ")
+            expr_vec_fmt!(columns)
         )));
     }
     Ok(())
@@ -526,7 +523,7 @@ pub(crate) fn make_decimal_type(
         (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
-            return Err(DataFusionError::Internal(
+            return Err(DataFusionError::Plan(
                 "Cannot specify only scale for decimal data type".to_string(),
             ))
         }
@@ -538,7 +535,7 @@ pub(crate) fn make_decimal_type(
         || precision > DECIMAL128_MAX_PRECISION
         || scale.unsigned_abs() > precision
     {
-        Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Plan(format!(
             "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {

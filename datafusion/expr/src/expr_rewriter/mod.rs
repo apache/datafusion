@@ -17,7 +17,6 @@
 
 //! Expression rewriter
 
-use crate::expr::Sort;
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
@@ -252,46 +251,15 @@ pub fn rewrite_preserving_name<R>(expr: Expr, rewriter: &mut R) -> Result<Expr>
 where
     R: TreeNodeRewriter<N = Expr>,
 {
-    let original_name = name_for_alias(&expr)?;
+    let original_name = expr.name_for_alias()?;
     let expr = expr.rewrite(rewriter)?;
-    add_alias_if_changed(original_name, expr)
-}
-
-/// Return the name to use for the specific Expr, recursing into
-/// `Expr::Sort` as appropriate
-fn name_for_alias(expr: &Expr) -> Result<String> {
-    match expr {
-        // call Expr::display_name() on a Expr::Sort will throw an error
-        Expr::Sort(Sort { expr, .. }) => name_for_alias(expr),
-        expr => expr.display_name(),
-    }
-}
-
-/// Ensure `expr` has the name as `original_name` by adding an
-/// alias if necessary.
-fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
-    let new_name = name_for_alias(&expr)?;
-
-    if new_name == original_name {
-        return Ok(expr);
-    }
-
-    Ok(match expr {
-        Expr::Sort(Sort {
-            expr,
-            asc,
-            nulls_first,
-        }) => {
-            let expr = add_alias_if_changed(original_name, *expr)?;
-            Expr::Sort(Sort::new(Box::new(expr), asc, nulls_first))
-        }
-        expr => expr.alias(original_name),
-    })
+    expr.alias_if_changed(original_name)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::expr::Sort;
     use crate::{col, lit, Cast};
     use arrow::datatypes::DataType;
     use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
@@ -307,12 +275,12 @@ mod test {
         type N = Expr;
 
         fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
-            self.v.push(format!("Previsited {expr:?}"));
+            self.v.push(format!("Previsited {expr}"));
             Ok(RewriteRecursion::Continue)
         }
 
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            self.v.push(format!("Mutated {expr:?}"));
+            self.v.push(format!("Mutated {expr}"));
             Ok(expr)
         }
     }

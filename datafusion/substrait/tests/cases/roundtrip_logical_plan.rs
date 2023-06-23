@@ -29,6 +29,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
+use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 
@@ -327,8 +328,30 @@ async fn aggregate_case() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_inlist() -> Result<()> {
+async fn roundtrip_inlist_1() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a IN (1, 2, 3)").await
+}
+
+#[tokio::test]
+// Test with length <= datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+async fn roundtrip_inlist_2() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c')").await
+}
+
+#[tokio::test]
+// Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+async fn roundtrip_inlist_3() -> Result<()> {
+    let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
+        .map(|i| format!("'{}'", i))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    roundtrip(&format!("SELECT * FROM data WHERE f IN ({})", inlist)).await
+}
+
+#[tokio::test]
+async fn roundtrip_inlist_4() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE f NOT IN ('a', 'b', 'c', 'd')").await
 }
 
 #[tokio::test]
@@ -627,6 +650,7 @@ async fn create_context() -> Result<SessionContext> {
         Field::new("c", DataType::Date32, true),
         Field::new("d", DataType::Boolean, true),
         Field::new("e", DataType::UInt32, true),
+        Field::new("f", DataType::Utf8, true),
     ]);
     explicit_options.schema = Some(&schema);
     ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)

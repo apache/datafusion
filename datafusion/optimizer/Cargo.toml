@@ -47,7 +47,7 @@ datafusion-common = { path = "../common", version = "26.0.0" }
 datafusion-expr = { path = "../expr", version = "26.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "26.0.0", default-features = false }
 hashbrown = { version = "0.14", features = ["raw"] }
-itertools = "0.10"
+itertools = "0.11"
 log = "^0.4"
 regex-syntax = "0.7.1"
 
