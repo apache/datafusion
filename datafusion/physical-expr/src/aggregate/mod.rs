@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::aggregate::row_accumulator::RowAccumulator;
-use crate::expressions::{ArrayAgg, FirstValue, LastValue};
-use crate::PhysicalExpr;
+use crate::expressions::{FirstValue, LastValue, OrderSensitiveArrayAgg};
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -31,6 +31,7 @@ pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
 pub(crate) mod array_agg_distinct;
+pub(crate) mod array_agg_ordered;
 pub(crate) mod average;
 pub(crate) mod bit_and_or_xor;
 pub(crate) mod bool_and_or;
@@ -85,6 +86,13 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
+    /// Order by requirements for the aggregate function
+    /// By default it is `None` (there is no requirement)
+    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
+    fn order_bys(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
     /// Human readable name such as `"MIN(c2)"`. The default
     /// implementation returns placeholder text.
     fn name(&self) -> &str {
@@ -133,5 +141,5 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
 pub fn is_order_sensitive(aggr_expr: &Arc<dyn AggregateExpr>) -> bool {
     aggr_expr.as_any().is::<FirstValue>()
         || aggr_expr.as_any().is::<LastValue>()
-        || aggr_expr.as_any().is::<ArrayAgg>()
+        || aggr_expr.as_any().is::<OrderSensitiveArrayAgg>()
 }
