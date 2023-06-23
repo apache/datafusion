@@ -67,8 +67,14 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunction::AggregateFunction(fun) => {
-            let aggregate =
-                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+            let aggregate = aggregates::create_aggregate_expr(
+                fun,
+                false,
+                args,
+                &[],
+                input_schema,
+                name,
+            )?;
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,

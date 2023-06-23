@@ -1652,13 +1652,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let agg_expr = aggregates::create_aggregate_expr(
-                fun,
-                *distinct,
-                &args,
-                physical_input_schema,
-                name,
-            )?;
             let order_by = match order_by {
                 Some(e) => Some(
                     e.iter()
@@ -1674,6 +1667,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
+            let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+            let agg_expr = aggregates::create_aggregate_expr(
+                fun,
+                *distinct,
+                &args,
+                &ordering_reqs,
+                physical_input_schema,
+                name,
+            )?;
             Ok((agg_expr, filter, order_by))
         }
         Expr::AggregateUDF(AggregateUDF {
