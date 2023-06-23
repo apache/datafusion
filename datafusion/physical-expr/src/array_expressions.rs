@@ -106,7 +106,6 @@ fn array_array(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
         ));
     }
 
-    let data_type = args[0].data_type();
     let res = match data_type {
         DataType::List(..) => {
             let arrays =

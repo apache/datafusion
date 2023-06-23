@@ -116,9 +116,9 @@ select array_prepend(1, make_array(2, 3, 4)), array_prepend(1.0, make_array(2.0,
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
 # array_fill scalar function #1
-query error DataFusion error: SQL error: TokenizerError\("Unterminated string literal at Line: 2, Column 856"\)
+query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
 caused by
-Internal error: Optimizer rule 'simplify_expressions' failed, due to generate a different schema, original schema: DFSchema \{ fields: \[DFField \{ qualifier: None, field: Field \{ name: "array_fill\(Int64\(1\),make_array\(\)\)", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \} \}\], metadata: \{\} \}, new schema: DFSchema \{ fields: \[DFField \{ qualifier: None, field: Field \{ name: "array_fill\(Int64\(1\),make_array\(\)\)", data_type: List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \} \}\], metadata: \{\} \}\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_fill(11, make_array(1, 2, 3)), array_fill(3, make_array(2, 3)), array_fill(2, make_array(2));
 
 # array_fill scalar function #2
