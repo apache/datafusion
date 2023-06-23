@@ -999,15 +999,12 @@ dependencies = [
  "hashbrown 0.14.0",
  "indexmap",
  "itertools 0.11.0",
- "lazy_static",
  "log",
- "num_cpus",
  "object_store",
  "parking_lot",
  "parquet",
  "percent-encoding",
  "pin-project-lite",
- "rand",
  "smallvec",
  "sqlparser",
  "tempfile",
@@ -1086,7 +1083,6 @@ name = "datafusion-optimizer"
 version = "26.0.0"
 dependencies = [
  "arrow",
- "async-trait",
  "chrono",
  "datafusion-common",
  "datafusion-expr",
@@ -1135,7 +1131,6 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "paste",
- "rand",
 ]
 
 [[package]]
