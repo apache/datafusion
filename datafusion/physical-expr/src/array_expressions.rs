@@ -1488,7 +1488,7 @@ mod tests {
 
         assert_eq!(result, &UInt8Array::from(vec![4]));
 
-        // array_length([1, 2, 3, 4], 1) = 2
+        // array_length([1, 2, 3, 4], 1) = 4
         let array = array_length(&[
             list_array,
             ColumnarValue::Scalar(ScalarValue::UInt8(Some(1_u8))),
