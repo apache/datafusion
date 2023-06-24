@@ -95,6 +95,46 @@ impl InsertExec {
             count_schema: make_count_schema(),
         }
     }
+
+    fn make_input_stream(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let input_stream = self.input.execute(partition, context)?;
+
+        debug_assert_eq!(
+            self.sink_schema.fields().len(),
+            self.input.schema().fields().len()
+        );
+
+        // Find input columns that may violate the not null constraint.
+        let risky_columns: Vec<_> = self
+            .sink_schema
+            .fields()
+            .iter()
+            .zip(self.input.schema().fields().iter())
+            .enumerate()
+            .filter_map(|(i, (sink_field, input_field))| {
+                if !sink_field.is_nullable() && input_field.is_nullable() {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if risky_columns.is_empty() {
+            Ok(input_stream)
+        } else {
+            // Check not null constraint on the input stream
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                self.sink_schema.clone(),
+                input_stream
+                    .map(move |batch| check_not_null_contraits(batch?, &risky_columns)),
+            )))
+        }
+    }
 }
 
 impl ExecutionPlan for InsertExec {
@@ -175,13 +215,7 @@ impl ExecutionPlan for InsertExec {
             )));
         }
 
-        let sink_schema = self.sink_schema.clone();
-        let data = Box::pin(RecordBatchStreamAdapter::new(
-            self.sink_schema.clone(),
-            self.input
-                .execute(0, context.clone())?
-                .map(move |batch| check_batch(batch?, &sink_schema)),
-        ));
+        let data = self.make_input_stream(0, context.clone())?;
 
         let count_schema = self.count_schema.clone();
         let sink = self.sink.clone();
@@ -238,21 +272,24 @@ fn make_count_schema() -> SchemaRef {
     )]))
 }
 
-fn check_batch(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch> {
-    if batch.num_columns() != schema.fields().len() {
-        return Err(DataFusionError::Execution(format!(
-            "Invalid batch column count {} expected {}",
-            batch.num_columns(),
-            schema.fields().len()
-        )));
-    }
+fn check_not_null_contraits(
+    batch: RecordBatch,
+    column_indices: &Vec<usize>,
+) -> Result<RecordBatch> {
+    for i in column_indices {
+        let index = *i;
+        if batch.num_columns() <= index {
+            return Err(DataFusionError::Execution(format!(
+                "Invalid batch column count {} expected > {}",
+                batch.num_columns(),
+                index
+            )));
+        }
 
-    // Check NOT NULL constraints
-    for (i, field) in schema.fields().iter().enumerate() {
-        if !field.is_nullable() && batch.column(i).null_count() > 0 {
+        if batch.column(index).null_count() > 0 {
             return Err(DataFusionError::Execution(format!(
                 "Invalid batch column at '{}' has null but schema specifies non-nullable",
-                i
+                index
             )));
         }
     }
