@@ -430,11 +430,13 @@ pub mod prelude;
 pub mod scalar;
 pub mod variable;
 
-// re-export dependencies from arrow-rs to minimise version maintenance for crate users
+// re-export dependencies from arrow-rs to minimize version maintenance for crate users
 pub use arrow;
 pub use parquet;
 
-// re-export DataFusion crates
+// re-export DataFusion sub-crates at the top level. Use `pub use *`
+// so that the contents of the subcrates appears in rustdocs
+// for details, see https://github.com/apache/arrow-datafusion/issues/6648
 
 /// re-export of [`datafusion_common`] crate
 pub mod common {
