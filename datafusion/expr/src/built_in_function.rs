@@ -550,7 +550,9 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::DatePart => Ok(Float64),
             BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
                 match input_expr_types[1] {
-                    Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
+                    Timestamp(Nanosecond, _) | Utf8 | Null => {
+                        Ok(Timestamp(Nanosecond, None))
+                    }
                     Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
                     Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
                     Timestamp(Second, _) => Ok(Timestamp(Second, None)),
