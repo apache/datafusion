@@ -30,9 +30,7 @@ use datafusion_expr::utils::{
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::Expr::Alias;
-use datafusion_expr::{
-    Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
-};
+use datafusion_expr::{Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning};
 
 use sqlparser::ast::{Distinct, Expr as SQLExpr, WildcardAdditionalOptions, WindowType};
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
@@ -75,12 +73,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match_window_definitions(&mut select.projection, &select.named_window)?;
 
         // process the SELECT expressions, with wildcards expanded.
-        let select_exprs = self.prepare_select_exprs(
-            &plan,
-            select.projection,
-            empty_from,
-            planner_context,
-        )?;
+        let select_exprs =
+            self.prepare_select_exprs(&plan, select.projection, empty_from, planner_context)?;
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
@@ -94,11 +88,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let having_expr_opt = select
             .having
             .map::<Result<Expr>, _>(|having_expr| {
-                let having_expr = self.sql_expr_to_logical_expr(
-                    having_expr,
-                    &combined_schema,
-                    planner_context,
-                )?;
+                let having_expr =
+                    self.sql_expr_to_logical_expr(having_expr, &combined_schema, planner_context)?;
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -141,14 +132,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     alias_map.remove(f.name());
                 }
                 let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
-                let group_by_expr =
-                    resolve_positions_to_exprs(&group_by_expr, &select_exprs)
-                        .unwrap_or(group_by_expr);
+                let group_by_expr = resolve_positions_to_exprs(&group_by_expr, &select_exprs)
+                    .unwrap_or(group_by_expr);
                 let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
-                self.validate_schema_satisfies_exprs(
-                    plan.schema(),
-                    &[group_by_expr.clone()],
-                )?;
+                self.validate_schema_satisfies_exprs(plan.schema(), &[group_by_expr.clone()])?;
                 Ok(group_by_expr)
             })
             .collect::<Result<Vec<Expr>>>()?;
@@ -202,22 +189,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
-        let distinct = select
-            .distinct
-            .map(|distinct| match distinct {
-                Distinct::Distinct => Ok(true),
-                Distinct::On(_) => Err(DataFusionError::NotImplemented(
-                    "DISTINCT ON Exprs not supported".to_string(),
-                )),
-            })
-            .transpose()?
-            .unwrap_or(false);
-
-        let plan = if distinct {
-            LogicalPlanBuilder::from(plan).distinct()?.build()
+        let plan = if let Some(distinct) = select.distinct {
+            let on_expr = match distinct {
+                Distinct::Distinct => None,
+                Distinct::On(o) => Some(
+                    o.iter()
+                        .map(|e| {
+                            self.sql_expr_to_logical_expr(
+                                e.clone(),
+                                &plan.schema(),
+                                planner_context,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+            };
+            LogicalPlanBuilder::from(plan).distinct(on_expr)?.build()?
         } else {
-            Ok(plan)
-        }?;
+            plan
+        };
 
         // DISTRIBUTE BY
         let plan = if !select.distribute_by.is_empty() {
@@ -225,11 +215,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .distribute_by
                 .iter()
                 .map(|e| {
-                    self.sql_expr_to_logical_expr(
-                        e.clone(),
-                        &combined_schema,
-                        planner_context,
-                    )
+                    self.sql_expr_to_logical_expr(e.clone(), &combined_schema, planner_context)
                 })
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
@@ -341,8 +327,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(vec![col])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
-                let select_expr =
-                    self.sql_to_expr(expr, plan.schema(), planner_context)?;
+                let select_expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     select_expr,
                     &[&[plan.schema()]],
@@ -366,11 +351,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Self::check_wildcard_options(&options)?;
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(
-                    &qualifier,
-                    plan.schema().as_ref(),
-                    Some(options),
-                )
+                expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), Some(options))
             }
         }
     }
@@ -492,8 +473,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Rewrite the HAVING expression to use the columns produced by the
         // aggregation.
         let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
-            let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
+            let having_expr_post_aggr = rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
