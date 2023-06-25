@@ -1828,6 +1828,29 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#struct-functions">
+   Struct Functions
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#struct">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       struct
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id90">
+       Arguments
+      </a>
+     </li>
+    </ul>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#hashing-functions">
    Hashing Functions
   </a>
@@ -1842,7 +1865,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id90">
+      <a class="reference internal nav-link" href="#id91">
        Arguments
       </a>
      </li>
@@ -1858,7 +1881,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id91">
+      <a class="reference internal nav-link" href="#id92">
        Arguments
       </a>
      </li>
@@ -1874,7 +1897,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id92">
+      <a class="reference internal nav-link" href="#id93">
        Arguments
       </a>
      </li>
@@ -1890,7 +1913,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id93">
+      <a class="reference internal nav-link" href="#id94">
        Arguments
       </a>
      </li>
@@ -1906,7 +1929,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id94">
+      <a class="reference internal nav-link" href="#id95">
        Arguments
       </a>
      </li>
@@ -1922,7 +1945,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id95">
+      <a class="reference internal nav-link" href="#id96">
        Arguments
       </a>
      </li>
@@ -1945,7 +1968,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id96">
+      <a class="reference internal nav-link" href="#id97">
        Arguments
       </a>
      </li>
@@ -1956,22 +1979,6 @@
      <code class="docutils literal notranslate">
       <span class="pre">
        arrow_typeof
-      </span>
-     </code>
-    </a>
-    <ul class="nav section-nav flex-column">
-     <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id97">
-       Arguments
-      </a>
-     </li>
-    </ul>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#struct">
-     <code class="docutils literal notranslate">
-      <span class="pre">
-       struct
       </span>
      </code>
     </a>
@@ -3705,6 +3712,48 @@ Can be a constant, column, or function, and any combination of array operators.<
 </section>
 </section>
 </section>
+<section id="struct-functions">
+<h2>Struct Functions<a class="headerlink" href="#struct-functions" title="Permalink to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference internal" href="#struct">struct</a></p></li>
+</ul>
+<section id="struct">
+<h3><code class="docutils literal notranslate"><span class="pre">struct</span></code><a class="headerlink" href="#struct" title="Permalink to this heading">¶</a></h3>
+<p>Returns an Arrow struct using the specified input expressions.
+Fields in the returned struct use the <code class="docutils literal notranslate"><span class="pre">cN</span></code> naming convention.
+For example: <code class="docutils literal notranslate"><span class="pre">c0</span></code>, <code class="docutils literal notranslate"><span class="pre">c1</span></code>, <code class="docutils literal notranslate"><span class="pre">c2</span></code>, etc.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">struct</span><span class="p">(</span><span class="n">expression1</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">expression_n</span><span class="p">])</span>
+</pre></div>
+</div>
+<p>For example, this query converts two columns <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code> to a single column with
+a struct type of fields <code class="docutils literal notranslate"><span class="pre">c0</span></code> and <code class="docutils literal notranslate"><span class="pre">c1</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span>❯ select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+❯ select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+</pre></div>
+</div>
+<section id="id90">
+<h4>Arguments<a class="headerlink" href="#id90" title="Permalink to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>expression_n</strong>: Expression to include in the output struct.
+Can be a constant, column, or function, and any combination of arithmetic or
+string operators.</p></li>
+</ul>
+</section>
+</section>
+</section>
 <section id="hashing-functions">
 <h2>Hashing Functions<a class="headerlink" href="#hashing-functions" title="Permalink to this heading">¶</a></h2>
 <ul class="simple">
@@ -3721,8 +3770,8 @@ Can be a constant, column, or function, and any combination of array operators.<
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">digest</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">algorithm</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id90">
-<h4>Arguments<a class="headerlink" href="#id90" title="Permalink to this heading">¶</a></h4>
+<section id="id91">
+<h4>Arguments<a class="headerlink" href="#id91" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3748,8 +3797,8 @@ Must be one of:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">md5</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id91">
-<h4>Arguments<a class="headerlink" href="#id91" title="Permalink to this heading">¶</a></h4>
+<section id="id92">
+<h4>Arguments<a class="headerlink" href="#id92" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3762,8 +3811,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha224</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id92">
-<h4>Arguments<a class="headerlink" href="#id92" title="Permalink to this heading">¶</a></h4>
+<section id="id93">
+<h4>Arguments<a class="headerlink" href="#id93" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3776,8 +3825,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha256</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id93">
-<h4>Arguments<a class="headerlink" href="#id93" title="Permalink to this heading">¶</a></h4>
+<section id="id94">
+<h4>Arguments<a class="headerlink" href="#id94" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3790,8 +3839,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha384</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id94">
-<h4>Arguments<a class="headerlink" href="#id94" title="Permalink to this heading">¶</a></h4>
+<section id="id95">
+<h4>Arguments<a class="headerlink" href="#id95" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3804,8 +3853,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sha512</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id95">
-<h4>Arguments<a class="headerlink" href="#id95" title="Permalink to this heading">¶</a></h4>
+<section id="id96">
+<h4>Arguments<a class="headerlink" href="#id96" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: String expression to operate on.
 Can be a constant, column, or function, and any combination of string operators.</p></li>
@@ -3818,7 +3867,6 @@ Can be a constant, column, or function, and any combination of string operators.
 <ul class="simple">
 <li><p><a class="reference internal" href="#arrow-cast">arrow_cast</a></p></li>
 <li><p><a class="reference internal" href="#arrow-typeof">arrow_typeof</a></p></li>
-<li><p><a class="reference internal" href="#struct">struct</a></p></li>
 </ul>
 <section id="arrow-cast">
 <h3><code class="docutils literal notranslate"><span class="pre">arrow_cast</span></code><a class="headerlink" href="#arrow-cast" title="Permalink to this heading">¶</a></h3>
@@ -3826,8 +3874,8 @@ Can be a constant, column, or function, and any combination of string operators.
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">datatype</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id96">
-<h4>Arguments<a class="headerlink" href="#id96" title="Permalink to this heading">¶</a></h4>
+<section id="id97">
+<h4>Arguments<a class="headerlink" href="#id97" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to cast.
 Can be a constant, column, or function, and any combination of arithmetic or
@@ -3843,27 +3891,10 @@ to cast to.</p></li>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id97">
-<h4>Arguments<a class="headerlink" href="#id97" title="Permalink to this heading">¶</a></h4>
-<ul class="simple">
-<li><p><strong>expression</strong>: Expression to evaluate.
-Can be a constant, column, or function, and any combination of arithmetic or
-string operators.</p></li>
-</ul>
-</section>
-</section>
-<section id="struct">
-<h3><code class="docutils literal notranslate"><span class="pre">struct</span></code><a class="headerlink" href="#struct" title="Permalink to this heading">¶</a></h3>
-<p>Returns an Arrow struct using the specified input expressions.
-Fields in the returned struct use the <code class="docutils literal notranslate"><span class="pre">cN</span></code> naming convention.
-For example: <code class="docutils literal notranslate"><span class="pre">c0</span></code>, <code class="docutils literal notranslate"><span class="pre">c1</span></code>, <code class="docutils literal notranslate"><span class="pre">c2</span></code>, etc.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">struct</span><span class="p">(</span><span class="n">expression1</span><span class="p">[,</span> <span class="o">...</span><span class="p">,</span> <span class="n">expression_n</span><span class="p">])</span>
-</pre></div>
-</div>
 <section id="id98">
 <h4>Arguments<a class="headerlink" href="#id98" title="Permalink to this heading">¶</a></h4>
 <ul class="simple">
-<li><p><strong>expression_n</strong>: Expression to include in the output struct.
+<li><p><strong>expression</strong>: Expression to evaluate.
 Can be a constant, column, or function, and any combination of arithmetic or
 string operators.</p></li>
 </ul>

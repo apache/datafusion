@@ -1606,6 +1606,47 @@ trim_array(array, n)
   Can be a constant, column, or function, and any combination of array operators.
 - **n**: Element to trim the array.
 
+## Struct Functions
+
+- [struct](#struct)
+
+### `struct`
+
+Returns an Arrow struct using the specified input expressions.
+Fields in the returned struct use the `cN` naming convention.
+For example: `c0`, `c1`, `c2`, etc.
+
+```
+struct(expression1[, ..., expression_n])
+```
+
+For example, this query converts two columns `a` and `b` to a single column with
+a struct type of fields `c0` and `c1`:
+
+```sql
+❯ select * from t;
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
+| 3 | 4 |
++---+---+
+
+❯ select struct(a, b) from t;
++-----------------+
+| struct(t.a,t.b) |
++-----------------+
+| {c0: 1, c1: 2}  |
+| {c0: 3, c1: 4}  |
++-----------------+
+```
+
+#### Arguments
+
+- **expression_n**: Expression to include in the output struct.
+  Can be a constant, column, or function, and any combination of arithmetic or
+  string operators.
+
 ## Hashing Functions
 
 - [digest](#digest)
@@ -1708,7 +1749,6 @@ sha512(expression)
 
 - [arrow_cast](#arrow_cast)
 - [arrow_typeof](#arrow_typeof)
-- [struct](#struct)
 
 ### `arrow_cast`
 
@@ -1737,21 +1777,5 @@ arrow_typeof(expression)
 #### Arguments
 
 - **expression**: Expression to evaluate.
-  Can be a constant, column, or function, and any combination of arithmetic or
-  string operators.
-
-### `struct`
-
-Returns an Arrow struct using the specified input expressions.
-Fields in the returned struct use the `cN` naming convention.
-For example: `c0`, `c1`, `c2`, etc.
-
-```
-struct(expression1[, ..., expression_n])
-```
-
-#### Arguments
-
-- **expression_n**: Expression to include in the output struct.
   Can be a constant, column, or function, and any combination of arithmetic or
   string operators.
