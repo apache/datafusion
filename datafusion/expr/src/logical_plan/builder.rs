@@ -18,9 +18,8 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col,
-    normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
-    rewrite_sort_cols_by_aggs,
+    coerce_plan_expr_for_schema, normalize_col, normalize_col_with_schemas_and_ambiguity_check,
+    normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
@@ -28,13 +27,12 @@ use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
-        Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare, Projection,
+        Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values, Window,
     },
     utils::{
-        can_hash, expand_qualified_wildcard, expand_wildcard,
-        find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+        can_hash, expand_qualified_wildcard, expand_wildcard, find_valid_equijoin_key_pair,
+        group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
 };
@@ -176,18 +174,13 @@ impl LogicalPlanBuilder {
             .map(|(j, data_type)| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                DFField::new_unqualified(
-                    name,
-                    data_type.clone().unwrap_or(DataType::Utf8),
-                    true,
-                )
+                DFField::new_unqualified(name, data_type.clone().unwrap_or(DataType::Utf8), true)
             })
             .collect::<Vec<_>>();
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let schema =
-            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
+        let schema = DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -269,18 +262,13 @@ impl LogicalPlanBuilder {
                 DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
-                            DFField::from_qualified(
-                                table_name.clone(),
-                                schema.field(*i).clone(),
-                            )
+                            DFField::from_qualified(table_name.clone(), schema.field(*i).clone())
                         })
                         .collect(),
                     schema.metadata().clone(),
                 )
             })
-            .unwrap_or_else(|| {
-                DFSchema::try_from_qualified_schema(table_name.clone(), &schema)
-            })?;
+            .unwrap_or_else(|| DFSchema::try_from_qualified_schema(table_name.clone(), &schema))?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
@@ -294,10 +282,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Wrap a plan in a window
-    pub fn window_plan(
-        input: LogicalPlan,
-        window_exprs: Vec<Expr>,
-    ) -> Result<LogicalPlan> {
+    pub fn window_plan(input: LogicalPlan, window_exprs: Vec<Expr>) -> Result<LogicalPlan> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
@@ -331,10 +316,7 @@ impl LogicalPlanBuilder {
         Ok(plan)
     }
     /// Apply a projection without alias.
-    pub fn project(
-        self,
-        expr: impl IntoIterator<Item = impl Into<Expr>>,
-    ) -> Result<Self> {
+    pub fn project(self, expr: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
         Ok(Self::from(project(self.plan, expr)?))
     }
 
@@ -440,17 +422,12 @@ impl LogicalPlanBuilder {
                 Ok(project((*input).clone(), expr)?)
             }
             _ => {
-                let is_distinct =
-                    is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
+                let is_distinct = is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
                 let new_inputs = curr_plan
                     .inputs()
                     .into_iter()
                     .map(|input_plan| {
-                        Self::add_missing_columns(
-                            (*input_plan).clone(),
-                            missing_cols,
-                            is_distinct,
-                        )
+                        Self::add_missing_columns((*input_plan).clone(), missing_cols, is_distinct)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -500,10 +477,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a sort
-    pub fn sort(
-        self,
-        exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
-    ) -> Result<Self> {
+    pub fn sort(self, exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone) -> Result<Self> {
         let exprs = rewrite_sort_cols_by_aggs(exprs, &self.plan)?;
 
         let schema = self.plan.schema();
@@ -563,24 +537,75 @@ impl LogicalPlanBuilder {
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
         // unwrap top-level Distincts, to avoid duplication
         let left_plan: LogicalPlan = match self.plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
+            LogicalPlan::Distinct(Distinct {
+                input,
+                on_expr: None,
+            }) => (*input).clone(),
             _ => self.plan,
         };
         let right_plan: LogicalPlan = match plan {
-            LogicalPlan::Distinct(Distinct { input }) => (*input).clone(),
+            LogicalPlan::Distinct(Distinct {
+                input,
+                on_expr: None,
+            }) => (*input).clone(),
             _ => plan,
         };
 
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
             input: Arc::new(union(left_plan, right_plan)?),
+            on_expr: None,
         })))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
-    pub fn distinct(self) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(self.plan),
-        })))
+    pub fn distinct(self, on_expr: Option<Vec<Expr>>) -> Result<Self> {
+        if on_expr.is_none() {
+            return Ok(Self::from(LogicalPlan::Distinct(Distinct {
+                input: Arc::new(self.plan),
+                on_expr: None,
+            })));
+        }
+
+        let on_expr = on_expr.unwrap();
+
+        let schema = self.plan.schema();
+
+        // Collect sort columns that are missing in the input plan's schema
+        let mut missing_cols: Vec<Column> = vec![];
+        on_expr
+            .clone()
+            .into_iter()
+            .try_for_each::<_, Result<()>>(|expr| {
+                let columns = expr.to_columns()?;
+
+                columns.into_iter().for_each(|c| {
+                    if schema.field_from_column(&c).is_err() {
+                        missing_cols.push(c);
+                    }
+                });
+
+                Ok(())
+            })?;
+
+        // remove pushed down sort columns
+        let new_expr = schema
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(f.qualified_column()))
+            .collect();
+
+        let is_distinct = false; // We still haven't applied distinct
+        let plan = Self::add_missing_columns(self.plan, &missing_cols, is_distinct)?;
+
+        let distinct_plan = LogicalPlan::Distinct(Distinct {
+            input: Arc::new(plan),
+            on_expr: Some(on_expr),
+        });
+
+        Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
+            new_expr,
+            Arc::new(distinct_plan),
+        )?)))
     }
 
     /// Apply a join with on constraint.
@@ -638,81 +663,62 @@ impl LogicalPlanBuilder {
             None
         };
 
-        let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) =
-            join_keys
-                .0
-                .into_iter()
-                .zip(join_keys.1.into_iter())
-                .map(|(l, r)| {
-                    let l = l.into();
-                    let r = r.into();
+        let (left_keys, right_keys): (Vec<Result<Column>>, Vec<Result<Column>>) = join_keys
+            .0
+            .into_iter()
+            .zip(join_keys.1.into_iter())
+            .map(|(l, r)| {
+                let l = l.into();
+                let r = r.into();
 
-                    match (&l.relation, &r.relation) {
-                        (Some(lr), Some(rr)) => {
-                            let l_is_left =
-                                self.plan.schema().field_with_qualified_name(lr, &l.name);
-                            let l_is_right =
-                                right.schema().field_with_qualified_name(lr, &l.name);
-                            let r_is_left =
-                                self.plan.schema().field_with_qualified_name(rr, &r.name);
-                            let r_is_right =
-                                right.schema().field_with_qualified_name(rr, &r.name);
+                match (&l.relation, &r.relation) {
+                    (Some(lr), Some(rr)) => {
+                        let l_is_left = self.plan.schema().field_with_qualified_name(lr, &l.name);
+                        let l_is_right = right.schema().field_with_qualified_name(lr, &l.name);
+                        let r_is_left = self.plan.schema().field_with_qualified_name(rr, &r.name);
+                        let r_is_right = right.schema().field_with_qualified_name(rr, &r.name);
 
-                            match (l_is_left, l_is_right, r_is_left, r_is_right) {
-                                (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
-                                (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
-                                _ => (
-                                    Self::normalize(&self.plan, l),
-                                    Self::normalize(&right, r),
-                                ),
-                            }
-                        }
-                        (Some(lr), None) => {
-                            let l_is_left =
-                                self.plan.schema().field_with_qualified_name(lr, &l.name);
-                            let l_is_right =
-                                right.schema().field_with_qualified_name(lr, &l.name);
-
-                            match (l_is_left, l_is_right) {
-                                (Ok(_), _) => (Ok(l), Self::normalize(&right, r)),
-                                (_, Ok(_)) => (Self::normalize(&self.plan, r), Ok(l)),
-                                _ => (
-                                    Self::normalize(&self.plan, l),
-                                    Self::normalize(&right, r),
-                                ),
-                            }
-                        }
-                        (None, Some(rr)) => {
-                            let r_is_left =
-                                self.plan.schema().field_with_qualified_name(rr, &r.name);
-                            let r_is_right =
-                                right.schema().field_with_qualified_name(rr, &r.name);
-
-                            match (r_is_left, r_is_right) {
-                                (Ok(_), _) => (Ok(r), Self::normalize(&right, l)),
-                                (_, Ok(_)) => (Self::normalize(&self.plan, l), Ok(r)),
-                                _ => (
-                                    Self::normalize(&self.plan, l),
-                                    Self::normalize(&right, r),
-                                ),
-                            }
-                        }
-                        (None, None) => {
-                            let mut swap = false;
-                            let left_key = Self::normalize(&self.plan, l.clone())
-                                .or_else(|_| {
-                                    swap = true;
-                                    Self::normalize(&right, l)
-                                });
-                            if swap {
-                                (Self::normalize(&self.plan, r), left_key)
-                            } else {
-                                (left_key, Self::normalize(&right, r))
-                            }
+                        match (l_is_left, l_is_right, r_is_left, r_is_right) {
+                            (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
+                            (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
+                            _ => (Self::normalize(&self.plan, l), Self::normalize(&right, r)),
                         }
                     }
-                })
-                .unzip();
+                    (Some(lr), None) => {
+                        let l_is_left = self.plan.schema().field_with_qualified_name(lr, &l.name);
+                        let l_is_right = right.schema().field_with_qualified_name(lr, &l.name);
+
+                        match (l_is_left, l_is_right) {
+                            (Ok(_), _) => (Ok(l), Self::normalize(&right, r)),
+                            (_, Ok(_)) => (Self::normalize(&self.plan, r), Ok(l)),
+                            _ => (Self::normalize(&self.plan, l), Self::normalize(&right, r)),
+                        }
+                    }
+                    (None, Some(rr)) => {
+                        let r_is_left = self.plan.schema().field_with_qualified_name(rr, &r.name);
+                        let r_is_right = right.schema().field_with_qualified_name(rr, &r.name);
+
+                        match (r_is_left, r_is_right) {
+                            (Ok(_), _) => (Ok(r), Self::normalize(&right, l)),
+                            (_, Ok(_)) => (Self::normalize(&self.plan, l), Ok(r)),
+                            _ => (Self::normalize(&self.plan, l), Self::normalize(&right, r)),
+                        }
+                    }
+                    (None, None) => {
+                        let mut swap = false;
+                        let left_key = Self::normalize(&self.plan, l.clone()).or_else(|_| {
+                            swap = true;
+                            Self::normalize(&right, l)
+                        });
+                        if swap {
+                            (Self::normalize(&self.plan, r), left_key)
+                        } else {
+                            (left_key, Self::normalize(&right, r))
+                        }
+                    }
+                }
+            })
+            .unzip();
 
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
@@ -722,8 +728,7 @@ impl LogicalPlanBuilder {
             .zip(right_keys.into_iter())
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
         Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan),
@@ -755,8 +760,7 @@ impl LogicalPlanBuilder {
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
@@ -821,10 +825,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a window functions to extend the schema
-    pub fn window(
-        self,
-        window_expr: impl IntoIterator<Item = impl Into<Expr>>,
-    ) -> Result<Self> {
+    pub fn window(self, window_expr: impl IntoIterator<Item = impl Into<Expr>>) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone())?;
@@ -873,8 +874,7 @@ impl LogicalPlanBuilder {
                 schema,
             })))
         } else {
-            let stringified_plans =
-                vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
+            let stringified_plans = vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
             Ok(Self::from(LogicalPlan::Explain(Explain {
                 verbose,
@@ -892,12 +892,7 @@ impl LogicalPlanBuilder {
         right_plan: LogicalPlan,
         is_all: bool,
     ) -> Result<LogicalPlan> {
-        LogicalPlanBuilder::intersect_or_except(
-            left_plan,
-            right_plan,
-            JoinType::LeftSemi,
-            is_all,
-        )
+        LogicalPlanBuilder::intersect_or_except(left_plan, right_plan, JoinType::LeftSemi, is_all)
     }
 
     /// Process except set operator
@@ -906,12 +901,7 @@ impl LogicalPlanBuilder {
         right_plan: LogicalPlan,
         is_all: bool,
     ) -> Result<LogicalPlan> {
-        LogicalPlanBuilder::intersect_or_except(
-            left_plan,
-            right_plan,
-            JoinType::LeftAnti,
-            is_all,
-        )
+        LogicalPlanBuilder::intersect_or_except(left_plan, right_plan, JoinType::LeftAnti, is_all)
     }
 
     /// Process intersect or except
@@ -948,7 +938,7 @@ impl LogicalPlanBuilder {
                 .build()
         } else {
             LogicalPlanBuilder::from(left_plan)
-                .distinct()?
+                .distinct(None)?
                 .join_detailed(right_plan, join_type, join_keys, None, true)?
                 .build()
         }
@@ -1013,8 +1003,7 @@ impl LogicalPlanBuilder {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
         Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan),
@@ -1168,17 +1157,16 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             let left_field = left_plan.schema().field(i);
             let right_field = right_plan.schema().field(i);
             let nullable = left_field.is_nullable() || right_field.is_nullable();
-            let data_type =
-                comparison_coercion(left_field.data_type(), right_field.data_type())
-                    .ok_or_else(|| {
-                        DataFusionError::Plan(format!(
-                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                    right_field.name(),
-                    right_field.data_type(),
-                    left_field.name(),
-                    left_field.data_type()
-                ))
-                    })?;
+            let data_type = comparison_coercion(left_field.data_type(), right_field.data_type())
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                        right_field.name(),
+                        right_field.data_type(),
+                        left_field.name(),
+                        left_field.data_type()
+                    ))
+                })?;
 
             Ok(DFField::new(
                 left_field.qualifier().cloned(),
@@ -1199,13 +1187,9 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
             match plan {
-                LogicalPlan::Projection(Projection { expr, input, .. }) => {
-                    Ok(Arc::new(project_with_column_index(
-                        expr,
-                        input,
-                        Arc::new(union_schema.clone()),
-                    )?))
-                }
+                LogicalPlan::Projection(Projection { expr, input, .. }) => Ok(Arc::new(
+                    project_with_column_index(expr, input, Arc::new(union_schema.clone()))?,
+                )),
                 other_plan => Ok(Arc::new(other_plan)),
             }
         })
@@ -1235,13 +1219,11 @@ pub fn project(
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard => {
-                projected_expr.extend(expand_wildcard(input_schema, &plan, None)?)
+            Expr::Wildcard => projected_expr.extend(expand_wildcard(input_schema, &plan, None)?),
+            Expr::QualifiedWildcard { ref qualifier } => {
+                projected_expr.extend(expand_qualified_wildcard(qualifier, input_schema, None)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, None)?),
-            _ => projected_expr
-                .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
+            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
@@ -1383,14 +1365,14 @@ pub fn unnest(input: LogicalPlan, column: Column) -> Result<LogicalPlan> {
 
     // Extract the type of the nested field in the list.
     let unnested_field = match unnest_field.data_type() {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field) => DFField::new(
-            unnest_field.qualifier().cloned(),
-            unnest_field.name(),
-            field.data_type().clone(),
-            unnest_field.is_nullable(),
-        ),
+        DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
+            DFField::new(
+                unnest_field.qualifier().cloned(),
+                unnest_field.name(),
+                field.data_type().clone(),
+                unnest_field.is_nullable(),
+            )
+        }
         _ => {
             // If the unnest field is not a list type return the input plan.
             return Ok(input);
@@ -1436,11 +1418,10 @@ mod tests {
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .filter(col("state").eq(lit("CO")))?
-                .project(vec![col("id")])?
-                .build()?;
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+            .filter(col("state").eq(lit("CO")))?
+            .project(vec![col("id")])?
+            .build()?;
 
         let expected = "Projection: employee_csv.id\
         \n  Filter: employee_csv.state = Utf8(\"CO\")\
@@ -1456,21 +1437,17 @@ mod tests {
         let schema = employee_schema();
         let projection = None;
         let plan =
-            LogicalPlanBuilder::scan("employee_csv", table_source(&schema), projection)
+            LogicalPlanBuilder::scan("employee_csv", table_source(&schema), projection).unwrap();
+        let expected =
+            DFSchema::try_from_qualified_schema(TableReference::bare("employee_csv"), &schema)
                 .unwrap();
-        let expected = DFSchema::try_from_qualified_schema(
-            TableReference::bare("employee_csv"),
-            &schema,
-        )
-        .unwrap();
         assert_eq!(&expected, plan.schema().as_ref());
 
         // Note scan of "EMPLOYEE_CSV" is treated as a SQL identifer
         // (and thus normalized to "employee"csv") as well
         let projection = None;
         let plan =
-            LogicalPlanBuilder::scan("EMPLOYEE_CSV", table_source(&schema), projection)
-                .unwrap();
+            LogicalPlanBuilder::scan("EMPLOYEE_CSV", table_source(&schema), projection).unwrap();
         assert_eq!(&expected, plan.schema().as_ref());
     }
 
@@ -1478,8 +1455,7 @@ mod tests {
     fn plan_builder_empty_name() {
         let schema = employee_schema();
         let projection = None;
-        let err =
-            LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
+        let err = LogicalPlanBuilder::scan("", table_source(&schema), projection).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Error during planning: table_name cannot be empty"
@@ -1488,15 +1464,14 @@ mod tests {
 
     #[test]
     fn plan_builder_aggregate() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
-                .aggregate(
-                    vec![col("state")],
-                    vec![sum(col("salary")).alias("total_salary")],
-                )?
-                .project(vec![col("state"), col("total_salary")])?
-                .limit(2, Some(10))?
-                .build()?;
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+            .aggregate(
+                vec![col("state")],
+                vec![sum(col("salary")).alias("total_salary")],
+            )?
+            .project(vec![col("state"), col("total_salary")])?
+            .limit(2, Some(10))?
+            .build()?;
 
         let expected = "Limit: skip=2, fetch=10\
                 \n  Projection: employee_csv.state, total_salary\
@@ -1510,15 +1485,15 @@ mod tests {
 
     #[test]
     fn plan_builder_sort() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
-                .sort(vec![
-                    Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
-                    Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
-                ])?
-                .build()?;
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
+            .sort(vec![
+                Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
+                Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
+            ])?
+            .build()?;
 
-        let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
+        let expected =
+            "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
 
         assert_eq!(expected, format!("{plan:?}"));
@@ -1548,8 +1523,7 @@ mod tests {
 
     #[test]
     fn plan_builder_union_combined_single_union() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
         let plan = plan
             .clone()
@@ -1572,8 +1546,7 @@ mod tests {
 
     #[test]
     fn plan_builder_union_distinct_combined_single_union() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
 
         let plan = plan
             .clone()
@@ -1598,10 +1571,8 @@ mod tests {
 
     #[test]
     fn plan_builder_union_different_num_columns_error() -> Result<()> {
-        let plan1 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
-        let plan2 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
+        let plan1 = table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
+        let plan2 = table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
 
         let expected = "Error during planning: Union queries must have the same number of columns, (left is 1, right is 2)";
         let err_msg1 = plan1.clone().union(plan2.clone().build()?).unwrap_err();
@@ -1615,12 +1586,11 @@ mod tests {
 
     #[test]
     fn plan_builder_simple_distinct() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .filter(col("state").eq(lit("CO")))?
-                .project(vec![col("id")])?
-                .distinct()?
-                .build()?;
+        let plan = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+            .filter(col("state").eq(lit("CO")))?
+            .project(vec![col("id")])?
+            .distinct()?
+            .build()?;
 
         let expected = "\
         Distinct:\
@@ -1784,13 +1754,11 @@ mod tests {
 
     #[test]
     fn stringified_plan() {
-        let stringified_plan =
-            StringifiedPlan::new(PlanType::InitialLogicalPlan, "...the plan...");
+        let stringified_plan = StringifiedPlan::new(PlanType::InitialLogicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
         assert!(!stringified_plan.should_display(false)); // not in non verbose mode
 
-        let stringified_plan =
-            StringifiedPlan::new(PlanType::FinalLogicalPlan, "...the plan...");
+        let stringified_plan = StringifiedPlan::new(PlanType::FinalLogicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
         assert!(stringified_plan.should_display(false)); // display in non verbose mode too
 
@@ -1799,8 +1767,7 @@ mod tests {
         assert!(stringified_plan.should_display(true));
         assert!(!stringified_plan.should_display(false)); // not in non verbose mode
 
-        let stringified_plan =
-            StringifiedPlan::new(PlanType::FinalPhysicalPlan, "...the plan...");
+        let stringified_plan = StringifiedPlan::new(PlanType::FinalPhysicalPlan, "...the plan...");
         assert!(stringified_plan.should_display(true));
         assert!(stringified_plan.should_display(false)); // display in non verbose mode
 
@@ -1825,16 +1792,14 @@ mod tests {
 
     #[test]
     fn plan_builder_intersect_different_num_columns_error() -> Result<()> {
-        let plan1 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
-        let plan2 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
+        let plan1 = table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
+        let plan2 = table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
 
-        let expected = "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
+        let expected =
+            "Error during planning: INTERSECT/EXCEPT query must have the same number of columns. \
          Left is 1 and right is 2.";
         let err_msg1 =
-            LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
-                .unwrap_err();
+            LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true).unwrap_err();
 
         assert_eq!(err_msg1.to_string(), expected);
 

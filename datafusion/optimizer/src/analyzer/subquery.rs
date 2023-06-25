@@ -21,8 +21,7 @@ use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Cast, Expr, Filter, Join, JoinType, LogicalPlan, Operator,
-    Window,
+    Aggregate, BinaryExpr, Cast, Expr, Filter, Join, JoinType, LogicalPlan, Operator, Window,
 };
 use std::ops::Deref;
 
@@ -117,10 +116,7 @@ pub fn check_subquery_expr(
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
-fn check_correlations_in_subquery(
-    inner_plan: &LogicalPlan,
-    is_scalar: bool,
-) -> Result<()> {
+fn check_correlations_in_subquery(inner_plan: &LogicalPlan, is_scalar: bool) -> Result<()> {
     check_inner_plan(inner_plan, is_scalar, false, true)
 }
 
@@ -195,12 +191,7 @@ fn check_inner_plan(
         }) => match join_type {
             JoinType::Inner => {
                 inner_plan.apply_children(&mut |plan| {
-                    check_inner_plan(
-                        plan,
-                        is_scalar,
-                        is_aggregate,
-                        can_contain_outer_ref,
-                    )?;
+                    check_inner_plan(plan, is_scalar, is_aggregate, can_contain_outer_ref)?;
                     Ok(VisitRecursion::Continue)
                 })?;
                 Ok(())
@@ -234,14 +225,10 @@ fn contains_outer_reference(inner_plan: &LogicalPlan) -> bool {
         .any(|expr| expr.contains_outer())
 }
 
-fn check_aggregation_in_scalar_subquery(
-    inner_plan: &LogicalPlan,
-    agg: &Aggregate,
-) -> Result<()> {
+fn check_aggregation_in_scalar_subquery(inner_plan: &LogicalPlan, agg: &Aggregate) -> Result<()> {
     if agg.aggr_expr.is_empty() {
         return Err(DataFusionError::Plan(
-            "Correlated scalar subquery must be aggregated to return at most one row"
-                .to_string(),
+            "Correlated scalar subquery must be aggregated to return at most one row".to_string(),
         ));
     }
     if !agg.group_expr.is_empty() {
@@ -269,9 +256,7 @@ fn check_aggregation_in_scalar_subquery(
 
 fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
     match inner_plan {
-        LogicalPlan::Projection(projection) => {
-            strip_inner_query(projection.input.as_ref())
-        }
+        LogicalPlan::Projection(projection) => strip_inner_query(projection.input.as_ref()),
         LogicalPlan::SubqueryAlias(alias) => strip_inner_query(alias.input.as_ref()),
         other => other,
     }
@@ -327,9 +312,10 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
 
 /// Check whether the window expressions contain a mixture of out reference columns and inner columns
 fn check_mixed_out_refer_in_window(window: &Window) -> Result<()> {
-    let mixed = window.window_expr.iter().any(|win_expr| {
-        win_expr.contains_outer() && !win_expr.to_columns().unwrap().is_empty()
-    });
+    let mixed = window
+        .window_expr
+        .iter()
+        .any(|win_expr| win_expr.contains_outer() && !win_expr.to_columns().unwrap().is_empty());
     if mixed {
         Err(DataFusionError::Plan(
             "Window expressions should not contain a mixed of outer references and inner columns"

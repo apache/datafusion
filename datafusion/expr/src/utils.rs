@@ -21,21 +21,17 @@ use crate::expr::{Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
-    Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest,
-    Values, Window,
+    Projection, Repartition, Sort as SortPlan, Subquery, SubqueryAlias, Union, Unnest, Values,
+    Window,
 };
 use crate::{
     BinaryExpr, Cast, CreateMemoryTable, CreateView, DdlStatement, DmlStatement, Expr,
-    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan,
-    TryCast,
+    ExprSchemable, GroupingSet, LogicalPlan, LogicalPlanBuilder, Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::tree_node::{
-    RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion,
-};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter, VisitRecursion};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReference,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use sqlparser::ast::{ExceptSelectItem, ExcludeSelectItem, WildcardAdditionalOptions};
 use std::cmp::Ordering;
@@ -61,8 +57,7 @@ pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
     if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
         if group_expr.len() > 1 {
             return Err(DataFusionError::Plan(
-                "Invalid group by expressions, GroupingSet must be the only expression"
-                    .to_string(),
+                "Invalid group by expressions, GroupingSet must be the only expression".to_string(),
             ));
         }
         Ok(grouping_set.distinct_expr().len())
@@ -156,10 +151,7 @@ fn merge_grouping_set<T: Clone>(left: &[T], right: &[T]) -> Result<Vec<T>> {
 ///
 /// [`DataFusionError`] The number of group_expression in grouping_set exceeds the maximum limit \
 /// [`DataFusionError`] The number of grouping_set in grouping_sets exceeds the maximum limit
-fn cross_join_grouping_sets<T: Clone>(
-    left: &[Vec<T>],
-    right: &[Vec<T>],
-) -> Result<Vec<Vec<T>>> {
+fn cross_join_grouping_sets<T: Clone>(left: &[Vec<T>], right: &[Vec<T>]) -> Result<Vec<Vec<T>>> {
     let grouping_sets_size = left.len() * right.len();
 
     check_grouping_sets_size_limit(grouping_sets_size)?;
@@ -210,8 +202,7 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     grouping_sets.iter().map(|e| e.iter().collect()).collect()
                 }
                 Expr::GroupingSet(GroupingSet::Cube(group_exprs)) => {
-                    let grouping_sets =
-                        powerset(group_exprs).map_err(DataFusionError::Plan)?;
+                    let grouping_sets = powerset(group_exprs).map_err(DataFusionError::Plan)?;
                     check_grouping_sets_size_limit(grouping_sets.len())?;
                     grouping_sets
                 }
@@ -253,8 +244,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<Expr>> {
     if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
         if group_expr.len() > 1 {
             return Err(DataFusionError::Plan(
-                "Invalid group by expressions, GroupingSet must be the only expression"
-                    .to_string(),
+                "Invalid group by expressions, GroupingSet must be the only expression".to_string(),
             ));
         }
         Ok(grouping_set.distinct_expr())
@@ -361,10 +351,7 @@ fn get_excluded_columns(
 }
 
 /// Returns all `Expr`s in the schema, except the `Column`s in the `columns_to_skip`
-fn get_exprs_except_skipped(
-    schema: &DFSchema,
-    columns_to_skip: HashSet<Column>,
-) -> Vec<Expr> {
+fn get_exprs_except_skipped(schema: &DFSchema, columns_to_skip: HashSet<Column>) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
         schema
             .fields()
@@ -470,16 +457,11 @@ pub fn expand_qualified_wildcard(
 type WindowSortKey = Vec<(Expr, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
-pub fn generate_sort_key(
-    partition_by: &[Expr],
-    order_by: &[Expr],
-) -> Result<WindowSortKey> {
+pub fn generate_sort_key(partition_by: &[Expr], order_by: &[Expr]) -> Result<WindowSortKey> {
     let normalized_order_by_keys = order_by
         .iter()
         .map(|e| match e {
-            Expr::Sort(Sort { expr, .. }) => {
-                Ok(Expr::Sort(Sort::new(expr.clone(), true, false)))
-            }
+            Expr::Sort(Sort { expr, .. }) => Ok(Expr::Sort(Sort::new(expr.clone(), true, false))),
             _ => Err(DataFusionError::Plan(
                 "Order by only accepts sort expressions".to_string(),
             )),
@@ -520,11 +502,7 @@ pub fn generate_sort_key(
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
 /// <https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c>
-pub fn compare_sort_expr(
-    sort_expr_a: &Expr,
-    sort_expr_b: &Expr,
-    schema: &DFSchemaRef,
-) -> Ordering {
+pub fn compare_sort_expr(sort_expr_a: &Expr, sort_expr_b: &Expr, schema: &DFSchemaRef) -> Ordering {
     match (sort_expr_a, sort_expr_b) {
         (
             Expr::Sort(Sort {
@@ -725,11 +703,7 @@ where
 /// // create new plan using rewritten_exprs in same position
 /// let new_plan = from_plan(&plan, rewritten_exprs, new_inputs);
 /// ```
-pub fn from_plan(
-    plan: &LogicalPlan,
-    expr: &[Expr],
-    inputs: &[LogicalPlan],
-) -> Result<LogicalPlan> {
+pub fn from_plan(plan: &LogicalPlan, expr: &[Expr], inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Projection(Projection { schema, .. }) => {
             Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
@@ -779,9 +753,7 @@ pub fn from_plan(
 
                 fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
                     match expr {
-                        Expr::Exists { .. }
-                        | Expr::ScalarSubquery(_)
-                        | Expr::InSubquery(_) => {
+                        Expr::Exists { .. } | Expr::ScalarSubquery(_) | Expr::InSubquery(_) => {
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }
@@ -807,12 +779,10 @@ pub fn from_plan(
             partitioning_scheme,
             ..
         }) => match partitioning_scheme {
-            Partitioning::RoundRobinBatch(n) => {
-                Ok(LogicalPlan::Repartition(Repartition {
-                    partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                    input: Arc::new(inputs[0].clone()),
-                }))
-            }
+            Partitioning::RoundRobinBatch(n) => Ok(LogicalPlan::Repartition(Repartition {
+                partitioning_scheme: Partitioning::RoundRobinBatch(*n),
+                input: Arc::new(inputs[0].clone()),
+            })),
             Partitioning::Hash(_, n) => Ok(LogicalPlan::Repartition(Repartition {
                 partitioning_scheme: Partitioning::Hash(expr.to_owned(), *n),
                 input: Arc::new(inputs[0].clone()),
@@ -851,8 +821,7 @@ pub fn from_plan(
             null_equals_null,
             ..
         }) => {
-            let schema =
-                build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+            let schema = build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
 
             let equi_expr_count = on.len();
             assert!(expr.len() >= equi_expr_count);
@@ -873,8 +842,7 @@ pub fn from_plan(
 
             // Assume that the last expr, if any,
             // is the filter_expr (non equality predicate from ON clause)
-            let filter_expr =
-                (expr.len() > equi_expr_count).then(|| expr[expr.len() - 1].clone());
+            let filter_expr = (expr.len() > equi_expr_count).then(|| expr[expr.len() - 1].clone());
 
             Ok(LogicalPlan::Join(Join {
                 left: Arc::new(inputs[0].clone()),
@@ -901,12 +869,9 @@ pub fn from_plan(
                 outer_ref_columns: outer_ref_columns.clone(),
             }))
         }
-        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                inputs[0].clone(),
-                alias.clone(),
-            )?))
-        }
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => Ok(LogicalPlan::SubqueryAlias(
+            SubqueryAlias::try_new(inputs[0].clone(), alias.clone())?,
+        )),
         LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
             skip: *skip,
             fetch: *fetch,
@@ -944,8 +909,15 @@ pub fn from_plan(
             inputs: inputs.iter().cloned().map(Arc::new).collect(),
             schema: schema.clone(),
         })),
-        LogicalPlan::Distinct(Distinct { .. }) => Ok(LogicalPlan::Distinct(Distinct {
+        LogicalPlan::Distinct(Distinct { on_expr, .. }) => Ok(LogicalPlan::Distinct(Distinct {
             input: Arc::new(inputs[0].clone()),
+            on_expr: {
+                if on_expr.is_some() {
+                    Some(expr.to_vec())
+                } else {
+                    None
+                }
+            },
         })),
         LogicalPlan::Analyze(a) => {
             assert!(expr.is_empty());
@@ -988,9 +960,7 @@ pub fn from_plan(
                 ..ts.clone()
             }))
         }
-        LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::Ddl(_)
-        | LogicalPlan::Statement(_) => {
+        LogicalPlan::EmptyRelation(_) | LogicalPlan::Ddl(_) | LogicalPlan::Statement(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{plan:?} should have no exprs");
             assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
@@ -1068,13 +1038,9 @@ pub fn exprlist_to_fields<'a>(
     // `GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
     // look at the input to the aggregate instead.
     let fields = match plan {
-        LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-        }
+        LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, plan, agg)),
         LogicalPlan::Window(window) => match window.input.as_ref() {
-            LogicalPlan::Aggregate(agg) => {
-                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
-            }
+            LogicalPlan::Aggregate(agg) => Some(exprlist_to_fields_aggregate(&exprs, plan, agg)),
             _ => None,
         },
         _ => None,
@@ -1107,9 +1073,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::OuterReferenceColumn(_, _) => e,
-        Expr::Alias(inner_expr, name) => {
-            columnize_expr(*inner_expr, input_schema).alias(name)
-        }
+        Expr::Alias(inner_expr, name) => columnize_expr(*inner_expr, input_schema).alias(name),
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
             data_type,
@@ -1166,10 +1130,7 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
 
 /// Recursively walk an expression tree, collecting the column indexes
 /// referenced in the expression
-pub(crate) fn find_column_indexes_referenced_by_expr(
-    e: &Expr,
-    schema: &DFSchemaRef,
-) -> Vec<usize> {
+pub(crate) fn find_column_indexes_referenced_by_expr(e: &Expr, schema: &DFSchemaRef) -> Vec<usize> {
     let mut indexes = vec![];
     inspect_expr_pre(e, |expr| {
         match expr {
@@ -1218,9 +1179,7 @@ pub fn can_hash(data_type: &DataType) -> bool {
         DataType::Date32 => true,
         DataType::Date64 => true,
         DataType::FixedSizeBinary(_) => true,
-        DataType::Dictionary(key_type, value_type)
-            if *value_type.as_ref() == DataType::Utf8 =>
-        {
+        DataType::Dictionary(key_type, value_type) if *value_type.as_ref() == DataType::Utf8 => {
             DataType::is_dictionary_key_type(key_type)
         }
         _ => false,
@@ -1265,27 +1224,19 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    let l_is_left =
-        check_all_columns_from_schema(&left_using_columns, left_schema.clone())?;
-    let r_is_right =
-        check_all_columns_from_schema(&right_using_columns, right_schema.clone())?;
+    let l_is_left = check_all_columns_from_schema(&left_using_columns, left_schema.clone())?;
+    let r_is_right = check_all_columns_from_schema(&right_using_columns, right_schema.clone())?;
 
     let r_is_left_and_l_is_right = || {
-        let result =
-            check_all_columns_from_schema(&right_using_columns, left_schema.clone())?
-                && check_all_columns_from_schema(
-                    &left_using_columns,
-                    right_schema.clone(),
-                )?;
+        let result = check_all_columns_from_schema(&right_using_columns, left_schema.clone())?
+            && check_all_columns_from_schema(&left_using_columns, right_schema.clone())?;
 
         Result::<_>::Ok(result)
     };
 
     let join_key_pair = match (l_is_left, r_is_right) {
         (true, true) => Some((left_key.clone(), right_key.clone())),
-        (_, _) if r_is_left_and_l_is_right()? => {
-            Some((right_key.clone(), left_key.clone()))
-        }
+        (_, _) if r_is_left_and_l_is_right()? => Some((right_key.clone(), left_key.clone())),
         _ => None,
     };
 
@@ -1296,8 +1247,7 @@ pub fn find_valid_equijoin_key_pair(
 mod tests {
     use super::*;
     use crate::{
-        col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame,
-        WindowFunction,
+        col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame, WindowFunction,
     };
 
     #[test]
@@ -1351,8 +1301,7 @@ mod tests {
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
         let age_asc = Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true));
         let name_desc = Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true));
-        let created_at_desc =
-            Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
+        let created_at_desc = Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
         let max1 = Expr::WindowFunction(expr::WindowFunction::new(
             WindowFunction::AggregateFunction(AggregateFunction::Max),
             vec![col("name")],
@@ -1542,8 +1491,7 @@ mod tests {
         );
 
         // 6. col + grouping_set
-        let sets =
-            enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
+        let sets = enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\
@@ -1552,11 +1500,7 @@ mod tests {
         );
 
         // 7. col + grouping_set + rollup
-        let sets = enumerate_grouping_sets(vec![
-            simple_col.clone(),
-            grouping_set,
-            rollup.clone(),
-        ])?;
+        let sets = enumerate_grouping_sets(vec![simple_col.clone(), grouping_set, rollup.clone()])?;
         let result = format!("{sets:?}");
         assert_eq!(
             "[GROUPING SETS (\

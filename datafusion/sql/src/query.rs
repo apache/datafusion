@@ -20,11 +20,9 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder,
-};
+use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{
-    Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
+    Distinct, Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
 };
 
 use sqlparser::parser::ParserError::ParserError;
@@ -67,8 +65,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 // create logical plan & pass backreferencing CTEs
                 // CTE expr don't need extend outer_query_schema
-                let logical_plan =
-                    self.query_to_plan(*cte.query, &mut planner_context.clone())?;
+                let logical_plan = self.query_to_plan(*cte.query, &mut planner_context.clone())?;
 
                 // Each `WITH` block can change the column names in the last
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
@@ -78,6 +75,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         let plan = self.set_expr_to_plan(*(set_expr.clone()), planner_context)?;
+
         let plan = self.order_by(plan, query.order_by, planner_context)?;
         let plan = self.limit(plan, query.offset, query.limit)?;
 
@@ -131,17 +129,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         let fetch = match fetch {
-            Some(limit_expr)
-                if limit_expr != sqlparser::ast::Expr::Value(Value::Null) =>
-            {
+            Some(limit_expr) if limit_expr != sqlparser::ast::Expr::Value(Value::Null) => {
                 let n = match self.sql_to_expr(
                     limit_expr,
                     input.schema(),
                     &mut PlannerContext::new(),
                 )? {
-                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => {
-                        Ok(n as usize)
-                    }
+                    Expr::Literal(ScalarValue::Int64(Some(n))) if n >= 0 => Ok(n as usize),
                     _ => Err(DataFusionError::Plan(
                         "LIMIT must not be negative".to_string(),
                     )),
@@ -165,8 +159,50 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(plan);
         }
 
-        let order_by_rex =
-            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
+        let order_by_rex = self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
+
+        // Handle DISTINCT ON situation- this is the only situation in which we want to logically
+        // do our ordering before the DISTINCT, as the DISTINCT row that is chosen will be decided
+        // by said ordering- if we did the DISTINCT first, the order wouldn't matter
+        // So, we check if our last logical plans are Projection and Distinct, which means we had a
+        // DISTINCT ON situation (todo: this is a bit hacky, not sure how else to do it)
+        // If so, we move the sort before the distinct
+        if let LogicalPlan::Projection(mut p) = plan.clone() {
+            if let LogicalPlan::Distinct(mut d) = (*p.input).clone() {
+                if let Some(on_expr) = d.on_expr.clone() {
+                    // First, we need to ensure the ORDER BY expressions start with our ON expression
+                    // This is because the ON expression is used to determine the distinct key
+                    for (i, expr) in on_expr.into_iter().enumerate() {
+                        let order_exp = order_by_rex.get(i);
+                        match order_exp {
+                            None => {}
+                            Some(o) => match o {
+                                Expr::Sort(sort_expr) => {
+                                    if *sort_expr.expr != expr {
+                                        return Err(DataFusionError::Plan(format!(
+                                            "ORDER BY expression must start with ON expression for DISTINCT ON"
+                                        )));
+                                    }
+                                }
+                                _ => {
+                                    return Err(DataFusionError::Internal(format!(
+                                        "Unexpected expression in ORDER BY clause"
+                                    )));
+                                }
+                            },
+                        }
+                    }
+
+                    // Next, We need to move the sort BEFORE the distinct
+                    let sort_plan = LogicalPlanBuilder::from((*d.input).clone())
+                        .sort(order_by_rex.clone())?
+                        .build()?;
+                    d.input = Arc::new(sort_plan);
+                    p.input = Arc::new(LogicalPlan::Distinct(d.clone()));
+                    return Ok(LogicalPlan::Projection(p));
+                }
+            }
+        }
         LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
     }
 }
