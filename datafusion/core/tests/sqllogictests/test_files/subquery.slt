@@ -965,3 +965,11 @@ select t1.t1_int from t1 where
 ----
 2
 4
+
+query B rowsort
+select t1_int > (select avg(t1_int) from t1) from t1
+----
+false
+false
+true
+true
