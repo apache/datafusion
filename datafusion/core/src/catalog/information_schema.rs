@@ -28,13 +28,16 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::config::{ConfigEntry, ConfigOptions};
-use crate::datasource::streaming::{PartitionStream, StreamingTable};
+use crate::datasource::streaming::StreamingTable;
 use crate::datasource::TableProvider;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
+use crate::{
+    config::{ConfigEntry, ConfigOptions},
+    physical_plan::streaming::PartitionStream,
+};
 
 use super::{schema::SchemaProvider, CatalogList};
 
