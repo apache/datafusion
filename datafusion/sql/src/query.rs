@@ -21,9 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value,
-};
+use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value};
 
 use sqlparser::parser::ParserError::ParserError;
 
