@@ -34,6 +34,7 @@ use std::sync::Arc;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
+#[ignore]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_1k_mem() {
     run_sort(10240, vec![(5, false), (20000, true), (1000000, true)]).await

@@ -20,7 +20,7 @@
 use futures::StreamExt;
 use log::debug;
 use std::any::Any;
-use std::fmt::{self, Debug, Display};
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -36,9 +36,9 @@ use crate::logical_expr::Expr;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::insert::{DataSink, InsertExec};
 use crate::physical_plan::memory::MemoryExec;
-use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{common, SendableRecordBatchStream};
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
@@ -213,10 +213,14 @@ impl Debug for MemSink {
     }
 }
 
-impl Display for MemSink {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let partition_count = self.batches.len();
-        write!(f, "MemoryTable (partitions={partition_count})")
+impl DisplayAs for MemSink {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let partition_count = self.batches.len();
+                write!(f, "MemoryTable (partitions={partition_count})")
+            }
+        }
     }
 }
 

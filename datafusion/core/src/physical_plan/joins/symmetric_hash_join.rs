@@ -462,15 +462,21 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 write!(
                     f,
-                    "SymmetricHashJoinExec: join_type={:?}, on={:?}{}",
-                    self.join_type, self.on, display_filter
+                    "SymmetricHashJoinExec: join_type={:?}, on=[{}]{}",
+                    self.join_type, on, display_filter
                 )
             }
         }
@@ -1369,8 +1375,8 @@ impl OneSideHashJoiner {
                 schema,
                 &self.input_buffer,
                 probe_batch,
-                build_indices,
-                probe_indices,
+                &build_indices,
+                &probe_indices,
                 column_indices,
                 self.build_side,
             )
@@ -1421,8 +1427,8 @@ impl OneSideHashJoiner {
                 output_schema.as_ref(),
                 &self.input_buffer,
                 &empty_probe_batch,
-                build_indices,
-                probe_indices,
+                &build_indices,
+                &probe_indices,
                 column_indices,
                 self.build_side,
             )
@@ -2624,15 +2630,15 @@ mod tests {
         let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
         let dataframe = ctx.sql(sql).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+                "SymmetricHashJoinExec: join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
             ]
         };
@@ -2677,15 +2683,15 @@ mod tests {
         let sql = "SELECT t1.a1, t1.a2, t2.a1, t2.a2 FROM left as t1 FULL JOIN right as t2 ON t1.a2 = t2.a2 AND t1.a1 > t2.a1 + 3 AND t1.a1 < t2.a1 + 10";
         let dataframe = ctx.sql(sql).await?;
         let physical_plan = dataframe.create_physical_plan().await?;
-        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let formatted = displayable(physical_plan.as_ref()).indent(true).to_string();
         let expected = {
             [
-                "SymmetricHashJoinExec: join_type=Full, on=[(Column { name: \"a2\", index: 1 }, Column { name: \"a2\", index: 1 })], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
+                "SymmetricHashJoinExec: join_type=Full, on=[(a2@1, a2@1)], filter=CAST(a1@0 AS Int64) > CAST(a1@1 AS Int64) + 3 AND CAST(a1@0 AS Int64) < CAST(a1@1 AS Int64) + 10",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/left.csv]]}, projection=[a1, a2], has_header=false",
                 "  CoalesceBatchesExec: target_batch_size=8192",
-                "    RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 1 }], 8), input_partitions=1",
+                "    RepartitionExec: partitioning=Hash([a2@1], 8), input_partitions=1",
                 // "   CsvExec: file_groups={1 group: [[tempdir/right.csv]]}, projection=[a1, a2], has_header=false"
             ]
         };
