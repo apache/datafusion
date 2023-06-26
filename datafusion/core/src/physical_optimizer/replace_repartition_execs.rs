@@ -67,33 +67,14 @@ impl ReplaceRepartitionExecs {
     }
 }
 
-/// Checks if repartition should be replaced.
-/// Takes parameters as one original `SortExec`, one `RepartitionExec` to compare,
-/// and a changed version of `SortExec`s input to be able to detect if the ordering will be preserved after the change
-fn is_repartition_matches_with_output_ordering(
-    sort_exec: &SortExec,
-    repartition: &RepartitionExec,
-) -> bool {
-    let orderings_matched = ordering_satisfy(
-        sort_exec.output_ordering(),
-        repartition.input().output_ordering(),
-        || repartition.input().equivalence_properties(),
-        || repartition.input().ordering_equivalence_properties(),
-    );
-    orderings_matched && !repartition.maintains_input_order()[0]
-}
-
 /// Creates a `SortPreservingRepartitionExec` from given `RepartitionExec`
 fn sort_preserving_repartition(
     repartition: &RepartitionExec,
-) -> Arc<SortPreservingRepartitionExec> {
-    Arc::new(
-        SortPreservingRepartitionExec::try_new(
-            repartition.input().clone(),
-            repartition.partitioning().clone(),
-        )
-        .unwrap(),
-    )
+) -> Result<Arc<SortPreservingRepartitionExec>> {
+    Ok(Arc::new(SortPreservingRepartitionExec::try_new(
+        repartition.input().clone(),
+        repartition.partitioning().clone(),
+    )?))
 }
 
 fn does_plan_maintains_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -102,12 +83,11 @@ fn does_plan_maintains_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
 
 /// Check the children nodes between two `SortExec`s if they all maintain the input ordering
 /// if all of the related children maintain, then it is a possibility to replace `RepartitionExec`s
-fn replace_sort_children_if_needed(
-    sort_exec: &SortExec,
+fn replace_sort_children(
     plan: &Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     if plan.children().is_empty() {
-        return plan.clone();
+        return Ok(plan.clone());
     }
 
     let mut children = plan.children();
@@ -117,19 +97,19 @@ fn replace_sort_children_if_needed(
         }
 
         if let Some(repartition) = child.as_any().downcast_ref::<RepartitionExec>() {
-            if is_repartition_matches_with_output_ordering(sort_exec, repartition) {
-                let spr = sort_preserving_repartition(repartition)
+            if !repartition.maintains_input_order()[0] {
+                let spr = sort_preserving_repartition(repartition)?
                     .with_new_children(repartition.children());
                 // Change the current RepartitionExec with SortPreservingRepartitionExec and dive into its children
-                children[i] = replace_sort_children_if_needed(sort_exec, &spr.unwrap());
+                children[i] = replace_sort_children(&spr?)?;
                 continue;
             }
         }
 
-        children[i] = replace_sort_children_if_needed(sort_exec, &child);
+        children[i] = replace_sort_children(&child)?;
     }
 
-    plan.clone().with_new_children(children).unwrap()
+    plan.clone().with_new_children(children)
 }
 
 impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
@@ -140,23 +120,22 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_down(&|plan| {
             if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-                let changed_plan = replace_sort_children_if_needed(sort_exec, &plan);
+                let changed_plan = replace_sort_children(&plan)?;
                 let changed_sort_exec =
                     changed_plan.as_any().downcast_ref::<SortExec>().unwrap();
 
                 // Check if any child is changed, if changed remove the `SortExec`
+                // If ordering is being satisfied with the child then it means `SortExec` is unnecessary
                 if ordering_satisfy(
-                    sort_exec.input().output_ordering(),
                     changed_sort_exec.input().output_ordering(),
+                    sort_exec.output_ordering(),
                     || changed_sort_exec.input().equivalence_properties(),
                     || changed_sort_exec.input().ordering_equivalence_properties(),
                 ) {
-                    Ok(Transformed::No(plan.clone()))
-                } else {
-                    // Remove the `SortExec` since we've manipulated at least a child
-
                     // The plan is `SortExec` here, so it's guaranteed that it has only one child
                     Ok(Transformed::Yes((changed_sort_exec.children()[0]).clone()))
+                } else {
+                    Ok(Transformed::No(plan))
                 }
             } else {
                 // We don't have anything to do until we get to the `SortExec` parent
