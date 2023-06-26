@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr_rewriter::{normalize_col, replace_col};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value};
 
@@ -172,7 +170,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Some(on_expr) = d.on_expr.clone() {
                     let parent_plan = d.input;
 
-                    let mut order_by_expressions = self.order_by_to_sort_expr(
+                    let order_by_expressions = self.order_by_to_sort_expr(
                         &order_by,
                         parent_plan.schema(),
                         planner_context,
