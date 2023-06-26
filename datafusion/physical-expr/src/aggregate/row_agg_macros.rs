@@ -130,7 +130,7 @@ pub use dispatch_all_bit_and_or_xor_supported_data_types;
 #[macro_export]
 macro_rules! impl_one_row_accumulator_dispatch {
     (
-        [$array1_dt:ident, $array1:ident, $acc_idx1:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident}),*
+        [$array1_dt:ident, $array1:ident, $acc_idx1:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident, $row_layout:ident], $({ $i1t:ident, $i1:ident}),*
     ) => {
         match ($array1_dt) {
             $(
@@ -141,6 +141,7 @@ macro_rules! impl_one_row_accumulator_dispatch {
                             &typed_array,
                             $acc_idx1,
                             &$filter_bool_array,
+                            $row_layout,
                         )?;
                 }
             )*
@@ -158,7 +159,7 @@ pub use impl_one_row_accumulator_dispatch;
 #[macro_export]
 macro_rules! impl_two_row_accumulators_dispatch {
     (
-        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $acc_idx1:ident, $acc_idx2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),* $(,)?
+        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $acc_idx1:ident, $acc_idx2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident, $row_layout:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),* $(,)?
     ) => {
         match ($array1_dt, $array2_dt) {
             $(
@@ -172,6 +173,7 @@ macro_rules! impl_two_row_accumulators_dispatch {
                             $acc_idx1,
                             $acc_idx2,
                             &$filter_bool_array,
+                            $row_layout,
                         )?;
                 }
             )*

@@ -18,20 +18,26 @@
 //! This file contains various utility functions that are common to both
 //! batch and streaming aggregation code.
 
+use crate::physical_plan::aggregates::row_agg_macros::*;
 use crate::physical_plan::aggregates::AccumulatorItem;
+use arrow::array::*;
 use arrow::compute;
 use arrow::compute::filter;
+use arrow::datatypes::DataType;
 use arrow::row::OwnedRow;
 use arrow_array::types::UInt32Type;
 use arrow_array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::get_arrayref_at_indices;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{downcast_value, DataFusionError, Result};
+use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulatorItem;
 use datafusion_physical_expr::AggregateExpr;
-use datafusion_row::accessor::ArrowArrayReader;
+use datafusion_row::accessor::{ArrowArrayReader, RowAccessor};
+use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::MutableRecordBatch;
+use itertools::izip;
 use std::sync::Arc;
 
 /// This object encapsulates the state that is built for each output group.
@@ -57,6 +63,157 @@ pub(crate) enum ExecutionState {
     ReadingInput,
     ProducingOutput,
     Done,
+}
+
+/// A helper trait used for GroupState row accumulators update.
+pub(crate) trait GroupStateRowAccumulatorsUpdater {
+    fn get_row_accumulator(&self, acc_idx: usize) -> *const RowAccumulatorItem;
+    fn get_row_accumulators(&self) -> &[RowAccumulatorItem];
+    fn get_group_state(&self, group_idx: &usize) -> &GroupState;
+    fn get_mut_group_state(&mut self, group_idx: &usize) -> &mut GroupState;
+    fn get_mut_group_state_and_row_accumulators(
+        &mut self,
+        group_idx: &usize,
+    ) -> (&mut GroupState, &[RowAccumulatorItem]);
+
+    fn update_row_accumulators(
+        &mut self,
+        groups_with_rows: &[usize],
+        row_values: &[Vec<ArrayRef>],
+        row_filter_values: &[Option<ArrayRef>],
+        row_layout: Arc<RowLayout>,
+    ) -> Result<()> {
+        let filter_bool_array = row_filter_values
+            .iter()
+            .map(|filter_opt| match filter_opt {
+                Some(f) => Ok(Some(as_boolean_array(f)?)),
+                None => Ok(None),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut single_value_acc_idx = vec![];
+        let mut single_row_acc_idx = vec![];
+        self.get_row_accumulators()
+            .iter()
+            .zip(row_values.iter())
+            .enumerate()
+            .for_each(|(idx, (acc, values))| {
+                if let RowAccumulatorItem::COUNT(_) = acc {
+                    single_row_acc_idx.push(idx);
+                } else if values.len() == 1 {
+                    single_value_acc_idx.push(idx);
+                } else {
+                    single_row_acc_idx.push(idx);
+                };
+            });
+
+        if single_value_acc_idx.len() == 1 && single_row_acc_idx.is_empty() {
+            let acc_idx1 = single_value_acc_idx[0];
+            let array1 = &row_values[acc_idx1][0];
+            let array1_dt = array1.data_type();
+            dispatch_all_supported_data_types! { impl_one_row_accumulator_dispatch, array1_dt, array1, acc_idx1, self, update_one_accumulator_with_native_value, groups_with_rows, filter_bool_array, row_layout}
+        } else if single_value_acc_idx.len() == 2 && single_row_acc_idx.is_empty() {
+            let acc_idx1 = single_value_acc_idx[0];
+            let acc_idx2 = single_value_acc_idx[1];
+            let array1 = &row_values[acc_idx1][0];
+            let array2 = &row_values[acc_idx2][0];
+            let array1_dt = array1.data_type();
+            let array2_dt = array2.data_type();
+            dispatch_all_supported_data_types! { dispatch_all_supported_data_types_pairs, impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, acc_idx1, acc_idx2, self, update_two_accumulator2_with_native_value, groups_with_rows, filter_bool_array, row_layout}
+        } else {
+            for group_idx in groups_with_rows {
+                let (group_state, accumulators) =
+                    self.get_mut_group_state_and_row_accumulators(group_idx);
+                let mut state_accessor = RowAccessor::new_from_layout(row_layout.clone());
+                state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+                for (accumulator, values_array, filter_array) in izip!(
+                    accumulators.iter(),
+                    row_values.iter(),
+                    filter_bool_array.iter()
+                ) {
+                    accumulator.update_row_indices(
+                        values_array,
+                        filter_array,
+                        &group_state.indices,
+                        &mut state_accessor,
+                    )?;
+                }
+
+                // clear the group indices in this group
+                group_state.indices.clear();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update_one_accumulator_with_native_value<T1>(
+        &mut self,
+        groups_with_rows: &[usize],
+        agg_input_array1: &T1,
+        acc_idx1: usize,
+        filter_bool_array: &[Option<&BooleanArray>],
+        row_layout: Arc<RowLayout>,
+    ) -> Result<()>
+    where
+        T1: ArrowArrayReader,
+    {
+        let acc_ptr1 = self.get_row_accumulator(acc_idx1);
+        let filter_array1 = &filter_bool_array[acc_idx1];
+        for group_idx in groups_with_rows {
+            let group_state = self.get_mut_group_state(group_idx);
+            let mut state_accessor = RowAccessor::new_from_layout(row_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                let value = col_to_value(agg_input_array1, filter_array1, *idx);
+                unsafe {
+                    (*acc_ptr1).update_value::<T1::Item>(value, &mut state_accessor);
+                }
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update_two_accumulator2_with_native_value<T1, T2>(
+        &mut self,
+        groups_with_rows: &[usize],
+        agg_input_array1: &T1,
+        agg_input_array2: &T2,
+        acc_idx1: usize,
+        acc_idx2: usize,
+        filter_bool_array: &[Option<&BooleanArray>],
+        row_layout: Arc<RowLayout>,
+    ) -> Result<()>
+    where
+        T1: ArrowArrayReader,
+        T2: ArrowArrayReader,
+    {
+        let acc_ptr1 = self.get_row_accumulator(acc_idx1);
+        let acc_ptr2 = self.get_row_accumulator(acc_idx2);
+        let filter_array1 = &filter_bool_array[acc_idx1];
+        let filter_array2 = &filter_bool_array[acc_idx2];
+        for group_idx in groups_with_rows {
+            let group_state = self.get_mut_group_state(group_idx);
+            let mut state_accessor = RowAccessor::new_from_layout(row_layout.clone());
+            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+            for idx in &group_state.indices {
+                let value1 = col_to_value(agg_input_array1, filter_array1, *idx);
+                let value2 = col_to_value(agg_input_array2, filter_array2, *idx);
+                unsafe {
+                    (*acc_ptr1).update_value::<T1::Item>(value1, &mut state_accessor);
+                    (*acc_ptr2).update_value::<T2::Item>(value2, &mut state_accessor);
+                }
+            }
+            // clear the group indices in this group
+            group_state.indices.clear();
+        }
+
+        Ok(())
+    }
 }
 
 pub(crate) fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> SchemaRef {

@@ -29,10 +29,9 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
-use crate::physical_plan::aggregates::row_agg_macros::*;
 use crate::physical_plan::aggregates::utils::{
-    aggr_state_schema, col_to_value, get_at_indices, get_optional_filters, read_as_batch,
-    slice_and_maybe_filter, ExecutionState, GroupState,
+    aggr_state_schema, get_at_indices, get_optional_filters, read_as_batch,
+    slice_and_maybe_filter, ExecutionState, GroupState, GroupStateRowAccumulatorsUpdater,
 };
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, evaluate_optional, group_schema, AggregateMode,
@@ -45,16 +44,14 @@ use arrow::array::*;
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Accumulator;
-use datafusion_row::accessor::{ArrowArrayReader, RowAccessor};
+use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use hashbrown::raw::RawTable;
-use itertools::izip;
 
 use super::AggregateExec;
 
@@ -482,75 +479,6 @@ impl GroupedHashAggregateStream {
         Ok(())
     }
 
-    // Update the accumulator results, according to row_aggr_state.
-    fn update_accumulators_using_scalar(
-        &mut self,
-        groups_with_rows: &[usize],
-        row_values: &[Vec<ArrayRef>],
-        row_filter_values: &[Option<ArrayRef>],
-    ) -> Result<()> {
-        let filter_bool_array = row_filter_values
-            .iter()
-            .map(|filter_opt| match filter_opt {
-                Some(f) => Ok(Some(as_boolean_array(f)?)),
-                None => Ok(None),
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let mut single_value_acc_idx = vec![];
-        let mut single_row_acc_idx = vec![];
-        self.row_accumulators
-            .iter()
-            .zip(row_values.iter())
-            .enumerate()
-            .for_each(|(idx, (acc, values))| {
-                if let RowAccumulatorItem::COUNT(_) = acc {
-                    single_row_acc_idx.push(idx);
-                } else if values.len() == 1 {
-                    single_value_acc_idx.push(idx);
-                } else {
-                    single_row_acc_idx.push(idx);
-                };
-            });
-
-        if single_value_acc_idx.len() == 1 && single_row_acc_idx.is_empty() {
-            let acc_idx1 = single_value_acc_idx[0];
-            let array1 = &row_values[acc_idx1][0];
-            let array1_dt = array1.data_type();
-            dispatch_all_supported_data_types! { impl_one_row_accumulator_dispatch, array1_dt, array1, acc_idx1, self, update_one_accumulator_with_native_value, groups_with_rows, filter_bool_array}
-        } else if single_value_acc_idx.len() == 2 && single_row_acc_idx.is_empty() {
-            let acc_idx1 = single_value_acc_idx[0];
-            let acc_idx2 = single_value_acc_idx[1];
-            let array1 = &row_values[acc_idx1][0];
-            let array2 = &row_values[acc_idx2][0];
-            let array1_dt = array1.data_type();
-            let array2_dt = array2.data_type();
-            dispatch_all_supported_data_types! { dispatch_all_supported_data_types_pairs, impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, acc_idx1, acc_idx2, self, update_two_accumulator2_with_native_value, groups_with_rows, filter_bool_array}
-        } else {
-            for group_idx in groups_with_rows {
-                let group_state = &mut self.aggr_state.group_states[*group_idx];
-                let mut state_accessor =
-                    RowAccessor::new_from_layout(self.row_aggr_layout.clone());
-                state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-                for (accumulator, values_array, filter_array) in izip!(
-                    self.row_accumulators.iter_mut(),
-                    row_values.iter(),
-                    filter_bool_array.iter()
-                ) {
-                    accumulator.update_row_indices(
-                        values_array,
-                        filter_array,
-                        &group_state.indices,
-                        &mut state_accessor,
-                    )?;
-                }
-                // clear the group indices in this group
-                group_state.indices.clear();
-            }
-        }
-        Ok(())
-    }
-
     /// Perform group-by aggregation for the given [`RecordBatch`].
     ///
     /// If successful, this returns the additional number of bytes that were allocated during this process.
@@ -585,10 +513,11 @@ impl GroupedHashAggregateStream {
                 && normal_filter_values.is_empty()
                 && groups_with_rows.len() >= batch.num_rows() / self.scalar_update_factor
             {
-                self.update_accumulators_using_scalar(
+                self.update_row_accumulators(
                     &groups_with_rows,
                     &row_aggr_input_values,
                     &row_filter_values,
+                    self.row_aggr_layout.clone(),
                 )?;
             } else {
                 // Collect all indices + offsets based on keys in this vec
@@ -785,67 +714,32 @@ impl GroupedHashAggregateStream {
         }
         Ok(Some(RecordBatch::try_new(self.schema.clone(), output)?))
     }
+}
 
-    fn update_one_accumulator_with_native_value<T1>(
-        &mut self,
-        groups_with_rows: &[usize],
-        agg_input_array1: &T1,
-        acc_idx1: usize,
-        filter_bool_array: &[Option<&BooleanArray>],
-    ) -> Result<()>
-    where
-        T1: ArrowArrayReader,
-    {
-        let accumulator1 = &self.row_accumulators[acc_idx1];
-        let filter_array1 = &filter_bool_array[acc_idx1];
-        for group_idx in groups_with_rows {
-            let group_state = &mut self.aggr_state.group_states[*group_idx];
-            let mut state_accessor =
-                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
-            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-            for idx in &group_state.indices {
-                let value = col_to_value(agg_input_array1, filter_array1, *idx);
-                accumulator1.update_value::<T1::Item>(value, &mut state_accessor);
-            }
-            // clear the group indices in this group
-            group_state.indices.clear();
-        }
-
-        Ok(())
+impl GroupStateRowAccumulatorsUpdater for GroupedHashAggregateStream {
+    fn get_row_accumulator(&self, acc_idx: usize) -> *const RowAccumulatorItem {
+        &self.row_accumulators[acc_idx]
     }
 
-    fn update_two_accumulator2_with_native_value<T1, T2>(
-        &mut self,
-        groups_with_rows: &[usize],
-        agg_input_array1: &T1,
-        agg_input_array2: &T2,
-        acc_idx1: usize,
-        acc_idx2: usize,
-        filter_bool_array: &[Option<&BooleanArray>],
-    ) -> Result<()>
-    where
-        T1: ArrowArrayReader,
-        T2: ArrowArrayReader,
-    {
-        let accumulator1 = &self.row_accumulators[acc_idx1];
-        let accumulator2 = &self.row_accumulators[acc_idx2];
-        let filter_array1 = &filter_bool_array[acc_idx1];
-        let filter_array2 = &filter_bool_array[acc_idx2];
-        for group_idx in groups_with_rows {
-            let group_state = &mut self.aggr_state.group_states[*group_idx];
-            let mut state_accessor =
-                RowAccessor::new_from_layout(self.row_aggr_layout.clone());
-            state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-            for idx in &group_state.indices {
-                let value1 = col_to_value(agg_input_array1, filter_array1, *idx);
-                let value2 = col_to_value(agg_input_array2, filter_array2, *idx);
-                accumulator1.update_value::<T1::Item>(value1, &mut state_accessor);
-                accumulator2.update_value::<T2::Item>(value2, &mut state_accessor);
-            }
-            // clear the group indices in this group
-            group_state.indices.clear();
-        }
+    fn get_row_accumulators(&self) -> &[RowAccumulatorItem] {
+        self.row_accumulators.as_slice()
+    }
 
-        Ok(())
+    fn get_group_state(&self, group_idx: &usize) -> &GroupState {
+        &self.aggr_state.group_states[*group_idx]
+    }
+
+    fn get_mut_group_state(&mut self, group_idx: &usize) -> &mut GroupState {
+        &mut self.aggr_state.group_states[*group_idx]
+    }
+
+    fn get_mut_group_state_and_row_accumulators(
+        &mut self,
+        group_idx: &usize,
+    ) -> (&mut GroupState, &[RowAccumulatorItem]) {
+        (
+            &mut self.aggr_state.group_states[*group_idx],
+            self.row_accumulators.as_slice(),
+        )
     }
 }
