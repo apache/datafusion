@@ -44,19 +44,17 @@ use std::sync::Arc;
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan top-down and look for a SortExec node (if not found do nothing)
 /// 2. If `SortExec` is found, iterate over its children recursively until the leaf node
-///      or another `SortExec` and check if anything breaks the ordering between
+///      or check if anything breaks the ordering between,
 ///      `RepartitionExec`s with multiple input partitions considered as they maintain input ordering
 ///       because they're potentially changed with `SortPreservingRepartitionExec`s
-/// 2_1. If the ordering is broken somehow, do nothing
-/// 2_2. If the ordering is kept the same among all children continue
-/// 3. Start a transform loop bottom-up on `SortExec`s children
-/// 3_1. Check if the child is a `RepartitionExec` with multiple input partitions and if the ordering matches with the `SortExec`
+/// 2_1. If the ordering is not being maintained from input, break the cycle of node visiting
+/// 3_1. Check if the child is a `RepartitionExec` with multiple input partitions
 /// 3_1_1. If conditions match, replace the `RepartitionExec` with `SortPreservingRepartitionExec`
 /// 3_1_2. If conditions do not match, keep the plan as is.
 /// 4. End the bottom-up transformation loop
-/// 5. Check if the `SortExec` plan is changed somehow.
-/// 5_1. If changed remove the `SortExec` from the plan
-/// 5_2. If not changed then keep the plan as is.
+/// 5. Check if the `SortExec` plan is still necessary by comparing its inputs ordering and `SortExec` ordering
+/// 5_1. If ordering is the same, remove the `SortExec` from the plan
+/// 5_2. Otherwise keep the plan as is.
 /// 6. Continue to the top-down transformation
 pub struct ReplaceRepartitionExecs {}
 
@@ -99,9 +97,9 @@ fn replace_sort_children(
         if let Some(repartition) = child.as_any().downcast_ref::<RepartitionExec>() {
             if !repartition.maintains_input_order()[0] {
                 let spr = sort_preserving_repartition(repartition)?
-                    .with_new_children(repartition.children());
+                    .with_new_children(repartition.children())?;
                 // Change the current RepartitionExec with SortPreservingRepartitionExec and dive into its children
-                children[i] = replace_sort_children(&spr?)?;
+                children[i] = replace_sort_children(&spr)?;
                 continue;
             }
         }
@@ -121,19 +119,18 @@ impl PhysicalOptimizerRule for ReplaceRepartitionExecs {
         plan.transform_down(&|plan| {
             if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
                 let changed_plan = replace_sort_children(&plan)?;
-                let changed_sort_exec =
-                    changed_plan.as_any().downcast_ref::<SortExec>().unwrap();
+                // Since we got the `SortExec` here, it's guaranteed that it has only one child
+                let input = &changed_plan.children()[0];
 
                 // Check if any child is changed, if changed remove the `SortExec`
                 // If ordering is being satisfied with the child then it means `SortExec` is unnecessary
                 if ordering_satisfy(
-                    changed_sort_exec.input().output_ordering(),
+                    input.output_ordering(),
                     sort_exec.output_ordering(),
-                    || changed_sort_exec.input().equivalence_properties(),
-                    || changed_sort_exec.input().ordering_equivalence_properties(),
+                    || input.equivalence_properties(),
+                    || input.ordering_equivalence_properties(),
                 ) {
-                    // The plan is `SortExec` here, so it's guaranteed that it has only one child
-                    Ok(Transformed::Yes((changed_sort_exec.children()[0]).clone()))
+                    Ok(Transformed::Yes(input.clone()))
                 } else {
                     Ok(Transformed::No(plan))
                 }
