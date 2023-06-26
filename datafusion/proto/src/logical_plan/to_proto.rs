@@ -590,6 +590,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             "UDAF as window function in proto".to_string(),
                         ))
                     }
+                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/6733
+                    WindowFunction::WindowUDF(_) => {
+                        return Err(Error::NotImplemented(
+                            "UDWF as window function in proto".to_string(),
+                        ))
+                    }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];

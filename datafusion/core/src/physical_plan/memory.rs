@@ -108,7 +108,7 @@ impl ExecutionPlan for MemoryExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partitions: Vec<_> =
                     self.partitions.iter().map(|b| b.len()).collect();
                 write!(

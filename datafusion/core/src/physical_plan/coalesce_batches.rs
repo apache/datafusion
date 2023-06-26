@@ -107,6 +107,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_ordering()
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
@@ -143,7 +147,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "CoalesceBatchesExec: target_batch_size={}",

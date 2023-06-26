@@ -207,7 +207,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
                 write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))
             }
