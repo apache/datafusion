@@ -2786,12 +2786,66 @@ mod roundtrip_tests {
             vec![col("col1")],
             vec![col("col1")],
             vec![col("col2")],
+            row_number_frame.clone(),
+        ));
+        #[derive(Debug)]
+        struct Dummy {}
+
+        impl Accumulator for Dummy {
+            fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+                Ok(vec![])
+            }
+
+            fn update_batch(
+                &mut self,
+                _values: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn merge_batch(
+                &mut self,
+                _states: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+                Ok(ScalarValue::Float64(None))
+            }
+
+            fn size(&self) -> usize {
+                std::mem::size_of_val(self)
+            }
+        }
+
+        let dummy_agg = create_udaf(
+            // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
+            "dummy_agg",
+            // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
+            DataType::Float64,
+            // the return type; DataFusion expects this to match the type returned by `evaluate`.
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            // This is the accumulator factory; DataFusion uses it to create new accumulators.
+            Arc::new(|_| Ok(Box::new(Dummy {}))),
+            // This is the description of the state. `state()` must match the types here.
+            Arc::new(vec![DataType::Float64, DataType::UInt32]),
+        );
+
+        let test_expr5 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateUDF(Arc::new(dummy_agg.clone())),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
             row_number_frame,
         ));
+        ctx.register_udaf(dummy_agg);
 
         roundtrip_expr_test(test_expr1, ctx.clone());
         roundtrip_expr_test(test_expr2, ctx.clone());
         roundtrip_expr_test(test_expr3, ctx.clone());
-        roundtrip_expr_test(test_expr4, ctx);
+        roundtrip_expr_test(test_expr4, ctx.clone());
+        roundtrip_expr_test(test_expr5, ctx);
     }
 }

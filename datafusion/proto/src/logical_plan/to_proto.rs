@@ -585,16 +585,16 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         )
                     }
                     // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
-                    WindowFunction::AggregateUDF(_) => {
-                        return Err(Error::NotImplemented(
-                            "UDAF as window function in proto".to_string(),
-                        ))
+                    WindowFunction::AggregateUDF(aggr_udf) => {
+                        protobuf::window_expr_node::WindowFunction::Udaf(
+                            aggr_udf.name.clone(),
+                        )
                     }
                     // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/6733
-                    WindowFunction::WindowUDF(_) => {
-                        return Err(Error::NotImplemented(
-                            "UDWF as window function in proto".to_string(),
-                        ))
+                    WindowFunction::WindowUDF(window_udf) => {
+                        protobuf::window_expr_node::WindowFunction::Udwf(
+                            window_udf.name.clone(),
+                        )
                     }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {

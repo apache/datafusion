@@ -22190,6 +22190,12 @@ impl serde::Serialize for WindowExprNode {
                         .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
                     struct_ser.serialize_field("builtInFunction", &v)?;
                 }
+                window_expr_node::WindowFunction::Udaf(v) => {
+                    struct_ser.serialize_field("udaf", v)?;
+                }
+                window_expr_node::WindowFunction::Udwf(v) => {
+                    struct_ser.serialize_field("udwf", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -22213,6 +22219,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             "aggrFunction",
             "built_in_function",
             "builtInFunction",
+            "udaf",
+            "udwf",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22223,6 +22231,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             WindowFrame,
             AggrFunction,
             BuiltInFunction,
+            Udaf,
+            Udwf,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22250,6 +22260,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
+                            "udaf" => Ok(GeneratedField::Udaf),
+                            "udwf" => Ok(GeneratedField::Udwf),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22311,6 +22323,18 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                                 return Err(serde::de::Error::duplicate_field("builtInFunction"));
                             }
                             window_function__ = map.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| window_expr_node::WindowFunction::BuiltInFunction(x as i32));
+                        }
+                        GeneratedField::Udaf => {
+                            if window_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("udaf"));
+                            }
+                            window_function__ = map.next_value::<::std::option::Option<_>>()?.map(window_expr_node::WindowFunction::Udaf);
+                        }
+                        GeneratedField::Udwf => {
+                            if window_function__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("udwf"));
+                            }
+                            window_function__ = map.next_value::<::std::option::Option<_>>()?.map(window_expr_node::WindowFunction::Udwf);
                         }
                     }
                 }
