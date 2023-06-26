@@ -509,7 +509,7 @@ enum ExprMask {
 
 impl ExprMask {
     fn ignores(&self, expr: &Expr) -> bool {
-        let is_normal_minus_aggregates = matches!(
+        let is_normal = matches!(
             expr,
             Expr::Literal(..)
                 | Expr::Column(..)
@@ -525,8 +525,8 @@ impl ExprMask {
         );
 
         match self {
-            Self::Normal => is_normal_minus_aggregates || is_aggr,
-            Self::NormalAndAggregates => is_normal_minus_aggregates,
+            Self::NormalAndAggregates => is_normal || is_aggr,
+            Self::Normal => is_normal,
         }
     }
 }
