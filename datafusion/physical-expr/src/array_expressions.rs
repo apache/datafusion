@@ -81,7 +81,7 @@ macro_rules! array {
 fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
-        return Err(DataFusionError::Internal(
+        return Err(DataFusionError::Plan(
             "Array requires at least one argument".to_string(),
         ));
     }
@@ -1488,7 +1488,7 @@ mod tests {
 
         assert_eq!(result, &UInt8Array::from(vec![4]));
 
-        // array_length([1, 2, 3, 4], 1) = 2
+        // array_length([1, 2, 3, 4], 1) = 4
         let array = array_length(&[
             list_array,
             ColumnarValue::Scalar(ScalarValue::UInt8(Some(1_u8))),

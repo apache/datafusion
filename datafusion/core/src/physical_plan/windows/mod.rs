@@ -26,12 +26,12 @@ use crate::physical_plan::{
     udaf, ExecutionPlan, PhysicalExpr,
 };
 use arrow::datatypes::Schema;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, Field, SchemaRef};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     window_function::{BuiltInWindowFunction, WindowFunction},
-    WindowFrame,
+    PartitionEvaluator, WindowFrame, WindowUDF,
 };
 use datafusion_physical_expr::{
     window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
@@ -67,8 +67,14 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunction::AggregateFunction(fun) => {
-            let aggregate =
-                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+            let aggregate = aggregates::create_aggregate_expr(
+                fun,
+                false,
+                args,
+                &[],
+                input_schema,
+                name,
+            )?;
             window_expr_from_aggregate_expr(
                 partition_by,
                 order_by,
@@ -92,6 +98,12 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
+        WindowFunction::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+            create_udwf_window_expr(fun, args, input_schema, name)?,
+            partition_by,
+            order_by,
+            window_frame,
+        )),
     })
 }
 
@@ -204,6 +216,71 @@ fn create_built_in_window_expr(
             Arc::new(NthValue::last(name, arg, data_type))
         }
     })
+}
+
+/// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
+fn create_udwf_window_expr(
+    fun: &Arc<WindowUDF>,
+    args: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    name: String,
+) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    // need to get the types into an owned vec for some reason
+    let input_types: Vec<_> = args
+        .iter()
+        .map(|arg| arg.data_type(input_schema))
+        .collect::<Result<_>>()?;
+
+    // figure out the output type
+    let data_type = (fun.return_type)(&input_types)?;
+    Ok(Arc::new(WindowUDFExpr {
+        fun: Arc::clone(fun),
+        args: args.to_vec(),
+        name,
+        data_type,
+    }))
+}
+
+/// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
+#[derive(Clone, Debug)]
+struct WindowUDFExpr {
+    fun: Arc<WindowUDF>,
+    args: Vec<Arc<dyn PhysicalExpr>>,
+    /// Display name
+    name: String,
+    /// result type
+    data_type: Arc<DataType>,
+}
+
+impl BuiltInWindowFunctionExpr for WindowUDFExpr {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        let nullable = false;
+        Ok(Field::new(
+            &self.name,
+            self.data_type.as_ref().clone(),
+            nullable,
+        ))
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.args.clone()
+    }
+
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        (self.fun.partition_evaluator_factory)()
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        None
+    }
 }
 
 pub(crate) fn calc_requirements<

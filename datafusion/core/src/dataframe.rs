@@ -218,6 +218,14 @@ impl DataFrame {
         Ok(DataFrame::new(self.session_state, plan))
     }
 
+    /// Apply one or more window functions ([`Expr::WindowFunction`]) to extend the schema
+    pub fn window(self, window_exprs: Vec<Expr>) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .window(window_exprs)?
+            .build()?;
+        Ok(DataFrame::new(self.session_state, plan))
+    }
+
     /// Limit the number of rows returned from this DataFrame.
     ///
     /// `skip` - Number of rows to skip before fetch any row

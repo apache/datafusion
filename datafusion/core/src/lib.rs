@@ -17,9 +17,9 @@
 #![warn(missing_docs, clippy::needless_borrow)]
 
 //! [DataFusion] is an extensible query engine written in Rust that
-//! uses [Apache Arrow] as its in-memory format. DataFusion's [use
-//! cases] include building very fast database and analytic systems,
-//! customized to particular workloads.
+//! uses [Apache Arrow] as its in-memory format. DataFusion's many [use
+//! cases] help developers build very fast and feature rich database
+//! and analytic systems, customized to particular workloads.
 //!
 //! "Out of the box," DataFusion quickly runs complex [SQL] and
 //! [`DataFrame`] queries using a sophisticated query planner, a columnar,
@@ -143,8 +143,7 @@
 //! * read from any datasource ([`TableProvider`])
 //! * define your own catalogs, schemas, and table lists ([`CatalogProvider`])
 //! * build your own query langue or plans using the ([`LogicalPlanBuilder`])
-//! * declare and use user-defined scalar functions ([`ScalarUDF`])
-//! * declare and use user-defined aggregate functions ([`AggregateUDF`])
+//! * declare and use user-defined functions: ([`ScalarUDF`], and [`AggregateUDF`])
 //! * add custom optimizer rewrite passes ([`OptimizerRule`] and [`PhysicalOptimizerRule`])
 //! * extend the planner to use user-defined logical and physical nodes ([`QueryPlanner`])
 //!

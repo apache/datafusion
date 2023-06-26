@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::ops::Deref;
 
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
@@ -471,8 +472,12 @@ pub fn to_substrait_agg_measure(
     ),
 ) -> Result<Measure> {
     match expr {
-        // TODO: Once substrait supports order by, add handling for it.
-        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter, order_by: _order_by }) => {
+        Expr::AggregateFunction(expr::AggregateFunction { fun, args, distinct, filter, order_by }) => {
+            let sorts = if let Some(order_by) = order_by {
+                order_by.iter().map(|expr| to_substrait_sort_field(expr, schema, extension_info)).collect::<Result<Vec<_>>>()?
+            } else {
+                vec![]
+            };
             let mut arguments: Vec<FunctionArgument> = vec![];
             for arg in args {
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, 0, extension_info)?)) });
@@ -483,7 +488,7 @@ pub fn to_substrait_agg_measure(
                 measure: Some(AggregateFunction {
                     function_reference: function_anchor,
                     arguments,
-                    sorts: vec![],
+                    sorts,
                     output_type: None,
                     invocation: match distinct {
                         true => AggregationInvocation::Distinct as i32,
@@ -507,6 +512,39 @@ pub fn to_substrait_agg_measure(
             expr,
             expr.variant_name()
         ))),
+    }
+}
+
+/// Converts sort expression to corresponding substrait `SortField`
+fn to_substrait_sort_field(
+    expr: &Expr,
+    schema: &DFSchemaRef,
+    extension_info: &mut (
+        Vec<extensions::SimpleExtensionDeclaration>,
+        HashMap<String, u32>,
+    ),
+) -> Result<SortField> {
+    match expr {
+        Expr::Sort(sort) => {
+            let sort_kind = match (sort.asc, sort.nulls_first) {
+                (true, true) => SortDirection::AscNullsFirst,
+                (true, false) => SortDirection::AscNullsLast,
+                (false, true) => SortDirection::DescNullsFirst,
+                (false, false) => SortDirection::DescNullsLast,
+            };
+            Ok(SortField {
+                expr: Some(to_substrait_rex(
+                    sort.expr.deref(),
+                    schema,
+                    0,
+                    extension_info,
+                )?),
+                sort_kind: Some(SortKind::Direction(sort_kind.into())),
+            })
+        }
+        _ => Err(DataFusionError::Execution(
+            "expects to receive sort expression".to_string(),
+        )),
     }
 }
 
