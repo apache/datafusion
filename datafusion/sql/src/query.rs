@@ -157,8 +157,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(plan);
         }
 
-        let order_by_rex = self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
-
         // Handle DISTINCT ON situation- this is the only situation in which we want to logically
         // do our ordering before the DISTINCT, as the DISTINCT row that is chosen will be decided
         // by said ordering- if we did the DISTINCT first, the order wouldn't matter
@@ -168,10 +166,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let LogicalPlan::Projection(mut p) = plan.clone() {
             if let LogicalPlan::Distinct(mut d) = (*p.input).clone() {
                 if let Some(on_expr) = d.on_expr.clone() {
+                    let order_by_expressions =
+                        self.order_by_to_sort_expr(&order_by, d.input.schema(), planner_context)?;
+
                     // First, we need to ensure the ORDER BY expressions start with our ON expression
                     // This is because the ON expression is used to determine the distinct key
                     for (i, expr) in on_expr.into_iter().enumerate() {
-                        let order_exp = order_by_rex.get(i);
+                        let order_exp = order_by_expressions.get(i);
                         match order_exp {
                             None => {}
                             Some(o) => match o {
@@ -193,7 +194,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                     // Next, We need to move the sort BEFORE the distinct
                     let sort_plan = LogicalPlanBuilder::from((*d.input).clone())
-                        .sort(order_by_rex.clone())?
+                        .sort(order_by_expressions.clone())?
                         .build()?;
                     d.input = Arc::new(sort_plan);
                     p.input = Arc::new(LogicalPlan::Distinct(d.clone()));
@@ -201,6 +202,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
         }
-        LogicalPlanBuilder::from(plan).sort(order_by_rex)?.build()
+
+        let order_by_expressions =
+            self.order_by_to_sort_expr(&order_by, plan.schema(), planner_context)?;
+        LogicalPlanBuilder::from(plan)
+            .sort(order_by_expressions)?
+            .build()
     }
 }
