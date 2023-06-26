@@ -109,6 +109,8 @@ pub enum RowAccumulatorItem {
     BOOLOR(BoolOrRowAccumulator),
 }
 
+/// Implement the enum dispatch logic manually.
+/// We can use the enum_dispatch macros to generate the impl methods, but seems the performances is not as good as the handwriting ones.
 impl RowAccumulatorItem {
     pub fn update_batch(
         &self,

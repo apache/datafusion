@@ -679,7 +679,7 @@ impl BoundedAggregateStream {
             let array2 = &row_values[acc_idx2][0];
             let array1_dt = array1.data_type();
             let array2_dt = array2.data_type();
-            dispatch_all_supported_data_types_pairs! { impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, acc_idx1, acc_idx2, self, update_two_accumulator2_with_native_value, groups_with_rows, filter_bool_array}
+            dispatch_all_supported_data_types! { dispatch_all_supported_data_types_pairs, impl_two_row_accumulators_dispatch, array1_dt, array2_dt, array1, array2, acc_idx1, acc_idx2, self, update_two_accumulator2_with_native_value, groups_with_rows, filter_bool_array}
         } else {
             for group_idx in groups_with_rows {
                 let group_state =

@@ -60,159 +60,30 @@ macro_rules! dispatch_all_supported_data_types {
 
 pub use dispatch_all_supported_data_types;
 
-// TODO generate the matching type pairs
 #[macro_export]
 macro_rules! dispatch_all_supported_data_types_pairs {
-    ($macro:ident $(, $x:ident)*) => {
-       $macro! {
+    ([$macro:ident $(, $x:ident)*], $({ $i1t:ident, $i1:ident}),*) => {
+            $macro! {
                 [$($x),*],
-                { Boolean, BooleanArray, Boolean, BooleanArray },
-                { Int8, Int8Array, Boolean, BooleanArray },
-                { Int16, Int16Array, Boolean, BooleanArray },
-                { Int32, Int32Array, Boolean, BooleanArray },
-                { Int64, Int64Array, Boolean, BooleanArray },
-                { UInt8, UInt8Array, Boolean, BooleanArray },
-                { UInt16, UInt16Array, Boolean, BooleanArray },
-                { UInt32, UInt32Array, Boolean, BooleanArray },
-                { UInt64, UInt64Array, Boolean, BooleanArray },
-                { Float32, Float32Array, Boolean, BooleanArray },
-                { Float64, Float64Array, Boolean, BooleanArray },
-                { Decimal128, Decimal128Array, Boolean, BooleanArray },
-                { Boolean, BooleanArray, Int8, Int8Array },
-                { Int8, Int8Array, Int8, Int8Array },
-                { Int16, Int16Array, Int8, Int8Array },
-                { Int32, Int32Array, Int8, Int8Array },
-                { Int64, Int64Array, Int8, Int8Array },
-                { UInt8, UInt8Array, Int8, Int8Array },
-                { UInt16, UInt16Array, Int8, Int8Array },
-                { UInt32, UInt32Array, Int8, Int8Array },
-                { UInt64, UInt64Array, Int8, Int8Array },
-                { Float32, Float32Array, Int8, Int8Array },
-                { Float64, Float64Array, Int8, Int8Array },
-                { Decimal128, Decimal128Array, Int8, Int8Array },
-                { Boolean, BooleanArray, Int16, Int16Array},
-                { Int8, Int8Array, Int16, Int16Array },
-                { Int16, Int16Array, Int16, Int16Array },
-                { Int32, Int32Array, Int16, Int16Array },
-                { Int64, Int64Array, Int16, Int16Array },
-                { UInt8, UInt8Array, Int16, Int16Array },
-                { UInt16, UInt16Array, Int16, Int16Array },
-                { UInt32, UInt32Array, Int16, Int16Array },
-                { UInt64, UInt64Array, Int16, Int16Array },
-                { Float32, Float32Array, Int16, Int16Array },
-                { Float64, Float64Array, Int16, Int16Array },
-                { Decimal128, Decimal128Array, Int16, Int16Array },
-                { Boolean, BooleanArray, Int32, Int32Array },
-                { Int8, Int8Array, Int32, Int32Array },
-                { Int16, Int16Array, Int32, Int32Array },
-                { Int32, Int32Array, Int32, Int32Array },
-                { Int64, Int64Array, Int32, Int32Array },
-                { UInt8, UInt8Array, Int32, Int32Array },
-                { UInt16, UInt16Array, Int32, Int32Array },
-                { UInt32, UInt32Array, Int32, Int32Array },
-                { UInt64, UInt64Array, Int32, Int32Array },
-                { Float32, Float32Array, Int32, Int32Array },
-                { Float64, Float64Array, Int32, Int32Array },
-                { Decimal128, Decimal128Array, Int32, Int32Array },
-                { Boolean, BooleanArray, Int64, Int64Array },
-                { Int8, Int8Array, Int64, Int64Array },
-                { Int16, Int16Array, Int64, Int64Array },
-                { Int32, Int32Array, Int64, Int64Array },
-                { Int64, Int64Array, Int64, Int64Array },
-                { UInt8, UInt8Array, Int64, Int64Array },
-                { UInt16, UInt16Array, Int64, Int64Array },
-                { UInt32, UInt32Array, Int64, Int64Array },
-                { UInt64, UInt64Array, Int64, Int64Array },
-                { Float32, Float32Array, Int64, Int64Array },
-                { Float64, Float64Array, Int64, Int64Array },
-                { Decimal128, Decimal128Array, Int64, Int64Array },
-                { Boolean, BooleanArray, UInt8, UInt8Array },
-                { Int8, Int8Array, UInt8, UInt8Array },
-                { Int16, Int16Array, UInt8, UInt8Array },
-                { Int32, Int32Array, UInt8, UInt8Array },
-                { Int64, Int64Array, UInt8, UInt8Array },
-                { UInt8, UInt8Array, UInt8, UInt8Array },
-                { UInt16, UInt16Array, UInt8, UInt8Array },
-                { UInt32, UInt32Array, UInt8, UInt8Array },
-                { UInt64, UInt64Array, UInt8, UInt8Array },
-                { Float32, Float32Array, UInt8, UInt8Array },
-                { Float64, Float64Array, UInt8, UInt8Array },
-                { Decimal128, Decimal128Array, UInt8, UInt8Array },
-                { Boolean, BooleanArray, UInt16, UInt16Array },
-                { Int8, Int8Array, UInt16, UInt16Array },
-                { Int16, Int16Array, UInt16, UInt16Array },
-                { Int32, Int32Array, UInt16, UInt16Array },
-                { Int64, Int64Array, UInt16, UInt16Array },
-                { UInt8, UInt8Array, UInt16, UInt16Array },
-                { UInt16, UInt16Array, UInt16, UInt16Array },
-                { UInt32, UInt32Array, UInt16, UInt16Array },
-                { UInt64, UInt64Array, UInt16, UInt16Array },
-                { Float32, Float32Array, UInt16, UInt16Array },
-                { Float64, Float64Array, UInt16, UInt16Array },
-                { Decimal128, Decimal128Array, UInt16, UInt16Array },
-                { Boolean, BooleanArray, UInt32, UInt32Array },
-                { Int8, Int8Array, UInt32, UInt32Array },
-                { Int16, Int16Array, UInt32, UInt32Array },
-                { Int32, Int32Array, UInt32, UInt32Array },
-                { Int64, Int64Array, UInt32, UInt32Array },
-                { UInt8, UInt8Array, UInt32, UInt32Array },
-                { UInt16, UInt16Array, UInt32, UInt32Array },
-                { UInt32, UInt32Array, UInt32, UInt32Array },
-                { UInt64, UInt64Array, UInt32, UInt32Array },
-                { Float32, Float32Array, UInt32, UInt32Array },
-                { Float64, Float64Array, UInt32, UInt32Array },
-                { Decimal128, Decimal128Array, UInt32, UInt32Array },
-                { Boolean, BooleanArray, UInt64, UInt64Array },
-                { Int8, Int8Array, UInt64, UInt64Array },
-                { Int16, Int16Array, UInt64, UInt64Array },
-                { Int32, Int32Array, UInt64, UInt64Array },
-                { Int64, Int64Array, UInt64, UInt64Array },
-                { UInt8, UInt8Array, UInt64, UInt64Array },
-                { UInt16, UInt16Array, UInt64, UInt64Array },
-                { UInt32, UInt32Array, UInt64, UInt64Array },
-                { UInt64, UInt64Array, UInt64, UInt64Array },
-                { Float32, Float32Array, UInt64, UInt64Array },
-                { Float64, Float64Array, UInt64, UInt64Array },
-                { Decimal128, Decimal128Array, UInt64, UInt64Array },
-                { Boolean, BooleanArray, Float32, Float32Array },
-                { Int8, Int8Array, Float32, Float32Array },
-                { Int16, Int16Array, Float32, Float32Array },
-                { Int32, Int32Array, Float32, Float32Array },
-                { Int64, Int64Array, Float32, Float32Array },
-                { UInt8, UInt8Array, Float32, Float32Array },
-                { UInt16, UInt16Array, Float32, Float32Array },
-                { UInt32, UInt32Array, Float32, Float32Array },
-                { UInt64, UInt64Array, Float32, Float32Array },
-                { Float32, Float32Array, Float32, Float32Array },
-                { Float64, Float64Array, Float32, Float32Array },
-                { Decimal128, Decimal128Array, Float32, Float32Array },
-                { Boolean, BooleanArray, Float64, Float64Array },
-                { Int8, Int8Array, Float64, Float64Array },
-                { Int16, Int16Array, Float64, Float64Array },
-                { Int32, Int32Array, Float64, Float64Array },
-                { Int64, Int64Array, Float64, Float64Array },
-                { UInt8, UInt8Array, Float64, Float64Array },
-                { UInt16, UInt16Array, Float64, Float64Array },
-                { UInt32, UInt32Array, Float64, Float64Array },
-                { UInt64, UInt64Array, Float64, Float64Array },
-                { Float32, Float32Array, Float64, Float64Array },
-                { Float64, Float64Array, Float64, Float64Array },
-                { Decimal128, Decimal128Array, Float64, Float64Array },
-                { Boolean, BooleanArray, Decimal128, Decimal128Array },
-                { Int8, Int8Array, Decimal128, Decimal128Array },
-                { Int16, Int16Array, Decimal128, Decimal128Array },
-                { Int32, Int32Array, Decimal128, Decimal128Array },
-                { Int64, Int64Array, Decimal128, Decimal128Array },
-                { UInt8, UInt8Array, Decimal128, Decimal128Array },
-                { UInt16, UInt16Array, Decimal128, Decimal128Array },
-                { UInt32, UInt32Array, Decimal128, Decimal128Array },
-                { UInt64, UInt64Array, Decimal128, Decimal128Array },
-                { Float32, Float32Array, Decimal128, Decimal128Array },
-                { Float64, Float64Array, Decimal128, Decimal128Array },
-                { Decimal128, Decimal128Array, Decimal128, Decimal128Array }
-        }
+                $(
+                { Boolean, BooleanArray, $i1t, $i1 },
+                { Int8, Int8Array, $i1t, $i1 },
+                { Int16, Int16Array, $i1t, $i1 },
+                { Int32, Int32Array, $i1t, $i1 },
+                { Int64, Int64Array, $i1t, $i1 },
+                { UInt8, UInt8Array, $i1t, $i1 },
+                { UInt16, UInt16Array,$i1t, $i1 },
+                { UInt32, UInt32Array, $i1t, $i1 },
+                { UInt64, UInt64Array, $i1t, $i1 },
+                { Float32, Float32Array, $i1t, $i1 },
+                { Float64, Float64Array, $i1t, $i1 },
+                { Decimal128, Decimal128Array, $i1t, $i1 },
+                )*
+            }
     };
 }
+
+pub use dispatch_all_supported_data_types_pairs;
 
 #[macro_export]
 macro_rules! dispatch_all_sum_supported_data_types_with_default_value {
@@ -235,8 +106,6 @@ macro_rules! dispatch_all_sum_supported_data_types_with_default_value {
 }
 
 pub use dispatch_all_sum_supported_data_types_with_default_value;
-
-pub use dispatch_all_supported_data_types_pairs;
 
 #[macro_export]
 macro_rules! dispatch_all_bit_and_or_xor_supported_data_types {
@@ -289,7 +158,7 @@ pub use impl_one_row_accumulator_dispatch;
 #[macro_export]
 macro_rules! impl_two_row_accumulators_dispatch {
     (
-        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $acc_idx1:ident, $acc_idx2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),*
+        [$array1_dt:ident, $array2_dt:ident, $array1:ident, $array2:ident, $acc_idx1:ident, $acc_idx2:ident, $self:ident, $update_func:ident, $groups_with_rows:ident, $filter_bool_array:ident], $({ $i1t:ident, $i1:ident, $i2t:ident, $i2:ident}),* $(,)?
     ) => {
         match ($array1_dt, $array2_dt) {
             $(
