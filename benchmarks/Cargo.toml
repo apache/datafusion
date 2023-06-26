@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-benchmarks"
 description = "DataFusion Benchmarks"
-version = "26.0.0"
+version = "27.0.0"
 edition = "2021"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-datafusion"
@@ -34,7 +34,7 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow = { workspace = true }
-datafusion = { path = "../datafusion/core", version = "26.0.0" }
+datafusion = { path = "../datafusion/core", version = "27.0.0" }
 env_logger = "0.10"
 futures = "0.3"
 mimalloc = { version = "0.1", optional = true, default-features = false }
@@ -48,4 +48,4 @@ test-utils = { path = "../test-utils/", version = "0.1.0" }
 tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 
 [dev-dependencies]
-datafusion-proto = { path = "../datafusion/proto", version = "26.0.0" }
+datafusion-proto = { path = "../datafusion/proto", version = "27.0.0" }
