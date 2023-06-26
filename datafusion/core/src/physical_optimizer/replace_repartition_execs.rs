@@ -231,7 +231,7 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -266,11 +266,11 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC]",
             "    FilterExec: c@2 > 3",
-            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          SortExec: expr=[a@0 ASC]",
             "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "              RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
@@ -282,7 +282,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        SortExec: expr=[a@0 ASC]",
             "          CoalescePartitionsExec",
-            "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "            RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
@@ -306,7 +306,7 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      FilterExec: c@2 > 3",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
@@ -341,7 +341,7 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@2 > 3",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -377,7 +377,7 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@2 > 3",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
@@ -412,7 +412,7 @@ mod tests {
             "CoalescePartitionsExec",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@2 > 3",
-            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -420,7 +420,7 @@ mod tests {
             "CoalescePartitionsExec",
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@2 > 3",
-            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -446,10 +446,10 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
-            "    RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        FilterExec: c@2 > 3",
-            "          RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "          RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -481,14 +481,14 @@ mod tests {
         let expected_input = vec![
             "SortPreservingMergeExec: [c@2 ASC]",
             "  SortExec: expr=[c@2 ASC]",
-            "    RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized = vec![
             "SortPreservingMergeExec: [c@2 ASC]",
             "  SortExec: expr=[c@2 ASC]",
-            "    RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "    RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -513,7 +513,7 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
             "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -521,7 +521,7 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST]",
             "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -550,11 +550,11 @@ mod tests {
             "SortPreservingMergeExec: [c@2 ASC]",
             "  SortExec: expr=[c@2 ASC]",
             "    FilterExec: c@2 > 3",
-            "      RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "      RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "          SortExec: expr=[c@2 ASC]",
             "            CoalescePartitionsExec",
-            "              RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "              RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -566,7 +566,7 @@ mod tests {
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "        SortExec: expr=[c@2 ASC]",
             "          CoalescePartitionsExec",
-            "            RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "            RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -602,13 +602,13 @@ mod tests {
         let expected_input = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 1 }, Column { name: \"c\", index: 1 })]",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
             "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
             "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
@@ -616,13 +616,13 @@ mod tests {
         let expected_optimized = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC]",
-            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 1 }, Column { name: \"c\", index: 1 })]",
+            "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
             "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
             "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8), input_partitions=8",
+            "        RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
