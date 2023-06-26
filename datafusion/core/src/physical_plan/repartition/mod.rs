@@ -555,7 +555,7 @@ impl RepartitionExec {
         })
     }
 
-    /// Set sort information
+    /// Set Order preserving flag
     pub fn with_preserve_order(mut self) -> Self {
         self.preserve_order = true;
         self
