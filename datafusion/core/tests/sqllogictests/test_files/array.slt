@@ -19,6 +19,8 @@
 ## Array expressions Tests
 #############
 
+## make_array
+
 # array scalar function #1
 query ??? rowsort
 select make_array(1, 2, 3), make_array(1.0, 2.0, 3.0), make_array('h', 'e', 'l', 'l', 'o');
@@ -61,6 +63,8 @@ select make_array(make_array()), make_array(make_array(make_array()))
 ----
 [[]] [[[]]]
 
+## array_append
+
 # TODO issue: https://github.com/apache/arrow-datafusion/issues/6596
 # array_append scalar function #1
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
@@ -80,6 +84,8 @@ select array_append(make_array(1, 2, 3), 4), array_append(make_array(1.0, 2.0, 3
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+## array_prepend
+
 # array_prepend scalar function #1
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
 caused by
@@ -98,6 +104,8 @@ select array_prepend(1, make_array(2, 3, 4)), array_prepend(1.0, make_array(2.0,
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+## array_fill
+
 # array_fill scalar function #1
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
 caused by
@@ -115,6 +123,8 @@ query error DataFusion error: SQL error: TokenizerError\("Unterminated string li
 caused by
 Internal error: Optimizer rule 'simplify_expressions' failed, due to generate a different schema, original schema: DFSchema \{ fields: \[DFField \{ qualifier: None, field: Field \{ name: "array_fill\(Int64\(1\),make_array\(\)\)", data_type: List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \} \}\], metadata: \{\} \}, new schema: DFSchema \{ fields: \[DFField \{ qualifier: None, field: Field \{ name: "array_fill\(Int64\(1\),make_array\(\)\)", data_type: List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: \{\} \} \}\], metadata: \{\} \}\. This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 select array_fill(1, make_array())
+
+## array_concat
 
 # array_concat scalar function #1
 query ?? rowsort
@@ -152,6 +162,8 @@ caused by
 Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_concat(make_array(), make_array(2, 3));
 
+## array_position
+
 # array_position scalar function #1
 query III
 select array_position(['h', 'e', 'l', 'l', 'o'], 'l'), array_position([1, 2, 3, 4, 5], 5), array_position([1, 1, 1], 1);
@@ -170,11 +182,15 @@ caused by
 Error during planning: Cannot automatically convert List\(Field \{ name: "item", data_type: UInt8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\) to UInt8
 select array_positions(['h', 'e', 'l', 'l', 'o'], 'l'), array_positions([1, 2, 3, 4, 5], 5), array_positions([1, 1, 1], 1);
 
+## array_replace
+
 # array_replace scalar function
 query ???
 select array_replace(make_array(1, 2, 3, 4), 2, 3), array_replace(make_array(1, 4, 4, 5, 4, 6, 7), 4, 0), array_replace(make_array(1, 2, 3), 4, 0);
 ----
 [1, 3, 3, 4] [1, 0, 0, 5, 0, 6, 7] [1, 2, 3]
+
+## array_to_string
 
 # array_to_string scalar function
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
@@ -194,6 +210,8 @@ caused by
 Error during planning: Cannot automatically convert Utf8 to List\(Field \{ name: "item", data_type: Null, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_to_string(make_array(), ',')
 
+## cardinality
+
 # cardinality scalar function
 query III
 select cardinality(make_array(1, 2, 3, 4, 5)), cardinality([1, 3, 5]), cardinality(make_array('h', 'e', 'l', 'l', 'o'));
@@ -211,6 +229,8 @@ query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
 ----
 0 0
+
+## trim_array
 
 # trim_array scalar function #1
 query ???
@@ -235,6 +255,8 @@ query ??
 select trim_array(make_array(), 0), trim_array(make_array(), 1)
 ----
 [] []
+
+## array_length
 
 # array_length scalar function
 query III rowsort
@@ -266,6 +288,8 @@ select array_length(make_array()), array_length(make_array(), 1), array_length(m
 ----
 0 0 NULL
 
+## array_dims
+
 # array_dims scalar function
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
 caused by
@@ -290,6 +314,8 @@ select array_ndims(make_array(1, 2, 3)), array_ndims(make_array([1, 2], [3, 4]))
 ----
 1 2 5
 
+## array_ndims
+
 # array_ndims scalar function #2
 query error DataFusion error: SQL error: ParserError\("Expected an SQL statement, found: caused"\)
 caused by
@@ -301,6 +327,8 @@ query II rowsort
 select array_ndims(make_array()), array_ndims(make_array(make_array()))
 ----
 1 2
+
+## array concatenate opeartor
 
 # array concatenate operator #1 (like array_concat scalar function)
 query ?? rowsort
@@ -358,6 +386,10 @@ select make_array(x, y) from foo2;
 ----
 [1.0, 1]
 
+# array_contains
+
+
+
 # array_contains scalar function #1
 query BBB rowsort
 select array_contains(make_array(1, 2, 3), make_array(1, 1, 2, 3)), array_contains([1, 2, 3], [1, 1, 2]), array_contains([1, 2, 3], [2, 1, 3, 1]);
@@ -393,3 +425,42 @@ query BB rowsort
 select array_contains(make_array(true, true, true), make_array(false, false)), array_contains([false, false, false], [true, true]);
 ----
 false false
+
+# array_contains array
+
+statement ok
+CREATE TABLE t
+AS VALUES
+(make_array(1,2,3), make_array(1,2,3)),
+(make_array(1,2,3), make_array(2,3)),
+(make_array(2,3), make_array(1,2,3)),
+(null, make_array(1,2,3)),
+(make_array(2,3), null);
+
+
+query ??
+SELECT
+  column1,
+  column2
+FROM t
+----
+[1, 2, 3] [1, 2, 3]
+[1, 2, 3] [2, 3]
+[2, 3] [1, 2, 3]
+NULL [1, 2, 3]
+[2, 3] NULL
+
+
+# incorrect answer (one row) to https://github.com/apache/arrow-datafusion/issues/6709
+
+query BB
+SELECT
+  array_contains(column1, column2) as c12,
+  array_contains(column1, column2) as c21
+FROM t
+----
+true true
+
+
+statement ok
+drop table t
