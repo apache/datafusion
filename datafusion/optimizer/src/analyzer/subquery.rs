@@ -167,7 +167,7 @@ fn check_inner_plan(
                 .collect::<Vec<_>>();
             if is_aggregate && is_scalar && !maybe_unsupport.is_empty() {
                 return Err(DataFusionError::Plan(format!(
-                    "Correlated column is not allowed in predicate: {predicate:?}"
+                    "Correlated column is not allowed in predicate: {predicate}"
                 )));
             }
             check_inner_plan(input, is_scalar, is_aggregate, can_contain_outer_ref)

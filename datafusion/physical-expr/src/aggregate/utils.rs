@@ -17,10 +17,10 @@
 
 //! Utilities used in aggregates
 
-use crate::AggregateExpr;
+use crate::{AggregateExpr, PhysicalSortExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
@@ -60,25 +60,25 @@ pub fn calculate_result_decimal_for_avg(
                     if new_value >= target_min && new_value <= target_max {
                         Ok(ScalarValue::Decimal128(Some(new_value), *p, *s))
                     } else {
-                        Err(DataFusionError::Internal(
+                        Err(DataFusionError::Execution(
                             "Arithmetic Overflow in AvgAccumulator".to_string(),
                         ))
                     }
                 } else {
                     // can't convert the lit decimal to the returned data type
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Execution(
                         "Arithmetic Overflow in AvgAccumulator".to_string(),
                     ))
                 }
             } else {
                 // can't convert the lit decimal to the returned data type
-                Err(DataFusionError::Internal(
+                Err(DataFusionError::Execution(
                     "Arithmetic Overflow in AvgAccumulator".to_string(),
                 ))
             }
         }
         other => Err(DataFusionError::Internal(format!(
-            "Error returned data type in AvgAccumulator {other:?}"
+            "Invalid target type in AvgAccumulator {other:?}"
         ))),
     }
 }
@@ -102,4 +102,24 @@ pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
     } else {
         any
     }
+}
+
+/// Construct corresponding fields for lexicographical ordering requirement expression
+pub(crate) fn ordering_fields(
+    ordering_req: &[PhysicalSortExpr],
+    // Data type of each expression in the ordering requirement
+    data_types: &[DataType],
+) -> Vec<Field> {
+    ordering_req
+        .iter()
+        .zip(data_types.iter())
+        .map(|(expr, dtype)| {
+            Field::new(
+                expr.to_string().as_str(),
+                dtype.clone(),
+                // Multi partitions may be empty hence field should be nullable.
+                true,
+            )
+        })
+        .collect()
 }
