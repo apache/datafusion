@@ -54,8 +54,9 @@ use futures::stream::Stream;
 use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use parking_lot::Mutex;
+use tokio::task::JoinHandle;
 
-pub(crate) mod distributor_channels;
+mod distributor_channels;
 
 type MaybeBatch = Option<Result<RecordBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
@@ -435,14 +436,15 @@ impl ExecutionPlan for RepartitionExec {
 
                 let r_metrics = RepartitionMetrics::new(i, partition, &self.metrics);
 
-                let input_task = tokio::spawn(Self::pull_from_input(
-                    self.input.clone(),
-                    i,
-                    txs.clone(),
-                    self.partitioning.clone(),
-                    r_metrics,
-                    context.clone(),
-                ));
+                let input_task: JoinHandle<Result<()>> =
+                    tokio::spawn(Self::pull_from_input(
+                        self.input.clone(),
+                        i,
+                        txs.clone(),
+                        self.partitioning.clone(),
+                        r_metrics,
+                        context.clone(),
+                    ));
 
                 // In a separate task, wait for each input to be done
                 // (and pass along any errors, including panic!s)
