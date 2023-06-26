@@ -1427,7 +1427,7 @@ array_concat(array[, ..., array_n])
 
 ### `array_contains`
 
-Returns true, if each element of the second array appearing in the first array, otherwise false.
+Returns true, if each element of the second array appears in the first array, otherwise false.
 
 ```
 array_contains(first_array, second_array)
