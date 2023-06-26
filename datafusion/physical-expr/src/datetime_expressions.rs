@@ -215,10 +215,7 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 }
 
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
-    if granularity == "second"
-        || granularity == "millisecond"
-        || granularity == "microsecond"
-    {
+    if granularity == "millisecond" || granularity == "microsecond" {
         return Ok(value);
     }
 
@@ -228,6 +225,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
         })?
         .with_nanosecond(0);
     let value = match granularity {
+        "second" => value,
         "minute" => value.and_then(|d| d.with_second(0)),
         "hour" => value
             .and_then(|d| d.with_second(0))
@@ -914,7 +912,7 @@ mod tests {
             (
                 "2020-09-08T13:42:29.190855Z",
                 "second",
-                "2020-09-08T13:42:29.190855Z",
+                "2020-09-08T13:42:29.000000Z",
             ),
             (
                 "2020-09-08T13:42:29.190855Z",
