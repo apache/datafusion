@@ -196,9 +196,7 @@ impl DFSchema {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
-                (Some(q), Some(field_q)) => {
-                    q.resolved_eq(field_q) && field.name() == name
-                }
+                (Some(q), Some(field_q)) => q.resolved_eq(field_q) && field.name() == name,
                 // field to lookup is qualified but current field is unqualified.
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
@@ -315,29 +313,11 @@ impl DFSchema {
         }
     }
 
-    /// Find if the field exists with the given name
-    pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
-        self.fields().iter().any(|field| field.name() == name)
-    }
-
-    /// Find if the field exists with the given qualified name
-    pub fn has_column_with_qualified_name(
-        &self,
-        qualifier: &TableReference,
-        name: &str,
-    ) -> bool {
-        self.fields().iter().any(|field| {
-            field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false)
-                && field.name() == name
-        })
-    }
-
     /// Find if the field exists with the given qualified column
     pub fn has_column(&self, column: &Column) -> bool {
-        match &column.relation {
-            Some(r) => self.has_column_with_qualified_name(r, &column.name),
-            None => self.has_column_with_unqualified_name(&column.name),
-        }
+        self.index_of_column_by_name(column.relation.as_ref(), &column.name)
+            .map(|idx| idx.is_some())
+            .unwrap_or(false)
     }
 
     /// Check to see if unqualified field names matches field names in Arrow schema
@@ -349,10 +329,7 @@ impl DFSchema {
     }
 
     /// Check to see if fields in 2 Arrow schemas are compatible
-    pub fn check_arrow_schema_type_compatible(
-        &self,
-        arrow_schema: &Schema,
-    ) -> Result<()> {
+    pub fn check_arrow_schema_type_compatible(&self, arrow_schema: &Schema) -> Result<()> {
         let self_arrow_schema: Schema = self.into();
         self_arrow_schema
             .fields()
@@ -360,12 +337,13 @@ impl DFSchema {
             .zip(arrow_schema.fields().iter())
             .try_for_each(|(l_field, r_field)| {
                 if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    Err(DataFusionError::Plan(
-                        format!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                                r_field.name(),
-                                r_field.data_type(),
-                                l_field.name(),
-                                l_field.data_type())))
+                    Err(DataFusionError::Plan(format!(
+                        "Column {} (type: {}) is not compatible with column {} (type: {})",
+                        r_field.name(),
+                        r_field.data_type(),
+                        l_field.name(),
+                        l_field.data_type()
+                    )))
                 } else {
                     Ok(())
                 }
@@ -879,9 +857,11 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert_contains!(join.unwrap_err().to_string(),
-                         "Schema error: Schema contains qualified \
-                          field name t1.c0 and unqualified field name c0 which would be ambiguous");
+        assert_contains!(
+            join.unwrap_err().to_string(),
+            "Schema error: Schema contains qualified \
+                          field name t1.c0 and unqualified field name c0 which would be ambiguous"
+        );
         Ok(())
     }
 
@@ -935,15 +915,13 @@ mod tests {
 
         let field1_i16_t = DFField::from(arrow_field1);
         let field1_i16_t_meta = DFField::from(arrow_field1_meta);
-        let field1_i16_t_qualified =
-            DFField::from_qualified("foo", field1_i16_t.field().clone());
+        let field1_i16_t_qualified = DFField::from_qualified("foo", field1_i16_t.field().clone());
         let field1_i16_f = DFField::from(Field::new("f1", DataType::Int16, false));
         let field1_i32_t = DFField::from(Field::new("f1", DataType::Int32, true));
         let field2_i16_t = DFField::from(Field::new("f2", DataType::Int16, true));
         let field3_i16_t = DFField::from(Field::new("f3", DataType::Int16, true));
 
-        let dict =
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let field_dict_t = DFField::from(Field::new("f_dict", dict.clone(), true));
         let field_dict_f = DFField::from(Field::new("f_dict", dict, false));
 
@@ -1202,9 +1180,8 @@ mod tests {
         let a: DFField = DFField::from_qualified("table1", a_field);
         let b: DFField = DFField::from_qualified("table1", b_field);
 
-        let df_schema = Arc::new(
-            DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
-        );
+        let df_schema =
+            Arc::new(DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap());
         let schema: Schema = df_schema.as_ref().clone().into();
         let a_df = df_schema.fields.get(0).unwrap().field();
         let a_arrow = schema.fields.get(0).unwrap();
