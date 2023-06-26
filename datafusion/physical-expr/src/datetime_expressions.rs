@@ -273,7 +273,6 @@ fn _date_trunc(
     value: &Option<i64>,
     granularity: &str,
     f: impl Fn(Option<i64>) -> Result<Option<i64>>,
-    // tz_opt: &Option<Arc<str>>,
 ) -> Result<Option<i64>, DataFusionError> {
     let scale = match tu {
         TimeUnit::Second => 1_000_000_000,
@@ -282,34 +281,37 @@ fn _date_trunc(
         TimeUnit::Nanosecond => 1,
     };
 
-    if value.is_none() {
+    let Some(value) = value else {
         return Ok(None);
-    }
+    };
 
-    let nano = (f)(Some(value.unwrap() * scale))?;
+    // convert to nanoseconds
+    let Some(nano) = (f)(Some(value * scale))? else {
+        return Ok(None);
+    };
 
     let result = match tu {
         TimeUnit::Second => match granularity {
-            "minute" => Some(nano.unwrap() / 1_000_000_000 / 60 * 60),
-            _ => Some(nano.unwrap() / 1_000_000_000),
+            "minute" => Some(nano / 1_000_000_000 / 60 * 60),
+            _ => Some(nano / 1_000_000_000),
         },
         TimeUnit::Millisecond => match granularity {
-            "minute" => Some(nano.unwrap() / 1_000_000 / 1_000 / 60 * 1_000 * 60),
-            "second" => Some(nano.unwrap() / 1_000_000 / 1_000 * 1_000),
-            _ => Some(nano.unwrap() / 1_000_000),
+            "minute" => Some(nano / 1_000_000 / 1_000 / 60 * 1_000 * 60),
+            "second" => Some(nano / 1_000_000 / 1_000 * 1_000),
+            _ => Some(nano / 1_000_000),
         },
         TimeUnit::Microsecond => match granularity {
-            "minute" => Some(nano.unwrap() / 1_000 / 1_000_000 / 60 * 60 * 1_000_000),
-            "second" => Some(nano.unwrap() / 1_000 / 1_000_000 * 1_000_000),
-            "millisecond" => Some(nano.unwrap() / 1_000 / 1_000 * 1_000),
-            _ => Some(nano.unwrap() / 1_000),
+            "minute" => Some(nano / 1_000 / 1_000_000 / 60 * 60 * 1_000_000),
+            "second" => Some(nano / 1_000 / 1_000_000 * 1_000_000),
+            "millisecond" => Some(nano / 1_000 / 1_000 * 1_000),
+            _ => Some(nano / 1_000),
         },
         _ => match granularity {
-            "minute" => Some(nano.unwrap() / 1_000_000_000 / 60 * 1_000_000_000 * 60),
-            "second" => Some(nano.unwrap() / 1_000_000_000 * 1_000_000_000),
-            "millisecond" => Some(nano.unwrap() / 1_000_000 * 1_000_000),
-            "microsecond" => Some(nano.unwrap() / 1_000 * 1_000),
-            _ => Some(nano.unwrap()),
+            "minute" => Some(nano / 1_000_000_000 / 60 * 1_000_000_000 * 60),
+            "second" => Some(nano / 1_000_000_000 * 1_000_000_000),
+            "millisecond" => Some(nano / 1_000_000 * 1_000_000),
+            "microsecond" => Some(nano / 1_000 * 1_000),
+            _ => Some(nano),
         },
     };
     Ok(result)
