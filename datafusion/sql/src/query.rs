@@ -15,14 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use datafusion_expr::expr_rewriter::{normalize_col, replace_col};
 use datafusion_expr::{CreateMemoryTable, DdlStatement, Expr, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Expr as SQLExpr, Offset as SQLOffset, OrderByExpr, Query, SetExpr, Value};
 
+use crate::utils::{extract_aliases, resolve_aliases_to_exprs};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -166,8 +170,31 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let LogicalPlan::Projection(mut p) = plan.clone() {
             if let LogicalPlan::Distinct(mut d) = (*p.input).clone() {
                 if let Some(on_expr) = d.on_expr.clone() {
-                    let mut order_by_expressions =
-                        self.order_by_to_sort_expr(&order_by, d.input.schema(), planner_context)?;
+                    let parent_plan = d.input;
+
+                    let mut order_by_expressions = self.order_by_to_sort_expr(
+                        &order_by,
+                        parent_plan.schema(),
+                        planner_context,
+                    )?;
+
+                    let alias_map = match (*parent_plan).clone() {
+                        LogicalPlan::Projection(p) => extract_aliases(p.expr.as_slice()),
+                        _ => unreachable!(),
+                    };
+
+                    let on_expr = on_expr
+                        .into_iter()
+                        .map(|e| {
+                            normalize_col(resolve_aliases_to_exprs(&e, &alias_map)?, &parent_plan)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let mut order_by_expressions = order_by_expressions
+                        .into_iter()
+                        .map(|e| {
+                            normalize_col(resolve_aliases_to_exprs(&e, &alias_map)?, &parent_plan)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
                     // First, we need to ensure the ORDER BY expressions start with our ON expression
                     // This is because the ON expression is used to determine the distinct key
@@ -199,7 +226,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .collect();
 
                     // Next, We need to move the sort BEFORE the distinct
-                    let sort_plan = LogicalPlanBuilder::from((*d.input).clone())
+                    let sort_plan = LogicalPlanBuilder::from((*parent_plan).clone())
                         .sort(order_by_expressions.clone())?
                         .build()?;
                     d.input = Arc::new(sort_plan);
