@@ -166,11 +166,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         if let LogicalPlan::Projection(mut p) = plan.clone() {
             if let LogicalPlan::Distinct(mut d) = (*p.input).clone() {
                 if let Some(on_expr) = d.on_expr.clone() {
-                    let order_by_expressions =
+                    let mut order_by_expressions =
                         self.order_by_to_sort_expr(&order_by, d.input.schema(), planner_context)?;
 
                     // First, we need to ensure the ORDER BY expressions start with our ON expression
                     // This is because the ON expression is used to determine the distinct key
+                    let on_expr_length = on_expr.len();
                     for (i, expr) in on_expr.into_iter().enumerate() {
                         let order_exp = order_by_expressions.get(i);
                         match order_exp {
@@ -191,6 +192,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             },
                         }
                     }
+
+                    order_by_expressions = order_by_expressions
+                        .into_iter()
+                        .skip(on_expr_length)
+                        .collect();
 
                     // Next, We need to move the sort BEFORE the distinct
                     let sort_plan = LogicalPlanBuilder::from((*d.input).clone())
