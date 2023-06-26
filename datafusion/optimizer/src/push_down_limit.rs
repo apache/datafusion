@@ -266,6 +266,7 @@ fn push_down_join(join: &Join, limit: usize) -> Option<Join> {
                 join_constraint: join.join_constraint,
                 schema: join.schema.clone(),
                 null_equals_null: join.null_equals_null,
+                projection: join.projection.clone(),
             })
         }
     }

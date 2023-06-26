@@ -350,6 +350,7 @@ pub fn build_join_schema(
     left: &Schema,
     right: &Schema,
     join_type: &JoinType,
+    projection: Option<Vec<Column>>,
 ) -> (Schema, Vec<ColumnIndex>) {
     let (fields, column_indices): (SchemaBuilder, Vec<ColumnIndex>) = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
@@ -1197,7 +1198,7 @@ mod tests {
         ];
 
         for (left_in, right_in, join_type, left_out, right_out) in cases {
-            let (schema, _) = build_join_schema(left_in, right_in, &join_type);
+            let (schema, _) = build_join_schema(left_in, right_in, &join_type, None);
 
             let expected_fields = left_out
                 .fields()

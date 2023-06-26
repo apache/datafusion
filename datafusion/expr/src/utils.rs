@@ -845,10 +845,15 @@ pub fn from_plan(
             join_constraint,
             on,
             null_equals_null,
+            projection,
             ..
         }) => {
-            let schema =
-                build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
+            let schema = build_join_schema(
+                inputs[0].schema(),
+                inputs[1].schema(),
+                join_type,
+                projection.as_ref(),
+            )?;
 
             let equi_expr_count = on.len();
             assert!(expr.len() >= equi_expr_count);
@@ -881,6 +886,7 @@ pub fn from_plan(
                 filter: filter_expr,
                 schema: DFSchemaRef::new(schema),
                 null_equals_null: *null_equals_null,
+                projection: projection.clone(),
             }))
         }
         LogicalPlan::CrossJoin(_) => {

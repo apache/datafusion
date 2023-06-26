@@ -55,6 +55,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 join_constraint,
                 schema,
                 null_equals_null,
+                projection,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -80,6 +81,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                             join_constraint: *join_constraint,
                             schema: schema.clone(),
                             null_equals_null: *null_equals_null,
+                            projection: projection.clone(),
                         })
                     });
 

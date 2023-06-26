@@ -901,6 +901,7 @@ impl DefaultPhysicalPlanner {
                     join_type,
                     null_equals_null,
                     schema: join_schema,
+                    projection,
                     ..
                 }) => {
                     let null_equals_null = *null_equals_null;
@@ -989,6 +990,8 @@ impl DefaultPhysicalPlanner {
                             ))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
+
+                    let projection: Option<Vec<Column>> = projection.map(|proj|proj.iter().enumerate().map(|col|Column::new(col.name, 0)).collect());
 
                     let join_filter = match filter {
                         Some(expr) => {
@@ -1095,6 +1098,7 @@ impl DefaultPhysicalPlanner {
                             join_type,
                             partition_mode,
                             null_equals_null,
+                            projection.clone(),
                         )?))
                     } else {
                         Ok(Arc::new(HashJoinExec::try_new(
@@ -1105,6 +1109,7 @@ impl DefaultPhysicalPlanner {
                             join_type,
                             PartitionMode::CollectLeft,
                             null_equals_null,
+                            projection.clone(),
                         )?))
                     }
                 }

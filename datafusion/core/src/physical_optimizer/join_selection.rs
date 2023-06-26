@@ -137,6 +137,7 @@ pub fn swap_hash_join(
         &swap_join_type(*hash_join.join_type()),
         partition_mode,
         hash_join.null_equals_null(),
+        None,
     )?;
     if matches!(
         hash_join.join_type(),
@@ -333,6 +334,7 @@ fn try_collect_left(
                     hash_join.join_type(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
+                    hash_join.projection.clone(),
                 )?)))
             }
         }
@@ -344,6 +346,7 @@ fn try_collect_left(
             hash_join.join_type(),
             PartitionMode::CollectLeft,
             hash_join.null_equals_null(),
+            hash_join.projection.clone(),
         )?))),
         (false, true) => {
             if supports_swap(*hash_join.join_type()) {
@@ -371,6 +374,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
             hash_join.join_type(),
             PartitionMode::Partitioned,
             hash_join.null_equals_null(),
+            hash_join.projection.clone(),
         )?))
     }
 }
@@ -495,6 +499,7 @@ mod tests {
             &JoinType::Left,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
 
@@ -543,6 +548,7 @@ mod tests {
             &JoinType::Left,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
 
@@ -594,6 +600,7 @@ mod tests {
                 &join_type,
                 PartitionMode::Partitioned,
                 false,
+                None,
             )
             .unwrap();
 
@@ -659,6 +666,7 @@ mod tests {
             &JoinType::Inner,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
         let child_schema = child_join.schema();
@@ -675,6 +683,7 @@ mod tests {
             &JoinType::Left,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
 
@@ -712,6 +721,7 @@ mod tests {
             &JoinType::Inner,
             PartitionMode::CollectLeft,
             false,
+            None,
         )
         .unwrap();
 
@@ -937,6 +947,7 @@ mod tests {
             &JoinType::Inner,
             PartitionMode::Auto,
             false,
+            None,
         )
         .unwrap();
 

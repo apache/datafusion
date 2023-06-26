@@ -177,7 +177,7 @@ impl SortMergeJoinExec {
         };
 
         let schema =
-            Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
+            Arc::new(build_join_schema(&left_schema, &right_schema, &join_type, None).0);
 
         Ok(Self {
             left,

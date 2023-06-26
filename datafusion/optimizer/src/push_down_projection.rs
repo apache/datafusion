@@ -101,6 +101,10 @@ impl OptimizerRule for PushDownProjection {
                 for e in projection.expr.iter() {
                     expr_to_columns(e, &mut push_columns)?;
                 }
+
+                // Keep columns to use for join output projection
+                let output_columns = push_columns.clone();
+
                 for (l, r) in join.on.iter() {
                     expr_to_columns(l, &mut push_columns)?;
                     expr_to_columns(r, &mut push_columns)?;
@@ -119,9 +123,14 @@ impl OptimizerRule for PushDownProjection {
                     join.right.schema(),
                     join.right.clone(),
                 )?;
-                let new_join = child_plan.with_new_inputs(&[new_left, new_right])?;
 
-                generate_plan!(projection_is_empty, plan, new_join)
+                let mut join = join.clone();
+
+                join.left = Arc::new(new_left);
+                join.right = Arc::new(new_right);
+                join.projection = Some(output_columns.into_iter().collect());
+
+                generate_plan!(projection_is_empty, plan, LogicalPlan::Join(join))
             }
             LogicalPlan::CrossJoin(join) => {
                 // collect column in on/filter in join and projection.

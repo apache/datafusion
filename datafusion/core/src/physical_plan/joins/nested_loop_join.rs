@@ -106,7 +106,7 @@ impl NestedLoopJoinExec {
         let right_schema = right.schema();
         check_join_is_valid(&left_schema, &right_schema, &[])?;
         let (schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, join_type);
+            build_join_schema(&left_schema, &right_schema, join_type, None);
         Ok(NestedLoopJoinExec {
             left,
             right,

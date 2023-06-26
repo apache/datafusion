@@ -214,6 +214,7 @@ fn find_inner_join(
                 left_input.schema(),
                 right_input.schema(),
                 &JoinType::Inner,
+                None,
             )?);
 
             return Ok(LogicalPlan::Join(Join {
@@ -225,6 +226,7 @@ fn find_inner_join(
                 filter: None,
                 schema: join_schema,
                 null_equals_null: false,
+                projection: None,
             }));
         }
     }
@@ -233,6 +235,7 @@ fn find_inner_join(
         left_input.schema(),
         right.schema(),
         &JoinType::Inner,
+        None,
     )?);
 
     Ok(LogicalPlan::CrossJoin(CrossJoin {

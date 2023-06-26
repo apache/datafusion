@@ -295,7 +295,7 @@ impl SymmetricHashJoinExec {
 
         // Build the join schema from the left and right schemas:
         let (schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, join_type);
+            build_join_schema(&left_schema, &right_schema, join_type, None);
 
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
@@ -1862,6 +1862,7 @@ mod tests {
             join_type,
             PartitionMode::Partitioned,
             null_equals_null,
+            None,
         )?;
 
         let mut batches = vec![];
@@ -3026,7 +3027,7 @@ mod tests {
 
         // Build the join schema from the left and right schemas
         let (schema, join_column_indices) =
-            build_join_schema(&left_schema, &right_schema, &join_type);
+            build_join_schema(&left_schema, &right_schema, &join_type, None);
         let join_schema = Arc::new(schema);
 
         // Sort information for MemoryExec

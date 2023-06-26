@@ -122,6 +122,8 @@ pub struct HashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
     pub(crate) null_equals_null: bool,
+    /// Optional output projection
+    pub projection: Option<Vec<Column>>,
 }
 
 impl HashJoinExec {
@@ -136,6 +138,7 @@ impl HashJoinExec {
         join_type: &JoinType,
         partition_mode: PartitionMode,
         null_equals_null: bool,
+        projection: Option<Vec<Column>>,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -148,7 +151,7 @@ impl HashJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
         let (schema, column_indices) =
-            build_join_schema(&left_schema, &right_schema, join_type);
+            build_join_schema(&left_schema, &right_schema, join_type, projection);
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
@@ -165,6 +168,7 @@ impl HashJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             column_indices,
             null_equals_null,
+            projection,
         })
     }
 
@@ -337,6 +341,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_type,
             self.mode,
             self.null_equals_null,
+            self.projection,
         )?))
     }
 
@@ -1358,6 +1363,7 @@ mod tests {
             join_type,
             PartitionMode::CollectLeft,
             null_equals_null,
+            None,
         )
     }
 
@@ -1377,6 +1383,7 @@ mod tests {
             join_type,
             PartitionMode::CollectLeft,
             null_equals_null,
+            None,
         )
     }
 
@@ -1431,6 +1438,7 @@ mod tests {
             join_type,
             PartitionMode::Partitioned,
             null_equals_null,
+            None,
         )?;
 
         let columns = columns(&join.schema());
@@ -3164,6 +3172,7 @@ mod tests {
                 &join_type,
                 PartitionMode::Partitioned,
                 false,
+                None,
             )?;
 
             let stream = join.execute(1, task_ctx)?;

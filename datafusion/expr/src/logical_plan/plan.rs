@@ -1660,6 +1660,8 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+    /// optional projection
+    pub projection: Option<Vec<Column>>,
 }
 
 impl Join {
@@ -1681,8 +1683,12 @@ impl Join {
             .zip(column_on.1.into_iter())
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
-        let join_schema =
-            build_join_schema(left.schema(), right.schema(), &original_join.join_type)?;
+        let join_schema = build_join_schema(
+            left.schema(),
+            right.schema(),
+            &original_join.join_type,
+            original_join.projection.as_ref(),
+        )?;
 
         Ok(Join {
             left,
@@ -1693,6 +1699,7 @@ impl Join {
             join_constraint: original_join.join_constraint,
             schema: Arc::new(join_schema),
             null_equals_null: original_join.null_equals_null,
+            projection: None,
         })
     }
 }

@@ -721,7 +721,7 @@ impl LogicalPlanBuilder {
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
         let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+            build_join_schema(self.plan.schema(), right.schema(), &join_type, None)?;
 
         Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan),
@@ -732,6 +732,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null,
+            projection: None,
         })))
     }
 
@@ -754,7 +755,7 @@ impl LogicalPlanBuilder {
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+            build_join_schema(self.plan.schema(), right.schema(), &join_type, None)?;
         let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
@@ -796,6 +797,7 @@ impl LogicalPlanBuilder {
                 join_constraint: JoinConstraint::Using,
                 schema: DFSchemaRef::new(join_schema),
                 null_equals_null: false,
+                projection: None,
             })))
         }
     }
@@ -1012,7 +1014,7 @@ impl LogicalPlanBuilder {
             .collect::<Result<Vec<_>>>()?;
 
         let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+            build_join_schema(self.plan.schema(), right.schema(), &join_type, None)?;
 
         Ok(Self::from(LogicalPlan::Join(Join {
             left: Arc::new(self.plan),
@@ -1023,6 +1025,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equals_null: false,
+            projection: None,
         })))
     }
 
@@ -1038,6 +1041,7 @@ pub fn build_join_schema(
     left: &DFSchema,
     right: &DFSchema,
     join_type: &JoinType,
+    projection: Option<&Vec<Column>>,
 ) -> Result<DFSchema> {
     fn nullify_fields(fields: &[DFField]) -> Vec<DFField> {
         fields
@@ -1049,51 +1053,65 @@ pub fn build_join_schema(
     let right_fields = right.fields();
     let left_fields = left.fields();
 
-    let fields: Vec<DFField> = match join_type {
-        JoinType::Inner => {
-            // left then right
-            left_fields
+    let fields = {
+        if let Some(projection) = projection {
+            projection
                 .iter()
-                .chain(right_fields.iter())
-                .cloned()
-                .collect()
-        }
-        JoinType::Left => {
-            // left then right, right set to nullable in case of not matched scenario
-            left_fields
-                .iter()
-                .chain(&nullify_fields(right_fields))
-                .cloned()
-                .collect()
-        }
-        JoinType::Right => {
-            // left then right, left set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                .iter()
-                .chain(right_fields.iter())
-                .cloned()
-                .collect()
-        }
-        JoinType::Full => {
-            // left then right, all set to nullable in case of not matched scenario
-            nullify_fields(left_fields)
-                .iter()
-                .chain(&nullify_fields(right_fields))
-                .cloned()
-                .collect()
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            // Only use the left side for the schema
-            left_fields.clone()
-        }
-        JoinType::RightSemi | JoinType::RightAnti => {
-            // Only use the right side for the schema
-            right_fields.clone()
+                .map(|col| {
+                    left.field_from_column(col)
+                        .or_else(|_| right.field_from_column(col))
+                        .cloned()
+                })
+                .collect::<Result<Vec<DFField>>>()?
+        } else {
+            match join_type {
+                JoinType::Inner => {
+                    // left then right
+                    left_fields
+                        .iter()
+                        .chain(right_fields.iter())
+                        .cloned()
+                        .collect()
+                }
+                JoinType::Left => {
+                    // left then right, right set to nullable in case of not matched scenario
+                    left_fields
+                        .iter()
+                        .chain(&nullify_fields(right_fields))
+                        .cloned()
+                        .collect()
+                }
+                JoinType::Right => {
+                    // left then right, left set to nullable in case of not matched scenario
+                    nullify_fields(left_fields)
+                        .iter()
+                        .chain(right_fields.iter())
+                        .cloned()
+                        .collect()
+                }
+                JoinType::Full => {
+                    // left then right, all set to nullable in case of not matched scenario
+                    nullify_fields(left_fields)
+                        .iter()
+                        .chain(&nullify_fields(right_fields))
+                        .cloned()
+                        .collect()
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => {
+                    // Only use the left side for the schema
+                    left_fields.clone()
+                }
+                JoinType::RightSemi | JoinType::RightAnti => {
+                    // Only use the right side for the schema
+                    right_fields.clone()
+                }
+            }
         }
     };
 
     let mut metadata = left.metadata().clone();
     metadata.extend(right.metadata().clone());
+
     DFSchema::new_with_metadata(fields, metadata)
 }
 

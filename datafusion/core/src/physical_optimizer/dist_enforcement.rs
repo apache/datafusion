@@ -154,6 +154,7 @@ fn adjust_input_keys_ordering(
         join_type,
         mode,
         null_equals_null,
+        projection,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -169,6 +170,7 @@ fn adjust_input_keys_ordering(
                             join_type,
                             PartitionMode::Partitioned,
                             *null_equals_null,
+                            projection.clone(),
                         )?) as Arc<dyn ExecutionPlan>)
                     };
                 Some(reorder_partitioned_join_keys(
@@ -541,6 +543,7 @@ fn reorder_join_keys_to_inputs(
         join_type,
         mode,
         null_equals_null,
+        projection,
         ..
     }) = plan_any.downcast_ref::<HashJoinExec>()
     {
@@ -570,6 +573,7 @@ fn reorder_join_keys_to_inputs(
                             join_type,
                             PartitionMode::Partitioned,
                             *null_equals_null,
+                            projection.clone(),
                         )?))
                     } else {
                         Ok(plan)
@@ -1123,6 +1127,7 @@ mod tests {
                 join_type,
                 PartitionMode::Partitioned,
                 false,
+                None,
             )
             .unwrap(),
         )
