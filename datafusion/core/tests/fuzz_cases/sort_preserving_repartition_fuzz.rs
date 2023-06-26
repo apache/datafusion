@@ -21,7 +21,6 @@ mod sp_repartition_fuzz_tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use arrow_schema::SortOptions;
     use datafusion::physical_plan::memory::MemoryExec;
-    use datafusion::physical_plan::repartition::sort_preserving_repartition::SortPreservingRepartitionExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use datafusion::physical_plan::{collect, ExecutionPlan, Partitioning};
@@ -81,8 +80,15 @@ mod sp_repartition_fuzz_tests {
     /// preserves ordering. Input fed to the plan above should be same with the output of the plan.
     async fn run_sort_preserving_repartition_test(
         input1: Vec<RecordBatch>,
+        // If `true`, first repartition executor after `MemoryExec` will be in `RoundRobin` mode
+        // else it will be in `Hash` mode
         is_first_roundrobin: bool,
+        // If `true`, first repartition executor after `MemoryExec` will be `SortPreservingRepartitionExec`
+        // If `false`, first repartition executor after `MemoryExec` will be `RepartitionExec` (Since its input
+        // partition number is 1, `RepartitionExec` also preserves ordering.).
         is_first_sort_preserving: bool,
+        // If `true`, second repartition executor after `MemoryExec` will be in `RoundRobin` mode
+        // else it will be in `Hash` mode
         is_second_roundrobin: bool,
     ) {
         let schema = input1[0].schema();
@@ -121,7 +127,6 @@ mod sp_repartition_fuzz_tests {
         };
 
         let final_plan = sort_preserving_merge_exec(sort_keys.clone(), intermediate);
-
         let task_ctx = ctx.task_ctx();
 
         let collected_running = collect(final_plan, task_ctx.clone()).await.unwrap();
@@ -133,11 +138,9 @@ mod sp_repartition_fuzz_tests {
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
-            SortPreservingRepartitionExec::try_new(
-                input,
-                Partitioning::RoundRobinBatch(2),
-            )
-            .unwrap(),
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))
+                .unwrap()
+                .with_preserve_order(),
         )
     }
 
@@ -154,11 +157,9 @@ mod sp_repartition_fuzz_tests {
         hash_expr: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Arc<dyn ExecutionPlan> {
         Arc::new(
-            SortPreservingRepartitionExec::try_new(
-                input,
-                Partitioning::Hash(hash_expr, 2),
-            )
-            .unwrap(),
+            RepartitionExec::try_new(input, Partitioning::Hash(hash_expr, 2))
+                .unwrap()
+                .with_preserve_order(),
         )
     }
 
