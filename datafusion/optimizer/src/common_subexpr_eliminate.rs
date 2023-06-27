@@ -211,6 +211,7 @@ impl CommonSubexprEliminate {
         // rewrite inputs
         let input_schema = Arc::clone(input.schema());
         println!("INPUT SCHEMA: {}", input_schema);
+        println!("INPUT EXPR: {:#?}", group_expr);
         let group_arrays = to_arrays(
             group_expr,
             Arc::clone(&input_schema),
