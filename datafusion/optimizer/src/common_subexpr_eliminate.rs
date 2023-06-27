@@ -305,12 +305,15 @@ impl CommonSubexprEliminate {
                 }
             }
 
+            println!("PROJECTION EXPRESSION: {:#?}", proj_exprs);
+
             let agg = LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(new_input),
                 new_group_expr,
                 agg_exprs,
             )?);
 
+            println!("NEW AGG: {:?}", agg);
             Ok(LogicalPlan::Projection(Projection::try_new(
                 proj_exprs,
                 Arc::new(agg),
