@@ -198,6 +198,7 @@ impl CommonSubexprEliminate {
         aggregate: &Aggregate,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        println!("OPTIMIZING AGGREGATION: {:?}", aggregate);
         let Aggregate {
             group_expr,
             aggr_expr,
@@ -209,6 +210,7 @@ impl CommonSubexprEliminate {
 
         // rewrite inputs
         let input_schema = Arc::clone(input.schema());
+        println!("INPUT SCHEMA: {}", input_schema);
         let group_arrays = to_arrays(
             group_expr,
             Arc::clone(&input_schema),
@@ -218,6 +220,8 @@ impl CommonSubexprEliminate {
         let aggr_arrays =
             to_arrays(aggr_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
+        println!("GROUP ARRAYS: {:#?}", group_arrays);
+        println!("AGG ARRAYS: {:#?}", aggr_arrays);
         let (mut new_expr, new_input) = self.rewrite_expr(
             &[group_expr, aggr_expr],
             &[&group_arrays, &aggr_arrays],
