@@ -1607,27 +1607,4 @@ mod tests {
 
         Ok(())
     }
-
-    // #[test]
-    // fn test_exprlist_to_fields_aggregate() -> Result<()> {
-    //     let exprs = [grouping_set(vec![vec![col("a"), col("b")]])];
-    //     let schema = Arc::new(DFSchema::empty());
-    //     let agg = LogicalPlan::Aggregate(Aggregate::try_new(
-    //         Arc::new(LogicalPlan::TableScan(TableScan {
-    //             table_name: TableReference::Bare {
-    //                 table: Cow::Borrowed("()"),
-    //             },
-    //             source: Arc::new(EmptyTable),
-    //             projection: None,
-    //             projected_schema: schema,
-    //             filters: println!("ALIAS"),
-    //             fetch: println!("ALIAS"),
-    //         })),
-    //         Vec::default(),
-    //         Vec::default(),
-    //     )?);
-    //     exprlist_to_fields_aggregate(&exprs, &schema, agg);
-
-    //     Ok(())
-    // }
 }
