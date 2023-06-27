@@ -1056,6 +1056,7 @@ fn exprlist_to_fields_aggregate(
                 fields.push(field);
             }
             Expr::GroupingSet(exprs) => {
+                println!("GS EXPRS: {:#?}", exprs.distinct_expr());
                 for e in exprs.distinct_expr() {
                     let field = e.to_field(agg.input.schema())?;
                     println!("FIELD: {:?}", field);
