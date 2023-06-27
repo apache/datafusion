@@ -32,7 +32,7 @@ use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    any_decimal, coerce_types, comparison_coercion, like_coercion, math_decimal_coercion,
+    comparison_coercion, get_input_types, like_coercion,
 };
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
@@ -230,72 +230,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
                 Ok(expr)
             }
-            Expr::BinaryExpr(BinaryExpr {
-                ref left,
-                op,
-                ref right,
-            }) => {
-                // this is a workaround for https://github.com/apache/arrow-datafusion/issues/3419
-                let left_type = left.get_type(&self.schema)?;
-                let right_type = right.get_type(&self.schema)?;
-                match (&left_type, &right_type) {
-                    // Handle some case about Interval.
-                    (
-                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                        &DataType::Interval(_),
-                    ) if matches!(op, Operator::Plus | Operator::Minus) => Ok(expr),
-                    (
-                        &DataType::Interval(_),
-                        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
-                    ) if matches!(op, Operator::Plus) => Ok(expr),
-                    (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
-                        if op.is_numerical_operators() =>
-                    {
-                        if matches!(op, Operator::Minus) {
-                            Ok(expr)
-                        } else {
-                            Err(DataFusionError::Internal(format!(
-                                "Unsupported operation {op:?} between {left_type:?} and {right_type:?}"
-                            )))
-                        }
-                    }
-                    // For numerical operations between decimals, we don't coerce the types.
-                    // But if only one of the operands is decimal, we cast the other operand to decimal
-                    // if the other operand is integer. If the other operand is float, we cast the
-                    // decimal operand to float.
-                    (lhs_type, rhs_type)
-                        if op.is_numerical_operators()
-                            && any_decimal(lhs_type, rhs_type) =>
-                    {
-                        let (coerced_lhs_type, coerced_rhs_type) =
-                            math_decimal_coercion(lhs_type, rhs_type);
-                        let new_left = if let Some(lhs_type) = coerced_lhs_type {
-                            left.clone().cast_to(&lhs_type, &self.schema)?
-                        } else {
-                            left.as_ref().clone()
-                        };
-                        let new_right = if let Some(rhs_type) = coerced_rhs_type {
-                            right.clone().cast_to(&rhs_type, &self.schema)?
-                        } else {
-                            right.as_ref().clone()
-                        };
-                        let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(new_left),
-                            op,
-                            Box::new(new_right),
-                        ));
-                        Ok(expr)
-                    }
-                    _ => {
-                        let common_type = coerce_types(&left_type, &op, &right_type)?;
-                        let expr = Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(left.clone().cast_to(&common_type, &self.schema)?),
-                            op,
-                            Box::new(right.clone().cast_to(&common_type, &self.schema)?),
-                        ));
-                        Ok(expr)
-                    }
-                }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let lhs = left.get_type(&self.schema)?;
+                let rhs = right.get_type(&self.schema)?;
+                let (lhs, rhs) = get_input_types(&lhs, &op, &rhs)?;
+                Ok(Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(left.cast_to(&lhs, &self.schema)?),
+                    op,
+                    Box::new(right.cast_to(&rhs, &self.schema)?),
+                )))
             }
             Expr::Between(Between {
                 expr,
@@ -566,7 +509,7 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: &Expr, schema: &DFSchemaRef) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    coerce_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
     expr.clone().cast_to(&DataType::Boolean, schema)
 }
 
@@ -1108,9 +1051,9 @@ mod test {
 
         let empty = empty_with_type(DataType::Int64);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "");
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Int64 IS DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
+        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, "");
+        let err = ret.unwrap_err().to_string();
+        assert!(err.contains("Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean"), "{err}");
 
         // is not true
         let expr = col("a").is_not_true();
@@ -1210,9 +1153,9 @@ mod test {
 
         let empty = empty_with_type(DataType::Utf8);
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
-        let err = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Utf8 IS DISTINCT FROM Boolean can't be evaluated because there isn't a common type to coerce the types to"));
+        let ret = assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), &plan, expected);
+        let err = ret.unwrap_err().to_string();
+        assert!(err.contains("Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean"), "{err}");
 
         // is not unknown
         let expr = col("a").is_not_unknown();
