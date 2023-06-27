@@ -1064,7 +1064,10 @@ fn exprlist_to_fields_aggregate(
                     fields.push(field);
                 }
             }
-            _ => fields.push(expr.to_field(plan.schema())?),
+            other => {
+                println!("OTHER: {:?}", other);
+                fields.push(other.to_field(plan.schema())?)
+            }
         }
     }
     Ok(fields)
