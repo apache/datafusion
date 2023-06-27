@@ -1047,7 +1047,7 @@ fn exprlist_to_fields_aggregate(
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
-        println!("EXPR: {:?}", expr);
+        println!("EXPR: {}", expr);
         match expr {
             Expr::GroupingSet(_) => println!("OK"),
             _ => println!("HOW IT'S POSSIBLE"),
