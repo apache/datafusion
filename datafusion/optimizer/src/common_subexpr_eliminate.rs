@@ -234,6 +234,8 @@ impl CommonSubexprEliminate {
         let new_aggr_expr = pop_expr(&mut new_expr)?;
         let new_group_expr = pop_expr(&mut new_expr)?;
 
+        println!("NEW GROUP ARRAYS: {:#?}", new_group_expr);
+        println!("NEW AGG ARRAYS: {:#?}", new_aggr_expr);
         // create potential projection on top
         let mut expr_set = ExprSet::new();
         let new_input_schema = Arc::clone(new_input.schema());
@@ -243,6 +245,8 @@ impl CommonSubexprEliminate {
             &mut expr_set,
             ExprMask::NormalAndAggregates,
         )?;
+        println!("NEW INPUT SCHEMA: {:#?}", new_input_schema);
+        
         let mut affected_id = BTreeSet::<Identifier>::new();
         let mut rewritten = self.rewrite_exprs_list(
             &[&new_aggr_expr],
@@ -251,7 +255,7 @@ impl CommonSubexprEliminate {
             &mut affected_id,
         )?;
         let rewritten = pop_expr(&mut rewritten)?;
-
+        println!("REWRITTEN: {:#?}", rewritten);
         if affected_id.is_empty() {
             Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                 Arc::new(new_input),
