@@ -240,7 +240,8 @@ fn math_decimal_coercion(
         (Decimal128(_, _), Decimal128(_, _)) => {
             Some((lhs_type.clone(), rhs_type.clone()))
         }
-        // Unlike comparison we coerce to floating point for mixed decimal, floating-point
+        // Unlike with comparison we don't coerce to a decimal in the case of floating point
+        // numbers, instead falling back to floating point arithmetic instead
         (Decimal128(_, _), Int8 | Int16 | Int32 | Int64) => {
             Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?))
         }
