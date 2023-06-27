@@ -198,7 +198,6 @@ impl CommonSubexprEliminate {
         aggregate: &Aggregate,
         config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        println!("OPTIMIZING AGGREGATION: {:?}", aggregate);
         let Aggregate {
             group_expr,
             aggr_expr,
@@ -210,8 +209,6 @@ impl CommonSubexprEliminate {
 
         // rewrite inputs
         let input_schema = Arc::clone(input.schema());
-        println!("INPUT SCHEMA: {}", input_schema);
-        println!("INPUT EXPR: {:#?}", group_expr);
         let group_arrays = to_arrays(
             group_expr,
             Arc::clone(&input_schema),
@@ -221,8 +218,6 @@ impl CommonSubexprEliminate {
         let aggr_arrays =
             to_arrays(aggr_expr, input_schema, &mut expr_set, ExprMask::Normal)?;
 
-        println!("GROUP ARRAYS: {:#?}", group_arrays);
-        println!("AGG ARRAYS: {:#?}", aggr_arrays);
         let (mut new_expr, new_input) = self.rewrite_expr(
             &[group_expr, aggr_expr],
             &[&group_arrays, &aggr_arrays],
@@ -234,8 +229,6 @@ impl CommonSubexprEliminate {
         let new_aggr_expr = pop_expr(&mut new_expr)?;
         let new_group_expr = pop_expr(&mut new_expr)?;
 
-        println!("NEW GROUP ARRAYS: {:#?}", new_group_expr);
-        println!("NEW AGG ARRAYS: {:#?}", new_aggr_expr);
         // create potential projection on top
         let mut expr_set = ExprSet::new();
         let new_input_schema = Arc::clone(new_input.schema());
@@ -245,8 +238,6 @@ impl CommonSubexprEliminate {
             &mut expr_set,
             ExprMask::NormalAndAggregates,
         )?;
-        println!("NEW INPUT SCHEMA: {:#?}", new_input_schema);
-        
         let mut affected_id = BTreeSet::<Identifier>::new();
         let mut rewritten = self.rewrite_exprs_list(
             &[&new_aggr_expr],
@@ -255,7 +246,6 @@ impl CommonSubexprEliminate {
             &mut affected_id,
         )?;
         let rewritten = pop_expr(&mut rewritten)?;
-        println!("REWRITTEN: {:#?}", rewritten);
         if affected_id.is_empty() {
             Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                 Arc::new(new_input),
@@ -282,23 +272,9 @@ impl CommonSubexprEliminate {
 
             let mut proj_exprs = vec![];
             for expr in &new_group_expr {
-                match expr {
-                    Expr::GroupingSet(groupings) => {
-                        for e in groupings.distinct_expr() {
-                            proj_exprs.push(Expr::Column(
-                                e.to_field(&new_input_schema)?.qualified_column(),
-                            ))
-                        }
-                    }
-                    _ => {
-                        proj_exprs.push(Expr::Column(
-                            expr.to_field(&new_input_schema)?.qualified_column(),
-                        ));
-                    }
-                }
+                extract_expressions(expr, &new_input_schema, &mut proj_exprs)?
             }
 
-            println!("PROJECTED EXPRESSIONS 1: {:#?}", proj_exprs);
             for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
                 if expr_rewritten == expr_orig {
                     if let Expr::Alias(expr, name) = expr_rewritten {
@@ -317,16 +293,12 @@ impl CommonSubexprEliminate {
                     proj_exprs.push(expr_rewritten);
                 }
             }
-
-            println!("PROJECTION EXPRESSION: {:#?}", proj_exprs);
-
             let agg = LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(new_input),
                 new_group_expr,
                 agg_exprs,
             )?);
 
-            println!("NEW AGG: {:?}", agg);
             Ok(LogicalPlan::Projection(Projection::try_new(
                 proj_exprs,
                 Arc::new(agg),
@@ -511,6 +483,22 @@ fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalP
         Projection::try_new(col_exprs, Arc::new(input))
             .expect("Cannot build projection plan from an invalid schema"),
     )
+}
+
+fn extract_expressions(
+    expr: &Expr,
+    schema: &DFSchema,
+    result: &mut Vec<Expr>,
+) -> Result<()> {
+    if let Expr::GroupingSet(groupings) = expr {
+        for e in groupings.distinct_expr() {
+            result.push(Expr::Column(e.to_field(schema)?.qualified_column()))
+        }
+    } else {
+        result.push(Expr::Column(expr.to_field(schema)?.qualified_column()));
+    }
+
+    Ok(())
 }
 
 /// Which type of [expressions](Expr) should be considered for rewriting?
@@ -798,8 +786,8 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
-        StateTypeFunction, Volatility,
+        grouping_set, AccumulatorFunctionImplementation, AggregateUDF,
+        ReturnTypeFunction, Signature, StateTypeFunction, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -1275,6 +1263,54 @@ mod test {
 
         assert_optimized_plan_eq(expected, &plan);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_grouping_set() -> Result<()> {
+        let mut result = Vec::with_capacity(3);
+        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+                DFField::new_unqualified("c", DataType::Int32, false),
+            ],
+            HashMap::default(),
+        )?;
+        extract_expressions(&grouping, &schema, &mut result)?;
+
+        assert!(result.len() == 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
+        let mut result = Vec::with_capacity(2);
+        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+            ],
+            HashMap::default(),
+        )?;
+        extract_expressions(&grouping, &schema, &mut result)?;
+
+        assert!(result.len() == 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_col() -> Result<()> {
+        let mut result = Vec::with_capacity(1);
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified("a", DataType::Int32, false)],
+            HashMap::default(),
+        )?;
+        extract_expressions(&col("a"), &schema, &mut result)?;
+
+        assert!(result.len() == 1);
         Ok(())
     }
 }
