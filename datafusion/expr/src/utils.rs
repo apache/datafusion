@@ -1043,6 +1043,7 @@ fn exprlist_to_fields_aggregate(
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
     println!("EXPR TO FIELDS");
+    println!("AGG INPUT SCHEMA: {:?}", agg);
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
