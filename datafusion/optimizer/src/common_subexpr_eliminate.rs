@@ -787,8 +787,8 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        grouping_set, AccumulatorFunctionImplementation, AggregateUDF,
-        ReturnTypeFunction, Signature, StateTypeFunction, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
+        Signature, StateTypeFunction, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
