@@ -282,10 +282,23 @@ impl CommonSubexprEliminate {
 
             let mut proj_exprs = vec![];
             for expr in &new_group_expr {
-                let out_col: Column =
-                    expr.to_field(&new_input_schema)?.qualified_column();
-                proj_exprs.push(Expr::Column(out_col));
+                match expr {
+                    Expr::GroupingSet(groupings) => {
+                        for e in groupings.distinct_expr() {
+                            proj_exprs.push(Expr::Column(
+                                e.to_field(&new_input_schema)?.qualified_column(),
+                            ))
+                        }
+                    }
+                    _ => {
+                        proj_exprs.push(Expr::Column(
+                            expr.to_field(&new_input_schema)?.qualified_column(),
+                        ));
+                    }
+                }
             }
+
+            println!("PROJECTED EXPRESSIONS 1: {:#?}", proj_exprs);
             for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
                 if expr_rewritten == expr_orig {
                     if let Expr::Alias(expr, name) = expr_rewritten {
