@@ -76,7 +76,7 @@ fn sort_preserving_repartition(
 }
 
 fn does_plan_maintains_input_order(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    return plan.maintains_input_order().iter().all(|flag| *flag);
+    plan.maintains_input_order().iter().any(|flag| *flag)
 }
 
 /// Check the children nodes between two `SortExec`s if they all maintain the input ordering
