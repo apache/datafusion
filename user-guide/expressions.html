@@ -818,43 +818,46 @@ expressions such as <code class="docutils literal notranslate"><span class="pre"
 <tr class="row-odd"><td><p>array_concat(array[, …, array_n])</p></td>
 <td><p>Concatenates arrays.</p></td>
 </tr>
-<tr class="row-even"><td><p>array_dims(array)</p></td>
+<tr class="row-even"><td><p>array_contains(first_array, second_array)</p></td>
+<td><p>Returns true, if each element of the second array appearing in the first array, otherwise false.</p></td>
+</tr>
+<tr class="row-odd"><td><p>array_dims(array)</p></td>
 <td><p>Returns an array of the array’s dimensions.</p></td>
 </tr>
-<tr class="row-odd"><td><p>array_fill(element, array)</p></td>
+<tr class="row-even"><td><p>array_fill(element, array)</p></td>
 <td><p>Returns an array filled with copies of the given value.</p></td>
 </tr>
-<tr class="row-even"><td><p>array_length(array, dimension)</p></td>
+<tr class="row-odd"><td><p>array_length(array, dimension)</p></td>
 <td><p>Returns the length of the array dimension.</p></td>
 </tr>
-<tr class="row-odd"><td><p>array_ndims(array)</p></td>
+<tr class="row-even"><td><p>array_ndims(array)</p></td>
 <td><p>Returns the number of dimensions of the array.</p></td>
 </tr>
-<tr class="row-even"><td><p>array_position(array, element)</p></td>
+<tr class="row-odd"><td><p>array_position(array, element)</p></td>
 <td><p>Searches for an element in the array, returns first occurrence.</p></td>
 </tr>
-<tr class="row-odd"><td><p>array_positions(array, element)</p></td>
+<tr class="row-even"><td><p>array_positions(array, element)</p></td>
 <td><p>Searches for an element in the array, returns all occurrences.</p></td>
 </tr>
-<tr class="row-even"><td><p>array_prepend(array, element)</p></td>
+<tr class="row-odd"><td><p>array_prepend(array, element)</p></td>
 <td><p>Prepends an element to the beginning of an array.</p></td>
 </tr>
-<tr class="row-odd"><td><p>array_remove(array, element)</p></td>
+<tr class="row-even"><td><p>array_remove(array, element)</p></td>
 <td><p>Removes all elements equal to the given value from the array.</p></td>
 </tr>
-<tr class="row-even"><td><p>array_replace(array, from, to)</p></td>
+<tr class="row-odd"><td><p>array_replace(array, from, to)</p></td>
 <td><p>Replaces a specified element with another specified element.</p></td>
 </tr>
-<tr class="row-odd"><td><p>array_to_string(array, delimeter)</p></td>
+<tr class="row-even"><td><p>array_to_string(array, delimeter)</p></td>
 <td><p>Converts each element to its text representation.</p></td>
 </tr>
-<tr class="row-even"><td><p>cardinality(array)</p></td>
+<tr class="row-odd"><td><p>cardinality(array)</p></td>
 <td><p>Returns the total number of elements in the array.</p></td>
 </tr>
-<tr class="row-odd"><td><p>make_array(value1, [value2 [, …]])</p></td>
+<tr class="row-even"><td><p>make_array(value1, [value2 [, …]])</p></td>
 <td><p>Returns an Arrow array using the specified input expressions.</p></td>
 </tr>
-<tr class="row-even"><td><p>trim_array(array, n)</p></td>
+<tr class="row-odd"><td><p>trim_array(array, n)</p></td>
 <td><p>Removes the last n elements from the array.</p></td>
 </tr>
 </tbody>
