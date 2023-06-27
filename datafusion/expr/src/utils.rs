@@ -1036,7 +1036,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
 
 fn exprlist_to_fields_aggregate(
     exprs: &[Expr],
-    schema: &DFSchemaRef,
+    plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
     let agg_cols = agg_cols(agg);
@@ -1044,11 +1044,10 @@ fn exprlist_to_fields_aggregate(
     for expr in exprs {
         match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                let field = expr.to_field(agg.input.schema())?;
                 // resolve against schema of input to aggregate
-                fields.push(field);
+                fields.push(expr.to_field(agg.input.schema())?);
             }
-            _ => fields.push(expr.to_field(schema)?),
+            _ => fields.push(expr.to_field(plan.schema())?),
         }
     }
     Ok(fields)
@@ -1066,11 +1065,11 @@ pub fn exprlist_to_fields<'a>(
     // look at the input to the aggregate instead.
     let fields = match plan {
         LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_fields_aggregate(&exprs, plan.schema(), agg))
+            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
         }
         LogicalPlan::Window(window) => match window.input.as_ref() {
             LogicalPlan::Aggregate(agg) => {
-                Some(exprlist_to_fields_aggregate(&exprs, plan.schema(), agg))
+                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
             }
             _ => None,
         },
