@@ -525,8 +525,8 @@ impl ExprMask {
         );
 
         match self {
-            Self::NormalAndAggregates => is_normal || is_aggr,
-            Self::Normal => is_normal,
+            Self::Normal => is_normal || is_aggr,
+            Self::NormalAndAggregates => is_normal,
         }
     }
 }
