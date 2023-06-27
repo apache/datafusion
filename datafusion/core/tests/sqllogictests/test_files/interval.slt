@@ -489,5 +489,20 @@ select interval '1 month' + '2012-01-01'::date;
 ----
 2012-02-01
 
+# is (not) distinct from
+query BBBBBB
+select
+    i is distinct from null,
+    i is distinct from (interval '1 month'),
+    i is distinct from i,
+    i is not distinct from null,
+    i is not distinct from (interval '1 day'),
+    i is not distinct from i
+from t;
+----
+true false false false false true
+true true false false true true
+true true false false false true
+
 statement ok
 drop table t
