@@ -1334,9 +1334,7 @@ mod tests {
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
     use datafusion_common::{ColumnStatistics, Result, Statistics};
-    use datafusion_expr::type_coercion::binary::{
-        get_input_types, math_decimal_coercion,
-    };
+    use datafusion_expr::type_coercion::binary::get_input_types;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -4057,7 +4055,7 @@ mod tests {
         expected: ArrayRef,
     ) -> Result<()> {
         let (lhs_type, rhs_type) =
-            math_decimal_coercion(left.data_type(), right.data_type()).unwrap();
+            get_input_types(left.data_type(), &op, right.data_type()).unwrap();
 
         let left_expr = try_cast(col("a", schema)?, schema, lhs_type.clone())?;
         let right_expr = try_cast(col("b", schema)?, schema, rhs_type.clone())?;

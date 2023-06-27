@@ -25,7 +25,7 @@ use arrow::datatypes::{
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
-use crate::type_coercion::{is_decimal, is_numeric};
+use crate::type_coercion::is_numeric;
 use crate::Operator;
 
 /// The type signature of an instantiation of binary expression
@@ -119,10 +119,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         Operator::Divide|
         Operator::Modulo =>  {
             // TODO: this logic would be easier to follow if the functions were inlined
-            if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
-                // Numeric arithmetic, e.g. Int32 + Int32
-                Ok(Signature::coerced(numeric))
-            } else if let Some(ret) = mathematics_temporal_result_type(lhs, rhs) {
+            if let Some(ret) = mathematics_temporal_result_type(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
@@ -154,6 +151,9 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                     rhs,
                     ret,
                 })
+            } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
+                // Numeric arithmetic, e.g. Int32 + Int32
+                Ok(Signature::coerced(numeric))
             } else {
                 Err(DataFusionError::Plan(format!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
@@ -219,7 +219,7 @@ pub fn get_input_types(
 }
 
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
-pub fn math_decimal_coercion(
+fn math_decimal_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<(DataType, DataType)> {
@@ -240,26 +240,20 @@ pub fn math_decimal_coercion(
         (Decimal128(_, _), Decimal128(_, _)) => {
             Some((lhs_type.clone(), rhs_type.clone()))
         }
-        (Decimal128(_, _), Float32 | Float64) | (Float32 | Float64, Decimal128(_, _)) => {
-            Some((Float64, Float64))
-        }
-        (Decimal128(_, _), _) => {
+        // Unlike comparison we coerce to floating point for mixed decimal, floating-point
+        (Decimal128(_, _), Int8 | Int16 | Int32 | Int64) => {
             Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?))
         }
-        (_, Decimal128(_, _)) => {
+        (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
             Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
         }
-
         _ => None,
     }
 }
 
 /// Returns the output type of applying bitwise operations such as
 /// `&`, `|`, or `xor`to arguments of `lhs_type` and `rhs_type`.
-pub(crate) fn bitwise_coercion(
-    left_type: &DataType,
-    right_type: &DataType,
-) -> Option<DataType> {
+fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     if !both_numeric_or_null_and_numeric(left_type, right_type) {
@@ -307,6 +301,7 @@ pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
+        .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
@@ -318,6 +313,46 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
         (LargeUtf8, _) if is_numeric(rhs_type) => Some(LargeUtf8),
         (_, Utf8) if is_numeric(lhs_type) => Some(Utf8),
         (_, LargeUtf8) if is_numeric(lhs_type) => Some(LargeUtf8),
+        _ => None,
+    }
+}
+
+/// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
+/// where one is numeric and one is `Utf8`/`LargeUtf8`.
+///
+/// Note this cannot be performed in case of arithmetic as there is insufficient information
+/// to correctly determine the type of argument. Consider
+///
+/// ```sql
+/// timestamp > now() - '1 month'
+/// interval > now() - '1970-01-2021'
+/// ```
+///
+/// In the absence of a full type inference system, we can't determine the correct type
+/// to parse the string argument
+fn string_temporal_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
+        (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
+        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => {
+            match is_time_with_valid_unit(Time32(unit.clone())) {
+                false => None,
+                true => Some(Time32(unit.clone())),
+            }
+        }
+        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => {
+            match is_time_with_valid_unit(Time64(unit.clone())) {
+                false => None,
+                true => Some(Time64(unit.clone())),
+            }
+        }
+        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
+            Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
+        }
         _ => None,
     }
 }
@@ -341,7 +376,7 @@ fn comparison_binary_numeric_coercion(
     // these are ordered from most informative to least informative so
     // that the coercion does not lose information via truncation
     match (lhs_type, rhs_type) {
-        // support decimal data type for comparison operation
+        // Prefer decimal data type over floating point for comparison operation
         (Decimal128(_, _), Decimal128(_, _)) => {
             get_wider_decimal_type(lhs_type, rhs_type)
         }
@@ -718,23 +753,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         // interval +/-
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
-        (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
-        (Utf8, Date64) | (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) | (Time32(unit), Utf8) => {
-            match is_time_with_valid_unit(Time32(unit.clone())) {
-                false => None,
-                true => Some(Time32(unit.clone())),
-            }
-        }
-        (Utf8, Time64(unit)) | (Time64(unit), Utf8) => {
-            match is_time_with_valid_unit(Time64(unit.clone())) {
-                false => None,
-                true => Some(Time64(unit.clone())),
-            }
-        }
-        (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
-            Some(Timestamp(Nanosecond, tz.clone()))
-        }
         (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
             Some(Timestamp(Nanosecond, None))
         }

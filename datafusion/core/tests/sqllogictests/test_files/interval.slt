@@ -432,11 +432,15 @@ select '1 month'::interval + '1980-01-01T12:00:00'::timestamp;
 
 # Exected error: interval (scalar) - date / timestamp (scalar)
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Date32 can't be evaluated because there isn't a common type to coerce the types to
+query D
 select '1 month'::interval - '1980-01-01'::date;
+----
+1979-12-01
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
+query P
 select '1 month'::interval - '1980-01-01T12:00:00'::timestamp;
+----
+1979-12-01T12:00:00
 
 # interval (array) + date / timestamp (array)
 query D
@@ -454,11 +458,19 @@ select i + ts from t;
 2000-02-01T00:01:00
 
 # expected error interval (array) - date / timestamp (array)
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Date32 can't be evaluated because there isn't a common type to coerce the types to
+query D
 select i - d from t;
+----
+1979-12-01
+1990-09-30
+1980-01-02
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
+query P
 select i - ts from t;
+----
+1999-12-01T00:00:00
+1999-12-31T12:11:10
+2000-01-31T23:59:00
 
 
 # interval (scalar) + date / timestamp (array)
@@ -477,11 +489,19 @@ select '1 month'::interval + ts from t;
 2000-03-01T00:00:00
 
 # expected error interval (scalar) - date / timestamp (array)
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Date32 can't be evaluated because there isn't a common type to coerce the types to
+query D
 select '1 month'::interval - d from t;
+----
+1979-12-01
+1990-09-01
+1979-12-02
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) can't be evaluated because there isn't a common type to coerce the types to
+query P
 select '1 month'::interval - ts from t;
+----
+1999-12-01T00:00:00
+1999-12-01T12:11:10
+2000-01-01T00:00:00
 
 # interval + date
 query D
