@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::SchemaExt;
 use datafusion_execution::TaskContext;
 use tokio::sync::RwLock;
 
@@ -189,13 +190,13 @@ impl TableProvider for MemTable {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !input.schema().eq(&self.schema) {
+        if !self.schema().equivalent_names_and_types(&input.schema()) {
             return Err(DataFusionError::Plan(
                 "Inserting query must have the same schema with the table.".to_string(),
             ));
         }
         let sink = Arc::new(MemSink::new(self.batches.clone()));
-        Ok(Arc::new(InsertExec::new(input, sink)))
+        Ok(Arc::new(InsertExec::new(input, sink, self.schema.clone())))
     }
 }
 
