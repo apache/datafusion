@@ -1042,14 +1042,15 @@ fn exprlist_to_fields_aggregate(
     plan: &LogicalPlan,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
-    println!("EXPR TO FIELDS");
-    println!("AGG INPUT SCHEMA: {:?}", agg);
+    println!("EXPR TO FIELDS: {:#?}", exprs);
+    println!("AGG INPUT SCHEMA: {:?}", agg.schema);
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
         println!("EXPR: {:?}", expr);
         match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
+                println!("COLUMN: {:?}", c);
                 let field = expr.to_field(agg.input.schema())?;
                 println!("FIELD: {:?}", field);
                 // resolve against schema of input to aggregate
