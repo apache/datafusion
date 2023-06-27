@@ -552,17 +552,19 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Concat => Ok(Utf8),
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
-            // DateTrunc always makes nanosecond timestamps
-            BuiltinScalarFunction::DateTrunc => Ok(Timestamp(Nanosecond, None)),
-            BuiltinScalarFunction::DateBin => match input_expr_types[1] {
-                Timestamp(Nanosecond, _) | Utf8 => Ok(Timestamp(Nanosecond, None)),
-                Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-                Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-                Timestamp(Second, _) => Ok(Timestamp(Second, None)),
-                _ => Err(DataFusionError::Internal(format!(
+            BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
+                match input_expr_types[1] {
+                    Timestamp(Nanosecond, _) | Utf8 | Null => {
+                        Ok(Timestamp(Nanosecond, None))
+                    }
+                    Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
+                    Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
+                    Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                    _ => Err(DataFusionError::Internal(format!(
                     "The {self} function can only accept timestamp as the second arg."
                 ))),
-            },
+                }
+            }
             BuiltinScalarFunction::InitCap => {
                 utf8_to_str_type(&input_expr_types[0], "initcap")
             }
@@ -889,8 +891,13 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::DateTrunc => Signature::exact(
-                vec![Utf8, Timestamp(Nanosecond, None)],
+            BuiltinScalarFunction::DateTrunc => Signature::one_of(
+                vec![
+                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
+                    Exact(vec![Utf8, Timestamp(Second, None)]),
+                ],
                 self.volatility(),
             ),
             BuiltinScalarFunction::DateBin => {
