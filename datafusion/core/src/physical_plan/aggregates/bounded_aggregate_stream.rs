@@ -1005,14 +1005,17 @@ impl GroupStateRowAccumulatorsUpdater for BoundedAggregateStream {
         self.row_accumulators.as_slice()
     }
 
+    #[inline(always)]
     fn get_group_state(&self, group_idx: &usize) -> &GroupState {
         &self.aggr_state.ordered_group_states[*group_idx].group_state
     }
 
+    #[inline(always)]
     fn get_mut_group_state(&mut self, group_idx: &usize) -> &mut GroupState {
         &mut self.aggr_state.ordered_group_states[*group_idx].group_state
     }
 
+    #[inline(always)]
     fn get_mut_group_state_and_row_accumulators(
         &mut self,
         group_idx: &usize,

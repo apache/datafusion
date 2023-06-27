@@ -289,6 +289,7 @@ pub(crate) fn slice_and_maybe_filter(
     }
 }
 
+#[inline(always)]
 pub(crate) fn col_to_value<T1: ArrowArrayReader>(
     array: &T1,
     filter: &Option<&BooleanArray>,

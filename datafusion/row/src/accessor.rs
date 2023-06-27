@@ -784,12 +784,12 @@ pub trait ArrowArrayReader: Array {
 impl<'a> ArrowArrayReader for &'a BooleanArray {
     type Item = bool;
 
-    #[inline]
+    #[inline(always)]
     fn value_at(&self, index: usize) -> Self::Item {
         BooleanArray::value(self, index)
     }
 
-    #[inline]
+    #[inline(always)]
     unsafe fn value_at_unchecked(&self, index: usize) -> Self::Item {
         BooleanArray::value_unchecked(self, index)
     }
@@ -801,12 +801,12 @@ where
 {
     type Item = T::Native;
 
-    #[inline]
+    #[inline(always)]
     fn value_at(&self, index: usize) -> Self::Item {
         PrimitiveArray::value(self, index)
     }
 
-    #[inline]
+    #[inline(always)]
     unsafe fn value_at_unchecked(&self, index: usize) -> Self::Item {
         PrimitiveArray::value_unchecked(self, index)
     }
