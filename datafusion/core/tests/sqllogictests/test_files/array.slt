@@ -532,6 +532,12 @@ true true
 statement ok
 CREATE EXTERNAL TABLE fixed_size_list_array STORED AS PARQUET LOCATION 'tests/data/fixed_size_list_array.parquet';
 
+query T
+select arrow_typeof(f0) from fixed_size_list_array;
+----
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2)
+
 query ?
 select * from fixed_size_list_array;
 ----
