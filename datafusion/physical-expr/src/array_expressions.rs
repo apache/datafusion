@@ -26,6 +26,7 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+use itertools::Itertools;
 use std::sync::Arc;
 
 macro_rules! downcast_vec {
@@ -1070,6 +1071,70 @@ pub fn array_ndims(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     ]))))
 }
 
+macro_rules! contains {
+    ($FIRST_ARRAY:expr, $SECOND_ARRAY:expr, $ARRAY_TYPE:ident) => {{
+        let first_array = downcast_arg!($FIRST_ARRAY, $ARRAY_TYPE);
+        let second_array = downcast_arg!($SECOND_ARRAY, $ARRAY_TYPE);
+        let mut res = true;
+        for x in second_array.values().iter().dedup() {
+            if !first_array.values().contains(x) {
+                res = false;
+            }
+        }
+
+        res
+    }};
+}
+
+/// Array_contains SQL function
+pub fn array_contains(args: &[ArrayRef]) -> Result<ArrayRef> {
+    fn concat_inner_lists(arg: ArrayRef) -> Result<ArrayRef> {
+        match arg.data_type() {
+            DataType::List(field) => match field.data_type() {
+                DataType::List(..) => {
+                    concat_inner_lists(array_concat(&[as_list_array(&arg)?
+                        .values()
+                        .clone()])?)
+                }
+                _ => Ok(as_list_array(&arg)?.values().clone()),
+            },
+            data_type => Err(DataFusionError::NotImplemented(format!(
+                "Array is not type '{data_type:?}'."
+            ))),
+        }
+    }
+
+    let concat_first_array = concat_inner_lists(args[0].clone())?.clone();
+    let concat_second_array = concat_inner_lists(args[1].clone())?.clone();
+
+    let res = match (concat_first_array.data_type(), concat_second_array.data_type()) {
+        (DataType::Utf8, DataType::Utf8) => contains!(concat_first_array, concat_second_array, StringArray),
+        (DataType::LargeUtf8, DataType::LargeUtf8) => contains!(concat_first_array, concat_second_array, LargeStringArray),
+        (DataType::Boolean, DataType::Boolean) => {
+            let first_array = downcast_arg!(concat_first_array, BooleanArray);
+            let second_array = downcast_arg!(concat_second_array, BooleanArray);
+            compute::bool_or(first_array) == compute::bool_or(second_array)
+        }
+        (DataType::Float32, DataType::Float32) => contains!(concat_first_array, concat_second_array, Float32Array),
+        (DataType::Float64, DataType::Float64) => contains!(concat_first_array, concat_second_array, Float64Array),
+        (DataType::Int8, DataType::Int8) => contains!(concat_first_array, concat_second_array, Int8Array),
+        (DataType::Int16, DataType::Int16) => contains!(concat_first_array, concat_second_array, Int16Array),
+        (DataType::Int32, DataType::Int32) => contains!(concat_first_array, concat_second_array, Int32Array),
+        (DataType::Int64, DataType::Int64) => contains!(concat_first_array, concat_second_array, Int64Array),
+        (DataType::UInt8, DataType::UInt8) => contains!(concat_first_array, concat_second_array, UInt8Array),
+        (DataType::UInt16, DataType::UInt16) => contains!(concat_first_array, concat_second_array, UInt16Array),
+        (DataType::UInt32, DataType::UInt32) => contains!(concat_first_array, concat_second_array, UInt32Array),
+        (DataType::UInt64, DataType::UInt64) => contains!(concat_first_array, concat_second_array, UInt64Array),
+        (first_array_data_type, second_array_data_type) => {
+            return Err(DataFusionError::NotImplemented(format!(
+                "Array_contains is not implemented for types '{first_array_data_type:?}' and '{second_array_data_type:?}'."
+            )))
+        }
+    };
+
+    Ok(Arc::new(BooleanArray::from(vec![res])))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1588,7 +1653,7 @@ mod tests {
 
     #[test]
     fn test_array_ndims() {
-        // array_ndims([1, 2]) = 1
+        // array_ndims([1, 2, 3, 4]) = 1
         let list_array = return_array();
 
         let array = array_ndims(&[list_array])
@@ -1602,7 +1667,7 @@ mod tests {
 
     #[test]
     fn test_nested_array_ndims() {
-        // array_ndims([[1, 2], [3, 4]]) = 2
+        // array_ndims([[1, 2, 3, 4], [5, 6, 7, 8]]) = 2
         let list_array = return_nested_array();
 
         let array = array_ndims(&[list_array])
@@ -1612,6 +1677,63 @@ mod tests {
             as_uint8_array(&array).expect("failed to initialize function array_ndims");
 
         assert_eq!(result, &UInt8Array::from(vec![2]));
+    }
+
+    #[test]
+    fn test_array_contains() {
+        // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 3)) = t
+        let first_array = return_array().into_array(1);
+        let second_array = array_append(&[
+            first_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(3)])),
+        ])
+        .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![true]));
+
+        // array_contains([1, 2, 3, 4], array_append([1, 2, 3, 4], 5)) = f
+        let second_array = array_append(&[
+            first_array.clone(),
+            Arc::new(Int64Array::from(vec![Some(5)])),
+        ])
+        .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![false]));
+    }
+
+    #[test]
+    fn test_nested_array_contains() {
+        // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 3)) = t
+        let first_array = return_nested_array().into_array(1);
+        let array = return_array().into_array(1);
+        let second_array =
+            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(3)]))])
+                .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![true]));
+
+        // array_contains([[1, 2, 3, 4], [5, 6, 7, 8]], array_append([1, 2, 3, 4], 9)) = f
+        let second_array =
+            array_append(&[array.clone(), Arc::new(Int64Array::from(vec![Some(9)]))])
+                .expect("failed to initialize function array_contains");
+
+        let arr = array_contains(&[first_array.clone(), second_array])
+            .expect("failed to initialize function array_contains");
+        let result = as_boolean_array(&arr);
+
+        assert_eq!(result, &BooleanArray::from(vec![false]));
     }
 
     fn return_array() -> ColumnarValue {
