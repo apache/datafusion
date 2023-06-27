@@ -99,7 +99,7 @@ pub(crate) fn is_distinct_from<T>(
     right: &PrimitiveArray<T>,
 ) -> Result<BooleanArray>
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
 {
     distinct(
         left,
@@ -140,7 +140,7 @@ fn distinct<
     mut op: F,
 ) -> Result<BooleanArray>
 where
-    T: ArrowNumericType,
+    T: ArrowPrimitiveType,
 {
     let left_values = left.values();
     let right_values = right.values();

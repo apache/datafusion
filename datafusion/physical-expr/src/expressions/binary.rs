@@ -554,6 +554,15 @@ macro_rules! binary_array_op {
             DataType::Time64(TimeUnit::Nanosecond) => {
                 compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                compute_op!($LEFT, $RIGHT, $OP, IntervalYearMonthArray)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                compute_op!($LEFT, $RIGHT, $OP, IntervalDayTimeArray)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                compute_op!($LEFT, $RIGHT, $OP, IntervalMonthDayNanoArray)
+            }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
