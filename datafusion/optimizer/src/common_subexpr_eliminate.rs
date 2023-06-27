@@ -246,6 +246,7 @@ impl CommonSubexprEliminate {
             &mut affected_id,
         )?;
         let rewritten = pop_expr(&mut rewritten)?;
+
         if affected_id.is_empty() {
             Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                 Arc::new(new_input),
@@ -274,7 +275,6 @@ impl CommonSubexprEliminate {
             for expr in &new_group_expr {
                 extract_expressions(expr, &new_input_schema, &mut proj_exprs)?
             }
-
             for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
                 if expr_rewritten == expr_orig {
                     if let Expr::Alias(expr, name) = expr_rewritten {
@@ -293,6 +293,7 @@ impl CommonSubexprEliminate {
                     proj_exprs.push(expr_rewritten);
                 }
             }
+
             let agg = LogicalPlan::Aggregate(Aggregate::try_new(
                 Arc::new(new_input),
                 new_group_expr,
