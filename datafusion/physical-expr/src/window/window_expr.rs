@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::window_state::{
+    PartitionBatchState, WindowAggState, WindowFrameContext,
+};
+use datafusion_expr::PartitionEvaluator;
 use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
@@ -32,8 +33,31 @@ use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// A window expression that:
-/// * knows its resulting field
+/// Common trait for [window function] implementations
+///
+/// # Aggregate Window Expressions
+///
+/// These expressions take the form
+///
+/// ```text
+/// OVER({ROWS | RANGE| GROUPS} BETWEEN UNBOUNDED PRECEDING AND ...)
+/// ```
+///
+/// For example, cumulative window frames uses `PlainAggregateWindowExpr`.
+///
+/// # Non Aggregate Window Expressions
+///
+/// The expressions have the form
+///
+/// ```text
+/// OVER({ROWS | RANGE| GROUPS} BETWEEN M {PRECEDING| FOLLOWING} AND ...)
+/// ```
+///
+/// For example, sliding window frames use [`SlidingAggregateWindowExpr`].
+///
+/// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
+/// [`PlainAggregateWindowExpr`]: crate::window::PlainAggregateWindowExpr
+/// [`SlidingAggregateWindowExpr`]: crate::window::SlidingAggregateWindowExpr
 pub trait WindowExpr: Send + Sync + Debug {
     /// Returns the window expression as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
@@ -123,7 +147,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
-/// Trait for different `AggregateWindowExpr`s (`PlainAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
+/// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
     /// window expressions may return distinct accumulators; e.g. sliding
@@ -304,93 +328,6 @@ pub struct LeadLagState {
     pub idx: usize,
 }
 
-#[derive(Debug, Clone, Default)]
-pub enum BuiltinWindowState {
-    Rank(RankState),
-    NumRows(NumRowsState),
-    NthValue(NthValueState),
-    LeadLag(LeadLagState),
-    #[default]
-    Default,
-}
-
-#[derive(Debug)]
-pub struct WindowAggState {
-    /// The range that we calculate the window function
-    pub window_frame_range: Range<usize>,
-    pub window_frame_ctx: Option<WindowFrameContext>,
-    /// The index of the last row that its result is calculated inside the partition record batch buffer.
-    pub last_calculated_index: usize,
-    /// The offset of the deleted row number
-    pub offset_pruned_rows: usize,
-    /// Stores the results calculated by window frame
-    pub out_col: ArrayRef,
-    /// Keeps track of how many rows should be generated to be in sync with input record_batch.
-    // (For each row in the input record batch we need to generate a window result).
-    pub n_row_result_missing: usize,
-    /// flag indicating whether we have received all data for this partition
-    pub is_end: bool,
-}
-
-impl WindowAggState {
-    pub fn prune_state(&mut self, n_prune: usize) {
-        self.window_frame_range = Range {
-            start: self.window_frame_range.start - n_prune,
-            end: self.window_frame_range.end - n_prune,
-        };
-        self.last_calculated_index -= n_prune;
-        self.offset_pruned_rows += n_prune;
-
-        match self.window_frame_ctx.as_mut() {
-            // Rows have no state do nothing
-            Some(WindowFrameContext::Rows(_)) => {}
-            Some(WindowFrameContext::Range { .. }) => {}
-            Some(WindowFrameContext::Groups { state, .. }) => {
-                let mut n_group_to_del = 0;
-                for (_, end_idx) in &state.group_end_indices {
-                    if n_prune < *end_idx {
-                        break;
-                    }
-                    n_group_to_del += 1;
-                }
-                state.group_end_indices.drain(0..n_group_to_del);
-                state
-                    .group_end_indices
-                    .iter_mut()
-                    .for_each(|(_, start_idx)| *start_idx -= n_prune);
-                state.current_group_idx -= n_group_to_del;
-            }
-            None => {}
-        };
-    }
-}
-
-impl WindowAggState {
-    pub fn update(
-        &mut self,
-        out_col: &ArrayRef,
-        partition_batch_state: &PartitionBatchState,
-    ) -> Result<()> {
-        self.last_calculated_index += out_col.len();
-        self.out_col = concat(&[&self.out_col, &out_col])?;
-        self.n_row_result_missing =
-            partition_batch_state.record_batch.num_rows() - self.last_calculated_index;
-        self.is_end = partition_batch_state.is_end;
-        Ok(())
-    }
-}
-
-/// State for each unique partition determined according to PARTITION BY column(s)
-#[derive(Debug)]
-pub struct PartitionBatchState {
-    /// The record_batch belonging to current partition
-    pub record_batch: RecordBatch,
-    /// Flag indicating whether we have received all data for this partition
-    pub is_end: bool,
-    /// Number of rows emitted for each partition
-    pub n_out_row: usize,
-}
-
 /// Key for IndexMap for each unique partition
 ///
 /// For instance, if window frame is `OVER(PARTITION BY a,b)`,
@@ -406,18 +343,3 @@ pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
-
-impl WindowAggState {
-    pub fn new(out_type: &DataType) -> Result<Self> {
-        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
-        Ok(Self {
-            window_frame_range: Range { start: 0, end: 0 },
-            window_frame_ctx: None,
-            last_calculated_index: 0,
-            offset_pruned_rows: 0,
-            out_col: empty_out_col,
-            n_row_result_missing: 0,
-            is_end: false,
-        })
-    }
-}

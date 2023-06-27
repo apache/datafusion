@@ -20,19 +20,16 @@
 use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
-use crate::{
-    error::{DataFusionError, Result},
-    physical_plan::{
-        display::DisplayableExecutionPlan, DisplayFormatType, ExecutionPlan,
-        Partitioning, Statistics,
-    },
+use crate::physical_plan::{
+    display::DisplayableExecutionPlan, DisplayFormatType, ExecutionPlan, Partitioning,
+    Statistics,
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use datafusion_common::{DataFusionError, Result};
 use futures::StreamExt;
-use tokio::task::JoinSet;
 
 use super::expressions::PhysicalSortExpr;
-use super::stream::RecordBatchStreamAdapter;
+use super::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use super::{Distribution, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
 
@@ -121,23 +118,15 @@ impl ExecutionPlan for AnalyzeExec {
         // Gather futures that will run each input partition in
         // parallel (on a separate tokio task) using a JoinSet to
         // cancel outstanding futures on drop
-        let mut set = JoinSet::new();
         let num_input_partitions = self.input.output_partitioning().partition_count();
+        let mut builder =
+            RecordBatchReceiverStream::builder(self.schema(), num_input_partitions);
 
         for input_partition in 0..num_input_partitions {
-            let input_stream = self.input.execute(input_partition, context.clone());
-
-            set.spawn(async move {
-                let mut total_rows = 0;
-                let mut input_stream = input_stream?;
-                while let Some(batch) = input_stream.next().await {
-                    let batch = batch?;
-                    total_rows += batch.num_rows();
-                }
-                Ok(total_rows) as Result<usize>
-            });
+            builder.run_input(self.input.clone(), input_partition, context.clone());
         }
 
+        // Create future that computes thefinal output
         let start = Instant::now();
         let captured_input = self.input.clone();
         let captured_schema = self.schema.clone();
@@ -146,18 +135,11 @@ impl ExecutionPlan for AnalyzeExec {
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
         // record batch
+        let mut input_stream = builder.build();
         let output = async move {
             let mut total_rows = 0;
-            while let Some(res) = set.join_next().await {
-                // translate join errors (aka task panic's) into ExecutionErrors
-                match res {
-                    Ok(row_count) => total_rows += row_count?,
-                    Err(e) => {
-                        return Err(DataFusionError::Execution(format!(
-                            "Join error in AnalyzeExec: {e}"
-                        )))
-                    }
-                }
+            while let Some(batch) = input_stream.next().await.transpose()? {
+                total_rows += batch.num_rows();
             }
 
             let duration = Instant::now() - start;
@@ -182,7 +164,7 @@ impl ExecutionPlan for AnalyzeExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AnalyzeExec verbose={}", self.verbose)
             }
         }
@@ -209,7 +191,7 @@ fn create_output_batch(
     type_builder.append_value("Plan with Metrics");
 
     let annotated_plan = DisplayableExecutionPlan::with_metrics(input.as_ref())
-        .indent()
+        .indent(verbose)
         .to_string();
     plan_builder.append_value(annotated_plan);
 
@@ -219,7 +201,7 @@ fn create_output_batch(
         type_builder.append_value("Plan with Full Metrics");
 
         let annotated_plan = DisplayableExecutionPlan::with_full_metrics(input.as_ref())
-            .indent()
+            .indent(verbose)
             .to_string();
         plan_builder.append_value(annotated_plan);
 
@@ -227,7 +209,7 @@ fn create_output_batch(
         plan_builder.append_value(total_rows.to_string());
 
         type_builder.append_value("Duration");
-        plan_builder.append_value(format!("{:?}", duration));
+        plan_builder.append_value(format!("{duration:?}"));
     }
 
     RecordBatch::try_new(

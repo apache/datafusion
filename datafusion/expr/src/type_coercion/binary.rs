@@ -55,8 +55,7 @@ fn mathematics_temporal_result_type(
         (Interval(_), Date64) => Some(rhs_type.clone()),
         (Date64, Interval(_)) => Some(lhs_type.clone()),
         // interval +/-
-        (Interval(YearMonth), Interval(YearMonth)) => Some(Interval(YearMonth)),
-        (Interval(DayTime), Interval(DayTime)) => Some(Interval(DayTime)),
+        (Interval(l), Interval(h)) if l == h => Some(lhs_type.clone()),
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         // timestamp - timestamp
         (Timestamp(Second, _), Timestamp(Second, _))
@@ -68,7 +67,10 @@ fn mathematics_temporal_result_type(
             Some(Interval(MonthDayNano))
         }
         (Timestamp(_, _), Timestamp(_, _)) => None,
-        // TODO: date minus date
+        // date - date
+        (Date32, Date32) => Some(Interval(DayTime)),
+        (Date64, Date64) => Some(Interval(MonthDayNano)),
+        (Date32, Date64) | (Date64, Date32) => Some(Interval(MonthDayNano)),
         // date - timestamp, timestamp - date
         (Date32, Timestamp(_, _))
         | (Timestamp(_, _), Date32)
@@ -671,6 +673,8 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
         (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
             string_concat_internal_coercion(from_type, &LargeUtf8)
         }
+        // TODO: cast between array elements (#6558)
+        (List(_), from_type) | (from_type, List(_)) => Some(from_type.to_owned()),
         _ => None,
     })
 }
@@ -695,6 +699,10 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         (LargeUtf8, Utf8) => Some(LargeUtf8),
         (Utf8, LargeUtf8) => Some(LargeUtf8),
         (LargeUtf8, LargeUtf8) => Some(LargeUtf8),
+        // TODO: cast between array elements (#6558)
+        (List(_), List(_)) => Some(lhs_type.clone()),
+        (List(_), _) => Some(lhs_type.clone()),
+        (_, List(_)) => Some(rhs_type.clone()),
         _ => None,
     }
 }
@@ -733,10 +741,13 @@ fn is_time_with_valid_unit(datatype: DataType) -> bool {
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
+    use arrow::datatypes::TimeUnit::*;
+
+    if lhs_type == rhs_type {
+        return Some(lhs_type.clone());
+    }
     match (lhs_type, rhs_type) {
         // interval +/-
-        (Interval(YearMonth), Interval(YearMonth)) => Some(Interval(YearMonth)),
-        (Interval(DayTime), Interval(DayTime)) => Some(Interval(DayTime)),
         (Interval(_), Interval(_)) => Some(Interval(MonthDayNano)),
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
         (Utf8, Date32) | (Date32, Utf8) => Some(Date32),
@@ -754,13 +765,13 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
             }
         }
         (Timestamp(_, tz), Utf8) | (Utf8, Timestamp(_, tz)) => {
-            Some(Timestamp(TimeUnit::Nanosecond, tz.clone()))
+            Some(Timestamp(Nanosecond, tz.clone()))
         }
         (Timestamp(_, None), Date32) | (Date32, Timestamp(_, None)) => {
-            Some(Timestamp(TimeUnit::Nanosecond, None))
+            Some(Timestamp(Nanosecond, None))
         }
         (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
-            Some(Timestamp(TimeUnit::Nanosecond, None))
+            Some(Timestamp(Nanosecond, None))
         }
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
@@ -778,18 +789,18 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
             };
 
             let unit = match (lhs_unit, rhs_unit) {
-                (TimeUnit::Second, TimeUnit::Millisecond) => TimeUnit::Second,
-                (TimeUnit::Second, TimeUnit::Microsecond) => TimeUnit::Second,
-                (TimeUnit::Second, TimeUnit::Nanosecond) => TimeUnit::Second,
-                (TimeUnit::Millisecond, TimeUnit::Second) => TimeUnit::Second,
-                (TimeUnit::Millisecond, TimeUnit::Microsecond) => TimeUnit::Millisecond,
-                (TimeUnit::Millisecond, TimeUnit::Nanosecond) => TimeUnit::Millisecond,
-                (TimeUnit::Microsecond, TimeUnit::Second) => TimeUnit::Second,
-                (TimeUnit::Microsecond, TimeUnit::Millisecond) => TimeUnit::Millisecond,
-                (TimeUnit::Microsecond, TimeUnit::Nanosecond) => TimeUnit::Microsecond,
-                (TimeUnit::Nanosecond, TimeUnit::Second) => TimeUnit::Second,
-                (TimeUnit::Nanosecond, TimeUnit::Millisecond) => TimeUnit::Millisecond,
-                (TimeUnit::Nanosecond, TimeUnit::Microsecond) => TimeUnit::Microsecond,
+                (Second, Millisecond) => Second,
+                (Second, Microsecond) => Second,
+                (Second, Nanosecond) => Second,
+                (Millisecond, Second) => Second,
+                (Millisecond, Microsecond) => Millisecond,
+                (Millisecond, Nanosecond) => Millisecond,
+                (Microsecond, Second) => Second,
+                (Microsecond, Millisecond) => Millisecond,
+                (Microsecond, Nanosecond) => Microsecond,
+                (Nanosecond, Second) => Second,
+                (Nanosecond, Millisecond) => Millisecond,
+                (Nanosecond, Microsecond) => Microsecond,
                 (l, r) => {
                     assert_eq!(l, r);
                     l.clone()

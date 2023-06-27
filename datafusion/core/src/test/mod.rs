@@ -21,11 +21,10 @@ use crate::arrow::array::UInt32Array;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
-use crate::from_slice::FromSlice;
 use crate::logical_expr::LogicalPlan;
-use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
@@ -64,8 +63,8 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from_slice([1])),
-            Arc::new(array::StringArray::from_slice(["a"])),
+            Arc::new(array::Int32Array::from(vec![1])),
+            Arc::new(array::StringArray::from(vec!["a"])),
         ],
     )
     .unwrap();
@@ -357,7 +356,7 @@ pub fn csv_exec_sorted(
 fn create_batch(schema: &Schema) -> RecordBatch {
     RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(UInt32Array::from_slice([1, 2, 3, 4, 5, 6, 7, 8]))],
+        vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
     )
     .unwrap()
 }

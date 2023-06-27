@@ -26,7 +26,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::provider::TableProviderFactory;
 use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
@@ -412,7 +412,7 @@ impl ExecutionPlan for UnboundedExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "UnboundableExec: unbounded={}",

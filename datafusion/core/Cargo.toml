@@ -71,24 +71,23 @@ datafusion-sql = { path = "../sql", version = "26.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
-hashbrown = { version = "0.13", features = ["raw"] }
+hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "1.9.2"
-itertools = "0.10"
+itertools = "0.11"
 lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-object_store = "0.5.4"
+object_store = "0.6.1"
 parking_lot = "0.12"
 parquet = { workspace = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = { version = "0.34", features = ["visitor"] }
+sqlparser = { workspace = true }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
-tokio-stream = "0.1"
 tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
@@ -109,7 +108,7 @@ postgres-protocol = "0.6.4"
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.17.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-sqllogictest = "0.13.2"
+sqllogictest = "0.14.0"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"

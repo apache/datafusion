@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::file_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{AvroExec, CsvExec, ParquetExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
@@ -32,7 +33,6 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
-use datafusion::physical_plan::file_format::{AvroExec, CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::CrossJoinExec;
@@ -441,7 +441,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             ExprType::AggregateExpr(agg_node) => {
                                 let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
                                     .map(|e| parse_physical_expr(e, registry, &physical_schema).unwrap()).collect();
-
+                                let ordering_req: Vec<PhysicalSortExpr> = agg_node.ordering_req.iter()
+                                    .map(|e| parse_physical_sort_expr(e, registry, &physical_schema).unwrap()).collect();
                                 agg_node.aggregate_function.as_ref().map(|func| {
                                     match func {
                                         AggregateFunction::AggrFunction(i) => {
@@ -458,6 +459,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                                 &aggr_function.into(),
                                                 agg_node.distinct,
                                                 input_phy_expr.as_slice(),
+                                                &ordering_req,
                                                 &physical_schema,
                                                 name.to_string(),
                                             )
@@ -1276,14 +1278,16 @@ mod roundtrip_tests {
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        datasource::listing::PartitionedFile,
+        datasource::{
+            listing::PartitionedFile,
+            physical_plan::{FileScanConfig, ParquetExec},
+        },
         logical_expr::{JoinType, Operator},
         physical_plan::{
             aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
             expressions::{binary, col, lit, NotExpr},
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
-            file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
             joins::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
@@ -1295,7 +1299,7 @@ mod roundtrip_tests {
     };
     use datafusion_common::Result;
     use datafusion_expr::{
-        Accumulator, AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction,
+        Accumulator, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
         Signature, StateTypeFunction,
     };
 
@@ -1482,8 +1486,7 @@ mod roundtrip_tests {
 
         let rt_func: ReturnTypeFunction =
             Arc::new(move |_| Ok(Arc::new(DataType::Int64)));
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| Ok(Box::new(Example)));
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| Ok(Box::new(Example)));
         let st_func: StateTypeFunction =
             Arc::new(move |_| Ok(Arc::new(vec![DataType::Int64])));
 

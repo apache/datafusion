@@ -18,13 +18,13 @@
 //! Defines physical expression for `ntile` that can evaluated
 //! at runtime during query execution
 
-use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::Field;
 use arrow_schema::DataType;
 use datafusion_common::Result;
+use datafusion_expr::PartitionEvaluator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -70,13 +70,17 @@ pub(crate) struct NtileEvaluator {
 }
 
 impl PartitionEvaluator for NtileEvaluator {
-    fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    fn evaluate_all(
+        &mut self,
+        _values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<ArrayRef> {
         let num_rows = num_rows as u64;
         let mut vec: Vec<u64> = Vec::new();
         for i in 0..num_rows {
             let res = i * self.n / num_rows;
             vec.push(res + 1)
         }
-        Ok(Arc::new(UInt64Array::from_iter_values(vec)))
+        Ok(Arc::new(UInt64Array::from(vec)))
     }
 }

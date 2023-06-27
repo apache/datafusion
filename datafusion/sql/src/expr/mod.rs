@@ -36,7 +36,7 @@ use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
 };
-use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, Interval, TrimWhereField, Value};
+use sqlparser::ast::{ArrayAgg, Expr as SQLExpr, TrimWhereField, Value};
 use sqlparser::parser::ParserError::ParserError;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -161,20 +161,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
 
             SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
-            SQLExpr::Interval(Interval {
-                value,
-                leading_field,
-                leading_precision,
-                last_field,
-                fractional_seconds_precision,
-            })=> self.sql_interval_to_expr(
-                *value,
+            SQLExpr::Interval(interval)=> self.sql_interval_to_expr(
+                false,
+                interval,
                 schema,
                 planner_context,
-                leading_field,
-                leading_precision,
-                last_field,
-                fractional_seconds_precision,
             ),
             SQLExpr::Identifier(id) => self.sql_identifier_to_expr(id, schema, planner_context),
 
@@ -521,7 +512,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?)),
                 order_by,
             ))),
-            _ => Err(DataFusionError::Internal(
+            _ => Err(DataFusionError::Plan(
                 "AggregateExpressionWithFilter expression was not an AggregateFunction"
                     .to_string(),
             )),
@@ -573,7 +564,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
         }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsuported index key expression: {key:?}"
+                "Unsupported index key expression: {key:?}"
             ))));
         }
     };
@@ -611,7 +602,7 @@ mod tests {
 
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
+    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 
     use crate::TableReference;
 
@@ -667,6 +658,10 @@ mod tests {
 
         fn options(&self) -> &ConfigOptions {
             &self.options
+        }
+
+        fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
+            None
         }
     }
 

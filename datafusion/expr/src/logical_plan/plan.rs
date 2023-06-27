@@ -17,8 +17,9 @@
 
 //! Logical plan types
 
-use crate::expr::InSubquery;
-use crate::expr::{Exists, Placeholder};
+use crate::expr::{Exists, InSubquery, Placeholder};
+use crate::expr_rewriter::create_col_from_scalar_expr;
+use crate::expr_vec_fmt;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
@@ -40,8 +41,11 @@ use datafusion_common::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::Arc;
+
+// backwards compatibility
+pub use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+pub use datafusion_common::{JoinConstraint, JoinType};
 
 use super::DdlStatement;
 
@@ -403,6 +407,80 @@ impl LogicalPlan {
         Ok(using_columns)
     }
 
+    /// returns the first output expression of this `LogicalPlan` node.
+    pub fn head_output_expr(&self) -> Result<Option<Expr>> {
+        match self {
+            LogicalPlan::Projection(projection) => {
+                Ok(Some(projection.expr.as_slice()[0].clone()))
+            }
+            LogicalPlan::Aggregate(agg) => {
+                if agg.group_expr.is_empty() {
+                    Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
+                } else {
+                    Ok(Some(agg.group_expr.as_slice()[0].clone()))
+                }
+            }
+            LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Sort(Sort { input, .. })
+            | LogicalPlan::Limit(Limit { input, .. })
+            | LogicalPlan::Repartition(Repartition { input, .. })
+            | LogicalPlan::Window(Window { input, .. }) => input.head_output_expr(),
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                join_type,
+                ..
+            }) => match join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    if left.schema().fields().is_empty() {
+                        right.head_output_expr()
+                    } else {
+                        left.head_output_expr()
+                    }
+                }
+                JoinType::LeftSemi | JoinType::LeftAnti => left.head_output_expr(),
+                JoinType::RightSemi | JoinType::RightAnti => right.head_output_expr(),
+            },
+            LogicalPlan::CrossJoin(cross) => {
+                if cross.left.schema().fields().is_empty() {
+                    cross.right.head_output_expr()
+                } else {
+                    cross.left.head_output_expr()
+                }
+            }
+            LogicalPlan::Union(union) => Ok(Some(Expr::Column(
+                union.schema.fields()[0].qualified_column(),
+            ))),
+            LogicalPlan::TableScan(table) => Ok(Some(Expr::Column(
+                table.projected_schema.fields()[0].qualified_column(),
+            ))),
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                let expr_opt = subquery_alias.input.head_output_expr()?;
+                expr_opt
+                    .map(|expr| {
+                        Ok(Expr::Column(create_col_from_scalar_expr(
+                            &expr,
+                            subquery_alias.alias.to_string(),
+                        )?))
+                    })
+                    .map_or(Ok(None), |v| v.map(Some))
+            }
+            LogicalPlan::Subquery(_) => Ok(None),
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Prepare(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Unnest(_) => Ok(None),
+        }
+    }
+
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
         from_plan(self, &self.expressions(), inputs)
     }
@@ -417,7 +495,7 @@ impl LogicalPlan {
             LogicalPlan::Prepare(prepare_lp) => {
                 // Verify if the number of params matches the number of values
                 if prepare_lp.data_types.len() != param_values.len() {
-                    return Err(DataFusionError::Internal(format!(
+                    return Err(DataFusionError::Plan(format!(
                         "Expected {} parameters, got {}",
                         prepare_lp.data_types.len(),
                         param_values.len()
@@ -428,7 +506,7 @@ impl LogicalPlan {
                 let iter = prepare_lp.data_types.iter().zip(param_values.iter());
                 for (i, (param_type, value)) in iter.enumerate() {
                     if *param_type != value.get_datatype() {
-                        return Err(DataFusionError::Internal(format!(
+                        return Err(DataFusionError::Plan(format!(
                             "Expected parameter of type {:?}, got {:?} at index {}",
                             param_type,
                             value.get_datatype(),
@@ -940,15 +1018,24 @@ impl LogicalPlan {
                             }
 
                             if !full_filter.is_empty() {
-                                write!(f, ", full_filters={full_filter:?}")?;
+                                write!(
+                                    f,
+                                    ", full_filters=[{}]",
+                                    expr_vec_fmt!(full_filter)
+                                )?;
                             };
                             if !partial_filter.is_empty() {
-                                write!(f, ", partial_filters={partial_filter:?}")?;
+                                write!(
+                                    f,
+                                    ", partial_filters=[{}]",
+                                    expr_vec_fmt!(partial_filter)
+                                )?;
                             }
                             if !unsupported_filters.is_empty() {
                                 write!(
                                     f,
-                                    ", unsupported_filters={unsupported_filters:?}"
+                                    ", unsupported_filters=[{}]",
+                                    expr_vec_fmt!(unsupported_filters)
                                 )?;
                             }
                         }
@@ -965,7 +1052,7 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{expr_item:?}")?;
+                            write!(f, "{expr_item}")?;
                         }
                         Ok(())
                     }
@@ -978,11 +1065,15 @@ impl LogicalPlan {
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
-                    }) => write!(f, "Filter: {expr:?}"),
+                    }) => write!(f, "Filter: {expr}"),
                     LogicalPlan::Window(Window {
                         ref window_expr, ..
                     }) => {
-                        write!(f, "WindowAggr: windowExpr=[{window_expr:?}]")
+                        write!(
+                            f,
+                            "WindowAggr: windowExpr=[[{}]]",
+                            expr_vec_fmt!(window_expr)
+                        )
                     }
                     LogicalPlan::Aggregate(Aggregate {
                         ref group_expr,
@@ -990,7 +1081,9 @@ impl LogicalPlan {
                         ..
                     }) => write!(
                         f,
-                        "Aggregate: groupBy=[{group_expr:?}], aggr=[{aggr_expr:?}]"
+                        "Aggregate: groupBy=[[{}]], aggr=[[{}]]",
+                        expr_vec_fmt!(group_expr),
+                        expr_vec_fmt!(aggr_expr)
                     ),
                     LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;
@@ -998,7 +1091,7 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{expr_item:?}")?;
+                            write!(f, "{expr_item}")?;
                         }
                         if let Some(a) = fetch {
                             write!(f, ", fetch={a}")?;
@@ -1052,7 +1145,7 @@ impl LogicalPlan {
                         }
                         Partitioning::Hash(expr, n) => {
                             let hash_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{e:?}")).collect();
+                                expr.iter().map(|e| format!("{e}")).collect();
                             write!(
                                 f,
                                 "Repartition: Hash({}) partition_count={}",
@@ -1062,7 +1155,7 @@ impl LogicalPlan {
                         }
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{e:?}")).collect();
+                                expr.iter().map(|e| format!("{e}")).collect();
                             write!(
                                 f,
                                 "Repartition: DistributeBy({})",
@@ -1126,79 +1219,6 @@ impl ToStringifiedPlan for LogicalPlan {
     fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan {
         StringifiedPlan::new(plan_type, self.display_indent().to_string())
     }
-}
-
-/// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinType {
-    /// Inner Join
-    Inner,
-    /// Left Join
-    Left,
-    /// Right Join
-    Right,
-    /// Full Join
-    Full,
-    /// Left Semi Join
-    LeftSemi,
-    /// Right Semi Join
-    RightSemi,
-    /// Left Anti Join
-    LeftAnti,
-    /// Right Anti Join
-    RightAnti,
-}
-
-impl JoinType {
-    pub fn is_outer(self) -> bool {
-        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
-    }
-}
-
-impl Display for JoinType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let join_type = match self {
-            JoinType::Inner => "Inner",
-            JoinType::Left => "Left",
-            JoinType::Right => "Right",
-            JoinType::Full => "Full",
-            JoinType::LeftSemi => "LeftSemi",
-            JoinType::RightSemi => "RightSemi",
-            JoinType::LeftAnti => "LeftAnti",
-            JoinType::RightAnti => "RightAnti",
-        };
-        write!(f, "{join_type}")
-    }
-}
-
-impl FromStr for JoinType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "INNER" => Ok(JoinType::Inner),
-            "LEFT" => Ok(JoinType::Left),
-            "RIGHT" => Ok(JoinType::Right),
-            "FULL" => Ok(JoinType::Full),
-            "LEFTSEMI" => Ok(JoinType::LeftSemi),
-            "RIGHTSEMI" => Ok(JoinType::RightSemi),
-            "LEFTANTI" => Ok(JoinType::LeftAnti),
-            "RIGHTANTI" => Ok(JoinType::RightAnti),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "The join type {s} does not exist or is not implemented"
-            ))),
-        }
-    }
-}
-
-/// Join constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JoinConstraint {
-    /// Join ON
-    On,
-    /// Join USING
-    Using,
 }
 
 /// Produces no rows: An empty relation with an empty schema
@@ -1719,93 +1739,6 @@ pub enum Partitioning {
     Hash(Vec<Expr>, usize),
     /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
     DistributeBy(Vec<Expr>),
-}
-
-/// Represents which type of plan, when storing multiple
-/// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PlanType {
-    /// The initial LogicalPlan provided to DataFusion
-    InitialLogicalPlan,
-    /// The LogicalPlan which results from applying an analyzer pass
-    AnalyzedLogicalPlan {
-        /// The name of the analyzer which produced this plan
-        analyzer_name: String,
-    },
-    /// The LogicalPlan after all analyzer passes have been applied
-    FinalAnalyzedLogicalPlan,
-    /// The LogicalPlan which results from applying an optimizer pass
-    OptimizedLogicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized LogicalPlan that was converted to a physical plan
-    FinalLogicalPlan,
-    /// The initial physical plan, prepared for execution
-    InitialPhysicalPlan,
-    /// The ExecutionPlan which results from applying an optimizer pass
-    OptimizedPhysicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized physical which would be executed
-    FinalPhysicalPlan,
-}
-
-impl Display for PlanType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match self {
-            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
-            PlanType::AnalyzedLogicalPlan { analyzer_name } => {
-                write!(f, "logical_plan after {analyzer_name}")
-            }
-            PlanType::FinalAnalyzedLogicalPlan => write!(f, "analyzed_logical_plan"),
-            PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                write!(f, "logical_plan after {optimizer_name}")
-            }
-            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
-            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
-            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
-                write!(f, "physical_plan after {optimizer_name}")
-            }
-            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
-        }
-    }
-}
-
-/// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct StringifiedPlan {
-    /// An identifier of what type of plan this string represents
-    pub plan_type: PlanType,
-    /// The string representation of the plan
-    pub plan: Arc<String>,
-}
-
-impl StringifiedPlan {
-    /// Create a new Stringified plan of `plan_type` with string
-    /// representation `plan`
-    pub fn new(plan_type: PlanType, plan: impl Into<String>) -> Self {
-        StringifiedPlan {
-            plan_type,
-            plan: Arc::new(plan.into()),
-        }
-    }
-
-    /// returns true if this plan should be displayed. Generally
-    /// `verbose_mode = true` will display all available plans
-    pub fn should_display(&self, verbose_mode: bool) -> bool {
-        match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
-            _ => verbose_mode,
-        }
-    }
-}
-
-/// Trait for something that can be formatted as a stringified plan
-pub trait ToStringifiedPlan {
-    /// Create a stringified plan with the specified type
-    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
 }
 
 /// Unnest a column that contains a nested list type.

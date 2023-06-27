@@ -590,6 +590,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             "UDAF as window function in proto".to_string(),
                         ))
                     }
+                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/6733
+                    WindowFunction::WindowUDF(_) => {
+                        return Err(Error::NotImplemented(
+                            "UDWF as window function in proto".to_string(),
+                        ))
+                    }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
@@ -1336,7 +1342,21 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
+            BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
+            BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
+            BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
+            BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
+            BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
+            BuiltinScalarFunction::ArrayNdims => Self::ArrayNdims,
+            BuiltinScalarFunction::ArrayPosition => Self::ArrayPosition,
+            BuiltinScalarFunction::ArrayPositions => Self::ArrayPositions,
+            BuiltinScalarFunction::ArrayPrepend => Self::ArrayPrepend,
+            BuiltinScalarFunction::ArrayRemove => Self::ArrayRemove,
+            BuiltinScalarFunction::ArrayReplace => Self::ArrayReplace,
+            BuiltinScalarFunction::ArrayToString => Self::ArrayToString,
+            BuiltinScalarFunction::Cardinality => Self::Cardinality,
             BuiltinScalarFunction::MakeArray => Self::Array,
+            BuiltinScalarFunction::TrimArray => Self::TrimArray,
             BuiltinScalarFunction::NullIf => Self::NullIf,
             BuiltinScalarFunction::DatePart => Self::DatePart,
             BuiltinScalarFunction::DateTrunc => Self::DateTrunc,

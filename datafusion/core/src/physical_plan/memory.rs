@@ -22,10 +22,10 @@ use super::{
     common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use core::fmt;
+use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -108,7 +108,7 @@ impl ExecutionPlan for MemoryExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let partitions: Vec<_> =
                     self.partitions.iter().map(|b| b.len()).collect();
                 write!(

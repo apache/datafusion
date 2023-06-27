@@ -730,13 +730,10 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection(Projection { schema, .. }) => {
-            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                expr.to_vec(),
-                Arc::new(inputs[0].clone()),
-                schema.clone(),
-            )?))
-        }
+        LogicalPlan::Projection(_) => Ok(LogicalPlan::Projection(Projection::try_new(
+            expr.to_vec(),
+            Arc::new(inputs[0].clone()),
+        )?)),
         LogicalPlan::Dml(DmlStatement {
             table_name,
             table_schema,
@@ -1361,6 +1358,7 @@ pub fn find_valid_equijoin_key_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expr_vec_fmt;
     use crate::{
         col, cube, expr, grouping_set, rollup, AggregateFunction, WindowFrame,
         WindowFunction,
@@ -1566,22 +1564,22 @@ mod tests {
 
         // 1. col
         let sets = enumerate_grouping_sets(vec![simple_col.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[simple_col]", &result);
 
         // 2. cube
         let sets = enumerate_grouping_sets(vec![cube.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[CUBE (col1, col2, col3)]", &result);
 
         // 3. rollup
         let sets = enumerate_grouping_sets(vec![rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!("[ROLLUP (col1, col2, col3)]", &result);
 
         // 4. col + cube
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), cube.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \
@@ -1597,7 +1595,7 @@ mod tests {
 
         // 5. col + rollup
         let sets = enumerate_grouping_sets(vec![simple_col.clone(), rollup.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \
@@ -1610,7 +1608,7 @@ mod tests {
         // 6. col + grouping_set
         let sets =
             enumerate_grouping_sets(vec![simple_col.clone(), grouping_set.clone()])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3))]",
@@ -1623,7 +1621,7 @@ mod tests {
             grouping_set,
             rollup.clone(),
         ])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col, col1, col2, col3), \
@@ -1635,7 +1633,7 @@ mod tests {
 
         // 8. col + cube + rollup
         let sets = enumerate_grouping_sets(vec![simple_col, cube, rollup])?;
-        let result = format!("{sets:?}");
+        let result = format!("[{}]", expr_vec_fmt!(sets));
         assert_eq!(
             "[GROUPING SETS (\
             (simple_col), \

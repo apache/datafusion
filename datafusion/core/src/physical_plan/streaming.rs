@@ -26,11 +26,20 @@ use futures::stream::StreamExt;
 
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::PhysicalSortExpr;
+use log::debug;
 
-use crate::datasource::streaming::PartitionStream;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
+
+/// A partition that can be converted into a [`SendableRecordBatchStream`]
+pub trait PartitionStream: Send + Sync {
+    /// Returns the schema of this partition
+    fn schema(&self) -> &SchemaRef;
+
+    /// Returns a stream yielding this partitions values
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream;
+}
 
 /// An [`ExecutionPlan`] for [`PartitionStream`]
 pub struct StreamingTableExec {
@@ -48,10 +57,17 @@ impl StreamingTableExec {
         projection: Option<&Vec<usize>>,
         infinite: bool,
     ) -> Result<Self> {
-        if !partitions.iter().all(|x| schema.contains(x.schema())) {
-            return Err(DataFusionError::Plan(
-                "Mismatch between schema and batches".to_string(),
-            ));
+        for x in partitions.iter() {
+            let partition_schema = x.schema();
+            if !schema.contains(partition_schema) {
+                debug!(
+                    "target schema does not contain partition schema. \
+                        Target_schema: {schema:?}. Partiton Schema: {partition_schema:?}"
+                );
+                return Err(DataFusionError::Plan(
+                    "Mismatch between schema and batches".to_string(),
+                ));
+            }
         }
 
         let projected_schema = match projection {

@@ -911,8 +911,7 @@ mod test {
             assert_eq!(inputs, &[DataType::UInt32]);
             Ok(Arc::new(DataType::UInt32))
         });
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| unimplemented!());
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
             Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(

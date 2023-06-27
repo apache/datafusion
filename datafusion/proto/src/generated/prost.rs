@@ -1513,6 +1513,8 @@ pub struct PhysicalScalarUdfNode {
 pub struct PhysicalAggregateExprNode {
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "5")]
+    pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
@@ -2208,6 +2210,20 @@ pub enum ScalarFunction {
     Factorial = 83,
     Lcm = 84,
     Gcd = 85,
+    ArrayAppend = 86,
+    ArrayConcat = 87,
+    ArrayDims = 88,
+    ArrayFill = 89,
+    ArrayLength = 90,
+    ArrayNdims = 91,
+    ArrayPosition = 92,
+    ArrayPositions = 93,
+    ArrayPrepend = 94,
+    ArrayRemove = 95,
+    ArrayReplace = 96,
+    ArrayToString = 97,
+    Cardinality = 98,
+    TrimArray = 99,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2302,6 +2318,20 @@ impl ScalarFunction {
             ScalarFunction::Factorial => "Factorial",
             ScalarFunction::Lcm => "Lcm",
             ScalarFunction::Gcd => "Gcd",
+            ScalarFunction::ArrayAppend => "ArrayAppend",
+            ScalarFunction::ArrayConcat => "ArrayConcat",
+            ScalarFunction::ArrayDims => "ArrayDims",
+            ScalarFunction::ArrayFill => "ArrayFill",
+            ScalarFunction::ArrayLength => "ArrayLength",
+            ScalarFunction::ArrayNdims => "ArrayNdims",
+            ScalarFunction::ArrayPosition => "ArrayPosition",
+            ScalarFunction::ArrayPositions => "ArrayPositions",
+            ScalarFunction::ArrayPrepend => "ArrayPrepend",
+            ScalarFunction::ArrayRemove => "ArrayRemove",
+            ScalarFunction::ArrayReplace => "ArrayReplace",
+            ScalarFunction::ArrayToString => "ArrayToString",
+            ScalarFunction::Cardinality => "Cardinality",
+            ScalarFunction::TrimArray => "TrimArray",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2393,6 +2423,20 @@ impl ScalarFunction {
             "Factorial" => Some(Self::Factorial),
             "Lcm" => Some(Self::Lcm),
             "Gcd" => Some(Self::Gcd),
+            "ArrayAppend" => Some(Self::ArrayAppend),
+            "ArrayConcat" => Some(Self::ArrayConcat),
+            "ArrayDims" => Some(Self::ArrayDims),
+            "ArrayFill" => Some(Self::ArrayFill),
+            "ArrayLength" => Some(Self::ArrayLength),
+            "ArrayNdims" => Some(Self::ArrayNdims),
+            "ArrayPosition" => Some(Self::ArrayPosition),
+            "ArrayPositions" => Some(Self::ArrayPositions),
+            "ArrayPrepend" => Some(Self::ArrayPrepend),
+            "ArrayRemove" => Some(Self::ArrayRemove),
+            "ArrayReplace" => Some(Self::ArrayReplace),
+            "ArrayToString" => Some(Self::ArrayToString),
+            "Cardinality" => Some(Self::Cardinality),
+            "TrimArray" => Some(Self::TrimArray),
             _ => None,
         }
     }

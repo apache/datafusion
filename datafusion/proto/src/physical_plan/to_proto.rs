@@ -32,7 +32,7 @@ use datafusion::physical_plan::{
 };
 
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
-use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::datasource::physical_plan::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 
@@ -63,6 +63,13 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
 
         let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
+            .iter()
+            .map(|e| e.clone().try_into())
+            .collect::<Result<Vec<_>>>()?;
+
+        let ordering_req: Vec<protobuf::PhysicalSortExprNode> = a
+            .order_bys()
+            .unwrap_or(&[])
             .iter()
             .map(|e| e.clone().try_into())
             .collect::<Result<Vec<_>>>()?;
@@ -151,6 +158,10 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             .is_some()
         {
             Ok(AggregateFunction::ApproxMedian.into())
+        } else if a.as_any().is::<expressions::FirstValue>() {
+            Ok(AggregateFunction::FirstValueAgg.into())
+        } else if a.as_any().is::<expressions::LastValue>() {
+            Ok(AggregateFunction::LastValueAgg.into())
         } else {
             if let Some(a) = a.as_any().downcast_ref::<AggregateFunctionExpr>() {
                 return Ok(protobuf::PhysicalExprNode {
@@ -158,6 +169,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         protobuf::PhysicalAggregateExprNode {
                             aggregate_function: Some(physical_aggregate_expr_node::AggregateFunction::UserDefinedAggrFunction(a.fun().name.clone())),
                             expr: expressions,
+                            ordering_req,
                             distinct,
                         },
                     )),
@@ -178,6 +190,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
                         ),
                     ),
                     expr: expressions,
+                    ordering_req,
                     distinct,
                 },
             )),

@@ -22,9 +22,10 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
+use strum_macros::EnumIter;
 
 /// Enum of all built-in aggregate functions
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, EnumIter)]
 pub enum AggregateFunction {
     /// count
     Count,

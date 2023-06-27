@@ -31,11 +31,11 @@ rust-version = { workspace = true }
 async-recursion = "1.0"
 chrono = { version = "0.4.23", default-features = false }
 datafusion = { version = "26.0.0", path = "../core" }
-itertools = "0.10.5"
-object_store = "0.5.4"
+itertools = "0.11"
+object_store = "0.6.1"
 prost = "0.11"
 prost-types = "0.11"
-substrait = "0.10.0"
+substrait = "0.11.0"
 tokio = "1.17"
 
 [features]

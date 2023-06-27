@@ -31,6 +31,7 @@ mod tests {
     use datafusion::execution::registry::SerializerRegistry;
     use datafusion::execution::runtime_env::RuntimeEnv;
     use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode};
+    use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
     use datafusion::prelude::*;
     use substrait::proto::extensions::simple_extension_declaration::MappingType;
 
@@ -334,8 +335,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_inlist() -> Result<()> {
+    async fn roundtrip_inlist_1() -> Result<()> {
         roundtrip("SELECT * FROM data WHERE a IN (1, 2, 3)").await
+    }
+
+    #[tokio::test]
+    // Test with length <= datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+    async fn roundtrip_inlist_2() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f IN ('a', 'b', 'c')").await
+    }
+
+    #[tokio::test]
+    // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
+    async fn roundtrip_inlist_3() -> Result<()> {
+        let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
+            .map(|i| format!("'{}'", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        roundtrip(&format!("SELECT * FROM data WHERE f IN ({})", inlist)).await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_inlist_4() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE f NOT IN ('a', 'b', 'c', 'd')").await
     }
 
     #[tokio::test]
@@ -410,6 +433,30 @@ mod tests {
     #[tokio::test]
     async fn qualified_catalog_schema_table_reference() -> Result<()> {
         roundtrip("SELECT a,b,c,d,e FROM datafusion.public.data;").await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_inner_join_table_reuse_zero_index() -> Result<()> {
+        assert_expected_plan(
+            "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.a = d2.a",
+            "Projection: data.b, data.c\
+            \n  Inner Join: data.a = data.a\
+            \n    TableScan: data projection=[a, b]\
+            \n    TableScan: data projection=[a, c]",
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn roundtrip_inner_join_table_reuse_non_zero_index() -> Result<()> {
+        assert_expected_plan(
+            "SELECT d1.b, d2.c FROM data d1 JOIN data d2 ON d1.b = d2.b",
+            "Projection: data.b, data.c\
+            \n  Inner Join: data.b = data.b\
+            \n    TableScan: data projection=[b]\
+            \n    TableScan: data projection=[b, c]",
+        )
+        .await
     }
 
     /// Construct a plan that contains several literals of types that are currently supported.
@@ -614,6 +661,7 @@ mod tests {
             Field::new("c", DataType::Date32, true),
             Field::new("d", DataType::Boolean, true),
             Field::new("e", DataType::UInt32, true),
+            Field::new("f", DataType::Utf8, true),
         ]);
         explicit_options.schema = Some(&schema);
         ctx.register_csv("data", "tests/testdata/data.csv", explicit_options)

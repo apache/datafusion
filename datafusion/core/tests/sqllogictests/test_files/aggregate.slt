@@ -15,9 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
+#######
+# Setup test data table
+#######
 statement ok
-CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
+CREATE EXTERNAL TABLE aggregate_test_100 (
   c1  VARCHAR NOT NULL,
   c2  TINYINT NOT NULL,
   c3  SMALLINT NOT NULL,
@@ -26,8 +28,8 @@ CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
   c6  BIGINT NOT NULL,
   c7  SMALLINT NOT NULL,
   c8  INT NOT NULL,
-  c9  BIGINT UNSIGNED NOT NULL,
-  c10 VARCHAR NOT NULL,
+  c9  INT UNSIGNED NOT NULL,
+  c10 BIGINT UNSIGNED NOT NULL,
   c11 FLOAT NOT NULL,
   c12 DOUBLE NOT NULL,
   c13 VARCHAR NOT NULL
@@ -35,6 +37,34 @@ CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
 STORED AS CSV
 WITH HEADER ROW
 LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+
+statement ok
+CREATE TABLE d_table (c1 decimal(10,3)) as values
+(110.000), (110.001), (110.002), (110.003), (110.004), (110.005), (110.006), (110.007), (110.008), (110.009),
+(-100.000),(-100.001),(-100.002),(-100.003),(-100.004),(-100.005),(-100.006),(-100.007),(-100.008),(-100.009)
+
+statement ok
+CREATE TABLE median_table (
+    col_i8 TINYINT,
+    col_i16 SMALLINT,
+    col_i32 INT,
+    col_i64 BIGINT,
+    col_u8 TINYINT UNSIGNED,
+    col_u16 SMALLINT UNSIGNED,
+    col_u32 INT UNSIGNED,
+    col_u64 BIGINT UNSIGNED,
+    col_f32 FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE
+) as VALUES
+( -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0, 0, 0, arrow_cast(0,'UInt64'), 1.1, 1.1, 1.1 ),
+( -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0, 0, 0, arrow_cast(0,'UInt64'), 4.4, 4.4, arrow_cast('NAN','Float64') ),
+( 100,  100,    100,         arrow_cast(100,'Int64'),              100,100,100, arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64') ),
+( 127, 32767, 2147483647, arrow_cast(9223372036854775807,'Int64'), 255, 65535,  4294967295, 18446744073709551615, 2.2, 2.2, arrow_cast('NAN','Float64') )
+
+statement ok
+CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
+(0,null), (1,1), (null,1), (3,2), (3,2)
 
 #######
 # Error tests
@@ -87,9 +117,21 @@ SELECT bit_and(c5), bit_and(c6), bit_and(c7), bit_and(c8), bit_and(c9) FROM aggr
 ----
 0 0 0 0 0
 
+# csv_query_bit_and_distinct
+query IIIII
+SELECT bit_and(distinct c5), bit_and(distinct c6), bit_and(distinct c7), bit_and(distinct c8), bit_and(distinct c9) FROM aggregate_test_100
+----
+0 0 0 0 0
+
 # csv_query_bit_or
 query IIIII
 SELECT bit_or(c5), bit_or(c6), bit_or(c7), bit_or(c8), bit_or(c9) FROM aggregate_test_100
+----
+-1 -1 255 65535 4294967295
+
+# csv_query_bit_or_distinct
+query IIIII
+SELECT bit_or(distinct c5), bit_or(distinct c6), bit_or(distinct c7), bit_or(distinct c8), bit_or(distinct c9) FROM aggregate_test_100
 ----
 -1 -1 255 65535 4294967295
 
@@ -98,6 +140,18 @@ query IIIII
 SELECT bit_xor(c5), bit_xor(c6), bit_xor(c7), bit_xor(c8), bit_xor(c9) FROM aggregate_test_100
 ----
 1632751011 5960911605712039654 148 54789 169634700
+
+# csv_query_bit_xor_distinct (should be different than above)
+query IIIII
+SELECT bit_xor(distinct c5), bit_xor(distinct c6), bit_xor(distinct c7), bit_xor(distinct c8), bit_xor(distinct c9) FROM aggregate_test_100
+----
+1632751011 5960911605712039654 196 54789 169634700
+
+# csv_query_bit_xor_distinct_expr
+query I
+SELECT bit_xor(distinct c5 % 2) FROM aggregate_test_100
+----
+-2
 
 # csv_query_covariance_1
 query R
@@ -303,73 +357,73 @@ SELECT median(c12) FROM aggregate_test_100
 
 # median_i8
 query I
-SELECT median(a) FROM median_i8
+SELECT median(col_i8) FROM median_table
 ----
 -14
 
 # median_i16
 query I
-SELECT median(a) FROM median_i16
+SELECT median(col_i16) FROM median_table
 ----
 -16334
 
 # median_i32
 query I
-SELECT median(a) FROM median_i32
+SELECT median(col_i32) FROM median_table
 ----
 -1073741774
 
 # median_i64
 query I
-SELECT median(a) FROM median_i64
+SELECT median(col_i64) FROM median_table
 ----
 -4611686018427387854
 
 # median_u8
 query I
-SELECT median(a) FROM median_u8
+SELECT median(col_u8) FROM median_table
 ----
 50
 
 # median_u16
 query I
-SELECT median(a) FROM median_u16
+SELECT median(col_u16) FROM median_table
 ----
 50
 
 # median_u32
 query I
-SELECT median(a) FROM median_u32
+SELECT median(col_u32) FROM median_table
 ----
 50
 
 # median_u64
 query I
-SELECT median(a) FROM median_u64
+SELECT median(col_u64) FROM median_table
 ----
 50
 
 # median_f32
 query R
-SELECT median(a) FROM median_f32
+SELECT median(col_f32) FROM median_table
 ----
-3.3
+2.75
 
 # median_f64
 query R
-SELECT median(a) FROM median_f64
+SELECT median(col_f64) FROM median_table
 ----
-3.3
+2.75
 
 # median_f64_nan
 query R
-SELECT median(a) FROM median_f64_nan
+SELECT median(col_f64_nan) FROM median_table
 ----
 NaN
 
 # approx_median_f64_nan
 query R
-SELECT approx_median(a) FROM median_f64_nan
+SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
@@ -695,7 +749,7 @@ true
 
 # csv_query_cube_avg
 query TIR
-SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORDER BY c1, c2
+SELECT c1, c2, AVG(c3) FROM aggregate_test_100 GROUP BY CUBE (c1, c2) ORDER BY c1, c2
 ----
 a 1 -17.6
 a 2 -15.333333333333
@@ -736,7 +790,7 @@ NULL NULL 7.81
 
 # csv_query_rollup_avg
 query TIIR
-SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100_by_sql WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
+SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100 WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
 ----
 a 1 -85 -15154
 a 1 -56 8692
@@ -794,7 +848,7 @@ NULL NULL NULL 3833.525
 # csv_query_groupingsets_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4)
-FROM aggregate_test_100_by_sql
+FROM aggregate_test_100
 WHERE c1 IN ('a', 'b', NULL)
 GROUP BY GROUPING SETS ((c1), (c1,c2), (c1,c2,c3))
 ORDER BY c1, c2, c3
@@ -854,7 +908,7 @@ b NULL NULL 7732.315789473684
 # csv_query_singlecol_with_rollup_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4)
-FROM aggregate_test_100_by_sql
+FROM aggregate_test_100
 WHERE c1 IN ('a', 'b', NULL)
 GROUP BY c1, ROLLUP (c2, c3)
 ORDER BY c1, c2, c3
@@ -1496,9 +1550,21 @@ SELECT bool_and(c1), bool_and(c2), bool_and(c3), bool_and(c4), bool_and(c5), boo
 ----
 true false false false false true false NULL
 
+# query_bool_and_distinct
+query BBBBBBBB
+SELECT bool_and(distinct c1), bool_and(distinct c2), bool_and(distinct c3), bool_and(distinct c4), bool_and(distinct c5), bool_and(distinct c6), bool_and(distinct c7), bool_and(distinct c8) FROM bool_aggregate_functions
+----
+true false false false false true false NULL
+
 # query_bool_or
 query BBBBBBBB
 SELECT bool_or(c1), bool_or(c2), bool_or(c3), bool_or(c4), bool_or(c5), bool_or(c6), bool_or(c7), bool_or(c8) FROM bool_aggregate_functions
+----
+true true true false true true false NULL
+
+# query_bool_or_distinct
+query BBBBBBBB
+SELECT bool_or(distinct c1), bool_or(distinct c2), bool_or(distinct c3), bool_or(distinct c4), bool_or(distinct c5), bool_or(distinct c6), bool_or(distinct c7), bool_or(distinct c8) FROM bool_aggregate_functions
 ----
 true true true false true true false NULL
 

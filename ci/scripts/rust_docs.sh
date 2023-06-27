@@ -20,3 +20,5 @@
 set -ex
 export RUSTDOCFLAGS="-D warnings -A rustdoc::private-intra-doc-links"
 cargo doc --document-private-items --no-deps --workspace
+cd datafusion-cli
+cargo doc --document-private-items --no-deps

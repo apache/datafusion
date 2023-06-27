@@ -18,18 +18,16 @@
 //! Defines common code used in execution plans
 
 use super::SendableRecordBatchStream;
-use crate::error::{DataFusionError, Result};
-use crate::execution::memory_pool::MemoryReservation;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
-use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
+use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
-use datafusion_execution::TaskContext;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use futures::{Future, StreamExt, TryStreamExt};
-use log::debug;
 use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 use std::fs;
@@ -37,7 +35,6 @@ use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// [`MemoryReservation`] used across query execution streams
@@ -96,42 +93,6 @@ fn build_file_list_recurse(
     Ok(())
 }
 
-/// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
-pub(crate) fn spawn_execution(
-    input: Arc<dyn ExecutionPlan>,
-    output: mpsc::Sender<Result<RecordBatch>>,
-    partition: usize,
-    context: Arc<TaskContext>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut stream = match input.execute(partition, context) {
-            Err(e) => {
-                // If send fails, plan being torn down,
-                // there is no place to send the error.
-                output.send(Err(e)).await.ok();
-                debug!(
-                    "Stopping execution: error executing input: {}",
-                    displayable(input.as_ref()).one_line()
-                );
-                return;
-            }
-            Ok(stream) => stream,
-        };
-
-        while let Some(item) = stream.next().await {
-            // If send fails, plan being torn down,
-            // there is no place to send the error.
-            if output.send(item).await.is_err() {
-                debug!(
-                    "Stopping execution: output is gone, plan cancelling: {}",
-                    displayable(input.as_ref()).one_line()
-                );
-                return;
-            }
-        }
-    })
-}
-
 /// If running in a tokio context spawns the execution of `stream` to a separate task
 /// allowing it to execute in parallel with an intermediate buffer of size `buffer`
 pub(crate) fn spawn_buffered(
@@ -139,14 +100,15 @@ pub(crate) fn spawn_buffered(
     buffer: usize,
 ) -> SendableRecordBatchStream {
     // Use tokio only if running from a tokio context (#2201)
-    let handle = match tokio::runtime::Handle::try_current() {
-        Ok(handle) => handle,
-        Err(_) => return input,
+    if tokio::runtime::Handle::try_current().is_err() {
+        return input;
     };
 
-    let schema = input.schema();
-    let (sender, receiver) = mpsc::channel(buffer);
-    let join = handle.spawn(async move {
+    let mut builder = RecordBatchReceiverStream::builder(input.schema(), buffer);
+
+    let sender = builder.tx();
+
+    builder.spawn(async move {
         while let Some(item) = input.next().await {
             if sender.send(item).await.is_err() {
                 return;
@@ -154,7 +116,7 @@ pub(crate) fn spawn_buffered(
         }
     });
 
-    RecordBatchReceiverStream::create(&schema, receiver, join)
+    builder.build()
 }
 
 /// Computes the statistics for an in-memory RecordBatch
@@ -322,12 +284,91 @@ fn get_meet_of_orderings_helper(
     }
 }
 
+/// Write in Arrow IPC format.
+pub struct IPCWriter {
+    /// path
+    pub path: PathBuf,
+    /// inner writer
+    pub writer: FileWriter<File>,
+    /// batches written
+    pub num_batches: u64,
+    /// rows written
+    pub num_rows: u64,
+    /// bytes written
+    pub num_bytes: u64,
+}
+
+impl IPCWriter {
+    /// Create new writer
+    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
+        let file = File::create(path).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to create partition file at {path:?}: {e:?}"
+            ))
+        })?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            path: path.into(),
+            writer: FileWriter::try_new(file, schema)?,
+        })
+    }
+
+    /// Create new writer with IPC write options
+    pub fn new_with_options(
+        path: &Path,
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+    ) -> Result<Self> {
+        let file = File::create(path).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to create partition file at {path:?}: {e:?}"
+            ))
+        })?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            path: path.into(),
+            writer: FileWriter::try_new_with_options(file, schema, write_options)?,
+        })
+    }
+    /// Write one single batch
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.writer.write(batch)?;
+        self.num_batches += 1;
+        self.num_rows += batch.num_rows() as u64;
+        let num_bytes: usize = batch_byte_size(batch);
+        self.num_bytes += num_bytes as u64;
+        Ok(())
+    }
+
+    /// Finish the writer
+    pub fn finish(&mut self) -> Result<()> {
+        self.writer.finish().map_err(Into::into)
+    }
+
+    /// Path write to
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Returns the total number of bytes of memory occupied physically by this batch.
+pub fn batch_byte_size(batch: &RecordBatch) -> usize {
+    batch
+        .columns()
+        .iter()
+        .map(|array| array.get_array_memory_size())
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::Not;
 
     use super::*;
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::union::UnionExec;
@@ -639,8 +680,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Float32Array::from_slice([1., 2., 3.])),
-                Arc::new(Float64Array::from_slice([9., 8., 7.])),
+                Arc::new(Float32Array::from(vec![1., 2., 3.])),
+                Arc::new(Float64Array::from(vec![9., 8., 7.])),
             ],
         )?;
         let actual =
@@ -681,84 +722,4 @@ mod tests {
         assert_eq!(expected, transposed);
         Ok(())
     }
-}
-
-/// Write in Arrow IPC format.
-pub struct IPCWriter {
-    /// path
-    pub path: PathBuf,
-    /// inner writer
-    pub writer: FileWriter<File>,
-    /// batches written
-    pub num_batches: u64,
-    /// rows written
-    pub num_rows: u64,
-    /// bytes written
-    pub num_bytes: u64,
-}
-
-impl IPCWriter {
-    /// Create new writer
-    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
-        let file = File::create(path).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to create partition file at {path:?}: {e:?}"
-            ))
-        })?;
-        Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            path: path.into(),
-            writer: FileWriter::try_new(file, schema)?,
-        })
-    }
-
-    /// Create new writer with IPC write options
-    pub fn new_with_options(
-        path: &Path,
-        schema: &Schema,
-        write_options: IpcWriteOptions,
-    ) -> Result<Self> {
-        let file = File::create(path).map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Failed to create partition file at {path:?}: {e:?}"
-            ))
-        })?;
-        Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            path: path.into(),
-            writer: FileWriter::try_new_with_options(file, schema, write_options)?,
-        })
-    }
-    /// Write one single batch
-    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
-        self.num_batches += 1;
-        self.num_rows += batch.num_rows() as u64;
-        let num_bytes: usize = batch_byte_size(batch);
-        self.num_bytes += num_bytes as u64;
-        Ok(())
-    }
-
-    /// Finish the writer
-    pub fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(Into::into)
-    }
-
-    /// Path write to
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-/// Returns the total number of bytes of memory occupied physically by this batch.
-pub fn batch_byte_size(batch: &RecordBatch) -> usize {
-    batch
-        .columns()
-        .iter()
-        .map(|array| array.get_array_memory_size())
-        .sum()
 }

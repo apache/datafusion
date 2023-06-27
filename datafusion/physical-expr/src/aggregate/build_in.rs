@@ -26,7 +26,7 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use crate::{expressions, AggregateExpr, PhysicalExpr};
+use crate::{expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr};
 use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::aggregate_function::{return_type, sum_type_of_avg};
@@ -39,6 +39,7 @@ pub fn create_aggregate_expr(
     fun: &AggregateFunction,
     distinct: bool,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    ordering_req: &[PhysicalSortExpr],
     input_schema: &Schema,
     name: impl Into<String>,
 ) -> Result<Arc<dyn AggregateExpr>> {
@@ -49,8 +50,11 @@ pub fn create_aggregate_expr(
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
     let rt_type = return_type(fun, &input_phy_types)?;
+    let ordering_types = ordering_req
+        .iter()
+        .map(|e| e.expr.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
     let input_phy_exprs = input_phy_exprs.to_vec();
-
     Ok(match (fun, distinct) {
         (AggregateFunction::Count, false) => Arc::new(
             expressions::Count::new_with_multiple_exprs(input_phy_exprs, name, rt_type),
@@ -65,56 +69,36 @@ pub fn create_aggregate_expr(
             name,
             rt_type,
         )),
-        (AggregateFunction::BitAnd, false) => Arc::new(expressions::BitAnd::new(
+        (AggregateFunction::BitAnd, _) => Arc::new(expressions::BitAnd::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BitAnd, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BIT_AND(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
-        (AggregateFunction::BitOr, false) => Arc::new(expressions::BitOr::new(
+        (AggregateFunction::BitOr, _) => Arc::new(expressions::BitOr::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BitOr, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BIT_OR(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
         (AggregateFunction::BitXor, false) => Arc::new(expressions::BitXor::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BitXor, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BIT_XOR(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
-        (AggregateFunction::BoolAnd, false) => Arc::new(expressions::BoolAnd::new(
+        (AggregateFunction::BitXor, true) => Arc::new(expressions::DistinctBitXor::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BoolAnd, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BOOL_AND(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
-        (AggregateFunction::BoolOr, false) => Arc::new(expressions::BoolOr::new(
+        (AggregateFunction::BoolAnd, _) => Arc::new(expressions::BoolAnd::new(
             input_phy_exprs[0].clone(),
             name,
             rt_type,
         )),
-        (AggregateFunction::BoolOr, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "BOOL_OR(DISTINCT) aggregations are not available".to_string(),
-            ));
-        }
+        (AggregateFunction::BoolOr, _) => Arc::new(expressions::BoolOr::new(
+            input_phy_exprs[0].clone(),
+            name,
+            rt_type,
+        )),
         (AggregateFunction::Sum, false) => {
             let cast_to_sum_type = rt_type != input_phy_types[0];
             Arc::new(expressions::Sum::new_with_pre_cast(
@@ -136,12 +120,27 @@ pub fn create_aggregate_expr(
                 input_phy_types[0].clone(),
             ))
         }
-        (AggregateFunction::ArrayAgg, false) => Arc::new(expressions::ArrayAgg::new(
-            input_phy_exprs[0].clone(),
-            name,
-            input_phy_types[0].clone(),
-        )),
+        (AggregateFunction::ArrayAgg, false) => {
+            let expr = input_phy_exprs[0].clone();
+            let data_type = input_phy_types[0].clone();
+            if ordering_req.is_empty() {
+                Arc::new(expressions::ArrayAgg::new(expr, name, data_type))
+            } else {
+                Arc::new(expressions::OrderSensitiveArrayAgg::new(
+                    expr,
+                    name,
+                    data_type,
+                    ordering_types,
+                    ordering_req.to_vec(),
+                ))
+            }
+        }
         (AggregateFunction::ArrayAgg, true) => {
+            if !ordering_req.is_empty() {
+                return Err(DataFusionError::NotImplemented(
+                    "ARRAY_AGG(DISTINCT ORDER BY a ASC) order-sensitive aggregations are not available".to_string(),
+                ));
+            }
             Arc::new(expressions::DistinctArrayAgg::new(
                 input_phy_exprs[0].clone(),
                 name,
@@ -312,11 +311,15 @@ pub fn create_aggregate_expr(
             input_phy_exprs[0].clone(),
             name,
             input_phy_types[0].clone(),
+            ordering_req.to_vec(),
+            ordering_types,
         )),
         (AggregateFunction::LastValue, _) => Arc::new(expressions::LastValue::new(
             input_phy_exprs[0].clone(),
             name,
             input_phy_types[0].clone(),
+            ordering_req.to_vec(),
+            ordering_types,
         )),
     })
 }
@@ -1220,7 +1223,7 @@ mod tests {
                 "Invalid or wrong number of arguments passed to aggregate: '{name}'",
             )));
         }
-        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, input_schema, name)
+        create_aggregate_expr(fun, distinct, &coerced_phy_exprs, &[], input_schema, name)
     }
 
     // Returns the coerced exprs for each `input_exprs`.

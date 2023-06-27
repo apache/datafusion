@@ -19,6 +19,7 @@
 
 use crate::error::{DataFusionError, Result};
 
+use crate::datasource::file_format::arrow::DEFAULT_ARROW_EXTENSION;
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
@@ -31,6 +32,8 @@ use async_compression::tokio::bufread::{
     ZstdDecoder as AsyncZstdDecoer, ZstdEncoder as AsyncZstdEncoder,
 };
 
+#[cfg(feature = "compression")]
+use async_compression::tokio::write::{BzEncoder, GzipEncoder, XzEncoder, ZstdEncoder};
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::MultiBzDecoder;
@@ -38,12 +41,12 @@ use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::MultiGzDecoder;
 
-use crate::datasource::file_format::arrow::DEFAULT_ARROW_EXTENSION;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(feature = "compression")]
 use futures::TryStreamExt;
 use std::str::FromStr;
+use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
 #[cfg(feature = "compression")]
@@ -146,6 +149,31 @@ impl FileCompressionType {
                 ))
             }
             UNCOMPRESSED => s.boxed(),
+        })
+    }
+
+    /// Wrap the given `AsyncWrite` so that it performs compressed writes
+    /// according to this `FileCompressionType`.
+    pub fn convert_async_writer(
+        &self,
+        w: Box<dyn AsyncWrite + Send + Unpin>,
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+        Ok(match self.variant {
+            #[cfg(feature = "compression")]
+            GZIP => Box::new(GzipEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            BZIP2 => Box::new(BzEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            XZ => Box::new(XzEncoder::new(w)),
+            #[cfg(feature = "compression")]
+            ZSTD => Box::new(ZstdEncoder::new(w)),
+            #[cfg(not(feature = "compression"))]
+            GZIP | BZIP2 | XZ | ZSTD => {
+                return Err(DataFusionError::NotImplemented(
+                    "Compression feature is not enabled".to_owned(),
+                ))
+            }
+            UNCOMPRESSED => w,
         })
     }
 

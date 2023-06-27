@@ -45,7 +45,6 @@ use datafusion_common::cast::{
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
-use std::borrow::Borrow;
 use std::sync::Arc;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
@@ -77,10 +76,7 @@ where
     let array = as_generic_string_array::<T>(args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
-    array
-        .iter()
-        .map(|x| x.map(op.borrow()).transpose())
-        .collect()
+    array.iter().map(|x| x.map(&op).transpose()).collect()
 }
 
 // given an function that maps a `&str` to a arrow native type,
@@ -262,7 +258,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             )));
         }
     };
-    // `with_x(0)` are infalible because `0` are always a valid
+    // `with_x(0)` are infallible because `0` are always a valid
     Ok(value.unwrap().timestamp_nanos())
 }
 
@@ -287,37 +283,35 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             let nano = (f)(*v)?;
+
             match granularity.as_str() {
                 "minute" => {
-                    // cast to second
-                    let second = ScalarValue::TimestampSecond(
-                        Some(nano.unwrap() / 1_000_000_000),
+                    // trunc to minute
+                    let second = ScalarValue::TimestampNanosecond(
+                        nano.map(|nano| nano / 1_000_000_000 * 1_000_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(second)
                 }
                 "second" => {
-                    // cast to millisecond
-                    let mill = ScalarValue::TimestampMillisecond(
-                        Some(nano.unwrap() / 1_000_000),
+                    // trunc to second
+                    let mill = ScalarValue::TimestampNanosecond(
+                        nano.map(|nano| nano / 1_000_000 * 1_000_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(mill)
                 }
                 "millisecond" => {
-                    // cast to microsecond
-                    let micro = ScalarValue::TimestampMicrosecond(
-                        Some(nano.unwrap() / 1_000),
+                    // trunc to microsecond
+                    let micro = ScalarValue::TimestampNanosecond(
+                        nano.map(|nano| nano / 1_000 * 1_000),
                         tz_opt.clone(),
                     );
                     ColumnarValue::Scalar(micro)
                 }
                 _ => {
-                    // cast to nanosecond
-                    let nano = ScalarValue::TimestampNanosecond(
-                        Some(nano.unwrap()),
-                        tz_opt.clone(),
-                    );
+                    // trunc to nanosecond
+                    let nano = ScalarValue::TimestampNanosecond(nano, tz_opt.clone());
                     ColumnarValue::Scalar(nano)
                 }
             }
@@ -333,7 +327,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         _ => {
             return Err(DataFusionError::Execution(
-                "array of `date_trunc` must be non-null scalar Utf8".to_string(),
+                "second argument of `date_trunc` must be nanosecond timestamp scalar or array".to_string(),
             ));
         }
     })

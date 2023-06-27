@@ -28,15 +28,18 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::config::{ConfigEntry, ConfigOptions};
-use crate::datasource::streaming::{PartitionStream, StreamingTable};
+use crate::datasource::streaming::StreamingTable;
 use crate::datasource::TableProvider;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
+use crate::{
+    config::{ConfigEntry, ConfigOptions},
+    physical_plan::streaming::PartitionStream,
+};
 
-use super::{catalog::CatalogList, schema::SchemaProvider};
+use super::{schema::SchemaProvider, CatalogList};
 
 pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";
@@ -81,15 +84,18 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        builder.add_table(
-                            &catalog_name,
-                            &schema_name,
-                            &table_name,
-                            table.table_type(),
-                        );
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            if let Some(table) = schema.table(&table_name).await {
+                                builder.add_table(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    table.table_type(),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -118,15 +124,18 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        builder.add_view(
-                            &catalog_name,
-                            &schema_name,
-                            &table_name,
-                            table.get_table_definition(),
-                        )
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            if let Some(table) = schema.table(&table_name).await {
+                                builder.add_view(
+                                    &catalog_name,
+                                    &schema_name,
+                                    &table_name,
+                                    table.get_table_definition(),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -140,19 +149,22 @@ impl InformationSchemaConfig {
 
             for schema_name in catalog.schema_names() {
                 if schema_name != INFORMATION_SCHEMA {
-                    let schema = catalog.schema(&schema_name).unwrap();
-                    for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).await.unwrap();
-                        for (field_position, field) in
-                            table.schema().fields().iter().enumerate()
-                        {
-                            builder.add_column(
-                                &catalog_name,
-                                &schema_name,
-                                &table_name,
-                                field_position,
-                                field,
-                            )
+                    // schema name may not exist in the catalog, so we need to check
+                    if let Some(schema) = catalog.schema(&schema_name) {
+                        for table_name in schema.table_names() {
+                            if let Some(table) = schema.table(&table_name).await {
+                                for (field_position, field) in
+                                    table.schema().fields().iter().enumerate()
+                                {
+                                    builder.add_column(
+                                        &catalog_name,
+                                        &schema_name,
+                                        &table_name,
+                                        field_position,
+                                        field,
+                                    )
+                                }
+                            }
                         }
                     }
                 }

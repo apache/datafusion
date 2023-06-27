@@ -13080,6 +13080,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if !self.expr.is_empty() {
             len += 1;
         }
+        if !self.ordering_req.is_empty() {
+            len += 1;
+        }
         if self.distinct {
             len += 1;
         }
@@ -13089,6 +13092,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalAggregateExprNode", len)?;
         if !self.expr.is_empty() {
             struct_ser.serialize_field("expr", &self.expr)?;
+        }
+        if !self.ordering_req.is_empty() {
+            struct_ser.serialize_field("orderingReq", &self.ordering_req)?;
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
@@ -13116,6 +13122,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
     {
         const FIELDS: &[&str] = &[
             "expr",
+            "ordering_req",
+            "orderingReq",
             "distinct",
             "aggr_function",
             "aggrFunction",
@@ -13126,6 +13134,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Expr,
+            OrderingReq,
             Distinct,
             AggrFunction,
             UserDefinedAggrFunction,
@@ -13151,6 +13160,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     {
                         match value {
                             "expr" => Ok(GeneratedField::Expr),
+                            "orderingReq" | "ordering_req" => Ok(GeneratedField::OrderingReq),
                             "distinct" => Ok(GeneratedField::Distinct),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
@@ -13174,6 +13184,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut expr__ = None;
+                let mut ordering_req__ = None;
                 let mut distinct__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map.next_key()? {
@@ -13183,6 +13194,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                                 return Err(serde::de::Error::duplicate_field("expr"));
                             }
                             expr__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::OrderingReq => {
+                            if ordering_req__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orderingReq"));
+                            }
+                            ordering_req__ = Some(map.next_value()?);
                         }
                         GeneratedField::Distinct => {
                             if distinct__.is_some() {
@@ -13206,6 +13223,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 }
                 Ok(PhysicalAggregateExprNode {
                     expr: expr__.unwrap_or_default(),
+                    ordering_req: ordering_req__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
                     aggregate_function: aggregate_function__,
                 })
@@ -17851,6 +17869,20 @@ impl serde::Serialize for ScalarFunction {
             Self::Factorial => "Factorial",
             Self::Lcm => "Lcm",
             Self::Gcd => "Gcd",
+            Self::ArrayAppend => "ArrayAppend",
+            Self::ArrayConcat => "ArrayConcat",
+            Self::ArrayDims => "ArrayDims",
+            Self::ArrayFill => "ArrayFill",
+            Self::ArrayLength => "ArrayLength",
+            Self::ArrayNdims => "ArrayNdims",
+            Self::ArrayPosition => "ArrayPosition",
+            Self::ArrayPositions => "ArrayPositions",
+            Self::ArrayPrepend => "ArrayPrepend",
+            Self::ArrayRemove => "ArrayRemove",
+            Self::ArrayReplace => "ArrayReplace",
+            Self::ArrayToString => "ArrayToString",
+            Self::Cardinality => "Cardinality",
+            Self::TrimArray => "TrimArray",
         };
         serializer.serialize_str(variant)
     }
@@ -17948,6 +17980,20 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
             "Factorial",
             "Lcm",
             "Gcd",
+            "ArrayAppend",
+            "ArrayConcat",
+            "ArrayDims",
+            "ArrayFill",
+            "ArrayLength",
+            "ArrayNdims",
+            "ArrayPosition",
+            "ArrayPositions",
+            "ArrayPrepend",
+            "ArrayRemove",
+            "ArrayReplace",
+            "ArrayToString",
+            "Cardinality",
+            "TrimArray",
         ];
 
         struct GeneratedVisitor;
@@ -18076,6 +18122,20 @@ impl<'de> serde::Deserialize<'de> for ScalarFunction {
                     "Factorial" => Ok(ScalarFunction::Factorial),
                     "Lcm" => Ok(ScalarFunction::Lcm),
                     "Gcd" => Ok(ScalarFunction::Gcd),
+                    "ArrayAppend" => Ok(ScalarFunction::ArrayAppend),
+                    "ArrayConcat" => Ok(ScalarFunction::ArrayConcat),
+                    "ArrayDims" => Ok(ScalarFunction::ArrayDims),
+                    "ArrayFill" => Ok(ScalarFunction::ArrayFill),
+                    "ArrayLength" => Ok(ScalarFunction::ArrayLength),
+                    "ArrayNdims" => Ok(ScalarFunction::ArrayNdims),
+                    "ArrayPosition" => Ok(ScalarFunction::ArrayPosition),
+                    "ArrayPositions" => Ok(ScalarFunction::ArrayPositions),
+                    "ArrayPrepend" => Ok(ScalarFunction::ArrayPrepend),
+                    "ArrayRemove" => Ok(ScalarFunction::ArrayRemove),
+                    "ArrayReplace" => Ok(ScalarFunction::ArrayReplace),
+                    "ArrayToString" => Ok(ScalarFunction::ArrayToString),
+                    "Cardinality" => Ok(ScalarFunction::Cardinality),
+                    "TrimArray" => Ok(ScalarFunction::TrimArray),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

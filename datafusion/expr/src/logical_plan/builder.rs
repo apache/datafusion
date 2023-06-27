@@ -23,14 +23,14 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields};
 use crate::{and, binary_expr, DmlStatement, Operator, WriteOp};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
         JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
-        Union, Unnest, Values, Window,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
+        Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -40,8 +40,8 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    ScalarValue, TableReference, ToDFSchema,
+    display::ToStringifiedPlan, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue, TableReference, ToDFSchema,
 };
 use std::any::Any;
 use std::cmp::Ordering;
@@ -453,9 +453,7 @@ impl LogicalPlanBuilder {
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
-
-                let expr = curr_plan.expressions();
-                from_plan(&curr_plan, &expr, &new_inputs)
+                curr_plan.with_new_inputs(&new_inputs)
             }
         }
     }
@@ -1115,7 +1113,7 @@ pub(crate) fn validate_unique_names<'a>(
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
                     format!("{node_name} require unique expression names \
-                             but the expression \"{existing_expr:?}\" at position {existing_position} and \"{expr:?}\" \
+                             but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
                              at position {position} have the same name. Consider aliasing (\"AS\") one of them.",
                             )
                 ))
@@ -1317,7 +1315,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
             //  https://github.com/apache/arrow-datafusion/issues/4478
             if matches!(key, Expr::Cast(_)) || matches!(key, Expr::TryCast(_)) {
-                let alias = format!("{key:?}");
+                let alias = format!("{key}");
                 key.clone().alias(alias)
             } else {
                 key.clone()
