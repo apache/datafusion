@@ -1039,7 +1039,7 @@ fn agg_cols(agg: &Aggregate) -> Vec<Column> {
 
 fn exprlist_to_fields_aggregate(
     exprs: &[Expr],
-    plan: &LogicalPlan,
+    schema: &DFSchemaRef,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
     println!("EXPR TO FIELDS: {:#?}", exprs);
@@ -1048,6 +1048,10 @@ fn exprlist_to_fields_aggregate(
     let mut fields = vec![];
     for expr in exprs {
         println!("EXPR: {:?}", expr);
+        match expr {
+            Expr::GroupingSet(_) => println!("OK"),
+            _ => println!("HOW IT'S POSSIBLE"),
+        }
         match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
                 println!("COLUMN: {:?}", c);
@@ -1065,7 +1069,8 @@ fn exprlist_to_fields_aggregate(
             //     }
             // }
             other => {
-                println!("OTHER: {:?}", other);
+                println!("OTHER: {:?}", other.display_name());
+
                 if let Expr::GroupingSet(exprs) = other {
                     println!("GS EXPRS: {:#?}", exprs.distinct_expr());
                     for e in exprs.distinct_expr() {
@@ -1074,7 +1079,7 @@ fn exprlist_to_fields_aggregate(
                         fields.push(field);
                     }
                 } else {
-                    fields.push(other.to_field(plan.schema())?)
+                    fields.push(other.to_field(schema)?)
                 }
             }
         }
@@ -1094,11 +1099,11 @@ pub fn exprlist_to_fields<'a>(
     // look at the input to the aggregate instead.
     let fields = match plan {
         LogicalPlan::Aggregate(agg) => {
-            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+            Some(exprlist_to_fields_aggregate(&exprs, plan.schema(), agg))
         }
         LogicalPlan::Window(window) => match window.input.as_ref() {
             LogicalPlan::Aggregate(agg) => {
-                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+                Some(exprlist_to_fields_aggregate(&exprs, plan.schema(), agg))
             }
             _ => None,
         },
@@ -1634,4 +1639,27 @@ mod tests {
 
         Ok(())
     }
+
+    // #[test]
+    // fn test_exprlist_to_fields_aggregate() -> Result<()> {
+    //     let exprs = [grouping_set(vec![vec![col("a"), col("b")]])];
+    //     let schema = Arc::new(DFSchema::empty());
+    //     let agg = LogicalPlan::Aggregate(Aggregate::try_new(
+    //         Arc::new(LogicalPlan::TableScan(TableScan {
+    //             table_name: TableReference::Bare {
+    //                 table: Cow::Borrowed("()"),
+    //             },
+    //             source: Arc::new(EmptyTable),
+    //             projection: None,
+    //             projected_schema: schema,
+    //             filters: todo!(),
+    //             fetch: todo!(),
+    //         })),
+    //         Vec::default(),
+    //         Vec::default(),
+    //     )?);
+    //     exprlist_to_fields_aggregate(&exprs, &schema, agg);
+
+    //     Ok(())
+    // }
 }
