@@ -1039,82 +1039,16 @@ fn exprlist_to_fields_aggregate(
     schema: &DFSchemaRef,
     agg: &Aggregate,
 ) -> Result<Vec<DFField>> {
-    println!("EXPR TO FIELDS: {:#?}", exprs);
-    println!("AGG INPUT SCHEMA: {:?}", agg.schema);
     let agg_cols = agg_cols(agg);
     let mut fields = vec![];
     for expr in exprs {
-        println!("EXPR: {}", expr);
-        match expr {
-            Expr::GroupingSet(_) => println!("OK"),
-            Expr::Alias(_, _) => println!("ALIAS"),
-            Expr::Column(_) => println!("Column"),
-            Expr::ScalarVariable(_, _) => println!("ScalarVariable"),
-            Expr::Literal(_) => println!("Literal"),
-            Expr::BinaryExpr(_) => println!("BinaryExpr"),
-            Expr::Like(_) => println!("Like"),
-            Expr::ILike(_) => println!("ILike"),
-            Expr::SimilarTo(_) => println!("SimilarTo"),
-            Expr::Not(_) => println!("Not"),
-            Expr::IsNotNull(_) => println!("IsNotNull"),
-            Expr::IsNull(_) => println!("IsNull"),
-            Expr::IsTrue(_) => println!("IsTrue"),
-            Expr::IsFalse(_) => println!("IsFalse"),
-            Expr::IsUnknown(_) => println!("IsUnknown"),
-            Expr::IsNotTrue(_) => println!("IsNotTrue"),
-            Expr::IsNotFalse(_) => println!("IsNotFalse"),
-            Expr::IsNotUnknown(_) => println!("IsNotUnknown"),
-            Expr::Negative(_) => println!("Negative"),
-            Expr::GetIndexedField(_) => println!("GetIndexedField"),
-            Expr::Between(_) => println!("Between"),
-            Expr::Case(_) => println!("Case"),
-            Expr::Cast(_) => println!("Cast"),
-            Expr::TryCast(_) => println!("TryCast"),
-            Expr::Sort(_) => println!("Sort"),
-            Expr::ScalarFunction(_) => println!("ScalarFunction"),
-            Expr::ScalarUDF(_) => println!("ScalarUDF"),
-            Expr::AggregateFunction(_) => println!("AggregateFunction"),
-            Expr::WindowFunction(_) => println!("WindowFunction"),
-            Expr::AggregateUDF(_) => println!("AggregateUDF"),
-            Expr::InList(_) => println!("InList"),
-            Expr::Exists(_) => println!("Exists"),
-            Expr::InSubquery(_) => println!("InSubquery"),
-            Expr::ScalarSubquery(_) => println!("ScalarSubquery"),
-            Expr::Wildcard => println!("Wildcard"),
-            Expr::QualifiedWildcard { .. } => println!("QualifiedWildcard"),
-            Expr::Placeholder(_) => println!("Placeholder"),
-            Expr::OuterReferenceColumn(_, _) => println!("OuterReferenceColumn"),
-        }
         match expr {
             Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                println!("COLUMN: {:?}", c);
                 let field = expr.to_field(agg.input.schema())?;
-                println!("FIELD: {:?}", field);
                 // resolve against schema of input to aggregate
                 fields.push(field);
             }
-            // Expr::GroupingSet(exprs) => {
-            //     println!("GS EXPRS: {:#?}", exprs.distinct_expr());
-            //     for e in exprs.distinct_expr() {
-            //         let field = e.to_field(agg.input.schema())?;
-            //         println!("FIELD: {:?}", field);
-            //         fields.push(field);
-            //     }
-            // }
-            other => {
-                println!("OTHER: {:?}", other.display_name());
-
-                if let Expr::GroupingSet(groupings) = other {
-                    println!("GS EXPRS: {:#?}", groupings.distinct_expr());
-                    for e in groupings.distinct_expr() {
-                        let field = e.to_field(agg.input.schema())?;
-                        println!("FIELD: {:?}", field);
-                        fields.push(field);
-                    }
-                } else {
-                    fields.push(other.to_field(schema)?)
-                }
-            }
+            _ => fields.push(expr.to_field(schema)?),
         }
     }
     Ok(fields)
