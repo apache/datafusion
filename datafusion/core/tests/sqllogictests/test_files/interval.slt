@@ -430,8 +430,6 @@ select '1 month'::interval + '1980-01-01T12:00:00'::timestamp;
 ----
 1980-02-01T12:00:00
 
-# Exected error: interval (scalar) - date / timestamp (scalar)
-
 query D
 select '1 month'::interval - '1980-01-01'::date;
 ----

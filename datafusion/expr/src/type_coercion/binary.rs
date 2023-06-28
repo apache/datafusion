@@ -39,8 +39,8 @@ struct Signature {
 }
 
 impl Signature {
-    /// A signature where the inputs are coerced to the same type as the output
-    fn coerced(t: DataType) -> Self {
+    /// A signature where the inputs are the same type as the output
+    fn uniform(t: DataType) -> Self {
         Self {
             lhs: t.clone(),
             rhs: t.clone(),
@@ -48,7 +48,7 @@ impl Signature {
         }
     }
 
-    /// A signature where the inputs are coerced to the same type with a boolean output
+    /// A signature where the inputs are the same type with a boolean output
     fn comparison(t: DataType) -> Self {
         Self {
             lhs: t.clone(),
@@ -80,7 +80,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
             (DataType::Boolean, DataType::Boolean)
             | (DataType::Null, DataType::Null)
             | (DataType::Boolean, DataType::Null)
-            | (DataType::Null, DataType::Boolean) => Ok(Signature::coerced(DataType::Boolean)),
+            | (DataType::Null, DataType::Boolean) => Ok(Signature::uniform(DataType::Boolean)),
             _ => Err(DataFusionError::Plan(format!(
                 "Cannot infer common argument type for logical boolean operation {lhs} {op} {rhs}"
             ))),
@@ -100,14 +100,14 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
         | Operator::BitwiseXor
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => {
-            bitwise_coercion(lhs, rhs).map(Signature::coerced).ok_or_else(|| {
+            bitwise_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common type for bitwise operation {lhs} {op} {rhs}"
                 ))
             })
         }
         Operator::StringConcat => {
-            string_concat_coercion(lhs, rhs).map(Signature::coerced).ok_or_else(|| {
+            string_concat_coercion(lhs, rhs).map(Signature::uniform).ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Cannot infer common string type for string concat operation {lhs} {op} {rhs}"
                 ))
@@ -153,7 +153,7 @@ fn signature(lhs: &DataType, op: &Operator, rhs: &DataType) -> Result<Signature>
                 })
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
-                Ok(Signature::coerced(numeric))
+                Ok(Signature::uniform(numeric))
             } else {
                 Err(DataFusionError::Plan(format!(
                     "Cannot coerce arithmetic expression {lhs} {op} {rhs} to valid types"
@@ -319,7 +319,7 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for the purposes of a comparison operation
-/// where one is numeric and one is `Utf8`/`LargeUtf8`.
+/// where one is temporal and one is `Utf8`/`LargeUtf8`.
 ///
 /// Note this cannot be performed in case of arithmetic as there is insufficient information
 /// to correctly determine the type of argument. Consider

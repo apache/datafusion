@@ -231,13 +231,16 @@ impl TreeNodeRewriter for TypeCoercionRewriter {
                 Ok(expr)
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let lhs = left.get_type(&self.schema)?;
-                let rhs = right.get_type(&self.schema)?;
-                let (lhs, rhs) = get_input_types(&lhs, &op, &rhs)?;
+                let (left_type, right_type) = get_input_types(
+                    &left.get_type(&self.schema)?,
+                    &op,
+                    &right.get_type(&self.schema)?,
+                )?;
+
                 Ok(Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(left.cast_to(&lhs, &self.schema)?),
+                    Box::new(left.cast_to(&left_type, &self.schema)?),
                     op,
-                    Box::new(right.cast_to(&rhs, &self.schema)?),
+                    Box::new(right.cast_to(&right_type, &self.schema)?),
                 )))
             }
             Expr::Between(Between {
