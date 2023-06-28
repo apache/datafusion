@@ -228,7 +228,7 @@ fn math_decimal_coercion(
     match (lhs_type, rhs_type) {
         (Dictionary(_, value_type), _) => {
             let (value_type, rhs_type) = math_decimal_coercion(value_type, rhs_type)?;
-            Some((value_type.clone(), rhs_type))
+            Some((value_type, rhs_type))
         }
         (_, Dictionary(_, value_type)) => {
             let (lhs_type, value_type) = math_decimal_coercion(lhs_type, value_type)?;
