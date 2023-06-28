@@ -219,42 +219,51 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 /// account that some granularities are not uniform durations of time
 /// (e.g. months are not always the same lengths, leap seconds, etc)
 fn date_trunc_coarse(granularity: &str, value: i64) -> Result<i64> {
-    if granularity == "millisecond" || granularity == "microsecond" {
-        return Ok(value);
-    }
+    // Use chrono NaiveDateTime to clear the various fields
+    // correctly accounting for non uniform granularities
+    let value = timestamp_ns_to_datetime(value).ok_or_else(|| {
+        DataFusionError::Execution(format!("Timestamp {value} out of range"))
+    })?;
 
-    let value = timestamp_ns_to_datetime(value)
-        .ok_or_else(|| {
-            DataFusionError::Execution(format!("Timestamp {value} out of range"))
-        })?
-        .with_nanosecond(0);
+    let value = Some(value);
+
     let value = match granularity {
-        "second" => value,
-        "minute" => value.and_then(|d| d.with_second(0)),
+        "millisecond" => value,
+        "microsecond" => value,
+        "second" => value.and_then(|d| d.with_nanosecond(0)),
+        "minute" => value
+            .and_then(|d| d.with_nanosecond(0))
+            .and_then(|d| d.with_second(0)),
         "hour" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0)),
         "day" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0)),
         "week" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .map(|d| d - Duration::seconds(60 * 60 * 24 * d.weekday() as i64)),
         "month" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0)),
         "quarter" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0))
             .and_then(|d| d.with_month(quarter_month(&d))),
         "year" => value
+            .and_then(|d| d.with_nanosecond(0))
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
