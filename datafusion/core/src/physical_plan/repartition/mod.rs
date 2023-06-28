@@ -407,7 +407,7 @@ impl ExecutionPlan for RepartitionExec {
                 // note we use a custom channel that ensures there is always data for each receiver
                 // but limits the amount of buffering if required.
                 let (txs, rxs) = channels(num_output_partitions);
-                // Clone sender for ech input partitions
+                // Clone sender for each input partitions
                 let txs = txs
                     .into_iter()
                     .map(|item| vec![item; num_input_partitions])
