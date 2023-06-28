@@ -219,6 +219,8 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 /// account that some granularities are not uniform durations of time
 /// (e.g. months are not always the same lengths, leap seconds, etc)
 fn date_trunc_coarse(granularity: &str, value: i64) -> Result<i64> {
+    // Use chrono NaiveDateTime to clear the various fields
+    // correctly accounting for non uniform granularities
     let value = timestamp_ns_to_datetime(value).ok_or_else(|| {
         DataFusionError::Execution(format!("Timestamp {value} out of range"))
     })?;
