@@ -340,20 +340,24 @@ pub async fn plan_to_csv(
         let stream = plan.execute(i, task_ctx.clone())?;
 
         join_set.spawn(async move {
-            stream
+            let result: Result<()> = stream
                 .map(|batch| writer.write(&batch?))
-                .try_collect::<Vec<()>>()
+                .try_collect()
                 .await
-                .map_err(DataFusionError::from)
+                .map_err(DataFusionError::from);
+            result
         });
     }
 
     while let Some(result) = join_set.join_next().await {
-        if let Err(e) = result {
-            if e.is_panic() {
-                std::panic::resume_unwind(e.into_panic());
-            } else {
-                unreachable!();
+        match result {
+            Ok(res) => res?, // propagate DataFusion error
+            Err(e) => {
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                } else {
+                    unreachable!();
+                }
             }
         }
     }
