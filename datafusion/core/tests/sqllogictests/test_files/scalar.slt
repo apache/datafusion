@@ -20,16 +20,51 @@
 #############
 
 statement ok
-CREATE TABLE t1(
+CREATE TABLE unsigned_integers(
   a INT,
   b INT,
   c INT,
-  d INT
+  d INT,
+  e INT,
+  f INT
 ) as VALUES
-  (1, 100, 567, 1024),
-  (2, 1000, 123, 256),
-  (3, 10000, 978, 2048)
+  (1, 100, 567, 1024, 4, 10),
+  (2, 1000, 123, 256, 5, 11),
+  (3, 10000, 978, 2048, 6, 12),
+  (4, NULL, NULL, 512, NULL, NULL)
 ;
+
+statement ok
+CREATE TABLE signed_integers(
+  a INT,
+  b INT,
+  c INT,
+  d INT,
+  e INT,
+  f INT
+) as VALUES
+  (-1, 100, -567, 1024, -4, 10),
+  (2, -1000, 123, -256, 5, -11),
+  (-3, 10000, -978, 2048, -6, 12),
+  (4, NULL, NULL, -512, NULL, NULL)
+;
+
+statement ok
+CREATE TABLE small_floats(
+  a FLOAT,
+  b FLOAT,
+  c FLOAT,
+  d FLOAT,
+  e FLOAT,
+  f FLOAT
+) as VALUES
+  (0.25, -0.001, 1.0, -0.9, 0.1, 0.15),
+  (0.5, -0.01, 0.0, 0.99, -0.2, 0.16),
+  (-0.75, 0.1, -1.0, 0.999, 0.3, -0.17),
+  (-1.0, NULL, NULL, -0.9999, NULL, NULL)
+;
+
+## abs
 
 # abs scalar function
 query RRR rowsort
@@ -43,6 +78,17 @@ select abs(null);
 ----
 NULL
 
+# abs with columns
+query RRR rowsort
+select abs(a), abs(b), abs(c) from signed_integers;
+----
+1 100 567
+2 1000 123
+3 10000 978
+4 NULL NULL
+
+## acos
+
 # acos scalar function
 query RRR rowsort
 select acos(0), acos(0.5), acos(1);
@@ -54,6 +100,17 @@ query R rowsort
 select acos(null);
 ----
 NULL
+
+# acos with columns
+query RRR rowsort
+select acos(a), acos(b), acos(c) from small_floats;
+----
+1.0471976 1.5807965 1.5707964
+1.3181161 1.5717963 0
+2.4188585 1.4706289 3.1415927
+3.1415927 NULL NULL
+
+## acosh
 
 # acosh scalar function
 # cosh(x) = (exp(x) + exp(-x)) / 2
@@ -68,6 +125,17 @@ select acosh(null);
 ----
 NULL
 
+# acosh with columns
+query RRR rowsort
+select acosh(a), acosh(b), acosh(c) from signed_integers;
+----
+1.316957896925 NaN 5.505315010967
+2.063437068896 NULL NULL
+NaN 5.29829236561 NaN
+NaN 9.903487550036 NaN
+
+## asin
+
 # asin scalar function
 query RRR rowsort
 select asin(0), asin(0.5), asin(1);
@@ -79,6 +147,17 @@ query R rowsort
 select asin(null);
 ----
 NULL
+
+# asin with columns
+query RRR rowsort
+select asin(a), asin(b), asin(c) from small_floats;
+----
+-0.8480621 0.10016742 -1.5707964
+-1.5707964 NULL NULL
+0.25268024 -0.0010000002 1.5707964
+0.5235988 -0.0100001665 0
+
+## asinh
 
 # asinh scalar function
 # sinh(x) = (exp(x) - exp(-x)) / 2
@@ -93,6 +172,17 @@ select asinh(null);
 ----
 NULL
 
+# asinh with columns
+query RRR rowsort
+select asinh(a), asinh(b), asinh(c) from small_floats;
+----
+-0.6931472 0.09983408 -0.8813736
+-0.8813736 NULL NULL
+0.24746647 -0.0009999999 0.8813736
+0.48121184 -0.009999833 0
+
+## atan
+
 # atan scalar function
 query RRR rowsort
 select atan(0), atan(cbrt(3)), atan(1);
@@ -104,6 +194,17 @@ query R rowsort
 select atan(null);
 ----
 NULL
+
+# atan with columns
+query RRR rowsort
+select atan(a), atan(b), atan(c) from small_floats;
+----
+-0.6435011 0.09966865 -0.7853982
+-0.7853982 NULL NULL
+0.24497867 -0.0009999997 0.7853982
+0.4636476 -0.009999666 0
+
+## atanh
 
 # atanh scalar function
 # tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
@@ -118,6 +219,17 @@ select atanh(null);
 ----
 NULL
 
+# atanh with columns
+query RRR rowsort
+select atanh(a), atanh(b), atanh(c) from small_floats;
+----
+-0.9729551 0.10033535 -Infinity
+-Infinity NULL NULL
+0.25541282 -0.0010000003 Infinity
+0.54930615 -0.010000333 0
+
+## atan2
+
 # atan2 scalar function
 query RRR rowsort
 select atan2(0, 1), atan2(1, 2), atan2(2, 2);
@@ -130,17 +242,28 @@ select atan2(null, 64);
 ----
 NULL
 
-# atan2 scalar nulls 1
+# atan2 scalar nulls #1
 query R rowsort
 select atan2(2, null);
 ----
 NULL
 
-# atan2 scalar nulls 2
+# atan2 scalar nulls #2
 query R rowsort
 select atan2(null, null);
 ----
 NULL
+
+# atan2 with columns
+query RRR rowsort
+select atan2(a, b), atan2(c, d), atan2(f, e) from small_floats;
+----
+-1.4382448 -0.7858984 -0.515549
+1.5747963 2.3036115 0.98279375
+1.5907936 0 2.4668517
+NULL NULL NULL
+
+## cbrt
 
 # cbrt scalar function
 query RRR rowsort
@@ -154,6 +277,17 @@ select cbrt(null);
 ----
 NULL
 
+# cbrt with columns
+query RRR rowsort
+select cbrt(a), cbrt(b), cbrt(c) from signed_integers;
+----
+-1 4.641588833613 -8.276772529143
+-1.442249570307 21.544346900319 -9.926122218065
+1.259921049895 -10 4.973189833269
+1.587401051968 NULL NULL
+
+## ceil
+
 # ceil scalar function
 query RRR rowsort
 select ceil(1.6), ceil(1.5), ceil(1.4);
@@ -165,6 +299,17 @@ query R rowsort
 select ceil(null);
 ----
 NULL
+
+# ceil with columns
+query RRR rowsort
+select ceil(a), ceil(b), ceil(c) from small_floats;
+----
+-1 NULL NULL
+0 1 -1
+1 0 0
+1 0 1
+
+## degrees
 
 # degrees scalar function
 query RRR rowsort
@@ -178,6 +323,17 @@ select degrees(null);
 ----
 NULL
 
+# degrees with columns
+query RRR rowsort
+select degrees(a), degrees(e), degrees(f) from signed_integers;
+----
+-171.887338539247 -343.774677078494 687.549354156988
+-57.295779513082 -229.183118052329 572.957795130823
+114.591559026165 286.478897565412 -630.253574643906
+229.183118052329 NULL NULL
+
+## cos
+
 # cos scalar function
 query RRR rowsort
 select cos(0), cos(pi() / 3), cos(pi() / 2);
@@ -189,6 +345,17 @@ query R rowsort
 select cos(null);
 ----
 NULL
+
+# cos with columns
+query RRR rowsort
+select cos(a), cos(b), cos(c) from signed_integers;
+----
+-0.416146836547 0.562379076291 -0.887968906692
+-0.653643620864 NULL NULL
+-0.9899924966 -0.952155368259 -0.569676012434
+0.540302305868 0.862318872288 0.057442336294
+
+## cosh
 
 # cosh scalar function
 # cosh(x) = (exp(x) + exp(-x)) / 2
@@ -203,6 +370,17 @@ select cosh(null);
 ----
 NULL
 
+# cosh with columns
+query RRR rowsort
+select cosh(a), cosh(b), cosh(c) from small_floats;
+----
+1.0314131 1.0000005 1.5430806
+1.127626 1.00005 1
+1.2946833 1.0050042 1.5430806
+1.5430806 NULL NULL
+
+## exp
+
 # exp scalar function
 query RRR rowsort
 select exp(0), exp(1), exp(2);
@@ -214,6 +392,17 @@ query R rowsort
 select exp(null);
 ----
 NULL
+
+# exp with columns
+query RRR rowsort
+select exp(a), exp(e), exp(f) from signed_integers;
+----
+0.049787068368 0.002478752177 162754.79141900392
+0.367879441171 0.018315638889 22026.465794806718
+54.598150033144 NULL NULL
+7.389056098931 148.413159102577 0.000016701701
+
+## factorial
 
 # factorial scalar function
 query III rowsort
@@ -227,6 +416,17 @@ select factorial(null);
 ----
 NULL
 
+# factorial with columns
+query III rowsort
+select factorial(a), factorial(e), factorial(f) from unsigned_integers;
+----
+1 24 3628800
+2 120 39916800
+24 NULL NULL
+6 720 479001600
+
+## floor
+
 # floor scalar function
 query RRR rowsort
 select floor(1.4), floor(1.5), floor(1.6);
@@ -238,6 +438,17 @@ query R rowsort
 select floor(null);
 ----
 NULL
+
+# floor with columns
+query RRR rowsort
+select floor(a), floor(b), floor(c) from signed_integers;
+----
+-1 100 -567
+-3 10000 -978
+2 -1000 123
+4 NULL NULL
+
+## gcd
 
 # gcd scalar function
 query III rowsort
@@ -251,17 +462,28 @@ select gcd(null, 64);
 ----
 NULL
 
-# gcd scalar nulls 1
+# gcd scalar nulls #1
 query I rowsort
 select gcd(2, null);
 ----
 NULL
 
-# gcd scalar nulls 2
+# gcd scalar nulls #2
 query I rowsort
 select gcd(null, null);
 ----
 NULL
+
+# gcd with columns
+query III rowsort
+select gcd(a, b), gcd(c, d), gcd(e, f) from signed_integers;
+----
+1 1 2
+1 2 6
+2 1 1
+NULL NULL NULL
+
+## lcm
 
 # lcm scalar function
 query III rowsort
@@ -275,17 +497,28 @@ select lcm(null, 64);
 ----
 NULL
 
-# lcm scalar nulls 1
+# lcm scalar nulls #1
 query I rowsort
 select lcm(2, null);
 ----
 NULL
 
-# lcm scalar nulls 2
+# lcm scalar nulls #2
 query I rowsort
 select lcm(null, null);
 ----
 NULL
+
+# lcm with columns
+query III rowsort
+select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
+----
+100 580608 20
+1000 31488 55
+30000 1001472 12
+NULL NULL NULL
+
+## ln
 
 # ln scalar function
 query RRR rowsort
@@ -306,6 +539,17 @@ select ln(0);
 ----
 -Infinity
 
+# ln with columns
+query RRR rowsort
+select ln(a), ln(b), ln(c) from signed_integers;
+----
+0.69314718056 NaN 4.812184355372
+1.38629436112 NULL NULL
+NaN 4.605170185988 NaN
+NaN 9.210340371976 NaN
+
+## log
+
 # log scalar function
 query RR rowsort
 select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
@@ -313,27 +557,19 @@ select log(2, 64) a, log(100) b union all select log(2, 8), log(10);
 3 1
 6 2
 
-# log scalar function
-query RRR rowsort
-select log(a, 64) a, log(b), log(10, b) from t1;
-----
-3.7855785 4 4
-6 3 3
-Infinity 2 2
-
 # log scalar nulls
 query RR rowsort
 select log(null, 64) a, log(null) b;
 ----
 NULL NULL
 
-# log scalar nulls 1
+# log scalar nulls #1
 query RR rowsort
 select log(2, null) a, log(null) b;
 ----
 NULL NULL
 
-# log scalar nulls 2
+# log scalar nulls #2
 query RR rowsort
 select log(null, null) a, log(null) b;
 ----
@@ -345,6 +581,26 @@ query RR rowsort
 select log(0) a, log(1, 64) b;
 ----
 -Infinity Infinity
+
+# log with columns #1
+query RRR rowsort
+select log(a, 64) a, log(b), log(10, b) from unsigned_integers;
+----
+3 NULL NULL
+3.7855785 4 4
+6 3 3
+Infinity 2 2
+
+# log with columns #2
+query RRR rowsort
+select log(a, 64) a, log(b), log(10, b) from signed_integers;
+----
+3 NULL NULL
+6 NaN NaN
+NaN 2 2
+NaN 4 4
+
+## log10
 
 # log10 scalar function
 query RRR rowsort
@@ -365,6 +621,17 @@ select log10(0);
 ----
 -Infinity
 
+# log10 with columns
+query RRR rowsort
+select log(a), log(b), log(c) from signed_integers;
+----
+0.30102998 NaN 2.089905
+0.60205996 NULL NULL
+NaN 2 NaN
+NaN 4 NaN
+
+## log2
+
 # log2 scalar function
 query RRR rowsort
 select log2(1), log2(2), log2(4);
@@ -384,11 +651,24 @@ select log2(0);
 ----
 -Infinity
 
+# log2 with columns
+query RRR rowsort
+select log2(a), log2(b), log2(c) from signed_integers;
+----
+1 NaN 6.942514505339
+2 NULL NULL
+NaN 13.287712379549 NaN
+NaN 6.643856189775 NaN
+
+## pi
+
 # pi scalar function
 query RRR rowsort
 select pi(), pi() / 2, pi() / 3;
 ----
 3.14159265359 1.570796326795 1.047197551197
+
+## power
 
 # power scalar function
 query III rowsort
@@ -402,17 +682,28 @@ select power(null, 64);
 ----
 NULL
 
-# power scalar nulls 1
+# power scalar nulls #1
 query I rowsort
 select power(2, null);
 ----
 NULL
 
-# power scalar nulls 2
+# power scalar nulls #2
 query R rowsort
 select power(null, null);
 ----
 NULL
+
+# power with columns
+query RRR rowsort
+select power(a, b), power(c, d), power(e, f) from small_floats;
+----
+1.001387255777 1 0.70794577625
+1.006955549901 0 NaN
+NULL NULL NULL
+NaN NaN 1.227126640793
+
+## radians
 
 # radians scalar function
 query RRR rowsort
@@ -426,6 +717,17 @@ select radians(null);
 ----
 NULL
 
+# radians with columns
+query RRR rowsort
+select radians(a), radians(b), radians(c) from signed_integers;
+----
+-0.01745329252 1.745329251994 -9.896016858808
+-0.05235987756 174.532925199433 -17.069320084505
+0.03490658504 -17.453292519943 2.146754979953
+0.06981317008 NULL NULL
+
+## round
+
 # round scalar function
 query RRR rowsort
 select round(1.4), round(1.5), round(1.6);
@@ -437,6 +739,17 @@ query R rowsort
 select round(null);
 ----
 NULL
+
+# round with columns
+query RRR rowsort
+select round(a), round(b), round(c) from small_floats;
+----
+-1 0 -1
+-1 NULL NULL
+0 0 1
+1 0 0
+
+## signum
 
 # signum scalar function
 query RRR rowsort
@@ -450,6 +763,17 @@ select signum(null);
 ----
 NULL
 
+# signum with columns
+query RRR rowsort
+select signum(a), signum(b), signum(c) from signed_integers;
+----
+-1 1 -1
+-1 1 -1
+1 -1 1
+1 NULL NULL
+
+## sin
+
 # sin scalar function
 query RRR rowsort
 select sin(0), sin(pi() / 3), sin(pi() / 2);
@@ -461,6 +785,17 @@ query R rowsort
 select sin(null);
 ----
 NULL
+
+# sin with columns
+query RRR rowsort
+select sin(a), sin(b), sin(c) from small_floats;
+----
+-0.6816388 0.09983342 -0.84147096
+-0.84147096 NULL NULL
+0.24740396 -0.0009999999 0.84147096
+0.47942555 -0.009999833 0
+
+## sinh
 
 # sinh scalar function
 # sinh(x) = (exp(x) - exp(-x)) / 2
@@ -475,6 +810,17 @@ select sinh(null);
 ----
 NULL
 
+# sinh with columns
+query RRR rowsort
+select sinh(a), sinh(b), sinh(c) from small_floats;
+----
+-0.8223167 0.10016675 -1.1752012
+-1.1752012 NULL NULL
+0.25261232 -0.0010000002 1.1752012
+0.5210953 -0.010000166 0
+
+## sqrt
+
 # sqrt scalar function
 query RRR rowsort
 select sqrt(0), sqrt(4), sqrt(9);
@@ -487,6 +833,17 @@ select sqrt(null);
 ----
 NULL
 
+# sqrt with columns
+query RRR rowsort
+select sqrt(a), sqrt(b), sqrt(c) from signed_integers;
+----
+1.414213562373 NaN 11.090536506409
+2 NULL NULL
+NaN 10 NaN
+NaN 100 NaN
+
+## tan
+
 # tan scalar function
 query RRR rowsort
 select tan(0), tan(pi() / 6), tan(pi() / 4);
@@ -498,6 +855,17 @@ query R rowsort
 select tan(null);
 ----
 NULL
+
+# tan with columns
+query RRR rowsort
+select tan(a), tan(b), tan(c) from small_floats;
+----
+-0.93159646 0.100334674 -1.5574077
+-1.5574077 NULL NULL
+0.25534192 -0.0010000004 1.5574077
+0.5463025 -0.010000333 0
+
+## tanh
 
 # tanh scalar function
 # tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
@@ -512,6 +880,17 @@ select tanh(null);
 ----
 NULL
 
+# tanh with columns
+query RRR rowsort
+select tanh(a), tanh(b), tanh(c) from small_floats;
+----
+-0.63514894 0.099667996 -0.7615942
+-0.7615942 NULL NULL
+0.24491866 -0.0009999997 0.7615942
+0.46211717 -0.009999666 0
+
+## trunc
+
 # trunc scalar function
 query RRR rowsort
 select trunc(1.5), trunc(2.71), trunc(3.1415);
@@ -524,48 +903,123 @@ select trunc(null);
 ----
 NULL
 
+# trunc with columns
+query RRR rowsort
+select trunc(a), trunc(b), trunc(c) from small_floats;
+----
+-1 NULL NULL
+0 0 -1
+0 0 0
+0 0 1
+
+## bitwise and
+
 # bitwise and with column and scalar
 query I rowsort
-select c & 856 from t1;
+select c & 856 from signed_integers;
 ----
-528
-848
+328
+8
 88
+NULL
+
+# bitwise and with columns
+query III rowsort
+select a & b, c & d, e & f from signed_integers;
+----
+0 0 5
+100 1024 8
+10000 2048 8
+NULL NULL NULL
+
+## bitwise or
 
 # bitwise or with column and scalar
 query I rowsort
-select c | 856 from t1;
+select c | 856 from signed_integers;
 ----
+-130
+-39
 891
-895
-986
+NULL
+
+# bitwise or with columns
+query III rowsort
+select a | b, c | d, e | f from signed_integers;
+----
+-1 -567 -2
+-3 -978 -2
+-998 -133 -11
+NULL NULL NULL
+
+## bitwise xor
 
 # bitwise xor with column and scalar
 query I rowsort
-select c ^ 856 from t1;
+select c ^ 856 from signed_integers;
 ----
-138
-367
+-138
+-367
 803
+NULL
 
-# right shift with column and scalar
-query I rowsort
-select d >> 2 from t1;
+# bitwise xor with columns
+query III rowsort
+select a ^ b, c ^ d, e ^ f from signed_integers;
 ----
+-10003 -3026 -10
+-101 -1591 -10
+-998 -133 -16
+NULL NULL NULL
+
+## bitwise right shift
+
+# bitwise right shift with column and scalar
+query I rowsort
+select d >> 2 from signed_integers;
+----
+-128
+-64
 256
 512
-64
 
-# left shift with column and scalar
-query I rowsort
-select d << 2 from t1;
+# bitwise right shift with columns
+query III rowsort
+select a >> b, c >> d, e >> f from signed_integers;
 ----
-1024
+-1 -567 -1
+-1 -978 -1
+0 123 0
+NULL NULL NULL
+
+## bitwise left shift
+
+# bitwise left shift with column and scalar
+query I rowsort
+select d << 2 from signed_integers;
+----
+-1024
+-2048
 4096
 8192
 
+# bitwise left shift with columns
+query III rowsort
+select a << b, c << d, e << f from signed_integers;
+----
+-16 -567 -4096
+-196608 -978 -24576
+33554432 123 10485760
+NULL NULL NULL
+
 statement ok
-drop table t1
+drop table unsigned_integers;
+
+statement ok
+drop table signed_integers;
+
+statement ok
+drop table small_floats;
 
 
 statement ok
