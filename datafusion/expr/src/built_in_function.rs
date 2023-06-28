@@ -444,32 +444,15 @@ impl BuiltinScalarFunction {
         // Some built-in functions' return type depends on the incoming type.
         match self {
             BuiltinScalarFunction::ArrayAppend => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
+                List(_) => Ok(List(Arc::new(Field::new(
                     "item",
-                    field.data_type().clone(),
+                    input_expr_types[1].clone(),
                     true,
                 )))),
                 _ => Err(DataFusionError::Internal(format!(
                     "The {self} function can only accept list as the first argument"
                 ))),
             },
-            BuiltinScalarFunction::ArrayConcat => match &input_expr_types[0] {
-                List(field) => Ok(List(Arc::new(Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                )))),
-                _ => Err(DataFusionError::Internal(format!(
-                    "The {self} function can only accept fixed size list as the args."
-                ))),
-            },
-            BuiltinScalarFunction::ArrayContains => Ok(Boolean),
-            BuiltinScalarFunction::ArrayDims => Ok(UInt8),
-            BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
-                "item",
-                input_expr_types[1].clone(),
-                true,
-            )))),
             BuiltinScalarFunction::ArrayConcat => {
                 let mut expr_type = Null;
                 for input_expr_type in input_expr_types {
@@ -489,9 +472,14 @@ impl BuiltinScalarFunction {
                 }
 
                 Ok(List(Arc::new(Field::new("item", expr_type, true))))
-            }
+            },
+            BuiltinScalarFunction::ArrayContains => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => Ok(UInt8),
-            BuiltinScalarFunction::ArrayFill => Ok(Null),
+            BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
+                "item",
+                input_expr_types[1].clone(),
+                true,
+            )))),
             BuiltinScalarFunction::ArrayLength => Ok(UInt8),
             BuiltinScalarFunction::ArrayNdims => Ok(UInt8),
             BuiltinScalarFunction::ArrayPosition => Ok(UInt8),
