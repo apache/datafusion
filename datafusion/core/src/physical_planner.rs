@@ -1652,13 +1652,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 )?),
                 None => None,
             };
-            let agg_expr = aggregates::create_aggregate_expr(
-                fun,
-                *distinct,
-                &args,
-                physical_input_schema,
-                name,
-            )?;
             let order_by = match order_by {
                 Some(e) => Some(
                     e.iter()
@@ -1674,6 +1667,15 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 ),
                 None => None,
             };
+            let ordering_reqs = order_by.clone().unwrap_or(vec![]);
+            let agg_expr = aggregates::create_aggregate_expr(
+                fun,
+                *distinct,
+                &args,
+                &ordering_reqs,
+                physical_input_schema,
+                name,
+            )?;
             Ok((agg_expr, filter, order_by))
         }
         Expr::AggregateUDF(AggregateUDF {
@@ -1954,7 +1956,7 @@ mod tests {
     use fmt::Debug;
     use std::collections::HashMap;
     use std::convert::TryFrom;
-    use std::ops::Not;
+    use std::ops::{BitAnd, Not};
     use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {
@@ -2138,18 +2140,17 @@ mod tests {
     async fn errors() -> Result<()> {
         let bool_expr = col("c1").eq(col("c1"));
         let cases = vec![
-            // utf8 AND utf8
-            col("c1").and(col("c1")),
+            // utf8 = utf8
+            col("c1").eq(col("c1")),
             // u8 AND u8
-            col("c3").and(col("c3")),
-            // utf8 = bool
-            col("c1").eq(bool_expr.clone()),
-            // u32 AND bool
-            col("c2").and(bool_expr),
+            col("c3").bitand(col("c3")),
+            // utf8 = u8
+            col("c1").eq(col("c3")),
+            // bool AND bool
+            bool_expr.clone().and(bool_expr),
         ];
         for case in cases {
-            let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
-            assert!(logical_plan.is_ok());
+            test_csv_scan().await?.project(vec![case.clone()]).unwrap();
         }
         Ok(())
     }

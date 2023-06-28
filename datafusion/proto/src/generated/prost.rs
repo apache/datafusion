@@ -1513,6 +1513,8 @@ pub struct PhysicalScalarUdfNode {
 pub struct PhysicalAggregateExprNode {
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "5")]
+    pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(bool, tag = "3")]
     pub distinct: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "1, 4")]
@@ -2222,6 +2224,7 @@ pub enum ScalarFunction {
     ArrayToString = 97,
     Cardinality = 98,
     TrimArray = 99,
+    ArrayContains = 100,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2330,6 +2333,7 @@ impl ScalarFunction {
             ScalarFunction::ArrayToString => "ArrayToString",
             ScalarFunction::Cardinality => "Cardinality",
             ScalarFunction::TrimArray => "TrimArray",
+            ScalarFunction::ArrayContains => "ArrayContains",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2435,6 +2439,7 @@ impl ScalarFunction {
             "ArrayToString" => Some(Self::ArrayToString),
             "Cardinality" => Some(Self::Cardinality),
             "TrimArray" => Some(Self::TrimArray),
+            "ArrayContains" => Some(Self::ArrayContains),
             _ => None,
         }
     }

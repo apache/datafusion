@@ -28,10 +28,18 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_physical_expr::PhysicalSortExpr;
 use log::debug;
 
-use crate::datasource::streaming::PartitionStream;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 use datafusion_execution::TaskContext;
+
+/// A partition that can be converted into a [`SendableRecordBatchStream`]
+pub trait PartitionStream: Send + Sync {
+    /// Returns the schema of this partition
+    fn schema(&self) -> &SchemaRef;
+
+    /// Returns a stream yielding this partitions values
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream;
+}
 
 /// An [`ExecutionPlan`] for [`PartitionStream`]
 pub struct StreamingTableExec {

@@ -554,6 +554,15 @@ macro_rules! binary_array_op {
             DataType::Time64(TimeUnit::Nanosecond) => {
                 compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                compute_op!($LEFT, $RIGHT, $OP, IntervalYearMonthArray)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                compute_op!($LEFT, $RIGHT, $OP, IntervalDayTimeArray)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                compute_op!($LEFT, $RIGHT, $OP, IntervalMonthDayNanoArray)
+            }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
@@ -1334,7 +1343,7 @@ mod tests {
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
     use datafusion_common::{ColumnStatistics, Result, Statistics};
-    use datafusion_expr::type_coercion::binary::{coerce_types, math_decimal_coercion};
+    use datafusion_expr::type_coercion::binary::get_input_types;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -1438,10 +1447,10 @@ mod tests {
             ]);
             let a = $A_ARRAY::from($A_VEC);
             let b = $B_ARRAY::from($B_VEC);
-            let common_type = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
+            let (lhs, rhs) = get_input_types(&$A_TYPE, &$OP, &$B_TYPE)?;
 
-            let left = try_cast(col("a", &schema)?, &schema, common_type.clone())?;
-            let right = try_cast(col("b", &schema)?, &schema, common_type)?;
+            let left = try_cast(col("a", &schema)?, &schema, lhs)?;
+            let right = try_cast(col("b", &schema)?, &schema, rhs)?;
 
             // verify that we can construct the expression
             let expression = binary(left, $OP, right, &schema)?;
@@ -2955,10 +2964,10 @@ mod tests {
     ) -> Result<()> {
         let left_type = left.data_type();
         let right_type = right.data_type();
-        let common_type = coerce_types(left_type, &op, right_type)?;
+        let (lhs, rhs) = get_input_types(left_type, &op, right_type)?;
 
-        let left_expr = try_cast(col("a", schema)?, schema, common_type.clone())?;
-        let right_expr = try_cast(col("b", schema)?, schema, common_type)?;
+        let left_expr = try_cast(col("a", schema)?, schema, lhs)?;
+        let right_expr = try_cast(col("b", schema)?, schema, rhs)?;
         let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
@@ -2977,17 +2986,10 @@ mod tests {
         expected: &BooleanArray,
     ) -> Result<()> {
         let scalar = lit(scalar.clone());
-        let op_type = coerce_types(&scalar.data_type(schema)?, &op, arr.data_type())?;
-        let left_expr = if op_type.eq(&scalar.data_type(schema)?) {
-            scalar
-        } else {
-            try_cast(scalar, schema, op_type.clone())?
-        };
-        let right_expr = if op_type.eq(arr.data_type()) {
-            col("a", schema)?
-        } else {
-            try_cast(col("a", schema)?, schema, op_type)?
-        };
+        let (lhs, rhs) =
+            get_input_types(&scalar.data_type(schema)?, &op, arr.data_type())?;
+        let left_expr = try_cast(scalar, schema, lhs)?;
+        let right_expr = try_cast(col("a", schema)?, schema, rhs)?;
 
         let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
@@ -3006,17 +3008,10 @@ mod tests {
         expected: &BooleanArray,
     ) -> Result<()> {
         let scalar = lit(scalar.clone());
-        let op_type = coerce_types(arr.data_type(), &op, &scalar.data_type(schema)?)?;
-        let right_expr = if op_type.eq(&scalar.data_type(schema)?) {
-            scalar
-        } else {
-            try_cast(scalar, schema, op_type.clone())?
-        };
-        let left_expr = if op_type.eq(arr.data_type()) {
-            col("a", schema)?
-        } else {
-            try_cast(col("a", schema)?, schema, op_type)?
-        };
+        let (lhs, rhs) =
+            get_input_types(arr.data_type(), &op, &scalar.data_type(schema)?)?;
+        let left_expr = try_cast(col("a", schema)?, schema, lhs)?;
+        let right_expr = try_cast(scalar, schema, rhs)?;
 
         let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
@@ -4068,26 +4063,11 @@ mod tests {
         op: Operator,
         expected: ArrayRef,
     ) -> Result<()> {
-        let (lhs_op_type, rhs_op_type) =
-            math_decimal_coercion(left.data_type(), right.data_type());
+        let (lhs_type, rhs_type) =
+            get_input_types(left.data_type(), &op, right.data_type()).unwrap();
 
-        let (left_expr, lhs_type) = if let Some(lhs_op_type) = lhs_op_type {
-            (
-                try_cast(col("a", schema)?, schema, lhs_op_type.clone())?,
-                lhs_op_type,
-            )
-        } else {
-            (col("a", schema)?, left.data_type().clone())
-        };
-
-        let (right_expr, rhs_type) = if let Some(rhs_op_type) = rhs_op_type {
-            (
-                try_cast(col("b", schema)?, schema, rhs_op_type.clone())?,
-                rhs_op_type,
-            )
-        } else {
-            (col("b", schema)?, right.data_type().clone())
-        };
+        let left_expr = try_cast(col("a", schema)?, schema, lhs_type.clone())?;
+        let right_expr = try_cast(col("b", schema)?, schema, rhs_type.clone())?;
 
         let coerced_schema = Schema::new(vec![
             Field::new(

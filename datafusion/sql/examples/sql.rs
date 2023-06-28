@@ -18,6 +18,7 @@
 use arrow_schema::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::WindowUDF;
 use datafusion_expr::{
     logical_plan::builder::LogicalTableSource, AggregateUDF, ScalarUDF, TableSource,
 };
@@ -123,6 +124,10 @@ impl ContextProvider for MySchemaProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
         None
     }
 

@@ -273,9 +273,7 @@ impl CommonSubexprEliminate {
 
             let mut proj_exprs = vec![];
             for expr in &new_group_expr {
-                let out_col: Column =
-                    expr.to_field(&new_input_schema)?.qualified_column();
-                proj_exprs.push(Expr::Column(out_col));
+                extract_expressions(expr, &new_input_schema, &mut proj_exprs)?
             }
             for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
                 if expr_rewritten == expr_orig {
@@ -486,6 +484,22 @@ fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalP
         Projection::try_new(col_exprs, Arc::new(input))
             .expect("Cannot build projection plan from an invalid schema"),
     )
+}
+
+fn extract_expressions(
+    expr: &Expr,
+    schema: &DFSchema,
+    result: &mut Vec<Expr>,
+) -> Result<()> {
+    if let Expr::GroupingSet(groupings) = expr {
+        for e in groupings.distinct_expr() {
+            result.push(Expr::Column(e.to_field(schema)?.qualified_column()))
+        }
+    } else {
+        result.push(Expr::Column(expr.to_field(schema)?.qualified_column()));
+    }
+
+    Ok(())
 }
 
 /// Which type of [expressions](Expr) should be considered for rewriting?
@@ -773,8 +787,8 @@ mod test {
         avg, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
     };
     use datafusion_expr::{
-        AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
-        StateTypeFunction, Volatility,
+        grouping_set, AccumulatorFactoryFunction, AggregateUDF, ReturnTypeFunction,
+        Signature, StateTypeFunction, Volatility,
     };
 
     use crate::optimizer::OptimizerContext;
@@ -898,8 +912,7 @@ mod test {
             assert_eq!(inputs, &[DataType::UInt32]);
             Ok(Arc::new(DataType::UInt32))
         });
-        let accumulator: AccumulatorFunctionImplementation =
-            Arc::new(|_| unimplemented!());
+        let accumulator: AccumulatorFactoryFunction = Arc::new(|_| unimplemented!());
         let state_type: StateTypeFunction = Arc::new(|_| unimplemented!());
         let udf_agg = |inner: Expr| {
             Expr::AggregateUDF(datafusion_expr::expr::AggregateUDF::new(
@@ -1250,6 +1263,54 @@ mod test {
 
         assert_optimized_plan_eq(expected, &plan);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_grouping_set() -> Result<()> {
+        let mut result = Vec::with_capacity(3);
+        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+                DFField::new_unqualified("c", DataType::Int32, false),
+            ],
+            HashMap::default(),
+        )?;
+        extract_expressions(&grouping, &schema, &mut result)?;
+
+        assert!(result.len() == 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
+        let mut result = Vec::with_capacity(2);
+        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                DFField::new_unqualified("a", DataType::Int32, false),
+                DFField::new_unqualified("b", DataType::Int32, false),
+            ],
+            HashMap::default(),
+        )?;
+        extract_expressions(&grouping, &schema, &mut result)?;
+
+        assert!(result.len() == 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extract_expressions_from_col() -> Result<()> {
+        let mut result = Vec::with_capacity(1);
+        let schema = DFSchema::new_with_metadata(
+            vec![DFField::new_unqualified("a", DataType::Int32, false)],
+            HashMap::default(),
+        )?;
+        extract_expressions(&col("a"), &schema, &mut result)?;
+
+        assert!(result.len() == 1);
         Ok(())
     }
 }

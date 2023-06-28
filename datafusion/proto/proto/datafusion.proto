@@ -563,6 +563,7 @@ enum ScalarFunction {
   ArrayToString = 97;
   Cardinality = 98;
   TrimArray = 99;
+  ArrayContains = 100;
 }
 
 message ScalarFunctionNode {
@@ -1107,6 +1108,7 @@ message PhysicalAggregateExprNode {
     string user_defined_aggr_function = 4;
   }
   repeated PhysicalExprNode expr = 2;
+  repeated PhysicalSortExprNode ordering_req = 5;
   bool distinct = 3;
 }
 

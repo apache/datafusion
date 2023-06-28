@@ -590,6 +590,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             "UDAF as window function in proto".to_string(),
                         ))
                     }
+                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/6733
+                    WindowFunction::WindowUDF(_) => {
+                        return Err(Error::NotImplemented(
+                            "UDWF as window function in proto".to_string(),
+                        ))
+                    }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
@@ -1338,6 +1344,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::ArrayAppend => Self::ArrayAppend,
             BuiltinScalarFunction::ArrayConcat => Self::ArrayConcat,
+            BuiltinScalarFunction::ArrayContains => Self::ArrayContains,
             BuiltinScalarFunction::ArrayDims => Self::ArrayDims,
             BuiltinScalarFunction::ArrayFill => Self::ArrayFill,
             BuiltinScalarFunction::ArrayLength => Self::ArrayLength,
