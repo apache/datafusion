@@ -26,7 +26,6 @@ use crate::datasource::physical_plan::{
 };
 use crate::{
     config::ConfigOptions,
-    datasource::listing::FileRange,
     error::{DataFusionError, Result},
     execution::context::TaskContext,
     physical_optimizer::pruning::PruningPredicate,
@@ -40,7 +39,6 @@ use crate::{
 use datafusion_physical_expr::PhysicalSortExpr;
 use fmt::Debug;
 use std::any::Any;
-use std::cmp::min;
 use std::fmt;
 use std::fs;
 use std::ops::Range;
@@ -55,7 +53,6 @@ use datafusion_physical_expr::{
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
@@ -71,12 +68,6 @@ mod row_filter;
 mod row_groups;
 
 pub use metrics::ParquetFileMetrics;
-
-#[derive(Default)]
-struct RepartitionState {
-    current_partition_index: usize,
-    current_partition_size: usize,
-}
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -253,75 +244,23 @@ impl ParquetExec {
     }
 
     /// Redistribute files across partitions according to their size
+    /// See comments on `get_file_groups_repartitioned()` for more detail.
     pub fn get_repartitioned(
         &self,
         target_partitions: usize,
         repartition_file_min_size: usize,
     ) -> Self {
-        let flattened_files = self
-            .base_config()
-            .file_groups
-            .iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
+            self.base_config.file_groups.clone(),
+            target_partitions,
+            repartition_file_min_size,
+        );
 
-        // Perform redistribution only in case all files should be read from beginning to end
-        let has_ranges = flattened_files.iter().any(|f| f.range.is_some());
-        if has_ranges {
-            return self.clone();
+        let mut new_plan = self.clone();
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            new_plan.base_config.file_groups = repartitioned_file_groups;
         }
-
-        let total_size = flattened_files
-            .iter()
-            .map(|f| f.object_meta.size as i64)
-            .sum::<i64>();
-        if total_size < (repartition_file_min_size as i64) {
-            return self.clone();
-        }
-
-        let target_partition_size =
-            (total_size as usize + (target_partitions) - 1) / (target_partitions);
-
-        let repartitioned_files = flattened_files
-            .into_iter()
-            .scan(RepartitionState::default(), |state, source_file| {
-                let mut produced_files = vec![];
-                let mut range_start = 0;
-                while range_start < source_file.object_meta.size {
-                    let range_end = min(
-                        range_start
-                            + (target_partition_size - state.current_partition_size),
-                        source_file.object_meta.size,
-                    );
-
-                    let mut produced_file = source_file.clone();
-                    produced_file.range = Some(FileRange {
-                        start: range_start as i64,
-                        end: range_end as i64,
-                    });
-                    produced_files.push((state.current_partition_index, produced_file));
-
-                    if state.current_partition_size + (range_end - range_start)
-                        >= target_partition_size
-                    {
-                        state.current_partition_index += 1;
-                        state.current_partition_size = 0;
-                    } else {
-                        state.current_partition_size += range_end - range_start;
-                    }
-                    range_start = range_end;
-                }
-                Some(produced_files)
-            })
-            .flatten()
-            .group_by(|(partition_idx, _)| *partition_idx)
-            .into_iter()
-            .map(|(_, group)| group.map(|(_, vals)| vals).collect_vec())
-            .collect_vec();
-
-        let mut new_parquet_exec = self.clone();
-        new_parquet_exec.base_config.file_groups = repartitioned_files;
-        new_parquet_exec
+        new_plan
     }
 }
 
@@ -810,6 +749,7 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
     use datafusion_physical_expr::execution_props::ExecutionProps;
     use futures::StreamExt;
+    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
@@ -1919,6 +1859,103 @@ mod tests {
         let predicate = rt.parquet_exec.predicate.as_ref();
         let filter_phys = logical2physical(&filter, rt.parquet_exec.schema().as_ref());
         assert_eq!(predicate.unwrap().to_string(), filter_phys.to_string());
+    }
+
+    /// Empty file won't get partitioned
+    #[tokio::test]
+    async fn parquet_exec_repartition_empty_file_only() {
+        let partitioned_file_empty = PartitionedFile::new("empty".to_string(), 0);
+        let file_group = vec![vec![partitioned_file_empty]];
+
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store_url: ObjectStoreUrl::local_filesystem(),
+                file_groups: file_group,
+                file_schema: Arc::new(Schema::empty()),
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+                output_ordering: vec![],
+                infinite_source: false,
+            },
+            None,
+            None,
+        );
+
+        let partitioned_file = parquet_exec
+            .get_repartitioned(4, 0)
+            .base_config()
+            .file_groups
+            .clone();
+
+        assert!(partitioned_file[0][0].range.is_none());
+    }
+
+    // Repartition when there is a empty file in file groups
+    #[tokio::test]
+    async fn parquet_exec_repartition_empty_files() {
+        let partitioned_file_a = PartitionedFile::new("a".to_string(), 10);
+        let partitioned_file_b = PartitionedFile::new("b".to_string(), 10);
+        let partitioned_file_empty = PartitionedFile::new("empty".to_string(), 0);
+
+        let empty_first = vec![
+            vec![partitioned_file_empty.clone()],
+            vec![partitioned_file_a.clone()],
+            vec![partitioned_file_b.clone()],
+        ];
+        let empty_middle = vec![
+            vec![partitioned_file_a.clone()],
+            vec![partitioned_file_empty.clone()],
+            vec![partitioned_file_b.clone()],
+        ];
+        let empty_last = vec![
+            vec![partitioned_file_a],
+            vec![partitioned_file_b],
+            vec![partitioned_file_empty],
+        ];
+
+        // Repartition file groups into x partitions
+        let expected_2 = vec![(0, "a".to_string(), 0, 10), (1, "b".to_string(), 0, 10)];
+        let expected_3 = vec![
+            (0, "a".to_string(), 0, 7),
+            (1, "a".to_string(), 7, 10),
+            (1, "b".to_string(), 0, 4),
+            (2, "b".to_string(), 4, 10),
+        ];
+
+        //let file_groups_testset = [empty_first, empty_middle, empty_last];
+        let file_groups_testset = [empty_first, empty_middle, empty_last];
+
+        for fg in file_groups_testset {
+            for (n_partition, expected) in [(2, &expected_2), (3, &expected_3)] {
+                let parquet_exec = ParquetExec::new(
+                    FileScanConfig {
+                        object_store_url: ObjectStoreUrl::local_filesystem(),
+                        file_groups: fg.clone(),
+                        file_schema: Arc::new(Schema::empty()),
+                        statistics: Statistics::default(),
+                        projection: None,
+                        limit: None,
+                        table_partition_cols: vec![],
+                        output_ordering: vec![],
+                        infinite_source: false,
+                    },
+                    None,
+                    None,
+                );
+
+                let actual = file_groups_to_vec(
+                    parquet_exec
+                        .get_repartitioned(n_partition, 10)
+                        .base_config()
+                        .file_groups
+                        .clone(),
+                );
+
+                assert_eq!(expected, &actual);
+            }
+        }
     }
 
     #[tokio::test]

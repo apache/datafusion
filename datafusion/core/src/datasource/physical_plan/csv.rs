@@ -18,11 +18,12 @@
 //! Execution plan for reading CSV files
 
 use crate::datasource::file_format::file_type::FileCompressionType;
+use crate::datasource::listing::FileRange;
 use crate::datasource::physical_plan::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
 use crate::datasource::physical_plan::FileMeta;
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -32,6 +33,7 @@ use crate::physical_plan::{
 };
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::DataFusionError;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{LexOrdering, OrderingEquivalenceProperties};
 
@@ -40,9 +42,12 @@ use super::FileScanConfig;
 use bytes::{Buf, Bytes};
 use futures::ready;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{GetResult, ObjectStore};
+use object_store::local::LocalFileSystem;
+use object_store::{GetOptions, GetResult, ObjectStore};
 use std::any::Any;
 use std::fs;
+use std::io::Cursor;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 use std::task::Poll;
@@ -59,7 +64,8 @@ pub struct CsvExec {
     delimiter: u8,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    file_compression_type: FileCompressionType,
+    /// Compression type of the file associated with CsvExec
+    pub file_compression_type: FileCompressionType,
 }
 
 impl CsvExec {
@@ -96,6 +102,27 @@ impl CsvExec {
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on `repartition_file_groups()` for more detail.
+    pub fn get_repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+    ) -> Option<Self> {
+        let repartitioned_file_groups_option = FileScanConfig::repartition_file_groups(
+            self.base_config.file_groups.clone(),
+            target_partitions,
+            repartition_file_min_size,
+        );
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut new_plan = self.clone();
+            new_plan.base_config.file_groups = repartitioned_file_groups;
+            return Some(new_plan);
+        }
+        None
     }
 }
 
@@ -270,14 +297,220 @@ impl CsvOpener {
     }
 }
 
+/// Returns the position of the first newline in the byte stream, or the total length if no newline is found.
+fn find_first_newline_bytes<R: std::io::Read>(reader: &mut R) -> Result<usize> {
+    let mut buffer = [0; 1];
+    let mut index = 0;
+
+    loop {
+        let result = reader.read(&mut buffer);
+        match result {
+            Ok(n) => {
+                if n == 0 {
+                    return Ok(index); // End of file, no newline found
+                }
+                if buffer[0] == b'\n' {
+                    return Ok(index);
+                }
+                index += 1;
+            }
+            Err(e) => {
+                return Err(DataFusionError::IoError(e));
+            }
+        }
+    }
+}
+
+/// Returns the offset of the first newline in the object store range [start, end), or the end offset if no newline is found.
+async fn find_first_newline(
+    object_store: &Arc<dyn ObjectStore>,
+    location: &object_store::path::Path,
+    start_byte: usize,
+    end_byte: usize,
+) -> Result<usize> {
+    let options = GetOptions {
+        range: Some(Range {
+            start: start_byte,
+            end: end_byte,
+        }),
+        ..Default::default()
+    };
+
+    let offset = match object_store.get_opts(location, options).await? {
+        GetResult::File(_, _) => {
+            // Range currently is ignored for GetResult::File(...)
+            let get_range_end_result = object_store
+                .get_range(
+                    location,
+                    Range {
+                        start: start_byte,
+                        end: end_byte,
+                    },
+                )
+                .await;
+            let mut decoder_tail = Cursor::new(get_range_end_result?);
+            find_first_newline_bytes(&mut decoder_tail)?
+        }
+        GetResult::Stream(s) => {
+            let mut input = s.map_err(DataFusionError::from);
+            let mut buffered = Bytes::new();
+
+            let future_index = async move {
+                let mut index = 0;
+
+                loop {
+                    if buffered.is_empty() {
+                        match input.next().await {
+                            Some(Ok(b)) => buffered = b,
+                            Some(Err(e)) => return Err(e),
+                            None => return Ok(index),
+                        };
+                    }
+
+                    for byte in &buffered {
+                        if *byte == b'\n' {
+                            return Ok(index);
+                        }
+                        index += 1;
+                    }
+
+                    buffered.advance(buffered.len());
+                }
+            };
+            future_index.await?
+        }
+    };
+    Ok(offset)
+}
+
 impl FileOpener for CsvOpener {
+    /// Open a partitioned CSV file.
+    ///
+    /// If `file_meta.range` is `None`, the entire file is opened.
+    /// If `file_meta.range` is `Some(FileRange {start, end})`, this signifies that the partition
+    /// corresponds to the byte range [start, end) within the file.
+    ///
+    /// Note: `start` or `end` might be in the middle of some lines. In such cases, the following rules
+    /// are applied to determine which lines to read:
+    /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
+    /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
+    ///
+    /// Examples:
+    /// Consider the following partitions enclosed by braces `{}`:
+    ///
+    /// {A,1,2,3,4,5,6,7,8,9\n
+    ///  A,1,2,3,4,5,6,7,8,9\n}                           
+    ///  A,1,2,3,4,5,6,7,8,9\n
+    ///  The lines read would be: [0, 1]
+    ///
+    ///  A,{1,2,3,4,5,6,7,8,9\n
+    ///  A,1,2,3,4,5,6,7,8,9\n
+    ///  A},1,2,3,4,5,6,7,8,9\n
+    ///  The lines read would be: [1, 2]
     fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
-        let config = self.config.clone();
+        // `self.config.has_header` controls whether to skip reading the 1st line header
+        // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
+        // partition, then don't skip first line
+        let mut csv_has_header = self.config.has_header;
+        if let Some(FileRange { start, .. }) = file_meta.range {
+            if start != 0 {
+                csv_has_header = false;
+            }
+        }
+
+        let config = CsvConfig {
+            has_header: csv_has_header,
+            ..(*self.config).clone()
+        };
+
         let file_compression_type = self.file_compression_type.to_owned();
+
+        if file_meta.range.is_some() {
+            assert!(
+                !file_compression_type.is_compressed(),
+                "Reading compressed .csv in parallel is not supported"
+            );
+        }
+
         Ok(Box::pin(async move {
-            match config.object_store.get(file_meta.location()).await? {
+            let file_size = file_meta.object_meta.size;
+            // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
+            let (start_byte, end_byte) = match file_meta.range {
+                None => (0, file_size),
+                Some(FileRange { start, end }) => {
+                    let (start, end) = (start as usize, end as usize);
+                    // Partition byte range is [start, end), the boundary might be in the middle of
+                    // some line. Need to find out the exact line boundaries.
+                    let start_delta = if start != 0 {
+                        find_first_newline(
+                            &config.object_store,
+                            file_meta.location(),
+                            start - 1,
+                            file_size,
+                        )
+                        .await?
+                    } else {
+                        0
+                    };
+                    let end_delta = if end != file_size {
+                        find_first_newline(
+                            &config.object_store,
+                            file_meta.location(),
+                            end - 1,
+                            file_size,
+                        )
+                        .await?
+                    } else {
+                        0
+                    };
+                    (start + start_delta, end + end_delta)
+                }
+            };
+
+            // For special case: If `Range` has equal `start` and `end`, object store will fetch
+            // the whole file
+            let localfs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+            let is_localfs = localfs.type_id() == config.object_store.type_id();
+            if start_byte == end_byte && !is_localfs {
+                return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
+            }
+
+            let options = GetOptions {
+                range: Some(Range {
+                    start: start_byte,
+                    end: end_byte,
+                }),
+                ..Default::default()
+            };
+
+            match config
+                .object_store
+                .get_opts(file_meta.location(), options)
+                .await?
+            {
                 GetResult::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file)?;
+                    let is_whole_file_scanned = file_meta.range.is_none();
+                    let decoder = if is_whole_file_scanned {
+                        // For special case: `get_range()` will interpret `start` and `end` as the
+                        // byte range after decompression for compressed files
+                        file_compression_type.convert_read(file)?
+                    } else {
+                        // Range currently is ignored for GetResult::File(...)
+                        let bytes = Cursor::new(
+                            config
+                                .object_store
+                                .get_range(
+                                    file_meta.location(),
+                                    Range {
+                                        start: start_byte,
+                                        end: end_byte,
+                                    },
+                                )
+                                .await?,
+                        );
+                        file_compression_type.convert_read(bytes)?
+                    };
+
                     Ok(futures::stream::iter(config.open(decoder)?).boxed())
                 }
                 GetResult::Stream(s) => {

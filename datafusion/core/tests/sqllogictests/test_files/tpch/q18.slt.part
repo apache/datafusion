@@ -89,12 +89,10 @@ SortPreservingMergeExec: [o_totalprice@4 DESC,o_orderdate@3 ASC NULLS LAST]
 --------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/customer.tbl]]}, projection=[c_custkey, c_name], has_header=false
 --------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------RepartitionExec: partitioning=Hash([o_custkey@1], 4), input_partitions=4
-------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl]]}, projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate], has_header=false
+------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate], has_header=false
 ----------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
---------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_orderkey, l_quantity], has_header=false
+--------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_quantity], has_header=false
 ----------------ProjectionExec: expr=[l_orderkey@0 as l_orderkey]
 ------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------FilterExec: SUM(lineitem.l_quantity)@1 > Some(30000),25,2
@@ -102,8 +100,7 @@ SortPreservingMergeExec: [o_totalprice@4 DESC,o_orderdate@3 ASC NULLS LAST]
 ------------------------CoalesceBatchesExec: target_batch_size=8192
 --------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
 ----------------------------AggregateExec: mode=Partial, gby=[l_orderkey@0 as l_orderkey], aggr=[SUM(lineitem.l_quantity)]
-------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl]]}, projection=[l_orderkey, l_quantity], has_header=false
+------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_quantity], has_header=false
 
 
 

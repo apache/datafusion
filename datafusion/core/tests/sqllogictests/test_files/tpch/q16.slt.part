@@ -87,8 +87,7 @@ GlobalLimitExec: skip=0, fetch=10
 ------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_partkey@0, p_partkey@0)]
 --------------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
-------------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
---------------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/partsupp.tbl]]}, projection=[ps_partkey, ps_suppkey], has_header=false
+------------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey], has_header=false
 --------------------------------------CoalesceBatchesExec: target_batch_size=8192
 ----------------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 ------------------------------------------CoalesceBatchesExec: target_batch_size=8192

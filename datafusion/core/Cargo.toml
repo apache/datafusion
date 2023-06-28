@@ -84,6 +84,7 @@ parquet = { workspace = true }
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
+regex = "1.5.4"
 smallvec = { version = "1.6", features = ["union"] }
 sqlparser = { workspace = true }
 tempfile = "3"

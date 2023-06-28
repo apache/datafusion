@@ -78,8 +78,7 @@ GlobalLimitExec: skip=0, fetch=10
 --------------------------------ProjectionExec: expr=[o_orderkey@0 as o_orderkey, o_custkey@1 as o_custkey]
 ----------------------------------CoalesceBatchesExec: target_batch_size=8192
 ------------------------------------FilterExec: o_comment@2 NOT LIKE %special%requests%
---------------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-----------------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl]]}, projection=[o_orderkey, o_custkey, o_comment], has_header=false
+--------------------------------------CsvExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/core/tests/sqllogictests/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_custkey, o_comment], has_header=false
 
 
 

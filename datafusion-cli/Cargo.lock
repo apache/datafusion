@@ -1051,6 +1051,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "rand",
+ "regex",
  "smallvec",
  "sqlparser",
  "tempfile",

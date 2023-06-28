@@ -62,11 +62,13 @@ use datafusion_common::tree_node::{TreeNode, VisitRecursion};
 use datafusion_physical_expr::expressions::Column;
 
 use arrow::compute::cast;
+use itertools::Itertools;
 use log::{debug, warn};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
     borrow::Cow,
+    cmp::min,
     collections::HashMap,
     fmt::{Debug, Display, Formatter, Result as FmtResult},
     marker::PhantomData,
@@ -239,6 +241,81 @@ impl FileScanConfig {
                 .copied()
                 .collect()
         })
+    }
+
+    /// Repartition all input files into `target_partitions` partitions, if total file size exceed
+    /// `repartition_file_min_size`
+    /// `target_partitions` and `repartition_file_min_size` directly come from configuration.
+    ///
+    /// This function only try to partition file byte range evenly, and let specific `FileOpener` to
+    /// do actual partition on specific data source type. (e.g. `CsvOpener` will only read lines
+    /// overlap with byte range but also handle boundaries to ensure all lines will be read exactly once)
+    pub fn repartition_file_groups(
+        file_groups: Vec<Vec<PartitionedFile>>,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+    ) -> Option<Vec<Vec<PartitionedFile>>> {
+        let flattened_files = file_groups.iter().flatten().collect::<Vec<_>>();
+
+        // Perform redistribution only in case all files should be read from beginning to end
+        let has_ranges = flattened_files.iter().any(|f| f.range.is_some());
+        if has_ranges {
+            return None;
+        }
+
+        let total_size = flattened_files
+            .iter()
+            .map(|f| f.object_meta.size as i64)
+            .sum::<i64>();
+        if total_size < (repartition_file_min_size as i64) || total_size == 0 {
+            return None;
+        }
+
+        let target_partition_size =
+            (total_size as usize + (target_partitions) - 1) / (target_partitions);
+
+        let current_partition_index: usize = 0;
+        let current_partition_size: usize = 0;
+
+        // Partition byte range evenly for all `PartitionedFile`s
+        let repartitioned_files = flattened_files
+            .into_iter()
+            .scan(
+                (current_partition_index, current_partition_size),
+                |state, source_file| {
+                    let mut produced_files = vec![];
+                    let mut range_start = 0;
+                    while range_start < source_file.object_meta.size {
+                        let range_end = min(
+                            range_start + (target_partition_size - state.1),
+                            source_file.object_meta.size,
+                        );
+
+                        let mut produced_file = source_file.clone();
+                        produced_file.range = Some(FileRange {
+                            start: range_start as i64,
+                            end: range_end as i64,
+                        });
+                        produced_files.push((state.0, produced_file));
+
+                        if state.1 + (range_end - range_start) >= target_partition_size {
+                            state.0 += 1;
+                            state.1 = 0;
+                        } else {
+                            state.1 += range_end - range_start;
+                        }
+                        range_start = range_end;
+                    }
+                    Some(produced_files)
+                },
+            )
+            .flatten()
+            .group_by(|(partition_idx, _)| *partition_idx)
+            .into_iter()
+            .map(|(_, group)| group.map(|(_, vals)| vals).collect_vec())
+            .collect_vec();
+
+        Some(repartitioned_files)
     }
 }
 
