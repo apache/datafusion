@@ -472,7 +472,7 @@ impl BuiltinScalarFunction {
                 }
 
                 Ok(List(Arc::new(Field::new("item", expr_type, true))))
-            },
+            }
             BuiltinScalarFunction::ArrayContains => Ok(Boolean),
             BuiltinScalarFunction::ArrayDims => Ok(UInt8),
             BuiltinScalarFunction::ArrayFill => Ok(List(Arc::new(Field::new(
