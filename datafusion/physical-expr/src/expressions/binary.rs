@@ -1345,15 +1345,20 @@ mod tests {
     use datafusion_common::{ColumnStatistics, Result, Statistics};
     use datafusion_expr::type_coercion::binary::get_input_types;
 
-    // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
-    // to valid types. Usage can result in an execution (after plan) error.
-    fn binary_simple(
-        l: Arc<dyn PhysicalExpr>,
+    /// Performs a binary operation, applying any type coercion necessary
+    fn binary_op(
+        left: Arc<dyn PhysicalExpr>,
         op: Operator,
-        r: Arc<dyn PhysicalExpr>,
-        input_schema: &Schema,
-    ) -> Arc<dyn PhysicalExpr> {
-        binary(l, op, r, input_schema).unwrap()
+        right: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let left_type = left.data_type(schema)?;
+        let right_type = right.data_type(schema)?;
+        let (lhs, rhs) = get_input_types(&left_type, &op, &right_type)?;
+
+        let left_expr = try_cast(left, schema, lhs)?;
+        let right_expr = try_cast(right, schema, rhs)?;
+        binary(left_expr, op, right_expr, schema)
     }
 
     #[test]
@@ -1366,12 +1371,12 @@ mod tests {
         let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
 
         // expression: "a < b"
-        let lt = binary_simple(
+        let lt = binary(
             col("a", &schema)?,
             Operator::Lt,
             col("b", &schema)?,
             &schema,
-        );
+        )?;
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
@@ -1398,22 +1403,22 @@ mod tests {
         let b = Int32Array::from(vec![2, 5, 4, 8, 8]);
 
         // expression: "a < b OR a == b"
-        let expr = binary_simple(
-            binary_simple(
+        let expr = binary(
+            binary(
                 col("a", &schema)?,
                 Operator::Lt,
                 col("b", &schema)?,
                 &schema,
-            ),
+            )?,
             Operator::Or,
-            binary_simple(
+            binary(
                 col("a", &schema)?,
                 Operator::Eq,
                 col("b", &schema)?,
                 &schema,
-            ),
+            )?,
             &schema,
-        );
+        )?;
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
@@ -1486,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_coersion() -> Result<()> {
+    fn test_type_coercion() -> Result<()> {
         test_coercion!(
             Int32Array,
             DataType::Int32,
@@ -1808,8 +1813,7 @@ mod tests {
     // is no way at the time of this writing to create a dictionary
     // array using the `From` trait
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
-    fn test_dictionary_type_to_array_coersion() -> Result<()> {
+    fn test_dictionary_type_to_array_coercion() -> Result<()> {
         // Test string  a string dictionary
         let dict_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
@@ -1872,7 +1876,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn plus_op_dict() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -1906,7 +1909,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn plus_op_dict_decimal() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2090,7 +2092,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn minus_op_dict() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2124,7 +2125,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn minus_op_dict_decimal() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2300,7 +2300,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn multiply_op_dict() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2334,7 +2333,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn multiply_op_dict_decimal() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2508,7 +2506,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn divide_op_dict() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2548,7 +2545,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn divide_op_dict_decimal() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2734,7 +2730,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn modulus_op_dict() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2774,7 +2769,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dictionary_expressions")]
     fn modulus_op_dict_decimal() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new(
@@ -2931,7 +2925,7 @@ mod tests {
         expected: PrimitiveArray<T>,
     ) -> Result<()> {
         let arithmetic_op =
-            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
+            binary_op(col("a", &schema)?, op, col("b", &schema)?, &schema)?;
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -2947,7 +2941,7 @@ mod tests {
         expected: ArrayRef,
     ) -> Result<()> {
         let lit = Arc::new(Literal::new(literal));
-        let arithmetic_op = binary_simple(col("a", &schema)?, op, lit, &schema);
+        let arithmetic_op = binary_op(col("a", &schema)?, op, lit, &schema)?;
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -2962,16 +2956,10 @@ mod tests {
         op: Operator,
         expected: BooleanArray,
     ) -> Result<()> {
-        let left_type = left.data_type();
-        let right_type = right.data_type();
-        let (lhs, rhs) = get_input_types(left_type, &op, right_type)?;
-
-        let left_expr = try_cast(col("a", schema)?, schema, lhs)?;
-        let right_expr = try_cast(col("b", schema)?, schema, rhs)?;
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+        let op = binary_op(col("a", schema)?, op, col("b", schema)?, schema)?;
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
 
         assert_eq!(result.as_ref(), &expected);
         Ok(())
@@ -2986,14 +2974,9 @@ mod tests {
         expected: &BooleanArray,
     ) -> Result<()> {
         let scalar = lit(scalar.clone());
-        let (lhs, rhs) =
-            get_input_types(&scalar.data_type(schema)?, &op, arr.data_type())?;
-        let left_expr = try_cast(scalar, schema, lhs)?;
-        let right_expr = try_cast(col("a", schema)?, schema, rhs)?;
-
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+        let op = binary_op(scalar, op, col("a", schema)?, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected);
 
         Ok(())
@@ -3008,14 +2991,9 @@ mod tests {
         expected: &BooleanArray,
     ) -> Result<()> {
         let scalar = lit(scalar.clone());
-        let (lhs, rhs) =
-            get_input_types(arr.data_type(), &op, &scalar.data_type(schema)?)?;
-        let left_expr = try_cast(col("a", schema)?, schema, lhs)?;
-        let right_expr = try_cast(scalar, schema, rhs)?;
-
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+        let op = binary_op(col("a", schema)?, op, scalar, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
-        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected);
 
         Ok(())
@@ -3581,7 +3559,7 @@ mod tests {
         let tree_depth: i32 = 100;
         let expr = (0..tree_depth)
             .map(|_| col("a", schema.as_ref()).unwrap())
-            .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema))
+            .reduce(|l, r| binary(l, Operator::Plus, r, &schema).unwrap())
             .unwrap();
 
         let result = expr
@@ -4063,26 +4041,7 @@ mod tests {
         op: Operator,
         expected: ArrayRef,
     ) -> Result<()> {
-        let (lhs_type, rhs_type) =
-            get_input_types(left.data_type(), &op, right.data_type()).unwrap();
-
-        let left_expr = try_cast(col("a", schema)?, schema, lhs_type.clone())?;
-        let right_expr = try_cast(col("b", schema)?, schema, rhs_type.clone())?;
-
-        let coerced_schema = Schema::new(vec![
-            Field::new(
-                schema.field(0).name(),
-                lhs_type,
-                schema.field(0).is_nullable(),
-            ),
-            Field::new(
-                schema.field(1).name(),
-                rhs_type,
-                schema.field(1).is_nullable(),
-            ),
-        ]);
-
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
+        let arithmetic_op = binary_op(col("a", schema)?, op, col("b", schema)?, schema)?;
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -4745,12 +4704,12 @@ mod tests {
 
         // expression: "a >= 25"
         let a = col("a", &schema).unwrap();
-        let gt = binary_simple(
+        let gt = binary(
             a.clone(),
             Operator::GtEq,
             lit(ScalarValue::from(25)),
             &schema,
-        );
+        )?;
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
@@ -4774,12 +4733,12 @@ mod tests {
 
         // expression: "50 >= a"
         let a = col("a", &schema).unwrap();
-        let gt = binary_simple(
+        let gt = binary(
             lit(ScalarValue::from(50)),
             Operator::GtEq,
             a.clone(),
             &schema,
-        );
+        )?;
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
