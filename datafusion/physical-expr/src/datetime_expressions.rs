@@ -988,7 +988,6 @@ mod tests {
         ];
 
         cases.iter().for_each(|(original, granularity, expected)| {
-            println!("original: {original}, granularity: {granularity}, expected: {expected:?}");
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
             let result = date_trunc_coarse(granularity, left).unwrap();
