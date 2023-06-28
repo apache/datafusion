@@ -729,6 +729,34 @@ impl From<Field> for DFField {
     }
 }
 
+/// DataFusion-specific extensions to [`Schema`].
+pub trait SchemaExt {
+    /// This is a specialized version of Eq that ignores differences
+    /// in nullability and metadata.
+    ///
+    /// It works the same as [`DFSchema::equivalent_names_and_types`].
+    fn equivalent_names_and_types(&self, other: &Self) -> bool;
+}
+
+impl SchemaExt for Schema {
+    fn equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+
+        self.fields()
+            .iter()
+            .zip(other.fields().iter())
+            .all(|(f1, f2)| {
+                f1.name() == f2.name()
+                    && DFSchema::datatype_is_semantically_equal(
+                        f1.data_type(),
+                        f2.data_type(),
+                    )
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
@@ -995,7 +1023,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_t],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1003,7 +1032,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t_meta],
             fields2: vec![&field1_i16_t],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1011,7 +1041,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field2_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1019,7 +1050,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i32_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1027,7 +1059,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1035,7 +1068,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t],
             fields2: vec![&field1_i16_t_qualified],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: true,
         }
         .run();
 
@@ -1043,7 +1077,8 @@ mod tests {
         TestCase {
             fields1: vec![&field2_i16_t, &field1_i16_t],
             fields2: vec![&field2_i16_t, &field3_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1051,7 +1086,8 @@ mod tests {
         TestCase {
             fields1: vec![&field1_i16_t, &field2_i16_t],
             fields2: vec![&field1_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1059,7 +1095,8 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field_dict_t],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1067,7 +1104,8 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field_dict_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1075,7 +1113,8 @@ mod tests {
         TestCase {
             fields1: vec![&field_dict_t],
             fields2: vec![&field1_i16_t],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1083,7 +1122,8 @@ mod tests {
         TestCase {
             fields1: vec![&list_t],
             fields2: vec![&list_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1091,7 +1131,8 @@ mod tests {
         TestCase {
             fields1: vec![&list_t],
             fields2: vec![&list_f_name],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1099,7 +1140,8 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1107,7 +1149,8 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f_meta],
-            expected: true,
+            expected_dfschema: true,
+            expected_arrow: true,
         }
         .run();
 
@@ -1115,7 +1158,8 @@ mod tests {
         TestCase {
             fields1: vec![&struct_t],
             fields2: vec![&struct_f_type],
-            expected: false,
+            expected_dfschema: false,
+            expected_arrow: false,
         }
         .run();
 
@@ -1123,7 +1167,8 @@ mod tests {
         struct TestCase<'a> {
             fields1: Vec<&'a DFField>,
             fields2: Vec<&'a DFField>,
-            expected: bool,
+            expected_dfschema: bool,
+            expected_arrow: bool,
         }
 
         impl<'a> TestCase<'a> {
@@ -1133,12 +1178,24 @@ mod tests {
                 let schema2 = to_df_schema(self.fields2);
                 assert_eq!(
                     schema1.equivalent_names_and_types(&schema2),
-                    self.expected,
+                    self.expected_dfschema,
                     "Comparison did not match expected: {}\n\n\
                      schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
-                    self.expected,
+                    self.expected_dfschema,
                     schema1,
                     schema2
+                );
+
+                let arrow_schema1 = Schema::from(schema1);
+                let arrow_schema2 = Schema::from(schema2);
+                assert_eq!(
+                    arrow_schema1.equivalent_names_and_types(&arrow_schema2),
+                    self.expected_arrow,
+                    "Comparison did not match expected: {}\n\n\
+                     arrow schema1:\n\n{:#?}\n\n arrow schema2:\n\n{:#?}",
+                    self.expected_arrow,
+                    arrow_schema1,
+                    arrow_schema2
                 );
             }
         }
