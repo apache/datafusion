@@ -426,16 +426,18 @@ select array_contains(make_array(true, true, true), make_array(false, false)), a
 ----
 false false
 
-# array_contains array
+## array_contains array
+
 
 statement ok
 CREATE TABLE t
 AS VALUES
 (make_array(1,2,3), make_array(1,2,3)),
 (make_array(1,2,3), make_array(2,3)),
-(make_array(2,3), make_array(1,2,3)),
-(null, make_array(1,2,3)),
-(make_array(2,3), null);
+(make_array(2,3),   make_array(1,2,3)),
+(null,              make_array(1,2,3)),
+(make_array(2,3),   null)
+;
 
 
 query ??
@@ -464,3 +466,39 @@ true true
 
 statement ok
 drop table t
+
+
+## array_contains array (nested)
+
+
+statement ok
+CREATE TABLE t
+AS VALUES
+(make_array(make_array(2),make_array(3,4)),   make_array(3,4)),
+(make_array(make_array(2),make_array(3,4)),   make_array(4,3)),
+(make_array(make_array(2),make_array(3,4)),   make_array(3)),
+(make_array(make_array(2),make_array(3,4)),   make_array(2))
+;
+
+
+query ??
+SELECT
+  column1,
+  column2
+FROM t
+----
+[[2], [3, 4]] [3, 4]
+[[2], [3, 4]] [4, 3]
+[[2], [3, 4]] [3]
+[[2], [3, 4]] [2]
+
+
+# incorrect answer (one row) to https://github.com/apache/arrow-datafusion/issues/6709
+
+query BB
+SELECT
+  array_contains(column1, column2) as c12,
+  array_contains(column1, column2) as c21
+FROM t
+----
+true true
