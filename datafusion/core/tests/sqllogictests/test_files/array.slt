@@ -386,3 +386,39 @@ query ?
 select make_array(x, y) from foo2;
 ----
 [1.0, 1]
+
+# array_contains scalar function #1
+query BBB rowsort
+select array_contains(make_array(1, 2, 3), make_array(1, 1, 2, 3)), array_contains([1, 2, 3], [1, 1, 2]), array_contains([1, 2, 3], [2, 1, 3, 1]);
+----
+true true true
+
+# array_contains scalar function #2
+query BB rowsort
+select array_contains([[1, 2], [3, 4]], [[1, 2], [3, 4], [1, 3]]), array_contains([[[1], [2]], [[3], [4]]], [1, 2, 2, 3, 4]);
+----
+true true
+
+# array_contains scalar function #3
+query BBB rowsort
+select array_contains(make_array(1, 2, 3), make_array(1, 2, 3, 4)), array_contains([1, 2, 3], [1, 1, 4]), array_contains([1, 2, 3], [2, 1, 3, 4]);
+----
+false false false
+
+# array_contains scalar function #4
+query BB rowsort
+select array_contains([[1, 2], [3, 4]], [[1, 2], [3, 4], [1, 5]]), array_contains([[[1], [2]], [[3], [4]]], [1, 2, 2, 3, 5]);
+----
+false false
+
+# array_contains scalar function #5
+query BB rowsort
+select array_contains([true, true, false, true, false], [true, false, false]), array_contains([true, false, true], [true, true]);
+----
+true true
+
+# array_contains scalar function #6
+query BB rowsort
+select array_contains(make_array(true, true, true), make_array(false, false)), array_contains([false, false, false], [true, true]);
+----
+false false

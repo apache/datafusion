@@ -61,18 +61,18 @@ bytes = "1.4"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "26.0.0", features = ["parquet", "object_store"] }
-datafusion-execution = { path = "../execution", version = "26.0.0" }
-datafusion-expr = { path = "../expr", version = "26.0.0" }
-datafusion-optimizer = { path = "../optimizer", version = "26.0.0", default-features = false }
-datafusion-physical-expr = { path = "../physical-expr", version = "26.0.0", default-features = false }
-datafusion-row = { path = "../row", version = "26.0.0" }
-datafusion-sql = { path = "../sql", version = "26.0.0" }
+datafusion-common = { path = "../common", version = "27.0.0", features = ["parquet", "object_store"] }
+datafusion-execution = { path = "../execution", version = "27.0.0" }
+datafusion-expr = { path = "../expr", version = "27.0.0" }
+datafusion-optimizer = { path = "../optimizer", version = "27.0.0", default-features = false }
+datafusion-physical-expr = { path = "../physical-expr", version = "27.0.0", default-features = false }
+datafusion-row = { path = "../row", version = "27.0.0" }
+datafusion-sql = { path = "../sql", version = "27.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
 hashbrown = { version = "0.14", features = ["raw"] }
-indexmap = "1.9.2"
+indexmap = "2.0.0"
 itertools = "0.11"
 lazy_static = { version = "^1.4.0" }
 log = "^0.4"
@@ -85,7 +85,7 @@ percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
 rand = "0.8"
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = { version = "0.34", features = ["visitor"] }
+sqlparser = { workspace = true }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-util = { version = "0.7.4", features = ["io"] }

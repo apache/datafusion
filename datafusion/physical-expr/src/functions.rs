@@ -391,6 +391,9 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayConcat => {
             Arc::new(|args| make_scalar_function(array_expressions::array_concat)(args))
         }
+        BuiltinScalarFunction::ArrayContains => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_contains)(args))
+        }
         BuiltinScalarFunction::ArrayDims => {
             Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
         }
