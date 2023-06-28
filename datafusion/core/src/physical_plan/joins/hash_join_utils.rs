@@ -90,8 +90,8 @@ use datafusion_common::Result;
 // TODO: speed up collision checks
 // https://github.com/apache/arrow-datafusion/issues/50
 pub struct JoinHashMap {
-    // Stores hash value to first index
-    pub map: RawTable<(u64, u64)>,
+    // Stores first index in bucket
+    pub map: Vec<u64>,
     // Stores indices in chained list data structure
     pub next: Vec<u64>,
 }
@@ -103,7 +103,8 @@ pub struct SymmetricJoinHashMap(pub RawTable<(u64, SmallVec<[u64; 1]>)>);
 impl JoinHashMap {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         JoinHashMap {
-            map: RawTable::with_capacity(capacity),
+            // Overallocate using 16 x the buckets
+            map: vec![0; capacity * 16],
             next: vec![0; capacity],
         }
     }
