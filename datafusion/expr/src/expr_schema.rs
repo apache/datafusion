@@ -175,7 +175,13 @@ impl ExprSchemable for Expr {
             | Expr::Negative(expr)
             | Expr::Sort(Sort { expr, .. })
             | Expr::InList(InList { expr, .. }) => expr.nullable(input_schema),
-            Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
+
+            Expr::Between(Between {
+                expr, low, high, ..
+            }) => Ok(expr.nullable(input_schema)?
+                || low.nullable(input_schema)?
+                || high.nullable(input_schema)?),
+
             Expr::Column(c) => input_schema.nullable(c),
             Expr::OuterReferenceColumn(_, _) => Ok(true),
             Expr::Literal(value) => Ok(value.is_null()),
@@ -358,6 +364,30 @@ mod tests {
         test_is_expr_nullable!(is_not_false);
         test_is_expr_nullable!(is_unknown);
         test_is_expr_nullable!(is_not_unknown);
+    }
+
+    #[test]
+    fn test_between_nullability() {
+        let get_schema = |nullable| {
+            MockExprSchema::new()
+                .with_data_type(DataType::Int32)
+                .with_nullable(nullable)
+        };
+
+        let expr = col("foo").between(lit(1), lit(2));
+        assert!(!expr.nullable(&get_schema(false)).unwrap());
+        assert!(expr.nullable(&get_schema(true)).unwrap());
+
+        let null = lit(ScalarValue::Int32(None));
+
+        let expr = col("foo").between(null.clone(), lit(2));
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+
+        let expr = col("foo").between(lit(1), null.clone());
+        assert!(expr.nullable(&get_schema(false)).unwrap());
+
+        let expr = col("foo").between(null.clone(), null);
+        assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 
     #[test]
