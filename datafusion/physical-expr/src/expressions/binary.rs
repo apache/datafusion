@@ -24,7 +24,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add_dyn, add_scalar_dyn as add_dyn_scalar, divide_dyn_opt,
+    add_dyn, add_scalar_dyn as add_dyn_scalar, divide_dyn_checked,
     divide_scalar_dyn as divide_dyn_scalar, modulus_dyn,
     modulus_scalar_dyn as modulus_dyn_scalar, multiply_dyn,
     multiply_scalar_dyn as multiply_dyn_scalar, subtract_dyn,
@@ -63,7 +63,7 @@ use kernels::{
 };
 use kernels_arrow::{
     add_decimal_dyn_scalar, add_dyn_decimal, add_dyn_temporal, divide_decimal_dyn_scalar,
-    divide_dyn_opt_decimal, is_distinct_from, is_distinct_from_binary,
+    divide_dyn_checked_decimal, is_distinct_from, is_distinct_from_binary,
     is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_f32,
     is_distinct_from_f64, is_distinct_from_null, is_distinct_from_utf8,
     is_not_distinct_from, is_not_distinct_from_binary, is_not_distinct_from_bool,
@@ -1223,7 +1223,12 @@ impl BinaryExpr {
                 binary_primitive_array_op_dyn!(left, right, multiply_dyn, result_type)
             }
             Divide => {
-                binary_primitive_array_op_dyn!(left, right, divide_dyn_opt, result_type)
+                binary_primitive_array_op_dyn!(
+                    left,
+                    right,
+                    divide_dyn_checked,
+                    result_type
+                )
             }
             Modulo => {
                 binary_primitive_array_op_dyn!(left, right, modulus_dyn, result_type)
@@ -1342,6 +1347,7 @@ mod tests {
     use arrow::datatypes::{
         ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
     };
+    use arrow_schema::ArrowError;
     use datafusion_common::{ColumnStatistics, Result, Statistics};
     use datafusion_expr::type_coercion::binary::get_input_types;
 
@@ -4336,27 +4342,31 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
         ]));
-        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048, 100]));
-        let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32, 0]));
+        let a = Arc::new(Int32Array::from(vec![100]));
+        let b = Arc::new(Int32Array::from(vec![0]));
 
-        apply_arithmetic::<Int32Type>(
+        let err = apply_arithmetic::<Int32Type>(
             schema,
             vec![a, b],
             Operator::Divide,
-            Int32Array::from(vec![Some(4), Some(8), Some(16), Some(32), Some(64), None]),
-        )?;
+            Int32Array::from(vec![Some(4), Some(8), Some(16), Some(32), Some(64)]),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
 
         // decimal
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Decimal128(25, 3), true),
             Field::new("b", DataType::Decimal128(25, 3), true),
         ]));
-        let left_decimal_array =
-            Arc::new(create_decimal_array(&[Some(1234567), Some(1234567)], 25, 3));
-        let right_decimal_array =
-            Arc::new(create_decimal_array(&[Some(10), Some(0)], 25, 3));
+        let left_decimal_array = Arc::new(create_decimal_array(&[Some(1234567)], 25, 3));
+        let right_decimal_array = Arc::new(create_decimal_array(&[Some(0)], 25, 3));
 
-        apply_arithmetic::<Decimal128Type>(
+        let err = apply_arithmetic::<Decimal128Type>(
             schema,
             vec![left_decimal_array, right_decimal_array],
             Operator::Divide,
@@ -4365,7 +4375,13 @@ mod tests {
                 38,
                 29,
             ),
-        )?;
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, DataFusionError::ArrowError(ArrowError::DivideByZero)),
+            "{err}"
+        );
 
         Ok(())
     }
