@@ -17,7 +17,7 @@
 
 //! Logical plan types
 
-use crate::expr::{Exists, InSubquery, Placeholder};
+use crate::expr::{Alias, Exists, InSubquery, Placeholder};
 use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -1370,10 +1370,10 @@ impl Filter {
         }
 
         // filter predicates should not be aliased
-        if let Expr::Alias(expr, alias) = predicate {
+        if let Expr::Alias(Alias { expr, name, .. }) = predicate {
             return Err(DataFusionError::Plan(format!(
                 "Attempted to create Filter predicate with \
-                expression `{expr}` aliased as '{alias}'. Filter predicates should not be \
+                expression `{expr}` aliased as '{name}'. Filter predicates should not be \
                 aliased."
             )));
         }
