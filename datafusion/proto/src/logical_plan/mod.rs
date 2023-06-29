@@ -1431,7 +1431,8 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
-    use arrow::datatypes::{Fields, Schema, SchemaRef, UnionFields};
+    use arrow::array::{AsArray, Float64Array};
+    use arrow::datatypes::{Fields, Float64Type, Schema, SchemaRef, UnionFields};
     use arrow::{
         array::ArrayRef,
         datatypes::{
@@ -1460,7 +1461,8 @@ mod roundtrip_tests {
         Expr, LogicalPlan, Operator, TryCast, Volatility,
     };
     use datafusion_expr::{
-        create_udaf, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+        create_udaf, PartitionEvaluator, Signature, WindowFrame, WindowFrameBound,
+        WindowFrameUnits, WindowFunction, WindowUDF,
     };
     use prost::Message;
     use std::collections::HashMap;
@@ -2788,6 +2790,8 @@ mod roundtrip_tests {
             vec![col("col2")],
             row_number_frame.clone(),
         ));
+
+        // 5. test with AggregateUDF
         #[derive(Debug)]
         struct Dummy {}
 
@@ -2838,14 +2842,101 @@ mod roundtrip_tests {
             vec![col("col1")],
             vec![col("col1")],
             vec![col("col2")],
-            row_number_frame,
+            row_number_frame.clone(),
         ));
         ctx.register_udaf(dummy_agg);
+
+        // 6. test with WindowUDF
+        #[derive(Clone, Debug)]
+        struct MyPartitionEvaluator {}
+
+        impl MyPartitionEvaluator {
+            fn new() -> Self {
+                Self {}
+            }
+        }
+
+        /// Different evaluation methods are called depending on the various
+        /// settings of WindowUDF. This example uses the simplest and most
+        /// general, `evaluate`. See `PartitionEvaluator` for the other more
+        /// advanced uses.
+        impl PartitionEvaluator for MyPartitionEvaluator {
+            /// Tell DataFusion the window function varies based on the value
+            /// of the window frame.
+            fn uses_window_frame(&self) -> bool {
+                true
+            }
+
+            /// This function is called once per input row.
+            ///
+            /// `range`specifies which indexes of `values` should be
+            /// considered for the calculation.
+            ///
+            /// Note this is the SLOWEST, but simplest, way to evaluate a
+            /// window function. It is much faster to implement
+            /// evaluate_all or evaluate_all_with_rank, if possible
+            fn evaluate(
+                &mut self,
+                values: &[ArrayRef],
+                range: &std::ops::Range<usize>,
+            ) -> Result<ScalarValue> {
+                // Again, the input argument is an array of floating
+                // point numbers to calculate a moving average
+                let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+
+                let range_len = range.end - range.start;
+
+                // our smoothing function will average all the values in the
+                let output = if range_len > 0 {
+                    let sum: f64 =
+                        arr.values().iter().skip(range.start).take(range_len).sum();
+                    Some(sum / range_len as f64)
+                } else {
+                    None
+                };
+
+                Ok(ScalarValue::Float64(output))
+            }
+        }
+
+        fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
+            if arg_types.len() != 1 {
+                return Err(DataFusionError::Plan(format!(
+                    "my_udwf expects 1 argument, got {}: {:?}",
+                    arg_types.len(),
+                    arg_types
+                )));
+            }
+            Ok(Arc::new(arg_types[0].clone()))
+        }
+
+        fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+            Ok(Box::new(MyPartitionEvaluator::new()))
+        }
+
+        let dummy_window_udf = WindowUDF {
+            name: String::from("smooth_it"),
+            // it will take 1 arguments -- the column to smooth
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
+            return_type: Arc::new(return_type),
+            partition_evaluator_factory: Arc::new(make_partition_evaluator),
+        };
+
+        let test_expr6 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::WindowUDF(Arc::new(dummy_window_udf.clone())),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
+            row_number_frame,
+        ));
+
+        ctx.register_udwf(dummy_window_udf);
 
         roundtrip_expr_test(test_expr1, ctx.clone());
         roundtrip_expr_test(test_expr2, ctx.clone());
         roundtrip_expr_test(test_expr3, ctx.clone());
         roundtrip_expr_test(test_expr4, ctx.clone());
-        roundtrip_expr_test(test_expr5, ctx);
+        roundtrip_expr_test(test_expr5, ctx.clone());
+        roundtrip_expr_test(test_expr6, ctx);
     }
 }

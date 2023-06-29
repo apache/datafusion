@@ -584,13 +584,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
-                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
                     WindowFunction::AggregateUDF(aggr_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udaf(
                             aggr_udf.name.clone(),
                         )
                     }
-                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/6733
                     WindowFunction::WindowUDF(window_udf) => {
                         protobuf::window_expr_node::WindowFunction::Udwf(
                             window_udf.name.clone(),
