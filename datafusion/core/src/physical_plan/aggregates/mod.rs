@@ -49,6 +49,7 @@ use std::sync::Arc;
 mod bounded_aggregate_stream;
 mod no_grouping;
 mod row_hash;
+mod row_hash2;
 mod utils;
 
 pub use datafusion_expr::AggregateFunction;
@@ -57,6 +58,8 @@ pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::utils::{
     get_finer_ordering, ordering_satisfy_requirement_concrete,
 };
+
+use self::row_hash2::GroupedHashAggregateStream2;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -196,6 +199,7 @@ impl PartialEq for PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStream(GroupedHashAggregateStream),
+    GroupedHashAggregateStream2(GroupedHashAggregateStream2),
     BoundedAggregate(BoundedAggregateStream),
 }
 
@@ -204,6 +208,7 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
+            StreamType::GroupedHashAggregateStream2(stream) => Box::pin(stream),
             StreamType::BoundedAggregate(stream) => Box::pin(stream),
         }
     }
@@ -711,11 +716,22 @@ impl AggregateExec {
                 partition,
                 aggregation_ordering,
             )?))
+        } else if self.use_poc_group_by() {
+            Ok(StreamType::GroupedHashAggregateStream2(
+                GroupedHashAggregateStream2::new(self, context, partition)?,
+            ))
         } else {
             Ok(StreamType::GroupedHashAggregateStream(
                 GroupedHashAggregateStream::new(self, context, partition)?,
             ))
         }
+    }
+
+    /// Returns true if we should use the POC group by stream
+    /// TODO: check for actually supported aggregates, etc
+    fn use_poc_group_by(&self) -> bool {
+        //info!("AAL Checking POC group by: {self:#?}");
+        true
     }
 }
 
@@ -980,7 +996,7 @@ fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
     Arc::new(Schema::new(group_fields))
 }
 
-/// returns physical expressions to evaluate against a batch
+/// returns physical expressions for arguments to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
 /// * Final: columns of `AggregateExpr::state_fields()`

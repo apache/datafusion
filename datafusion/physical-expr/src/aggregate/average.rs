@@ -17,6 +17,9 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use arrow::array::AsArray;
+use log::info;
+
 use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -29,14 +32,14 @@ use crate::aggregate::sum::sum_batch;
 use crate::aggregate::utils::calculate_result_decimal_for_avg;
 use crate::aggregate::utils::down_cast_any_ref;
 use crate::expressions::format_state_name;
-use crate::{AggregateExpr, PhysicalExpr};
+use crate::{AggregateExpr, GroupsAccumulator, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Decimal128Type, UInt64Type};
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
-use arrow_array::Array;
+use arrow_array::{Array, ArrowNativeTypeOp, ArrowNumericType, PrimitiveArray};
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
@@ -154,6 +157,22 @@ impl AggregateExpr for Avg {
             &self.sum_data_type,
             &self.rt_data_type,
         )?))
+    }
+
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // instantiate specialized accumulator
+        match self.sum_data_type {
+            DataType::Decimal128(_, _) => {
+                Ok(Box::new(AvgGroupsAccumulator::<Decimal128Type>::new(
+                    &self.sum_data_type,
+                    &self.rt_data_type,
+                )))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "AvgGroupsAccumulator for {}",
+                self.sum_data_type
+            ))),
+        }
     }
 }
 
@@ -381,6 +400,199 @@ impl RowAccumulator for AvgRowAccumulator {
     fn state_index(&self) -> usize {
         self.state_index
     }
+}
+
+/// An accumulator to compute the average of PrimitiveArray<T>.
+/// Stores values as native types
+#[derive(Debug)]
+struct AvgGroupsAccumulator<T: ArrowNumericType + Send> {
+    /// The type of the internal sum
+    sum_data_type: DataType,
+
+    /// The type of the returned sum
+    return_data_type: DataType,
+
+    /// Count per group (use u64 to make UInt64Array)
+    counts: Vec<u64>,
+
+    // Sums per group, stored as the native type
+    sums: Vec<T::Native>,
+}
+
+impl<T: ArrowNumericType + Send> AvgGroupsAccumulator<T> {
+    pub fn new(sum_data_type: &DataType, return_data_type: &DataType) -> Self {
+        info!(
+            "AvgGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
+            std::any::type_name::<T>()
+        );
+        Self {
+            return_data_type: return_data_type.clone(),
+            sum_data_type: sum_data_type.clone(),
+            counts: vec![],
+            sums: vec![],
+        }
+    }
+
+    /// Adds the values in `values` to self.sums
+    fn update_sums(
+        &mut self,
+        values: &PrimitiveArray<T>,
+        group_indicies: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.sums
+            .resize_with(total_num_groups, || T::default_value());
+
+        // AAL TODO
+        // TODO combine the null mask from values and opt_filter
+        let valids = values.nulls();
+
+        // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
+        let data: &[T::Native] = values.values();
+
+        match valids {
+            // use all values in group_index
+            None => {
+                let iter = group_indicies.iter().zip(data.iter());
+                for (group_index, new_value) in iter {
+                    self.sums[*group_index].add_wrapping(*new_value);
+                }
+            }
+            //
+            Some(valids) => {
+                let group_indices_chunks = group_indicies.chunks_exact(64);
+                let data_chunks = data.chunks_exact(64);
+                let bit_chunks = valids.inner().bit_chunks();
+
+                let group_indices_remainder = group_indices_chunks.remainder();
+                let data_remainder = data_chunks.remainder();
+
+                group_indices_chunks
+                    .zip(data_chunks)
+                    .zip(bit_chunks.iter())
+                    .for_each(|((group_index_chunk, data_chunk), mask)| {
+                        // index_mask has value 1 << i in the loop
+                        let mut index_mask = 1;
+                        group_index_chunk.iter().zip(data_chunk.iter()).for_each(
+                            |(group_index, new_value)| {
+                                if (mask & index_mask) != 0 {
+                                    self.sums[*group_index].add_wrapping(*new_value);
+                                }
+                                index_mask <<= 1;
+                            },
+                        )
+                    });
+
+                let remainder_bits = bit_chunks.remainder_bits();
+                group_indices_remainder
+                    .iter()
+                    .zip(data_remainder.iter())
+                    .enumerate()
+                    .for_each(|(i, (group_index, new_value))| {
+                        if remainder_bits & (1 << i) != 0 {
+                            self.sums[*group_index].add_wrapping(*new_value);
+                        }
+                    });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T: ArrowNumericType + Send> GroupsAccumulator for AvgGroupsAccumulator<T> {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indicies: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = values.get(0).unwrap().as_primitive::<T>();
+
+        // update counts (TOD account for opt_filter)
+        self.counts.resize(total_num_groups, 0);
+        group_indicies.iter().for_each(|&group_idx| {
+            self.counts[group_idx] += 1;
+        });
+
+        // update values
+        self.update_sums(values, group_indicies, opt_filter, total_num_groups)?;
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indicies: &[usize],
+        opt_filter: Option<&arrow_array::BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "two arguments to merge_batch");
+        // first batch is counts, second is partial sums
+        let counts = values.get(0).unwrap().as_primitive::<UInt64Type>();
+        let partial_sums = values.get(1).unwrap().as_primitive::<T>();
+
+        // update counts by summing the partial sums (TODO account for opt_filter)
+        self.counts.resize(total_num_groups, 0);
+        group_indicies.iter().zip(counts.values().iter()).for_each(
+            |(&group_idx, &count)| {
+                self.counts[group_idx] += count;
+            },
+        );
+
+        // update values
+        self.update_sums(partial_sums, group_indicies, opt_filter, total_num_groups)?;
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ArrayRef> {
+        todo!()
+    }
+
+    // return arrays for sums and counts
+    fn state(&mut self) -> Result<Vec<ArrayRef>> {
+        let counts = std::mem::take(&mut self.counts);
+        // create array from vec is zero copy
+        let counts = UInt64Array::from(counts);
+
+        let sums = std::mem::take(&mut self.sums);
+        // create array from vec is zero copy
+        // TODO figure out how to do this without the iter / copy
+        let sums: PrimitiveArray<T> = PrimitiveArray::from_iter_values(sums);
+
+        // fix up decimal precision and scale
+        let sums = set_decimal_precision(&self.sum_data_type, Arc::new(sums))?;
+
+        Ok(vec![
+            Arc::new(counts) as ArrayRef,
+            Arc::new(sums) as ArrayRef,
+        ])
+    }
+
+    fn size(&self) -> usize {
+        self.counts.capacity() * std::mem::size_of::<usize>()
+    }
+}
+
+/// Adjust array type metadata if needed
+///
+/// Decimal128Arrays are are are created from Vec<NativeType> with default
+/// precision and scale. This function adjusts them down.
+fn set_decimal_precision(sum_data_type: &DataType, array: ArrayRef) -> Result<ArrayRef> {
+    let array = match sum_data_type {
+        DataType::Decimal128(p, s) => Arc::new(
+            array
+                .as_primitive::<Decimal128Type>()
+                .clone()
+                .with_precision_and_scale(*p, *s)?,
+        ),
+        // no adjustment needed for other arrays
+        _ => array,
+    };
+    Ok(array)
 }
 
 #[cfg(test)]

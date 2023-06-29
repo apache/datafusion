@@ -17,6 +17,7 @@
 
 //! Hash aggregation through row format
 
+use log::info;
 use std::cmp::min;
 use std::ops::Range;
 use std::sync::Arc;
@@ -119,6 +120,7 @@ impl GroupedHashAggregateStream {
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
+        info!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
         let agg_group_by = agg.group_by.clone();
         let agg_filter_expr = agg.filter_expr.clone();

@@ -25,6 +25,8 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use self::groups_accumulator::GroupsAccumulator;
+
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;
 pub(crate) mod approx_percentile_cont;
@@ -45,6 +47,7 @@ pub(crate) mod median;
 #[macro_use]
 pub(crate) mod min_max;
 pub mod build_in;
+pub(crate) mod groups_accumulator;
 mod hyperloglog;
 pub mod moving_min_max;
 pub mod row_accumulator;
@@ -115,6 +118,18 @@ pub trait AggregateExpr: Send + Sync + Debug + PartialEq<dyn Any> {
     ) -> Result<Box<dyn RowAccumulator>> {
         Err(DataFusionError::NotImplemented(format!(
             "RowAccumulator hasn't been implemented for {self:?} yet"
+        )))
+    }
+
+    /// Return a specialized [`GroupsAccumulator`] that manages state for all groups
+    ///
+    /// For maximum performance, [`GroupsAccumulator`] should be
+    /// implemented rather than [`Accumulator`].
+    fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
+        // TODO: The default should implement a wrapper over
+        // sef.create_accumulator
+        Err(DataFusionError::NotImplemented(format!(
+            "GroupsAccumulator hasn't been implemented for {self:?} yet"
         )))
     }
 
