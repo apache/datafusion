@@ -19,7 +19,7 @@
 //! destined for arrow-rs but are in datafusion until they are ported.
 
 use arrow::compute::{
-    add_dyn, add_scalar_dyn, divide_dyn_opt, divide_scalar_dyn, modulus_dyn,
+    add_dyn, add_scalar_dyn, divide_dyn_checked, divide_scalar_dyn, modulus_dyn,
     modulus_scalar_dyn, multiply_fixed_point, multiply_scalar_dyn, subtract_dyn,
     subtract_scalar_dyn, try_unary,
 };
@@ -711,7 +711,7 @@ pub(crate) fn multiply_dyn_decimal(
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
-pub(crate) fn divide_dyn_opt_decimal(
+pub(crate) fn divide_dyn_checked_decimal(
     left: &dyn Array,
     right: &dyn Array,
     result_type: &DataType,
@@ -724,7 +724,7 @@ pub(crate) fn divide_dyn_opt_decimal(
     // Restore to original precision and scale (metadata only)
     let (org_precision, org_scale) = get_precision_scale(right.data_type())?;
     let array = decimal_array_with_precision_scale(array, org_precision, org_scale)?;
-    let array = divide_dyn_opt(&array, right)?;
+    let array = divide_dyn_checked(&array, right)?;
     decimal_array_with_precision_scale(array, precision, scale)
 }
 
@@ -2216,7 +2216,7 @@ mod tests {
             25,
             3,
         );
-        let result = divide_dyn_opt_decimal(
+        let result = divide_dyn_checked_decimal(
             &left_decimal_array,
             &right_decimal_array,
             &result_type,

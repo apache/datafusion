@@ -394,10 +394,14 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::ArrayContains => {
             Arc::new(|args| make_scalar_function(array_expressions::array_contains)(args))
         }
-        BuiltinScalarFunction::ArrayDims => Arc::new(array_expressions::array_dims),
+        BuiltinScalarFunction::ArrayDims => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_dims)(args))
+        }
         BuiltinScalarFunction::ArrayFill => Arc::new(array_expressions::array_fill),
         BuiltinScalarFunction::ArrayLength => Arc::new(array_expressions::array_length),
-        BuiltinScalarFunction::ArrayNdims => Arc::new(array_expressions::array_ndims),
+        BuiltinScalarFunction::ArrayNdims => {
+            Arc::new(|args| make_scalar_function(array_expressions::array_ndims)(args))
+        }
         BuiltinScalarFunction::ArrayPosition => {
             Arc::new(array_expressions::array_position)
         }
@@ -409,12 +413,14 @@ pub fn create_physical_fun(
         }
         BuiltinScalarFunction::ArrayRemove => Arc::new(array_expressions::array_remove),
         BuiltinScalarFunction::ArrayReplace => Arc::new(array_expressions::array_replace),
-        BuiltinScalarFunction::ArrayToString => {
-            Arc::new(array_expressions::array_to_string)
-        }
+        BuiltinScalarFunction::ArrayToString => Arc::new(|args| {
+            make_scalar_function(array_expressions::array_to_string)(args)
+        }),
         BuiltinScalarFunction::Cardinality => Arc::new(array_expressions::cardinality),
         BuiltinScalarFunction::MakeArray => Arc::new(array_expressions::make_array),
-        BuiltinScalarFunction::TrimArray => Arc::new(array_expressions::trim_array),
+        BuiltinScalarFunction::TrimArray => {
+            Arc::new(|args| make_scalar_function(array_expressions::trim_array)(args))
+        }
 
         // string functions
         BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
