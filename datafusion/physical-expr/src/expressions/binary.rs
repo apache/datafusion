@@ -296,6 +296,122 @@ macro_rules! compute_utf8_op_dyn_scalar {
     }};
 }
 
+macro_rules! list_comparison {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident) => {{
+        let first_array = downcast_value!($FIRST_ARRAY, $ARRAY_TYPE).unwrap();
+        let second_array = downcast_value!($SECOND_ARRAY, $ARRAY_TYPE).unwrap();
+        let res = binary_array_op_dyn_scalar!(&first_array, &second_array, $OP);
+
+        for i in 0..res.len() {
+            if !res.is_null(i) {
+                return Ok(res.value(i));
+            }
+        }
+
+        return Err(DataFusionError::Internal(format!(
+            "Opps!"
+        )))
+    }};
+}
+
+macro_rules! list_comparison_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        match ($LEFT.data_type(), $RIGHT.data_type()) {
+            (DataType::List(_), DataType::List(_)) => {
+                let first_array = downcast_value!($LEFT, ListArray).unwrap();
+                let second_array = downcast_value!($RIGHT, ListArray).unwrap();
+                list_comparison_op(&first_array.value(0), &second_array.value(0))
+            }
+            (DataType::Utf8, DataType::Utf8) => list_comparison!($LEFT, $RIGHT, StringArray),
+            (DataType::LargeUtf8, DataType::LargeUtf8) => list_comparison!($LEFT, $RIGHT, LargeStringArray),
+            (DataType::Boolean, DataType::Boolean) => list_comparison!($LEFT, $RIGHT, BooleanArray),
+            (DataType::Float32, DataType::Float32) => list_comparison!($LEFT, $RIGHT, Float32Array),
+            (DataType::Float64, DataType::Float64) => list_comparison!($LEFT, $RIGHT, Float64Array),
+            (DataType::Int8, DataType::Int8) => list_comparison!($LEFT, $RIGHT, Int8Array),
+            (DataType::Int16, DataType::Int16) => list_comparison!($LEFT, $RIGHT, Int16Array),
+            (DataType::Int32, DataType::Int32) => list_comparison!($LEFT, $RIGHT, Int32Array),
+            (DataType::Int64, DataType::Int64) => list_comparison!($LEFT, $RIGHT, Int64Array),
+            (DataType::UInt8, DataType::UInt8) => list_comparison!($LEFT, $RIGHT, UInt8Array),
+            (DataType::UInt16, DataType::UInt16) => list_comparison!($LEFT, $RIGHT, UInt16Array),
+            (DataType::UInt32, DataType::UInt32) => list_comparison!($LEFT, $RIGHT, UInt32Array),
+            (DataType::UInt64, DataType::UInt64) => list_comparison!($LEFT, $RIGHT, UInt64Array),
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Opps!"
+                ))
+            }
+        }
+    }};
+}
+
+macro_rules! list_equality {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $ARRAYTYPE:ident) => {{
+        let first_array = downcast_value!($FIRST_ARRAY, $ARRAY_TYPE).unwrap();
+        let second_array = downcast_value!($SECOND_ARRAY, $ARRAY_TYPE).unwrap();
+        let res = binary_array_op_dyn_scalar!(&first_array, &second_array, $OP);
+
+        bool_and(res)
+    }};
+}
+
+macro_rules! list_equality_op {
+    (first_array: &dyn Array, second_array: &dyn Array) => {{
+        match (first_array.data_type(), second_array.data_type()) {
+            (DataType::List(_), DataType::List(_)) => {
+                let first_array = downcast_value!(first_array, ListArray).unwrap();
+                let second_array = downcast_value!(second_array, ListArray).unwrap();
+                if first_array.len() != second_array.len() {
+                    return false;
+                }
+
+                bool_and(BooleanArray::from(
+                    first_array.iter().zip(second_array.iter()).map(|(x, y)| list_equality_op(&x, &y)).collect()
+                ))
+            }
+            (DataType::Utf8, DataType::Utf8) => list_comparison!(first_array, second_array, StringArray),
+            (DataType::LargeUtf8, DataType::LargeUtf8) => list_comparison!(first_array, second_array, LargeStringArray),
+            (DataType::Boolean, DataType::Boolean) => list_comparison!(first_array, second_array, BooleanArray),
+            (DataType::Float32, DataType::Float32) => list_comparison!(first_array, second_array, Float32Array),
+            (DataType::Float64, DataType::Float64) => list_comparison!(first_array, second_array, Float64Array),
+            (DataType::Int8, DataType::Int8) => list_comparison!(first_array, second_array, Int8Array),
+            (DataType::Int16, DataType::Int16) => list_comparison!(first_array, second_array, Int16Array),
+            (DataType::Int32, DataType::Int32) => list_comparison!(first_array, second_array, Int32Array),
+            (DataType::Int64, DataType::Int64) => list_comparison!(first_array, second_array, Int64Array),
+            (DataType::UInt8, DataType::UInt8) => list_comparison!(first_array, second_array, UInt8Array),
+            (DataType::UInt16, DataType::UInt16) => list_comparison!(first_array, second_array, UInt16Array),
+            (DataType::UInt32, DataType::UInt32) => list_comparison!(first_array, second_array, UInt32Array),
+            (DataType::UInt64, DataType::UInt64) => list_comparison!(first_array, second_array, UInt64Array),
+            _ => {
+                return Err(DataFusionError::Internal(
+                    "Opps!"
+                ))
+            }
+        }
+    }};
+}
+
+/// Invoke a compute kernel on a data array and a scalar value
+macro_rules! compute_list_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
+        if let Some(value) = $RIGHT {
+            Ok(Arc::new(list_comparison_op!($LEFT, value, $OP, $OP_TYPE)))
+            /*Ok(Arc::new(match $OP {
+                Lt | Gt | LtEq | GtEq => list_comparison_op!($LEFT, $RIGHT, $OP, $OP_TYPE),
+                Eq | NotEq => list_equality_op!($LEFT, value, $OP, $OP_TYPE),
+            }))*/
+        } else {
+            // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE
+            Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
+        }
+    }};
+}
+
+macro_rules! compute_list_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:expr) => {{
+        Ok(Arc::new(list_comparison_op!($LEFT, $RIGHT, $OP, $OP_TYPE)))
+    }};
+}
+
 /// Invoke a compute kernel on a data array and a scalar value
 macro_rules! compute_binary_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
@@ -555,6 +671,7 @@ macro_rules! binary_array_op {
                 compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
             }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
+            DataType::List(_) => compute_list_op!($LEFT, $RIGHT, $OP, ListArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
                 other, stringify!($OP)
@@ -990,6 +1107,21 @@ fn unwrap_dict_value(v: ScalarValue) -> ScalarValue {
     }
 }
 
+macro_rules! compute_dyn {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+
+    }};
+}
+
+macro_rules! binary_array_op_dyn {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+            DataType::List(_) => compute_list_dyn!($LEFT, $RIGHT, $OP, $OP_TYPE),
+            _ => compute_dyn!($LEFT, $RIGHT, $OP, $OP_TYPE),
+        }
+    }};
+}
+
 /// The binary_array_op_dyn_scalar macro includes types that extend
 /// beyond the primitive, such as Utf8 strings.
 #[macro_export]
@@ -1025,6 +1157,7 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::TimestampMillisecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::TimestampMicrosecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::TimestampNanosecond(v, _) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
+            ScalarValue::List(v, _) => compute_list_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for scalar operation '{}' on dyn array",
                 other, stringify!($OP)))
@@ -3563,6 +3696,746 @@ mod tests {
             Some(false),
             Some(false),
             Some(true),
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::IsNotDistinctFrom, expected).unwrap();
+    }
+
+    /// Returns (schema, a: ListArray, b: ListArray) with possible inputs
+    ///
+    /// a: [[[1, 2], [6, 8]], [[5, 7], [1, 10]], [[NULL, 7], [1, 10]], [[5, 6], [7, 8]], [[1, 2], [3, 4]], [[1, 2], [3, 4]], [[7, 8], [NULL, 4]]
+    /// b: [[[3, 4], [2, 4]], [[1, 6], [2, 2]], [[1, NULL], [2, 2]], [[1, 2], [3, 4]], [[5, 6], [7, 8]], [[1, 2], [3, 4]], [[7, 8], [NULL, 4]]
+    fn list_test_arrays() -> (SchemaRef, ArrayRef, ArrayRef) {
+        let field = Arc::new(Field::new(
+            "item",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Int64,
+                true,
+            ))
+            ),
+            true,
+        ));
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::List(field), true),
+            Field::new("b", DataType::List(field), true),
+        ]);
+
+        let mut builder = ListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(6);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(5);
+        builder.values().values().append_value(7);
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(10);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_null();
+        builder.values().values().append_value(7);
+        builder.values().append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(10);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(5);
+        builder.values().values().append_value(6);
+        builder.values().append(true);
+        builder.values().values().append_value(7);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(7);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.values().values().append_null();
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.append_null();
+        builder.append(true);
+        let a = builder.finish();
+    
+        let mut builder = ListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.values().values().append_value(2);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(6);
+        builder.values().append(true);
+        builder.values().values().append_value(2);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_null();
+        builder.values().append(true);
+        builder.values().values().append_value(2);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(5);
+        builder.values().values().append_value(6);
+        builder.values().append(true);
+        builder.values().values().append_value(7);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(7);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.values().values().append_null();
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
+        let b = builder.finish();
+
+        (Arc::new(schema), Arc::new(a), Arc::new(b))
+    }
+
+    /// Returns (schema, ListArray) with [[6, 8], [1, 10], [1, 10], [7, 8], [3, 4], [3, 4], [NULL, 4], NULL]
+    fn scalar_list_test_array() -> (SchemaRef, ArrayRef) {
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let schema = Schema::new(vec![Field::new("a", DataType::List(field), true)]);
+        let data = vec![
+            Some(vec![Some(6), Some(8)]),
+            Some(vec![Some(1), Some(10)]),
+            Some(vec![Some(1), Some(10)]),
+            Some(vec![Some(7), Some(8)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![Some(3), Some(4)]),
+            Some(vec![None, Some(4)]),
+            None,
+        ];
+        let a = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        (Arc::new(schema), Arc::new(a))
+    }
+
+    #[test]
+    fn eq_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = vec![
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            None,
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::Eq, expected).unwrap();
+    }
+
+    #[test]
+    fn eq_op_list_scalar() {
+        let (schema, a) = scalar_list_test_array();
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let expected = [
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            &a,
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn neq_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = [
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            None,
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::NotEq, expected).unwrap();
+    }
+
+    #[test]
+    fn neq_op_list_scalar() {
+        let (schema, a) = scalar_list_test_array();
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let expected = [
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            &a,
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn lt_op_list() {
+        let (schema, a, b) =list_test_arrays();
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            None,
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::Lt, expected).unwrap();
+    }
+
+    #[test]
+    fn lt_op_list_scalar() {
+        let (schema, a) = scalar_list_test_array();
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            &a,
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn lt_eq_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::LtEq, expected).unwrap();
+    }
+
+    #[test]
+    fn lt_eq_op_list_scalar() {
+        let (schema, a) = scalar_list_test_array();
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            &a,
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn gt_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(false),
+            None,
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::Gt, expected).unwrap();
+    }
+
+    #[test]
+    fn gt_op_list_scalar() {
+        let (schema, a) = scalar_list_test_array();
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn gt_eq_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false), 
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            None,
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::GtEq, expected).unwrap();
+    }
+
+    #[test]
+    fn gt_eq_op_list_scalar() {
+        let (schema, a) = scalar_list_test_array();
+        let field = Arc::new(Field::new("item", DataType::Int64, true));
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            &a,
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(3)), ScalarValue::Int64(Some(4))]), field),
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            None,
+        ].iter().collect();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            &a,
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
+
+        let expected = [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+            None,
+        ].iter().collect();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::List(Some(vec![ScalarValue::Int64(Some(5)), ScalarValue::Int64(Some(6))]), field),
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn is_distinct_from_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = [
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true),
+        ]
+        .iter()
+        .collect();
+        apply_logic_op(&schema, &a, &b, Operator::IsDistinctFrom, expected).unwrap();
+    }
+
+    #[test]
+    fn is_not_distinct_from_op_list() {
+        let (schema, a, b) = list_test_arrays();
+        let expected = [
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
         ]
         .iter()
         .collect();
