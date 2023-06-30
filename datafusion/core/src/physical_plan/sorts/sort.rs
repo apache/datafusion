@@ -189,6 +189,7 @@ impl ExternalSorter {
                 &self.expr,
                 self.metrics.baseline.clone(),
                 self.batch_size,
+                self.fetch,
             )
         } else if !self.in_mem_batches.is_empty() {
             let result = self.in_mem_sort_stream(self.metrics.baseline.clone());
@@ -285,14 +286,13 @@ impl ExternalSorter {
             })
             .collect::<Result<_>>()?;
 
-        // TODO: Pushdown fetch to streaming merge (#6000)
-
         streaming_merge(
             streams,
             self.schema.clone(),
             &self.expr,
             metrics,
             self.batch_size,
+            self.fetch,
         )
     }
 

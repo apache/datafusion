@@ -71,6 +71,8 @@ pub struct SortPreservingMergeExec {
     expr: Vec<PhysicalSortExpr>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Optional number of rows to fetch
+    fetch: Option<usize>
 }
 
 impl SortPreservingMergeExec {
@@ -80,7 +82,13 @@ impl SortPreservingMergeExec {
             input,
             expr,
             metrics: ExecutionPlanMetricsSet::new(),
+            fetch: None,
         }
+    }
+    /// Sets the number of rows to fetch 
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
     }
 
     /// Input schema
@@ -92,6 +100,12 @@ impl SortPreservingMergeExec {
     pub fn expr(&self) -> &[PhysicalSortExpr] {
         &self.expr
     }
+
+    /// Fetch
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+    
 }
 
 impl ExecutionPlan for SortPreservingMergeExec {
@@ -140,7 +154,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Ok(Arc::new(SortPreservingMergeExec::new(
             self.expr.clone(),
             children[0].clone(),
-        )))
+        ).with_fetch(self.fetch)))
     }
 
     fn execute(
@@ -192,6 +206,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     &self.expr,
                     BaselineMetrics::new(&self.metrics, partition),
                     context.session_config().batch_size(),
+                    self.fetch,
                 )?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
@@ -209,7 +224,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))
+                write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, "fetch={fetch}")?;
+                };
+
+                Ok(())
             }
         }
     }
@@ -814,6 +834,7 @@ mod tests {
             sort.as_slice(),
             BaselineMetrics::new(&metrics, 0),
             task_ctx.session_config().batch_size(),
+            None,
         )
         .unwrap();
 
