@@ -225,7 +225,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
                 write!(f, "SortPreservingMergeExec: [{}]", expr.join(","))?;
                 if let Some(fetch) = self.fetch {
-                    write!(f, "fetch={fetch}")?;
+                    write!(f, ", fetch={fetch}")?;
                 };
 
                 Ok(())
