@@ -184,7 +184,7 @@ impl ExprSchemable for Expr {
                     .take(MAX_INSPECT_LIMIT)
                     .find_map(|e| {
                         e.nullable(input_schema)
-                            .map(|x| if x { Some(()) } else { None })
+                            .map(|nullable| if nullable { Some(()) } else { None })
                             .transpose()
                     })
                     .transpose()?;
