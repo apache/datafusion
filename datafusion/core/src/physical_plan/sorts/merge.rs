@@ -247,8 +247,7 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
                     .unwrap_or(false)
                 {
                     self.aborted = true;
-                }
-                if self.in_progress.len() < self.batch_size {
+                } else if self.in_progress.len() < self.batch_size {
                     continue;
                 }
             }
