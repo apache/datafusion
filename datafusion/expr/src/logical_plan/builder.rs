@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::expr::Alias;
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols,
@@ -476,7 +477,7 @@ impl LogicalPlanBuilder {
         // As described in https://github.com/apache/arrow-datafusion/issues/5293
         let all_aliases = missing_exprs.iter().all(|e| {
             projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(expr, _) = proj_expr {
+                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
                     e == expr.as_ref()
                 } else {
                     false
@@ -1131,7 +1132,7 @@ pub fn project_with_column_index(
         .into_iter()
         .enumerate()
         .map(|(i, e)| match e {
-            Expr::Alias(_, ref name) if name != schema.field(i).name() => {
+            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
                 e.unalias().alias(schema.field(i).name())
             }
             Expr::Column(Column {

@@ -17,7 +17,7 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, BinaryExpr, Cast, GetIndexedField, InList,
+    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetIndexedField, InList,
     InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort, TryCast, WindowFunction,
 };
 use crate::field_util::get_indexed_field;
@@ -58,7 +58,7 @@ impl ExprSchemable for Expr {
     /// (e.g. `[utf8] + [bool]`).
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
-            Expr::Alias(expr, name) => match &**expr {
+            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
                 Expr::Placeholder(Placeholder { data_type, .. }) => match &data_type {
                     None => schema.data_type(&Column::from_name(name)).cloned(),
                     Some(dt) => Ok(dt.clone()),
@@ -170,7 +170,7 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool> {
         match self {
-            Expr::Alias(expr, _)
+            Expr::Alias(Alias { expr, .. })
             | Expr::Not(expr)
             | Expr::Negative(expr)
             | Expr::Sort(Sort { expr, .. })

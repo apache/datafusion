@@ -27,6 +27,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result,
 };
+use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     col,
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
@@ -277,7 +278,7 @@ impl CommonSubexprEliminate {
             }
             for (expr_rewritten, expr_orig) in rewritten.into_iter().zip(new_aggr_expr) {
                 if expr_rewritten == expr_orig {
-                    if let Expr::Alias(expr, name) = expr_rewritten {
+                    if let Expr::Alias(Alias { expr, name, .. }) = expr_rewritten {
                         agg_exprs.push(expr.alias(&name));
                         proj_exprs.push(Expr::Column(Column::from_name(name)));
                     } else {

@@ -17,7 +17,7 @@
 
 //! Expression utilities
 
-use crate::expr::{Sort, WindowFunction};
+use crate::expr::{Alias, Sort, WindowFunction};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, Extension, Filter, Join, Limit, Partitioning, Prepare,
@@ -275,7 +275,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
             Expr::ScalarVariable(_, _)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::Literal(_)
             | Expr::BinaryExpr { .. }
             | Expr::Like { .. }
@@ -781,7 +781,7 @@ pub fn from_plan(
                             // subqueries could contain aliases so we don't recurse into those
                             Ok(RewriteRecursion::Stop)
                         }
-                        Expr::Alias(_, _) => Ok(RewriteRecursion::Mutate),
+                        Expr::Alias(_) => Ok(RewriteRecursion::Mutate),
                         _ => Ok(RewriteRecursion::Continue),
                     }
                 }
@@ -1103,8 +1103,8 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::OuterReferenceColumn(_, _) => e,
-        Expr::Alias(inner_expr, name) => {
-            columnize_expr(*inner_expr, input_schema).alias(name)
+        Expr::Alias(Alias { expr, name, .. }) => {
+            columnize_expr(*expr, input_schema).alias(name)
         }
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
