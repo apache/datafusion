@@ -692,7 +692,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Arc::new(SortPreservingMergeExec::new(exprs, input)))
+                let fetch = if sort.fetch == -1 {None} else {Some(sort.fetch as usize)};
+                Ok(Arc::new(SortPreservingMergeExec::new(exprs, input).with_fetch(fetch)))
             }
             PhysicalPlanType::Extension(extension) => {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
