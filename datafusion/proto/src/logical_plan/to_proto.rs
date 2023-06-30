@@ -36,7 +36,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
+    self, Alias, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
     Placeholder, ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
@@ -468,10 +468,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },
-            Expr::Alias(expr, alias) => {
+            Expr::Alias(Alias { expr, name, .. }) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    alias: alias.to_owned(),
+                    alias: name.to_owned(),
                 });
                 Self {
                     expr_type: Some(ExprType::Alias(alias)),

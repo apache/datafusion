@@ -82,7 +82,7 @@ use std::sync::Arc;
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Expr {
     /// An expression with a specific name.
-    Alias(Box<Expr>, String),
+    Alias(Alias),
     /// A named reference to a qualified filed in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
@@ -178,6 +178,22 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+}
+
+/// Alias expression
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Alias {
+    pub expr: Box<Expr>,
+    pub name: String,
+}
+
+impl Alias {
+    pub fn new(expr: Expr, name: impl Into<String>) -> Self {
+        Self {
+            expr: Box::new(expr),
+            name: name.into(),
+        }
+    }
 }
 
 /// Binary expression
@@ -789,14 +805,14 @@ impl Expr {
                 asc,
                 nulls_first,
             }) => Expr::Sort(Sort::new(Box::new(expr.alias(name)), asc, nulls_first)),
-            _ => Expr::Alias(Box::new(self), name.into()),
+            _ => Expr::Alias(Alias::new(self, name.into())),
         }
     }
 
     /// Remove an alias from an expression if one exists.
     pub fn unalias(self) -> Expr {
         match self {
-            Expr::Alias(expr, _) => expr.as_ref().clone(),
+            Expr::Alias(alias) => alias.expr.as_ref().clone(),
             _ => self,
         }
     }
@@ -914,7 +930,7 @@ macro_rules! expr_vec_fmt {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Expr::Alias(expr, alias) => write!(f, "{expr} AS {alias}"),
+            Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
@@ -1180,7 +1196,7 @@ fn create_function_name(fun: &str, distinct: bool, args: &[Expr]) -> Result<Stri
 /// This function recursively transverses the expression for names such as "CAST(a > 2)".
 fn create_name(e: &Expr) -> Result<String> {
     match e {
-        Expr::Alias(_, name) => Ok(name.clone()),
+        Expr::Alias(Alias { name, .. }) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::OuterReferenceColumn(_, c) => Ok(format!("outer_ref({})", c.flat_name())),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
