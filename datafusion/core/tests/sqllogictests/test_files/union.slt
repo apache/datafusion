@@ -308,7 +308,7 @@ Limit: skip=0, fetch=5
 --------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 GlobalLimitExec: skip=0, fetch=5
---SortPreservingMergeExec: [c9@1 DESC]
+--SortPreservingMergeExec: [c9@1 DESC], fetch=5
 ----UnionExec
 ------SortExec: expr=[c9@1 DESC]
 --------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
