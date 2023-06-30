@@ -747,7 +747,7 @@ pub struct WindowExprNode {
     /// repeated LogicalExprNode filter = 7;
     #[prost(message, optional, tag = "8")]
     pub window_frame: ::core::option::Option<WindowFrame>,
-    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2")]
+    #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2, 3, 9")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
 }
 /// Nested message and enum types in `WindowExprNode`.
@@ -757,9 +757,12 @@ pub mod window_expr_node {
     pub enum WindowFunction {
         #[prost(enumeration = "super::AggregateFunction", tag = "1")]
         AggrFunction(i32),
-        /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
+        #[prost(string, tag = "3")]
+        Udaf(::prost::alloc::string::String),
+        #[prost(string, tag = "9")]
+        Udwf(::prost::alloc::string::String),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
