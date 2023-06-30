@@ -72,7 +72,7 @@ pub struct SortPreservingMergeExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional number of rows to fetch
-    fetch: Option<usize>
+    fetch: Option<usize>,
 }
 
 impl SortPreservingMergeExec {
@@ -85,7 +85,7 @@ impl SortPreservingMergeExec {
             fetch: None,
         }
     }
-    /// Sets the number of rows to fetch 
+    /// Sets the number of rows to fetch
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
         self
@@ -105,7 +105,6 @@ impl SortPreservingMergeExec {
     pub fn fetch(&self) -> Option<usize> {
         self.fetch
     }
-    
 }
 
 impl ExecutionPlan for SortPreservingMergeExec {
@@ -151,10 +150,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SortPreservingMergeExec::new(
-            self.expr.clone(),
-            children[0].clone(),
-        ).with_fetch(self.fetch)))
+        Ok(Arc::new(
+            SortPreservingMergeExec::new(self.expr.clone(), children[0].clone())
+                .with_fetch(self.fetch),
+        ))
     }
 
     fn execute(

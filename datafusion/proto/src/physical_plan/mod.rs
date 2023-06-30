@@ -1144,7 +1144,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: exec.fetch().map(|f|f as i64).unwrap_or(-1)
+                        fetch: exec.fetch().map(|f| f as i64).unwrap_or(-1),
                     }),
                 )),
             })

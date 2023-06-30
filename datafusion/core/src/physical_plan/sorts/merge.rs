@@ -80,7 +80,7 @@ pub(crate) fn streaming_merge(
         schema,
         metrics,
         batch_size,
-        fetch
+        fetch,
     )))
 }
 
@@ -241,16 +241,19 @@ impl<C: Cursor> SortPreservingMergeStream<C> {
                 self.in_progress.push_row(stream_idx);
 
                 // stop sorting if fetch has been reached
-                if self.fetch.map(|fetch| self.produced + self.in_progress.len() >= fetch).unwrap_or(false) {
+                if self
+                    .fetch
+                    .map(|fetch| self.produced + self.in_progress.len() >= fetch)
+                    .unwrap_or(false)
+                {
                     self.aborted = true;
                 }
-                if self.in_progress.len() < self.batch_size  {
+                if self.in_progress.len() < self.batch_size {
                     continue;
                 }
             }
 
             self.produced += self.in_progress.len();
-
 
             return Poll::Ready(self.in_progress.build_record_batch().transpose());
         }

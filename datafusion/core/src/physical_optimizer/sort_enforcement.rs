@@ -423,7 +423,8 @@ fn parallelize_sorts(
         let sort_exprs = get_sort_exprs(&plan)?;
         add_sort_above(&mut prev_layer, sort_exprs.to_vec())?;
         let sort_fetch = get_sort_fetch(&plan)?;
-        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer).with_fetch(sort_fetch);
+        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
+            .with_fetch(sort_fetch);
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
             plan: Arc::new(spm),
             coalesce_onwards: vec![None],
@@ -802,7 +803,7 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-/// gets 
+/// gets
 fn get_sort_fetch(sort_any: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok(sort_exec.fetch())
