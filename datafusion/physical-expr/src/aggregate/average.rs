@@ -483,7 +483,8 @@ where
             None => {
                 let iter = group_indicies.iter().zip(data.iter());
                 for (group_index, new_value) in iter {
-                    self.sums[*group_index].add_wrapping(*new_value);
+                    let sum = &mut self.sums[*group_index];
+                    *sum = sum.add_wrapping(*new_value);
                 }
             }
             //
@@ -504,7 +505,8 @@ where
                         group_index_chunk.iter().zip(data_chunk.iter()).for_each(
                             |(group_index, new_value)| {
                                 if (mask & index_mask) != 0 {
-                                    self.sums[*group_index].add_wrapping(*new_value);
+                                    let sum = &mut self.sums[*group_index];
+                                    *sum = sum.add_wrapping(*new_value);
                                 }
                                 index_mask <<= 1;
                             },
@@ -518,7 +520,8 @@ where
                     .enumerate()
                     .for_each(|(i, (group_index, new_value))| {
                         if remainder_bits & (1 << i) != 0 {
-                            self.sums[*group_index].add_wrapping(*new_value);
+                            let sum = &mut self.sums[*group_index];
+                            *sum = sum.add_wrapping(*new_value);
                         }
                     });
             }
@@ -550,6 +553,7 @@ where
 
         // update values
         self.update_sums(values, group_indicies, opt_filter, total_num_groups)?;
+
         Ok(())
     }
 

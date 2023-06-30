@@ -20,7 +20,7 @@
 //! POC demonstration of GroupByHashApproach
 
 use datafusion_physical_expr::GroupsAccumulator;
-use log::info;
+use log::debug;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -123,7 +123,7 @@ impl GroupedHashAggregateStream2 {
         context: Arc<TaskContext>,
         partition: usize,
     ) -> Result<Self> {
-        info!("Creating GroupedHashAggregateStream2");
+        debug!("Creating GroupedHashAggregateStream2");
         let agg_schema = Arc::clone(&agg.schema);
         let agg_group_by = agg.group_by.clone();
         let agg_filter_expr = agg.filter_expr.clone();
@@ -208,7 +208,7 @@ impl GroupedHashAggregateStream2 {
 fn create_accumulators(
     aggregate_exprs: Vec<Arc<dyn AggregateExpr>>,
 ) -> Result<Vec<Box<dyn GroupsAccumulator>>> {
-    info!("Creating accumulator for {aggregate_exprs:#?}");
+    debug!("Creating accumulator for {aggregate_exprs:#?}");
     aggregate_exprs
         .into_iter()
         .map(|agg_expr| agg_expr.create_groups_accumulator())
