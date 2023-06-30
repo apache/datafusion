@@ -1431,8 +1431,7 @@ mod roundtrip_tests {
         logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
     };
     use crate::logical_plan::LogicalExtensionCodec;
-    use arrow::array::{AsArray, Float64Array};
-    use arrow::datatypes::{Fields, Float64Type, Schema, SchemaRef, UnionFields};
+    use arrow::datatypes::{Fields, Schema, SchemaRef, UnionFields};
     use arrow::{
         array::ArrayRef,
         datatypes::{
@@ -2793,9 +2792,9 @@ mod roundtrip_tests {
 
         // 5. test with AggregateUDF
         #[derive(Debug)]
-        struct Dummy {}
+        struct DummyAggr {}
 
-        impl Accumulator for Dummy {
+        impl Accumulator for DummyAggr {
             fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
                 Ok(vec![])
             }
@@ -2832,7 +2831,7 @@ mod roundtrip_tests {
             Arc::new(DataType::Float64),
             Volatility::Immutable,
             // This is the accumulator factory; DataFusion uses it to create new accumulators.
-            Arc::new(|_| Ok(Box::new(Dummy {}))),
+            Arc::new(|_| Ok(Box::new(DummyAggr {}))),
             // This is the description of the state. `state()` must match the types here.
             Arc::new(vec![DataType::Float64, DataType::UInt32]),
         );
@@ -2848,61 +2847,26 @@ mod roundtrip_tests {
 
         // 6. test with WindowUDF
         #[derive(Clone, Debug)]
-        struct MyPartitionEvaluator {}
+        struct DummyWindow {}
 
-        impl MyPartitionEvaluator {
-            fn new() -> Self {
-                Self {}
-            }
-        }
-
-        /// Different evaluation methods are called depending on the various
-        /// settings of WindowUDF. This example uses the simplest and most
-        /// general, `evaluate`. See `PartitionEvaluator` for the other more
-        /// advanced uses.
-        impl PartitionEvaluator for MyPartitionEvaluator {
-            /// Tell DataFusion the window function varies based on the value
-            /// of the window frame.
+        impl PartitionEvaluator for DummyWindow {
             fn uses_window_frame(&self) -> bool {
                 true
             }
 
-            /// This function is called once per input row.
-            ///
-            /// `range`specifies which indexes of `values` should be
-            /// considered for the calculation.
-            ///
-            /// Note this is the SLOWEST, but simplest, way to evaluate a
-            /// window function. It is much faster to implement
-            /// evaluate_all or evaluate_all_with_rank, if possible
             fn evaluate(
                 &mut self,
-                values: &[ArrayRef],
-                range: &std::ops::Range<usize>,
+                _values: &[ArrayRef],
+                _range: &std::ops::Range<usize>,
             ) -> Result<ScalarValue> {
-                // Again, the input argument is an array of floating
-                // point numbers to calculate a moving average
-                let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
-
-                let range_len = range.end - range.start;
-
-                // our smoothing function will average all the values in the
-                let output = if range_len > 0 {
-                    let sum: f64 =
-                        arr.values().iter().skip(range.start).take(range_len).sum();
-                    Some(sum / range_len as f64)
-                } else {
-                    None
-                };
-
-                Ok(ScalarValue::Float64(output))
+                Ok(ScalarValue::Float64(None))
             }
         }
 
         fn return_type(arg_types: &[DataType]) -> Result<Arc<DataType>> {
             if arg_types.len() != 1 {
                 return Err(DataFusionError::Plan(format!(
-                    "my_udwf expects 1 argument, got {}: {:?}",
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
                     arg_types.len(),
                     arg_types
                 )));
@@ -2911,12 +2875,11 @@ mod roundtrip_tests {
         }
 
         fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
-            Ok(Box::new(MyPartitionEvaluator::new()))
+            Ok(Box::new(DummyWindow {}))
         }
 
         let dummy_window_udf = WindowUDF {
-            name: String::from("smooth_it"),
-            // it will take 1 arguments -- the column to smooth
+            name: String::from("dummy_udwf"),
             signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
             return_type: Arc::new(return_type),
             partition_evaluator_factory: Arc::new(make_partition_evaluator),
