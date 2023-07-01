@@ -67,9 +67,9 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
 #[cfg_attr(not(feature = "crypto_expressions"), ignore)]
 async fn test_encoding_expressions() -> Result<()> {
     test_expression!("encode('tom','base64')", "dG9t");
-    test_expression!("decode('dG9t','base64')", "tom");
-    test_expression!("encode('tom','hex')", "746F6D");
-    test_expression!("decode('746F6D','hex')", "tom");
+    test_expression!("arrow_cast(decode('dG9t','base64'), 'Utf8')", "tom");
+    test_expression!("encode('tom','hex')", "746f6d");
+    test_expression!("arrow_cast(decode('746f6d','hex'), 'Utf8')", "tom");
 
     Ok(())
 }

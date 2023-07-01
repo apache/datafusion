@@ -632,12 +632,30 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Digest => {
                 utf8_or_binary_to_binary_type(&input_expr_types[0], "digest")
             }
-            BuiltinScalarFunction::Encode => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "encode")
-            }
-            BuiltinScalarFunction::Decode => {
-                utf8_or_binary_to_binary_type(&input_expr_types[0], "decode")
-            }
+            BuiltinScalarFunction::Encode => Ok(match input_expr_types[0] {
+                Utf8 => Utf8,
+                LargeUtf8 => LargeUtf8,
+                Binary => Utf8,
+                LargeBinary => LargeUtf8,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(
+                        "The encode function can only accept utf8 or binary.".to_string(),
+                    ));
+                }
+            }),
+            BuiltinScalarFunction::Decode => Ok(match input_expr_types[0] {
+                Utf8 => Binary,
+                LargeUtf8 => LargeBinary,
+                Binary => Binary,
+                LargeBinary => LargeBinary,
+                _ => {
+                    // this error is internal as `data_types` should have captured this.
+                    return Err(DataFusionError::Internal(
+                        "The decode function can only accept utf8 or binary.".to_string(),
+                    ));
+                }
+            }),
             BuiltinScalarFunction::SplitPart => {
                 utf8_to_str_type(&input_expr_types[0], "split_part")
             }
