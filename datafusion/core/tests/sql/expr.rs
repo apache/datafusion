@@ -65,6 +65,17 @@ async fn test_mathematical_expressions_with_null() -> Result<()> {
 
 #[tokio::test]
 #[cfg_attr(not(feature = "crypto_expressions"), ignore)]
+async fn test_encoding_expressions() -> Result<()> {
+    test_expression!("encode('tom','base64')", "dG9t");
+    test_expression!("decode('dG9t','base64')", "tom");
+    test_expression!("encode('tom','hex')", "746F6D");
+    test_expression!("decode('746F6D','hex')", "tom");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "crypto_expressions"), ignore)]
 async fn test_crypto_expressions() -> Result<()> {
     test_expression!("md5('tom')", "34b7da764b21d298ef307d04d8152dc5");
     test_expression!("digest('tom','md5')", "34b7da764b21d298ef307d04d8152dc5");
