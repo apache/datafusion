@@ -564,6 +564,8 @@ enum ScalarFunction {
   Cardinality = 98;
   TrimArray = 99;
   ArrayContains = 100;
+  Encode = 101;
+  Decode = 102;
 }
 
 message ScalarFunctionNode {
