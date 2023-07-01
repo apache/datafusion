@@ -17,6 +17,8 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+pub mod accumulate;
+
 use arrow_array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;
 
