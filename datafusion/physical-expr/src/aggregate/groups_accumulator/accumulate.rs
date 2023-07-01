@@ -82,6 +82,8 @@ pub fn accumulate_all<T, F>(
     // AAL TODO handle filter values
 
     let data: &[T::Native] = values.values();
+    assert_eq!(data.len(), group_indicies.len());
+
     let iter = group_indicies.iter().zip(data.iter());
     for (&group_index, &new_value) in iter {
         value_fn(group_index, new_value)
@@ -113,6 +115,7 @@ pub fn accumulate_all_nullable<T, F>(
 
     // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
     let data: &[T::Native] = values.values();
+    assert_eq!(data.len(), group_indicies.len());
 
     let group_indices_chunks = group_indicies.chunks_exact(64);
     let data_chunks = data.chunks_exact(64);
