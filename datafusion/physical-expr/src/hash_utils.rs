@@ -96,7 +96,7 @@ fn hash_array_primitve<T>(
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = combine_hashes(value.hash_one(&random_state), *hash);
+                *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         } else {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
