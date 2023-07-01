@@ -17,7 +17,7 @@
 
 //! Vectorized [`accumulate`] and [`accumulate_nullable`] functions
 
-use arrow_array::{Array, ArrowNumericType, PrimitiveArray};
+use arrow_array::{Array, ArrowNumericType, BooleanArray, PrimitiveArray};
 
 /// This function is used to update the accumulator state per row,
 /// for a `PrimitiveArray<T>` with no nulls. It is the inner loop for
@@ -68,7 +68,7 @@ use arrow_array::{Array, ArrowNumericType, PrimitiveArray};
 pub fn accumulate_all<T, F>(
     group_indicies: &[usize],
     values: &PrimitiveArray<T>,
-    opt_filter: Option<&arrow_array::BooleanArray>,
+    opt_filter: Option<&BooleanArray>,
     mut value_fn: F,
 ) where
     T: ArrowNumericType + Send,
@@ -99,7 +99,7 @@ pub fn accumulate_all<T, F>(
 pub fn accumulate_all_nullable<T, F>(
     group_indicies: &[usize],
     values: &PrimitiveArray<T>,
-    opt_filter: Option<&arrow_array::BooleanArray>,
+    opt_filter: Option<&BooleanArray>,
     mut value_fn: F,
 ) where
     T: ArrowNumericType + Send,
@@ -156,15 +156,14 @@ mod test {
     use arrow_array::UInt32Array;
 
     #[test]
-    fn no_nulls_no_filter() {
+    fn accumulate_no_filter() {
         let fixture = Fixture::new();
-        let opt_filter = None;
         let mut accumulated = vec![];
 
         accumulate_all(
             &fixture.group_indices,
             &fixture.values_array(),
-            opt_filter,
+            fixture.opt_filter(),
             |group_index, value| accumulated.push((group_index, value)),
         );
 
@@ -179,15 +178,29 @@ mod test {
     }
 
     #[test]
-    fn nulls_no_filter() {
+    #[should_panic(
+        expected = "assertion failed: `(left == right)`\n  left: `34`,\n right: `0`: Called accumulate_all with nullable array (call accumulate_all_nullable instead)"
+    )]
+    fn accumulate_with_nullable_panics() {
         let fixture = Fixture::new();
-        let opt_filter = None;
+        // call with an array that has nulls should panic
+        accumulate_all(
+            &fixture.group_indices,
+            &fixture.values_with_nulls_array(),
+            fixture.opt_filter(),
+            |_, _| {},
+        );
+    }
+
+    #[test]
+    fn accumulate_nullable_no_filter() {
+        let fixture = Fixture::new();
         let mut accumulated = vec![];
 
         accumulate_all_nullable(
             &fixture.group_indices,
             &fixture.values_with_nulls_array(),
-            opt_filter,
+            fixture.opt_filter(),
             |group_index, value, is_valid| {
                 let value = if is_valid { Some(value) } else { None };
                 accumulated.push((group_index, value));
@@ -204,9 +217,22 @@ mod test {
             })
     }
 
-    // TODO: filter testing with/without null
+    #[test]
+    #[should_panic(
+        expected = "Called accumulate_all_nullable with non-nullable array (call accumulate_all instead)"
+    )]
+    fn accumulate_nullable_with_non_nullable_panics() {
+        let fixture = Fixture::new();
+        // call with an array that has nulls should panic
+        accumulate_all_nullable(
+            &fixture.group_indices,
+            &fixture.values_array(),
+            fixture.opt_filter(),
+            |_, _, _| {},
+        );
+    }
 
-    // TODO: calling nulls/nonulls with wrong one panics
+    // TODO: filter testing with/without null
 
     // fuzz testing
 
@@ -221,6 +247,9 @@ mod test {
         /// same as values, but every third is null:
         /// None, Some(20), Some(30), None ...
         values_with_nulls: Vec<Option<u32>>,
+
+        /// Optional filter (defaults to None)
+        opt_filter: Option<BooleanArray>,
     }
 
     impl Fixture {
@@ -231,6 +260,7 @@ mod test {
                 values_with_nulls: (0..100)
                     .map(|i| if i % 3 == 0 { None } else { Some((i + 1) * 10) })
                     .collect(),
+                opt_filter: None,
             }
         }
 
@@ -242,6 +272,10 @@ mod test {
         /// returns `Self::values_with_nulls` as an Array
         fn values_with_nulls_array(&self) -> UInt32Array {
             UInt32Array::from(self.values_with_nulls.clone())
+        }
+
+        fn opt_filter(&self) -> Option<&BooleanArray> {
+            self.opt_filter.as_ref()
         }
     }
 }
