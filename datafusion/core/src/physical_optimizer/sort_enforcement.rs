@@ -787,7 +787,7 @@ fn remove_corresponding_sort_from_sub_plan(
     Ok(updated_plan)
 }
 
-/// Retrieves a fetch from a `SortExec` when possible
+/// Converts an [ExecutionPlan] trait object to a [PhysicalSortExpr] slice when possible.
 fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExpr]> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok(sort_exec.expr())
@@ -803,7 +803,7 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
     }
 }
 
-/// gets
+/// Retrieves a fetch from a `SortExec` or `SortPreservingMergeExec` when possible
 fn get_sort_fetch(sort_any: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok(sort_exec.fetch())
