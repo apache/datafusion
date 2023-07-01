@@ -34,7 +34,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     ScalarValue,
 };
-use datafusion_expr::expr::Placeholder;
+use datafusion_expr::expr::{Alias, Placeholder};
 use datafusion_expr::{
     abs, acos, acosh, array, array_append, array_concat, array_contains, array_dims,
     array_fill, array_length, array_ndims, array_position, array_positions,
@@ -998,6 +998,36 @@ pub fn parse_expr(
                         window_frame,
                     )))
                 }
+                window_expr_node::WindowFunction::Udaf(udaf_name) => {
+                    let udaf_function = registry.udaf(udaf_name)?;
+                    let args = parse_optional_expr(expr.expr.as_deref(), registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::AggregateUDF(
+                            udaf_function,
+                        ),
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                    )))
+                }
+                window_expr_node::WindowFunction::Udwf(udwf_name) => {
+                    let udwf_function = registry.udwf(udwf_name)?;
+                    let args = parse_optional_expr(expr.expr.as_deref(), registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::WindowUDF(
+                            udwf_function,
+                        ),
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                    )))
+                }
             }
         }
         ExprType::AggregateExpr(expr) => {
@@ -1014,14 +1044,10 @@ pub fn parse_expr(
                 parse_vec_expr(&expr.order_by, registry)?,
             )))
         }
-        ExprType::Alias(alias) => Ok(Expr::Alias(
-            Box::new(parse_required_expr(
-                alias.expr.as_deref(),
-                registry,
-                "expr",
-            )?),
+        ExprType::Alias(alias) => Ok(Expr::Alias(Alias::new(
+            parse_required_expr(alias.expr.as_deref(), registry, "expr")?,
             alias.alias.clone(),
-        )),
+        ))),
         ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
             is_null.expr.as_deref(),
             registry,

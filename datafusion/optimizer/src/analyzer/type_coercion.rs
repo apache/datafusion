@@ -568,8 +568,8 @@ fn coerce_arguments_for_fun(
 
         return expressions
             .iter()
-            .enumerate()
-            .map(|(_, expr)| cast_expr(expr, &new_type, schema))
+            .zip(current_types)
+            .map(|(expr, from_type)| cast_array_expr(expr, &from_type, &new_type, schema))
             .collect();
     }
 
@@ -579,6 +579,20 @@ fn coerce_arguments_for_fun(
 /// Cast `expr` to the specified type, if possible
 fn cast_expr(expr: &Expr, to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
     expr.clone().cast_to(to_type, schema)
+}
+
+/// Cast array `expr` to the specified type, if possible
+fn cast_array_expr(
+    expr: &Expr,
+    from_type: &DataType,
+    to_type: &DataType,
+    schema: &DFSchema,
+) -> Result<Expr> {
+    if from_type.equals_datatype(&DataType::Null) {
+        Ok(expr.clone())
+    } else {
+        expr.clone().cast_to(to_type, schema)
+    }
 }
 
 /// Returns the coerced exprs for each `input_exprs`.

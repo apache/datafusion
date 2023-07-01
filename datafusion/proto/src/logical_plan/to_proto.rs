@@ -36,7 +36,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
+    self, Alias, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, InList, Like,
     Placeholder, ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
@@ -468,10 +468,10 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::Column(c) => Self {
                 expr_type: Some(ExprType::Column(c.into())),
             },
-            Expr::Alias(expr, alias) => {
+            Expr::Alias(Alias { expr, name, .. }) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    alias: alias.to_owned(),
+                    alias: name.to_owned(),
                 });
                 Self {
                     expr_type: Some(ExprType::Alias(alias)),
@@ -584,17 +584,15 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
-                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
-                    WindowFunction::AggregateUDF(_) => {
-                        return Err(Error::NotImplemented(
-                            "UDAF as window function in proto".to_string(),
-                        ))
+                    WindowFunction::AggregateUDF(aggr_udf) => {
+                        protobuf::window_expr_node::WindowFunction::Udaf(
+                            aggr_udf.name.clone(),
+                        )
                     }
-                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/6733
-                    WindowFunction::WindowUDF(_) => {
-                        return Err(Error::NotImplemented(
-                            "UDWF as window function in proto".to_string(),
-                        ))
+                    WindowFunction::WindowUDF(window_udf) => {
+                        protobuf::window_expr_node::WindowFunction::Udwf(
+                            window_udf.name.clone(),
+                        )
                     }
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
