@@ -84,7 +84,7 @@ macro_rules! hash_float_value {
 }
 hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 
-fn hash_array_primitve<T>(
+fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
     random_state: &RandomState,
     hashes_buffer: &mut [u64],
@@ -253,7 +253,7 @@ pub fn create_hashes<'a>(
         // combine hashes with `combine_hashes` for all columns besides the first
         let rehash = i >= 1;
         downcast_primitive_array! {
-            array => hash_array_primitve(array, random_state, hashes_buffer, rehash),
+            array => hash_array_primitive(array, random_state, hashes_buffer, rehash),
             DataType::Null => hash_null(random_state, hashes_buffer, rehash),
             DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, rehash),
             DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, rehash),
