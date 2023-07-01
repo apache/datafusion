@@ -100,7 +100,7 @@ fn hash_array_primitive<T>(
             }
         } else {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(&random_state);
+                *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
