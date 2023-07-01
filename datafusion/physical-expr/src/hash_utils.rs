@@ -266,11 +266,11 @@ pub fn create_hashes<'a>(
             }
             DataType::Decimal128(_, _) => {
                 let array = as_primitive_array::<Decimal128Type>(array)?;
-                hash_array_primitve(array, random_state, hashes_buffer, rehash)
+                hash_array_primitive(array, random_state, hashes_buffer, rehash)
             }
             DataType::Decimal256(_, _) => {
                 let array = as_primitive_array::<Decimal256Type>(array)?;
-                hash_array_primitve(array, random_state, hashes_buffer, rehash)
+                hash_array_primitive(array, random_state, hashes_buffer, rehash)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 array => hash_dictionary(array, random_state, hashes_buffer, rehash)?,
