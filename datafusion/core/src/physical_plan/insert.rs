@@ -278,8 +278,7 @@ fn check_not_null_contraits(
     batch: RecordBatch,
     column_indices: &Vec<usize>,
 ) -> Result<RecordBatch> {
-    for i in column_indices {
-        let index = *i;
+    for &index in column_indices {
         if batch.num_columns() <= index {
             return Err(DataFusionError::Execution(format!(
                 "Invalid batch column count {} expected > {}",
