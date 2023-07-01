@@ -106,14 +106,14 @@ fn hash_array_primitve<T>(
     } else if rehash {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                let value = unsafe {array.value_unchecked(i)};
+                let value = unsafe { array.value_unchecked(i) };
                 *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         }
     } else {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                let value = unsafe {array.value_unchecked(i)};
+                let value = unsafe { array.value_unchecked(i) };
                 *hash = value.hash_one(random_state);
             }
         }
@@ -132,26 +132,26 @@ fn hash_array<T>(
     if array.null_count() == 0 {
         if rehash {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value = unsafe {array.value_unchecked(i)};
+                let value = unsafe { array.value_unchecked(i) };
                 *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         } else {
             for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                let value= unsafe {array.value_unchecked(i)};
+                let value = unsafe { array.value_unchecked(i) };
                 *hash = value.hash_one(random_state);
             }
         }
     } else if rehash {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                let value= unsafe {array.value_unchecked(i)};
+                let value = unsafe { array.value_unchecked(i) };
                 *hash = combine_hashes(value.hash_one(random_state), *hash);
             }
         }
     } else {
         for (i, hash) in hashes_buffer.iter_mut().enumerate() {
             if !array.is_null(i) {
-                let value= unsafe {array.value_unchecked(i)};
+                let value = unsafe { array.value_unchecked(i) };
                 *hash = value.hash_one(random_state);
             }
         }

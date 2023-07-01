@@ -330,13 +330,13 @@ impl GroupedHashAggregateStream {
         } = &mut self.aggr_state;
 
         for (row, hash) in batch_hashes.into_iter().enumerate() {
-            let entry = map.get_mut(hash, |(hash2, group_idx)| {
+            let entry = map.get_mut(hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
                 let group_state = &group_states[*group_idx];
 
-                hash == *hash2 && group_rows.row(row) == group_state.group_by_values.row()
+                group_rows.row(row) == group_state.group_by_values.row()
             });
 
             match entry {
