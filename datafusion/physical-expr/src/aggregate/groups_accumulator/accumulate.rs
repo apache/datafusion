@@ -159,27 +159,11 @@ mod test {
     use super::*;
 
     use arrow_array::UInt32Array;
+    use rand::{rngs::ThreadRng, Rng};
 
     #[test]
     fn accumulate_no_filter() {
-        let fixture = Fixture::new();
-        let mut accumulated = vec![];
-
-        accumulate_all(
-            &fixture.group_indices,
-            &fixture.values_array(),
-            fixture.opt_filter(),
-            |group_index, value| accumulated.push((group_index, value)),
-        );
-
-        // Should have see all indexes and values in order
-        accumulated
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, (group_index, value))| {
-                assert_eq!(group_index, fixture.group_indices[i]);
-                assert_eq!(value, fixture.values[i]);
-            })
+        Fixture::new().accumulate_all_test()
     }
 
     #[test]
@@ -199,27 +183,7 @@ mod test {
 
     #[test]
     fn accumulate_nullable_no_filter() {
-        let fixture = Fixture::new();
-        let mut accumulated = vec![];
-
-        accumulate_all_nullable(
-            &fixture.group_indices,
-            &fixture.values_with_nulls_array(),
-            fixture.opt_filter(),
-            |group_index, value, is_valid| {
-                let value = if is_valid { Some(value) } else { None };
-                accumulated.push((group_index, value));
-            },
-        );
-
-        // Should have see all indexes and values in order
-        accumulated
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, (group_index, value))| {
-                assert_eq!(group_index, fixture.group_indices[i]);
-                assert_eq!(value, fixture.values_with_nulls[i]);
-            })
+        Fixture::new().accumulate_all_nullable_test()
     }
 
     #[test]
@@ -239,7 +203,31 @@ mod test {
 
     // TODO: filter testing with/without null
 
-    // fuzz testing
+    #[test]
+    fn accumulate_fuzz() {
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            Fixture::new_random(&mut rng).accumulate_all_test();
+        }
+    }
+
+    #[test]
+    fn accumulate_nullable_fuzz() {
+        let mut rng = rand::thread_rng();
+        let mut nullable_called = false;
+        for _ in 0..100 {
+            let fixture = Fixture::new_random(&mut rng);
+            // sometimes the random generator will create an array
+            // with no nulls so avoid panic'ing in tests
+            if fixture.values_with_nulls.iter().any(|v| v.is_none()) {
+                nullable_called = true;
+                fixture.accumulate_all_nullable_test();
+            } else {
+                fixture.accumulate_all_test();
+            }
+            assert!(nullable_called);
+        }
+    }
 
     /// Values for testing (there are enough values to exercise the 64 bit chunks
     struct Fixture {
@@ -269,6 +257,34 @@ mod test {
             }
         }
 
+        fn new_random(rng: &mut ThreadRng) -> Self {
+            let num_groups: usize = rng.gen_range(0..1000);
+            let group_indices: Vec<usize> = (0..num_groups).map(|_| rng.gen()).collect();
+
+            let values: Vec<u32> = (0..num_groups).map(|_| rng.gen()).collect();
+
+            // random values with random number and location of nulls
+            // random null percentage
+            let null_pct: f32 = rng.gen_range(0.0..1.0);
+            let values_with_nulls: Vec<Option<u32>> = (0..num_groups)
+                .map(|_| {
+                    let is_null = null_pct < rng.gen_range(0.0..1.0);
+                    if is_null {
+                        None
+                    } else {
+                        Some(rng.gen())
+                    }
+                })
+                .collect();
+
+            Self {
+                group_indices,
+                values,
+                values_with_nulls,
+                opt_filter: None,
+            }
+        }
+
         /// returns `Self::values` an Array
         fn values_array(&self) -> UInt32Array {
             UInt32Array::from(self.values.clone())
@@ -281,6 +297,52 @@ mod test {
 
         fn opt_filter(&self) -> Option<&BooleanArray> {
             self.opt_filter.as_ref()
+        }
+
+        // Calls `accumulate_all` with group_indices, values, and
+        // opt_filter and ensures it calls the right values
+        fn accumulate_all_test(&self) {
+            let mut accumulated = vec![];
+            accumulate_all(
+                &self.group_indices,
+                &self.values_array(),
+                self.opt_filter(),
+                |group_index, value| accumulated.push((group_index, value)),
+            );
+
+            // Should have see all indexes and values in order
+            accumulated
+                .into_iter()
+                .enumerate()
+                .for_each(|(i, (group_index, value))| {
+                    assert_eq!(group_index, self.group_indices[i]);
+                    assert_eq!(value, self.values[i]);
+                })
+        }
+
+        // Calls `accumulate_all_nullable` with group_indices, values,
+        // and opt_filter and ensures it calls the right values
+        fn accumulate_all_nullable_test(&self) {
+            let mut accumulated = vec![];
+
+            accumulate_all_nullable(
+                &self.group_indices,
+                &self.values_with_nulls_array(),
+                self.opt_filter(),
+                |group_index, value, is_valid| {
+                    let value = if is_valid { Some(value) } else { None };
+                    accumulated.push((group_index, value));
+                },
+            );
+
+            // Should have see all indexes and values in order
+            accumulated
+                .into_iter()
+                .enumerate()
+                .for_each(|(i, (group_index, value))| {
+                    assert_eq!(group_index, self.group_indices[i]);
+                    assert_eq!(value, self.values_with_nulls[i]);
+                })
         }
     }
 }
