@@ -1281,7 +1281,14 @@ SELECT
 ----
 true false true true
 
+# date_trunc with timestamptz
+statement ok
+set timezone to '+08:00';
 
+query P
+select date_trunc('hour', timestamptz '2000-01-01T00:00:00');
+----
+2000-01-01T00:00:00+08:00
 
 ##########
 ## Common timestamp data

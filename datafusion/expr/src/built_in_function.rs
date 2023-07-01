@@ -563,13 +563,12 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::ConcatWithSeparator => Ok(Utf8),
             BuiltinScalarFunction::DatePart => Ok(Float64),
             BuiltinScalarFunction::DateBin | BuiltinScalarFunction::DateTrunc => {
-                match input_expr_types[1] {
-                    Timestamp(Nanosecond, _) | Utf8 | Null => {
-                        Ok(Timestamp(Nanosecond, None))
-                    }
-                    Timestamp(Microsecond, _) => Ok(Timestamp(Microsecond, None)),
-                    Timestamp(Millisecond, _) => Ok(Timestamp(Millisecond, None)),
-                    Timestamp(Second, _) => Ok(Timestamp(Second, None)),
+                match &input_expr_types[1] {
+                    Utf8 | Null => Ok(Timestamp(Nanosecond, None)),
+                    Timestamp(Nanosecond, tz) => Ok(Timestamp(Nanosecond, tz.clone())),
+                    Timestamp(Microsecond, tz) => Ok(Timestamp(Microsecond, tz.clone())),
+                    Timestamp(Millisecond, tz) => Ok(Timestamp(Millisecond, tz.clone())),
+                    Timestamp(Second, tz) => Ok(Timestamp(Second, tz.clone())),
                     _ => Err(DataFusionError::Internal(format!(
                     "The {self} function can only accept timestamp as the second arg."
                 ))),
@@ -945,15 +944,37 @@ impl BuiltinScalarFunction {
                 ],
                 self.volatility(),
             ),
-            BuiltinScalarFunction::DateTrunc => Signature::one_of(
-                vec![
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                ],
-                self.volatility(),
-            ),
+            BuiltinScalarFunction::DateTrunc => {
+                let time_zones = vec![
+                    "-12:00", "-11:00", "-10:00", "-09:30", "-09:00", "-08:00", "-07:00",
+                    "-06:00", "-05:00", "-04:30", "-04:00", "-03:30", "-03:00", "-02:00",
+                    "-01:00", "±00:00", "+01:00", "+02:00", "+03:00", "+03:30", "+04:00",
+                    "+04:30", "+05:00", "+05:30", "+05:45", "+06:00", "+06:30", "+07:00",
+                    "+08:00", "+08:30", "+08:45", "+09:00", "+09:30", "+10:00", "+10:30",
+                    "+11:00", "+11:30", "+12:00", "+12:45", "+13:00", "+14:00",
+                ];
+                let time_units = vec![
+                    TimeUnit::Second,
+                    TimeUnit::Millisecond,
+                    TimeUnit::Microsecond,
+                    TimeUnit::Nanosecond,
+                ];
+                let mut signatures = vec![];
+                for unit in time_units {
+                    signatures.push(TypeSignature::Exact(vec![
+                        Utf8,
+                        Timestamp(unit.clone(), None),
+                    ]));
+                    for tz in &time_zones {
+                        signatures.push(TypeSignature::Exact(vec![
+                            Utf8,
+                            Timestamp(unit.clone(), Some((*tz).into())),
+                        ]));
+                    }
+                }
+
+                Signature::one_of(signatures, self.volatility())
+            }
             BuiltinScalarFunction::DateBin => {
                 let base_sig = |array_type: TimeUnit| {
                     vec![
