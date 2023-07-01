@@ -34,7 +34,7 @@ use arrow_array::{Array, ArrowNumericType, PrimitiveArray};
 ///
 /// # Example
 ///
-/// ```
+/// ```text
 ///  ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐
 ///  │ ┌─────┐ │   │ ┌─────┐ │     ┌─────┐
 ///  │ │  2  │ │   │ │ 200 │ │   │ │  t  │ │
@@ -151,7 +151,97 @@ pub fn accumulate_all_nullable<T, F>(
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
+    use arrow_array::UInt32Array;
 
     #[test]
-    fn basic() {}
+    fn no_nulls_no_filter() {
+        let fixture = Fixture::new();
+        let opt_filter = None;
+        let mut accumulated = vec![];
+
+        accumulate_all(
+            &fixture.group_indices,
+            &fixture.values_array(),
+            opt_filter,
+            |group_index, value| accumulated.push((group_index, value)),
+        );
+
+        // Should have see all indexes and values in order
+        accumulated
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, (group_index, value))| {
+                assert_eq!(group_index, fixture.group_indices[i]);
+                assert_eq!(value, fixture.values[i]);
+            })
+    }
+
+    #[test]
+    fn nulls_no_filter() {
+        let fixture = Fixture::new();
+        let opt_filter = None;
+        let mut accumulated = vec![];
+
+        accumulate_all_nullable(
+            &fixture.group_indices,
+            &fixture.values_with_nulls_array(),
+            opt_filter,
+            |group_index, value, is_valid| {
+                let value = if is_valid { Some(value) } else { None };
+                accumulated.push((group_index, value));
+            },
+        );
+
+        // Should have see all indexes and values in order
+        accumulated
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, (group_index, value))| {
+                assert_eq!(group_index, fixture.group_indices[i]);
+                assert_eq!(value, fixture.values_with_nulls[i]);
+            })
+    }
+
+    // TODO: filter testing with/without null
+
+    // TODO: calling nulls/nonulls with wrong one panics
+
+    // fuzz testing
+
+    /// Values for testing (there are enough values to exercise the 64 bit chunks
+    struct Fixture {
+        /// 100..0
+        group_indices: Vec<usize>,
+
+        /// 10, 20, ... 1010
+        values: Vec<u32>,
+
+        /// same as values, but every third is null:
+        /// None, Some(20), Some(30), None ...
+        values_with_nulls: Vec<Option<u32>>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                group_indices: (0..100).collect(),
+                values: (0..100).map(|i| (i + 1) * 10).collect(),
+                values_with_nulls: (0..100)
+                    .map(|i| if i % 3 == 0 { None } else { Some((i + 1) * 10) })
+                    .collect(),
+            }
+        }
+
+        /// returns `Self::values` an Array
+        fn values_array(&self) -> UInt32Array {
+            UInt32Array::from(self.values.clone())
+        }
+
+        /// returns `Self::values_with_nulls` as an Array
+        fn values_with_nulls_array(&self) -> UInt32Array {
+            UInt32Array::from(self.values_with_nulls.clone())
+        }
+    }
 }
