@@ -74,6 +74,7 @@ pub fn accumulate_all<T, F>(
     T: ArrowNumericType + Send,
     F: FnMut(usize, T::Native) + Send,
 {
+    // Given performance is critical, assert if the wrong flavor is called
     assert_eq!(
         values.null_count(), 0,
         "Called accumulate_all with nullable array (call accumulate_all_nullable instead)"
@@ -108,7 +109,8 @@ pub fn accumulate_all_nullable<T, F>(
     F: FnMut(usize, T::Native, bool) + Send,
 {
     // AAL TODO handle filter values
-    // TODO combine the null mask from values and opt_filter
+
+    // Given performance is critical, assert if the wrong flavor is called
     let valids = values
         .nulls()
         .expect("Called accumulate_all_nullable with non-nullable array (call accumulate_all instead)");
