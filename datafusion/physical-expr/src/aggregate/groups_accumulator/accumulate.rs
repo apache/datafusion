@@ -19,23 +19,55 @@
 
 use arrow_array::{Array, ArrowNumericType, PrimitiveArray};
 
-/// This function is called to update the accumulator state per row,
+/// This function is used to update the accumulator state per row,
 /// for a `PrimitiveArray<T>` with no nulls. It is the inner loop for
 /// many GroupsAccumulators and thus performance critical.
+///
+/// # Arguments:
+///
+/// * `values`: the input arguments to the accumulator
+/// * `group_indices`:  To which groups do the rows in `values` belong, group id)
+/// * `opt_filter`: if present, invoke value_fn if opt_filter[i] is true
+/// * `value_fn`: function invoked for each (group_index, value) pair.
+///
+/// `F`: Invoked for each input row like `value_fn(group_index, value)
+///
+/// # Example
+///
+/// ```
+///  ┌─────────┐   ┌─────────┐   ┌ ─ ─ ─ ─ ┐
+///  │ ┌─────┐ │   │ ┌─────┐ │     ┌─────┐
+///  │ │  2  │ │   │ │ 200 │ │   │ │  t  │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  2  │ │   │ │ 100 │ │   │ │  f  │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  0  │ │   │ │ 200 │ │   │ │  t  │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  1  │ │   │ │ 200 │ │   │ │NULL │ │
+///  │ ├─────┤ │   │ ├─────┤ │     ├─────┤
+///  │ │  0  │ │   │ │ 300 │ │   │ │  t  │ │
+///  │ └─────┘ │   │ └─────┘ │     └─────┘
+///  └─────────┘   └─────────┘   └ ─ ─ ─ ─ ┘
+///
+/// group_indices   values        opt_filter
+/// ```
+///
+/// In the example above, `value_fn` is invoked for each (group_index,
+/// value) pair where `opt_filter[i]` is true
+///
+/// ```text
+/// value_fn(2, 200)
+/// value_fn(0, 200)
+/// value_fn(0, 300)
+/// ```
 ///
 /// I couldn't find any way to combine this with
 /// accumulate_all_nullable without having to pass in a is_null on
 /// every row.
 ///
-/// * `values`: the input arguments to the accumulator
-/// * `group_indices`:  To which groups do the rows in `values` belong, group id)
-/// * `opt_filter`: if present, only update aggregate state using values[i] if opt_filter[i] is true
-///
-/// `F`: The function to invoke for a non null input row to update the
-/// accumulator state. Called like `value_fn(group_index, value)
 pub fn accumulate_all<T, F>(
-    values: &PrimitiveArray<T>,
     group_indicies: &[usize],
+    values: &PrimitiveArray<T>,
     opt_filter: Option<&arrow_array::BooleanArray>,
     mut value_fn: F,
 ) where
@@ -57,19 +89,16 @@ pub fn accumulate_all<T, F>(
 }
 
 /// This function is called to update the accumulator state per row,
-/// for a `PrimitiveArray<T>` with no nulls. It is the inner loop for
-/// many GroupsAccumulators and thus performance critical.
+/// for a `PrimitiveArray<T>` that can have nulls. See
+/// [`accumulate_all`] for more detail and example
 ///
-/// * `values`: the input arguments to the accumulator
-/// * `group_indices`:  To which groups do the rows in `values` belong, group id)
-/// * `opt_filter`: if present, only update aggregate state using values[i] if opt_filter[i] is true
+/// `F`: Invoked like `value_fn(group_index, value, is_valid).
 ///
-/// `F`: The function to invoke for an input row to update the
-/// accumulator state. Called like `value_fn(group_index, value,
-/// is_valid). NOTE the parameter is true when the value is VALID.
+/// NOTE the parameter is true when the value is VALID (not when it is
+/// NULL).
 pub fn accumulate_all_nullable<T, F>(
-    values: &PrimitiveArray<T>,
     group_indicies: &[usize],
+    values: &PrimitiveArray<T>,
     opt_filter: Option<&arrow_array::BooleanArray>,
     mut value_fn: F,
 ) where
@@ -118,4 +147,11 @@ pub fn accumulate_all_nullable<T, F>(
             let is_valid = remainder_bits & (1 << i) != 0;
             value_fn(group_index, new_value, is_valid)
         });
+}
+
+#[cfg(test)]
+mod test {
+
+    #[test]
+    fn basic() {}
 }
