@@ -620,8 +620,9 @@ where
             .map(|(sum, count)| (self.avg_fn)(sum, count))
             .collect::<Result<Vec<_>>>()?;
 
-        // TODO figure out how to do this without the iter / copy
-        let array = PrimitiveArray::<T>::from_iter_values(averages);
+        // Create a primitive array (without a copy)
+        let nulls = None; // TODO implement null handling
+        let array = PrimitiveArray::<T>::new(averages.into(), nulls);
 
         // fix up decimal precision and scale for decimals
         let array = adjust_output_array(&self.return_data_type, Arc::new(array))?;
@@ -637,8 +638,8 @@ where
 
         let sums = std::mem::take(&mut self.sums);
         // create array from vec is zero copy
-        // TODO figure out how to do this without the iter / copy
-        let sums: PrimitiveArray<T> = PrimitiveArray::from_iter_values(sums);
+        let nulls = None; // TODO implement null handling
+        let sums = PrimitiveArray::<T>::new(sums.into(), nulls);
 
         // fix up decimal precision and scale for decimals
         let sums = adjust_output_array(&self.sum_data_type, Arc::new(sums))?;
