@@ -19,16 +19,15 @@
 //! of expr can be added if needed.
 //! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
 use crate::optimizer::ApplyOrder;
-use crate::utils::merge_schema;
+use crate::utils::{generate_alias_project, merge_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
-use datafusion_common::tree_node::{RewriteRecursion, TreeNodeRewriter};
+use datafusion_common::tree_node::{RewriteRecursion, TreeNode, TreeNodeRewriter};
 use datafusion_common::{DFSchemaRef, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
-use datafusion_expr::expr_rewriter::rewrite_preserving_name;
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     binary_expr, in_list, lit, Expr, ExprSchemable, LogicalPlan, Operator,
@@ -99,15 +98,13 @@ impl OptimizerRule for UnwrapCastInComparison {
         let new_exprs = plan
             .expressions()
             .into_iter()
-            .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
+            .map(|expr| expr.rewrite(&mut expr_rewriter))
             .collect::<Result<Vec<_>>>()?;
 
         let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
-        Ok(Some(from_plan(
-            plan,
-            new_exprs.as_slice(),
-            inputs.as_slice(),
-        )?))
+        let new_plan = from_plan(plan, new_exprs.as_slice(), inputs.as_slice())?;
+
+        Ok(Some(generate_alias_project(plan.schema(), new_plan)?))
     }
 
     fn name(&self) -> &str {

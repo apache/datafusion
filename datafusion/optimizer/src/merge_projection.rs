@@ -77,9 +77,18 @@ pub(super) fn merge_projection(
         .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
         .enumerate()
         .map(|(i, e)| match e {
-            Ok(e) => {
-                let parent_expr = parent_projection.schema.fields()[i].qualified_name();
-                e.alias_if_changed(parent_expr)
+            Ok(expr) => {
+                let parent_expr = parent_projection.expr[i].clone();
+                match parent_expr {
+                    Expr::Alias(alias) => {
+                        Ok(Expr::Alias(alias.with_new_expr(expr.unalias())))
+                    }
+                    _ => {
+                        let parent_expr_name =
+                            parent_projection.schema.fields()[i].qualified_name();
+                        expr.alias_if_changed(parent_expr_name)
+                    }
+                }
             }
             Err(e) => Err(e),
         })

@@ -199,9 +199,13 @@ impl Alias {
         }
     }
 
-    pub fn new_with_field(expr: Expr, name: impl Into<String>, field: DFField) -> Self {
+    pub fn new_with_field(
+        expr: Box<Expr>,
+        name: impl Into<String>,
+        field: DFField,
+    ) -> Self {
         Self {
-            expr: Box::new(expr),
+            expr: expr,
             name: name.into(),
             field: Some(field),
         }
@@ -209,6 +213,14 @@ impl Alias {
 
     pub fn field(&self) -> &Option<DFField> {
         &self.field
+    }
+
+    pub fn with_new_expr(self, expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+            name: self.name,
+            field: self.field,
+        }
     }
 }
 
@@ -801,6 +813,13 @@ impl Expr {
         }
     }
 
+    pub fn alias_field(&self) -> Option<DFField> {
+        match self {
+            Expr::Alias(alias) => alias.field().clone(),
+            _ => None,
+        }
+    }
+
     /// Ensure `expr` has the name as `original_name` by adding an
     /// alias if necessary.
     pub fn alias_if_changed(self, original_name: String) -> Result<Expr> {
@@ -825,28 +844,13 @@ impl Expr {
         }
     }
 
-    /// Return `self AS name` alias expression from other expr
-    pub fn alias_expr(self, old_expr: &Expr) -> Result<Expr> {
-        let name = &self.name_for_alias()?;
-        let old_name = &old_expr.name_for_alias()?;
-
-        Ok(match old_expr {
-            Expr::Alias(alias) if alias.field().is_some() => {
-                self.unalias().alias_with_field(alias.field().clone().unwrap())
-            }
-            _ => {
-                if old_name != name {
-                    self.alias(old_name)
-                } else {
-                    self
-                }
-            }
-        })
-    }
-
     /// Return `self AS name` alias expression with a field
     pub fn alias_with_field(self, field: DFField) -> Expr {
-        Expr::Alias(Alias::new_with_field(self, field.qualified_name(), field))
+        Expr::Alias(Alias::new_with_field(
+            Box::new(self.unalias()),
+            field.qualified_name(),
+            field,
+        ))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -970,6 +974,7 @@ macro_rules! expr_vec_fmt {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            // Expr::Alias(Alias { expr, name, field }) => write!(f, "{expr:?} AS {name} field: {field:?}"),
             Expr::Alias(Alias { expr, name, .. }) => write!(f, "{expr} AS {name}"),
             Expr::Column(c) => write!(f, "{c}"),
             Expr::OuterReferenceColumn(_, c) => write!(f, "outer_ref({c})"),

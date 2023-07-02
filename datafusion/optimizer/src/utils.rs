@@ -17,6 +17,7 @@
 
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
+use crate::merge_projection::merge_projection;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_common::{DFSchema, Result};
@@ -25,7 +26,7 @@ use datafusion_expr::expr_rewriter::{replace_col, strip_outer_reference};
 use datafusion_expr::{
     and,
     logical_plan::{Filter, LogicalPlan},
-    Expr, Operator,
+    Expr, Operator, Projection,
 };
 use log::{debug, trace};
 use std::collections::{BTreeSet, HashMap};
@@ -322,6 +323,38 @@ pub(crate) fn replace_qualified_name(
         cols.iter().zip(alias_cols.iter()).collect();
 
     replace_col(expr, &replace_map)
+}
+
+pub(super) fn generate_alias_project(
+    original_schema: &DFSchemaRef,
+    new_plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    if original_schema == new_plan.schema() {
+        return Ok(new_plan);
+    }
+
+    let old_fields = original_schema.fields();
+    let new_fields = new_plan.schema().fields();
+    let alias_exprs = new_fields
+        .iter()
+        .enumerate()
+        .map(|(i, new_field)| {
+            let old_field = &old_fields[i];
+            let col = Expr::Column(new_field.qualified_column());
+            Ok(if old_field == new_field {
+                col
+            } else {
+                col.alias_with_field(old_field.clone())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let alias_project = Projection::try_new(alias_exprs, Arc::new(new_plan))?;
+
+    match alias_project.input.as_ref() {
+        LogicalPlan::Projection(project) => merge_projection(&alias_project, project),
+        _ => Ok(LogicalPlan::Projection(alias_project)),
+    }
 }
 
 /// Log the plan in debug/tracing mode after some part of the optimizer runs

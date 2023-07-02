@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use super::{ExprSimplifier, SimplifyContext};
-use crate::utils::merge_schema;
+use crate::utils::{generate_alias_project, merge_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{logical_plan::LogicalPlan, utils::from_plan};
@@ -85,15 +85,11 @@ impl SimplifyExpressions {
         let expr = plan
             .expressions()
             .into_iter()
-            .map(|e| {
-                // TODO: unify with `rewrite_preserving_name`
-                let original_name = e.name_for_alias()?;
-                let new_e = simplifier.simplify(e)?;
-                new_e.alias_if_changed(original_name)
-            })
+            .map(|e| simplifier.simplify(e))
             .collect::<Result<Vec<_>>>()?;
 
-        from_plan(plan, &expr, &new_inputs)
+        let new_plan = from_plan(plan, &expr, &new_inputs)?;
+        return generate_alias_project(plan.schema(), new_plan);
     }
 }
 
@@ -164,14 +160,11 @@ mod tests {
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let rule = SimplifyExpressions::new();
-        let optimized_plan = rule
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{optimized_plan:?}");
-        assert_eq!(formatted_plan, expected);
-        Ok(())
+        crate::test::assert_optimized_plan_eq(
+            Arc::new(SimplifyExpressions::new()),
+            plan,
+            expected,
+        )
     }
 
     #[test]
@@ -343,10 +336,10 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "\
-        Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
-        \n  Projection: test.a, test.c, test.b\
-        \n    TableScan: test";
+        let expected = "Projection: test.a, test.c, MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)\
+        \n  Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b), MIN(test.b)]]\
+        \n    Projection: test.a, test.c, test.b\
+        \n      TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -366,8 +359,7 @@ mod tests {
         let values = vec![vec![expr1, expr2]];
         let plan = LogicalPlanBuilder::values(values)?.build()?;
 
-        let expected = "\
-        Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";
+        let expected = "Values: (Int32(3), Int32(1))";
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -832,9 +824,8 @@ mod tests {
         .build()?;
 
         // before simplify: t.g = power(t.f, 1.0)
-        // after simplify:  (t.g = t.f) as "t.g = power(t.f, 1.0)"
-        let expected =
-            "TableScan: test, unsupported_filters=[g = f AS g = power(f,Float64(1))]";
+        // after simplify: t.g = t.f"
+        let expected = "TableScan: test, unsupported_filters=[g = f]";
         assert_optimized_plan_eq(&plan, expected)
     }
 
