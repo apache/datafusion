@@ -1326,13 +1326,6 @@ impl Projection {
             schema,
         }
     }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Projection> {
-        match plan {
-            LogicalPlan::Projection(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Projection!"),
-        }
-    }
 }
 
 /// Aliased subquery
@@ -1410,13 +1403,6 @@ impl Filter {
         }
 
         Ok(Self { predicate, input })
-    }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Filter> {
-        match plan {
-            LogicalPlan::Filter(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Filter!"),
-        }
     }
 }
 
@@ -1667,13 +1653,6 @@ impl Aggregate {
             aggr_expr,
             schema,
         })
-    }
-
-    pub fn try_from_plan(plan: &LogicalPlan) -> Result<&Aggregate> {
-        match plan {
-            LogicalPlan::Aggregate(it) => Ok(it),
-            _ => plan_err!("Could not coerce into Aggregate!"),
-        }
     }
 }
 
