@@ -80,14 +80,26 @@ pub fn accumulate_all<T, F>(
         "Called accumulate_all with nullable array (call accumulate_all_nullable instead)"
     );
 
-    // AAL TODO handle filter values
-
     let data: &[T::Native] = values.values();
     assert_eq!(data.len(), group_indices.len());
 
     let iter = group_indices.iter().zip(data.iter());
-    for (&group_index, &new_value) in iter {
-        value_fn(group_index, new_value)
+
+    // handle filter values with a specialized loop
+    if let Some(filter) = opt_filter {
+        assert_eq!(filter.len(), group_indices.len());
+        // The performance with a filtering could be improved by
+        // iterating over the filter in masks
+        let iter = iter.zip(filter.iter());
+        for ((&group_index, &new_value), filter_value) in iter {
+            if let Some(true) = filter_value {
+                value_fn(group_index, new_value)
+            }
+        }
+    } else {
+        for (&group_index, &new_value) in iter {
+            value_fn(group_index, new_value)
+        }
     }
 }
 
@@ -167,6 +179,21 @@ mod test {
     }
 
     #[test]
+    fn accumulate_with_filter() {
+        Fixture::new()
+            .with_filter(|group_index, _value, _value_opt| {
+                if group_index < 20 {
+                    None
+                } else if group_index < 40 {
+                    Some(false)
+                } else {
+                    Some(true)
+                }
+            })
+            .accumulate_all_test();
+    }
+
+    #[test]
     #[should_panic(
         expected = "assertion failed: `(left == right)`\n  left: `34`,\n right: `0`: Called accumulate_all with nullable array (call accumulate_all_nullable instead)"
     )]
@@ -201,8 +228,6 @@ mod test {
         );
     }
 
-    // TODO: filter testing with/without null
-
     #[test]
     fn accumulate_fuzz() {
         let mut rng = rand::thread_rng();
@@ -228,6 +253,8 @@ mod test {
             assert!(nullable_called);
         }
     }
+
+    // todo accumulate testing with fuzz
 
     /// Values for testing (there are enough values to exercise the 64 bit chunks
     struct Fixture {
@@ -255,6 +282,26 @@ mod test {
                     .collect(),
                 opt_filter: None,
             }
+        }
+
+        /// Applies `f(group_index, value, value_with_null)` for all
+        /// values in this fixture and set `opt_filter` to the result
+        fn with_filter<F>(mut self, mut f: F) -> Self
+        where
+            F: FnMut(usize, u32, Option<u32>) -> Option<bool>,
+        {
+            let filter: BooleanArray = self
+                .group_indices
+                .iter()
+                .zip(self.values.iter())
+                .zip(self.values_with_nulls.iter())
+                .map(|((&group_index, &value), &value_with_null)| {
+                    f(group_index, value, value_with_null)
+                })
+                .collect();
+
+            self.opt_filter = Some(filter);
+            self
         }
 
         fn new_random(rng: &mut ThreadRng) -> Self {
@@ -310,14 +357,22 @@ mod test {
                 |group_index, value| accumulated.push((group_index, value)),
             );
 
-            // Should have see all indexes and values in order
-            accumulated
-                .into_iter()
-                .enumerate()
-                .for_each(|(i, (group_index, value))| {
-                    assert_eq!(group_index, self.group_indices[i]);
-                    assert_eq!(value, self.values[i]);
-                })
+            // check_values[i] is true if the value[i] should have been included in the output
+            let check_values = match self.opt_filter.as_ref() {
+                Some(filter) => filter.into_iter().collect::<Vec<_>>(),
+                None => vec![Some(true); self.values.len()],
+            };
+
+            // Should have only checked indexes where the filter was true
+            let mut check_idx = 0;
+            for (i, check_value) in check_values.iter().enumerate() {
+                if let Some(true) = check_value {
+                    let (group_index, value) = &accumulated[check_idx];
+                    check_idx += 1;
+                    assert_eq!(*group_index, self.group_indices[i]);
+                    assert_eq!(*value, self.values[i]);
+                }
+            }
         }
 
         // Calls `accumulate_all_nullable` with group_indices, values,
