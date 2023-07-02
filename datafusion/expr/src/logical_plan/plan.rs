@@ -35,8 +35,8 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeVisitor, VisitRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
-    Result, ScalarValue,
+    plan_err, Column, DFField, DFSchema, DFSchemaRef, DataFusionError,
+    OwnedTableReference, Result, ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -1398,6 +1398,22 @@ pub struct Window {
     pub window_expr: Vec<Expr>,
     /// The schema description of the window output
     pub schema: DFSchemaRef,
+}
+
+impl Window {
+    /// Create a new window operator.
+    pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let mut window_fields: Vec<DFField> = input.schema().fields().clone();
+        window_fields
+            .extend_from_slice(&exprlist_to_fields(window_expr.iter(), input.as_ref())?);
+        let metadata = input.schema().metadata().clone();
+
+        Ok(Window {
+            input,
+            window_expr,
+            schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
+        })
+    }
 }
 
 /// Produces rows from a table provider by reference or from the context
