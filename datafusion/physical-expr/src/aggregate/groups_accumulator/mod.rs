@@ -47,7 +47,11 @@ pub trait GroupsAccumulator: Send {
     ) -> Result<()>;
 
     /// Returns the final aggregate value for each group as a single
-    /// `RecordBatch`
+    /// `RecordBatch`.
+    ///
+    /// The rows returned *must* be in group_index order: The value
+    /// for group_index 0, followed by 1, etc.  Any group_index that
+    /// did not have values, should be null.
     ///
     /// OPEN QUESTION: Should this method take a "batch_size: usize"
     /// and produce a Vec<RecordBatch> as output to avoid 1) requiring
@@ -63,7 +67,12 @@ pub trait GroupsAccumulator: Send {
     /// and error on any subsequent call.
     fn evaluate(&mut self) -> Result<ArrayRef>;
 
-    /// Returns any intermediate aggregate state used for multi-phase grouping
+    /// Returns any intermediate aggregate state, used for multi-phase
+    /// grouping.
+    ///
+    /// The rows returned *must* be in group_index order: The value
+    /// for group_index 0, followed by 1, etc.  Any group_index that
+    /// did not have values, should be null.
     ///
     /// For example, AVG returns two arrays:  `SUM` and `COUNT`.
     ///
