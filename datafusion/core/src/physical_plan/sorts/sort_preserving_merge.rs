@@ -71,7 +71,7 @@ pub struct SortPreservingMergeExec {
     expr: Vec<PhysicalSortExpr>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Optional number of rows to fetch
+    /// Optional number of rows to fetch. Stops producing rows after this fetch
     fetch: Option<usize>,
 }
 
