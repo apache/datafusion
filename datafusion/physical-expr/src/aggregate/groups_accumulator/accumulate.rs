@@ -88,8 +88,9 @@ pub fn accumulate_all<T, F>(
     // handle filter values with a specialized loop
     if let Some(filter) = opt_filter {
         assert_eq!(filter.len(), group_indices.len());
-        // The performance with a filtering could be improved by
-        // iterating over the filter in masks
+        // The performance with a filter could be improved by
+        // iterating over the filter in chunks, rather than a single
+        // iterator. TODO file a ticket
         let iter = iter.zip(filter.iter());
         for ((&group_index, &new_value), filter_value) in iter {
             if let Some(true) = filter_value {
@@ -120,50 +121,70 @@ pub fn accumulate_all_nullable<T, F>(
     T: ArrowNumericType + Send,
     F: FnMut(usize, T::Native, bool) + Send,
 {
-    // AAL TODO handle filter values
-
     // Given performance is critical, assert if the wrong flavor is called
     let valids = values
         .nulls()
         .expect("Called accumulate_all_nullable with non-nullable array (call accumulate_all instead)");
 
-    // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
-    let data: &[T::Native] = values.values();
-    assert_eq!(data.len(), group_indices.len());
+    if let Some(filter) = opt_filter {
+        assert_eq!(filter.len(), values.len());
+        assert_eq!(filter.len(), group_indices.len());
+        // The performance with a filter could be improved by
+        // iterating over the filter in chunks, rather than using
+        // iterators. TODO file a ticket
+        filter
+            .iter()
+            .zip(group_indices.iter())
+            .zip(values.iter())
+            .for_each(|((filter_value, group_index), new_value)| {
+                // did value[i] pass the filter?
+                if let Some(true) = filter_value {
+                    // Is value[i] valid?
+                    match new_value {
+                        Some(new_value) => value_fn(*group_index, new_value, true),
+                        None => value_fn(*group_index, Default::default(), false),
+                    }
+                }
+            })
+    } else {
+        // This is based on (ahem, COPY/PASTA) arrow::compute::aggregate::sum
+        // iterate over in chunks of 64 bits for more efficient null checking
+        let data: &[T::Native] = values.values();
+        assert_eq!(data.len(), group_indices.len());
+        let group_indices_chunks = group_indices.chunks_exact(64);
+        let data_chunks = data.chunks_exact(64);
+        let bit_chunks = valids.inner().bit_chunks();
 
-    let group_indices_chunks = group_indices.chunks_exact(64);
-    let data_chunks = data.chunks_exact(64);
-    let bit_chunks = valids.inner().bit_chunks();
+        let group_indices_remainder = group_indices_chunks.remainder();
+        let data_remainder = data_chunks.remainder();
 
-    let group_indices_remainder = group_indices_chunks.remainder();
-    let data_remainder = data_chunks.remainder();
+        group_indices_chunks
+            .zip(data_chunks)
+            .zip(bit_chunks.iter())
+            .for_each(|((group_index_chunk, data_chunk), mask)| {
+                // index_mask has value 1 << i in the loop
+                let mut index_mask = 1;
+                group_index_chunk.iter().zip(data_chunk.iter()).for_each(
+                    |(&group_index, &new_value)| {
+                        // valid bit was set, real vale
+                        let is_valid = (mask & index_mask) != 0;
+                        value_fn(group_index, new_value, is_valid);
+                        index_mask <<= 1;
+                    },
+                )
+            });
 
-    group_indices_chunks
-        .zip(data_chunks)
-        .zip(bit_chunks.iter())
-        .for_each(|((group_index_chunk, data_chunk), mask)| {
-            // index_mask has value 1 << i in the loop
-            let mut index_mask = 1;
-            group_index_chunk.iter().zip(data_chunk.iter()).for_each(
-                |(&group_index, &new_value)| {
-                    // valid bit was set, real vale
-                    let is_valid = (mask & index_mask) != 0;
-                    value_fn(group_index, new_value, is_valid);
-                    index_mask <<= 1;
-                },
-            )
-        });
-
-    // handle any remaining bits (after the intial 64)
-    let remainder_bits = bit_chunks.remainder_bits();
-    group_indices_remainder
-        .iter()
-        .zip(data_remainder.iter())
-        .enumerate()
-        .for_each(|(i, (&group_index, &new_value))| {
-            let is_valid = remainder_bits & (1 << i) != 0;
-            value_fn(group_index, new_value, is_valid)
-        });
+        // handle any remaining bits (after the intial 64)
+        let remainder_bits = bit_chunks.remainder_bits();
+        group_indices_remainder
+            .iter()
+            .zip(data_remainder.iter())
+            .enumerate()
+            .for_each(|(i, (&group_index, &new_value))| {
+                let is_valid = remainder_bits & (1 << i) != 0;
+                value_fn(group_index, new_value, is_valid)
+            });
+    }
 }
 
 #[cfg(test)]
@@ -211,6 +232,21 @@ mod test {
     #[test]
     fn accumulate_nullable_no_filter() {
         Fixture::new().accumulate_all_nullable_test()
+    }
+
+    #[test]
+    fn accumulate_nullable_with_filter() {
+        Fixture::new()
+            .with_filter(|group_index, _value, _value_opt| {
+                if group_index < 20 {
+                    None
+                } else if group_index < 40 {
+                    Some(false)
+                } else {
+                    Some(true)
+                }
+            })
+            .accumulate_all_nullable_test();
     }
 
     #[test]
@@ -310,6 +346,28 @@ mod test {
 
             let values: Vec<u32> = (0..num_groups).map(|_| rng.gen()).collect();
 
+            // with 30 percent probability, add a filter
+            let opt_filter = if 0.3 < rng.gen_range(0.0..1.0) {
+                // 10% chance of false
+                // 10% change of null
+                // 80% chance of true
+                let filter: BooleanArray = (0..num_groups)
+                    .map(|_| {
+                        let filter_value = rng.gen_range(0.0..1.0);
+                        if filter_value < 0.1 {
+                            Some(false)
+                        } else if filter_value < 0.2 {
+                            None
+                        } else {
+                            Some(true)
+                        }
+                    })
+                    .collect();
+                Some(filter)
+            } else {
+                None
+            };
+
             // random values with random number and location of nulls
             // random null percentage
             let null_pct: f32 = rng.gen_range(0.0..1.0);
@@ -328,7 +386,7 @@ mod test {
                 group_indices,
                 values,
                 values_with_nulls,
-                opt_filter: None,
+                opt_filter,
             }
         }
 
@@ -390,14 +448,23 @@ mod test {
                 },
             );
 
+            // check_values[i] is true if the value[i] should have been included in the output
+            let check_values = match self.opt_filter.as_ref() {
+                Some(filter) => filter.into_iter().collect::<Vec<_>>(),
+                None => vec![Some(true); self.values.len()],
+            };
+
             // Should have see all indexes and values in order
-            accumulated
-                .into_iter()
-                .enumerate()
-                .for_each(|(i, (group_index, value))| {
-                    assert_eq!(group_index, self.group_indices[i]);
-                    assert_eq!(value, self.values_with_nulls[i]);
-                })
+            let mut check_idx = 0;
+            for (i, check_value) in check_values.iter().enumerate() {
+                if let Some(true) = check_value {
+                    let (group_index, value) = &accumulated[check_idx];
+                    check_idx += 1;
+
+                    assert_eq!(*group_index, self.group_indices[i]);
+                    assert_eq!(*value, self.values_with_nulls[i]);
+                }
+            }
         }
     }
 }
