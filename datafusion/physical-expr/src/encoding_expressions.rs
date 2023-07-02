@@ -302,12 +302,12 @@ pub fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function encode",
-            ))),
+            _ => Err(DataFusionError::NotImplemented(
+                "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported".into(),
+            )),
         },
-        ColumnarValue::Array(_) => Err(DataFusionError::Internal(
-            "Encode using dynamically decided method is not yet supported".into(),
+        ColumnarValue::Array(_) => Err(DataFusionError::NotImplemented(
+            "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported".into(),
         )),
     }?;
     encode_process(&args[0], encoding)
@@ -328,12 +328,12 @@ pub fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {other:?} for function decode",
-            ))),
+            _ => Err(DataFusionError::NotImplemented(
+                "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported".into(),
+            )),
         },
-        ColumnarValue::Array(_) => Err(DataFusionError::Internal(
-            "Decode using dynamically decided method is not yet supported".into(),
+        ColumnarValue::Array(_) => Err(DataFusionError::NotImplemented(
+            "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported".into(),
         )),
     }?;
     decode_process(&args[0], encoding)
