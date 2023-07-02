@@ -422,9 +422,7 @@ fn parallelize_sorts(
         update_child_to_remove_coalesce(&mut prev_layer, &mut coalesce_onwards[0])?;
         let sort_exprs = get_sort_exprs(&plan)?;
         add_sort_above(&mut prev_layer, sort_exprs.to_vec())?;
-        let sort_fetch = get_sort_fetch(&plan)?;
-        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer)
-            .with_fetch(sort_fetch);
+        let spm = SortPreservingMergeExec::new(sort_exprs.to_vec(), prev_layer);
         return Ok(Transformed::Yes(PlanWithCorrespondingCoalescePartitions {
             plan: Arc::new(spm),
             coalesce_onwards: vec![None],
@@ -795,22 +793,6 @@ fn get_sort_exprs(sort_any: &Arc<dyn ExecutionPlan>) -> Result<&[PhysicalSortExp
         sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
     {
         Ok(sort_preserving_merge_exec.expr())
-    } else {
-        Err(DataFusionError::Plan(
-            "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
-                .to_string(),
-        ))
-    }
-}
-
-/// Retrieves a fetch from a `SortExec` or `SortPreservingMergeExec` when possible
-fn get_sort_fetch(sort_any: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
-    if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
-        Ok(sort_exec.fetch())
-    } else if let Some(sort_preserving_merge_exec) =
-        sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
-    {
-        Ok(sort_preserving_merge_exec.fetch())
     } else {
         Err(DataFusionError::Plan(
             "Given ExecutionPlan is not a SortExec or a SortPreservingMergeExec"
