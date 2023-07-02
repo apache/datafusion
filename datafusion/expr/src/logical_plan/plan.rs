@@ -482,7 +482,38 @@ impl LogicalPlan {
     }
 
     pub fn with_new_inputs(&self, inputs: &[LogicalPlan]) -> Result<LogicalPlan> {
-        from_plan(self, &self.expressions(), inputs)
+        // with_new_inputs use original expression,
+        // so we don't need to recompute Schema.
+        match &self {
+            LogicalPlan::Projection(projection) => {
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                    projection.expr.to_vec(),
+                    Arc::new(inputs[0].clone()),
+                    projection.schema.clone(),
+                )?))
+            }
+            LogicalPlan::Window(Window {
+                window_expr,
+                schema,
+                ..
+            }) => Ok(LogicalPlan::Window(Window {
+                input: Arc::new(inputs[0].clone()),
+                window_expr: window_expr.to_vec(),
+                schema: schema.clone(),
+            })),
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                schema,
+                ..
+            }) => Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Arc::new(inputs[0].clone()),
+                group_expr.to_vec(),
+                aggr_expr.to_vec(),
+                schema.clone(),
+            )?)),
+            _ => from_plan(self, &self.expressions(), inputs),
+        }
     }
 
     /// Convert a prepared [`LogicalPlan`] into its inner logical plan
