@@ -18,7 +18,7 @@
 //! Array expressions
 
 use arrow::array::*;
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::{DataType, Field};
 use core::any::type_name;
@@ -197,15 +197,53 @@ pub fn make_array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 macro_rules! append {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
+
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let cat = compute::concat(&[child_array, element])?;
-        let mut scalars = vec![];
-        for i in 0..cat.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&cat, i)?));
+        for (arr, el) in $ARRAY.iter().zip(element.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty",))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            child_array,
+                            &$ARRAY_TYPE::from(vec![el])
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.extend([last_offset + child_array.len() as i32 + 1i32]);
+                }
+                None => {
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            &$ARRAY_TYPE::from(vec![el.clone()])
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.extend([last_offset + 1i32]);
+                }
+            }
         }
-        scalars
+
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
@@ -221,7 +259,7 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
     let arr = as_list_array(&args[0])?;
     let element = &args[1];
 
-    let scalars = match (arr.value_type(), element.data_type()) {
+    let res = match (arr.value_type(), element.data_type()) {
                 (DataType::Utf8, DataType::Utf8) => append!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => append!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => append!(arr, element, BooleanArray),
@@ -243,20 +281,58 @@ pub fn array_append(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
     };
 
-    Ok(array(scalars.as_slice())?.into_array(1))
+    Ok(res)
 }
 
 macro_rules! prepend {
     ($ARRAY:expr, $ELEMENT:expr, $ARRAY_TYPE:ident) => {{
-        let child_array =
-            downcast_arg!(downcast_arg!($ARRAY, ListArray).values(), $ARRAY_TYPE);
+        let mut offsets: Vec<i32> = vec![0];
+        let mut values =
+            downcast_arg!(new_empty_array($ELEMENT.data_type()), $ARRAY_TYPE).clone();
+
         let element = downcast_arg!($ELEMENT, $ARRAY_TYPE);
-        let cat = compute::concat(&[element, child_array])?;
-        let mut scalars = vec![];
-        for i in 0..cat.len() {
-            scalars.push(ColumnarValue::Scalar(ScalarValue::try_from_array(&cat, i)?));
+        for (arr, el) in $ARRAY.iter().zip(element.iter()) {
+            let last_offset: i32 = offsets.last().copied().ok_or_else(|| {
+                DataFusionError::Internal(format!("offsets should not be empty",))
+            })?;
+            match arr {
+                Some(arr) => {
+                    let child_array = downcast_arg!(arr, $ARRAY_TYPE);
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            &$ARRAY_TYPE::from(vec![el]),
+                            child_array
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.extend([last_offset + child_array.len() as i32 + 1i32]);
+                }
+                None => {
+                    values = downcast_arg!(
+                        compute::concat(&[
+                            &values,
+                            &$ARRAY_TYPE::from(vec![el.clone()])
+                        ])?
+                        .clone(),
+                        $ARRAY_TYPE
+                    )
+                    .clone();
+                    offsets.extend([last_offset + 1i32]);
+                }
+            }
         }
-        scalars
+
+        let field = Arc::new(Field::new("item", $ELEMENT.data_type().clone(), true));
+
+        Arc::new(ListArray::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(values),
+            None,
+        )?)
     }};
 }
 
@@ -272,7 +348,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
     let element = &args[0];
     let arr = as_list_array(&args[1])?;
 
-    let scalars = match (arr.value_type(), element.data_type()) {
+    let res = match (arr.value_type(), element.data_type()) {
                 (DataType::Utf8, DataType::Utf8) => prepend!(arr, element, StringArray),
                 (DataType::LargeUtf8, DataType::LargeUtf8) => prepend!(arr, element, LargeStringArray),
                 (DataType::Boolean, DataType::Boolean) => prepend!(arr, element, BooleanArray),
@@ -294,7 +370,7 @@ pub fn array_prepend(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
     };
 
-    Ok(array(scalars.as_slice())?.into_array(1))
+    Ok(res)
 }
 
 /// Array_concat/Array_cat SQL function
