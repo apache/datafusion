@@ -1,0 +1,49 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE test(
+  bin_field  BINARY,
+  base64_field TEXT,
+  hex_field TEXT,
+) as VALUES
+  ('abc',  encode('abc', 'base64'), encode('abc', 'hex')),
+  ('qweqwe',    encode('qweqwe', 'base64'), encode('qweqwe', 'hex')),
+  (NULL, NULL, NULL)
+;
+
+# Arrays tests
+query I rowsort
+SELECT encode(bin_field, 'hex') FROM test;
+----
+'616263'
+'717765717765'
+NULL
+
+query B rowsort
+SELECT arrow_cast(decode(base64_field, 'base64'), 'Utf8') FROM test;
+----
+'abc'
+'qweqwe'
+NULL
+
+query T rowsort
+SELECT arrow_cast(decode(hex_field, 'hex'), 'Utf8') FROM test;
+----
+'abc'
+'qweqwe'
+NULL
