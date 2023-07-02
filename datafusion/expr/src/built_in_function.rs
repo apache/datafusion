@@ -637,6 +637,7 @@ impl BuiltinScalarFunction {
                 LargeUtf8 => LargeUtf8,
                 Binary => Utf8,
                 LargeBinary => LargeUtf8,
+                Null => Null,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
                     return Err(DataFusionError::Internal(
@@ -649,6 +650,7 @@ impl BuiltinScalarFunction {
                 LargeUtf8 => LargeBinary,
                 Binary => Binary,
                 LargeBinary => LargeBinary,
+                Null => Null,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
                     return Err(DataFusionError::Internal(
