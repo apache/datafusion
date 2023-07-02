@@ -827,7 +827,7 @@ impl LogicalPlanBuilder {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         validate_unique_names("Windows", &window_expr)?;
         Ok(Self::from(LogicalPlan::Window(Window::try_new(
-            window_expr.into(),
+            window_expr,
             Arc::new(self.plan),
         )?)))
     }

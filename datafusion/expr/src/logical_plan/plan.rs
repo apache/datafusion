@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use crate::expr::{Alias, Exists, InSubquery, Placeholder};
-use crate::expr_rewriter::{create_col_from_scalar_expr, normalize_cols};
+use crate::expr_rewriter::create_col_from_scalar_expr;
 use crate::expr_vec_fmt;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
@@ -1409,7 +1409,7 @@ impl Window {
         let metadata = input.schema().metadata().clone();
 
         Ok(Window {
-            input: input,
+            input,
             window_expr,
             schema: Arc::new(DFSchema::new_with_metadata(window_fields, metadata)?),
         })
