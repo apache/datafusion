@@ -17,7 +17,8 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use arrow::array::AsArray;
+use arrow::array::{AsArray, PrimitiveBuilder};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use log::debug;
 
 use std::any::Any;
@@ -441,6 +442,9 @@ where
     /// Sums per group, stored as the native type
     sums: Vec<T::Native>,
 
+    /// If we have seen a null input value for this group_index
+    null_inputs: BooleanBufferBuilder,
+
     /// Function that computes the average (value / count)
     avg_fn: F,
 }
@@ -455,11 +459,13 @@ where
             "AvgGroupsAccumulator ({}, sum type: {sum_data_type:?}) --> {return_data_type:?}",
             std::any::type_name::<T>()
         );
+
         Self {
             return_data_type: return_data_type.clone(),
             sum_data_type: sum_data_type.clone(),
             counts: vec![],
             sums: vec![],
+            null_inputs: BooleanBufferBuilder::new(0),
             avg_fn,
         }
     }
@@ -538,6 +544,12 @@ where
         opt_filter: Option<&arrow_array::BooleanArray>,
         total_num_groups: usize,
     ) {
+        if self.null_inputs.len() < total_num_groups {
+            let new_groups = total_num_groups - self.null_inputs.len();
+            // All groups start as valid (and are set to null if we
+            // see a null in the input)
+            self.null_inputs.append_n(new_groups, true);
+        }
         self.sums
             .resize_with(total_num_groups, || T::default_value());
 
@@ -547,6 +559,10 @@ where
                 values,
                 opt_filter,
                 |group_index, new_value| {
+                    // note since add_wrapping doesn't error, we
+                    // simply add values in null sum slots rather than
+                    // checking if they are null first. The theory is
+                    // this is faster
                     let sum = &mut self.sums[group_index];
                     *sum = sum.add_wrapping(new_value);
                 },
@@ -560,9 +576,24 @@ where
                     if is_valid {
                         let sum = &mut self.sums[group_index];
                         *sum = sum.add_wrapping(new_value);
+                    } else {
+                        // input null means this group is now null
+                        self.null_inputs.set_bit(group_index, false);
                     }
                 },
             )
+        }
+    }
+
+    /// Returns a NullBuffer representing which group_indices have
+    /// null values (if they saw a null input)
+    /// Resets `self.null_inputs`;
+    fn build_nulls(&mut self) -> Option<NullBuffer> {
+        let nulls = NullBuffer::new(self.null_inputs.finish());
+        if nulls.null_count() > 0 {
+            Some(nulls)
+        } else {
+            None
         }
     }
 }
@@ -613,16 +644,32 @@ where
     fn evaluate(&mut self) -> Result<ArrayRef> {
         let counts = std::mem::take(&mut self.counts);
         let sums = std::mem::take(&mut self.sums);
+        let nulls = self.build_nulls();
 
-        let averages: Vec<T::Native> = sums
-            .into_iter()
-            .zip(counts.into_iter())
-            .map(|(sum, count)| (self.avg_fn)(sum, count))
-            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(counts.len(), sums.len());
 
-        // Create a primitive array (without a copy)
-        let nulls = None; // TODO implement null handling
-        let array = PrimitiveArray::<T>::new(averages.into(), nulls);
+        // don't evaluate averages with null inputs to avoid errors on null vaues
+        let array: PrimitiveArray<T> = if let Some(nulls) = nulls.as_ref() {
+            assert_eq!(nulls.len(), sums.len());
+            let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len());
+            let iter = sums.into_iter().zip(counts.into_iter()).zip(nulls.iter());
+
+            for ((sum, count), is_valid) in iter {
+                if is_valid {
+                    builder.append_value((self.avg_fn)(sum, count)?)
+                } else {
+                    builder.append_null();
+                }
+            }
+            builder.finish()
+        } else {
+            let averages: Vec<T::Native> = sums
+                .into_iter()
+                .zip(counts.into_iter())
+                .map(|(sum, count)| (self.avg_fn)(sum, count))
+                .collect::<Result<Vec<_>>>()?;
+            PrimitiveArray::new(averages.into(), nulls) // no copy
+        };
 
         // fix up decimal precision and scale for decimals
         let array = adjust_output_array(&self.return_data_type, Arc::new(array))?;
@@ -632,16 +679,12 @@ where
 
     // return arrays for sums and counts
     fn state(&mut self) -> Result<Vec<ArrayRef>> {
+        let nulls = self.build_nulls();
         let counts = std::mem::take(&mut self.counts);
-        // create array from vec is zero copy
-        let counts = UInt64Array::from(counts);
+        let counts = UInt64Array::from(counts); // zero copy
 
         let sums = std::mem::take(&mut self.sums);
-        // create array from vec is zero copy
-        let nulls = None; // TODO implement null handling
-        let sums = PrimitiveArray::<T>::new(sums.into(), nulls);
-
-        // fix up decimal precision and scale for decimals
+        let sums = PrimitiveArray::<T>::new(sums.into(), nulls); // zero copy
         let sums = adjust_output_array(&self.sum_data_type, Arc::new(sums))?;
 
         Ok(vec![
